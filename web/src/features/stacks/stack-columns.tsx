@@ -177,14 +177,21 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   );
 }
 
-// UnmanagedName is the Name cell of a stack found on the engine: the name as text, then the Unmanaged badge and,
-// for Bayplan's own stack or an agent's, the badge that says so. The badges stay after a truncated name.
+// UnmanagedName is the Name cell of a stack found on the engine: the name as a link to its read-only page, then the
+// Unmanaged badge and, for Bayplan's own stack or an agent's, the badge that says so. The badges stay after a
+// truncated name. The address is built by the router from the name, never concatenated.
 function UnmanagedName({ row }: { row: StackRow }) {
   const t = useT();
   const owner = row.unmanaged?.owner;
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <TruncatedText>{row.name}</TruncatedText>
+      <Link
+        to="/env/$envId/unmanaged-stacks/$name"
+        params={{ envId: row.envId, name: row.name }}
+        className="block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
+        <TruncatedText>{row.name}</TruncatedText>
+      </Link>
       <UnmanagedBadge orphan={row.unmanaged?.orphan} />
       {owner === "bayplan" || owner === "agent" ? (
         <Tooltip>
@@ -197,6 +204,37 @@ function UnmanagedName({ row }: { row: StackRow }) {
         </Tooltip>
       ) : null}
     </span>
+  );
+}
+
+// UnmanagedRowActions is the row menu of a stack found on the engine: Open stack, and nothing that changes it.
+// Bayplan offers no Deploy, Update images, Stop, Start or Remove on a stack it does not manage.
+function UnmanagedRowActions({ row }: { row: StackRow }) {
+  const t = useT();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="max-md:size-11"
+          aria-label={t("stackReview.rowMenu.label", { name: row.name })}
+        >
+          <Ellipsis aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem asChild className="max-md:min-h-11">
+          <Link
+            to="/env/$envId/unmanaged-stacks/$name"
+            params={{ envId: row.envId, name: row.name }}
+          >
+            {t("stackUnmanagedPage.actions.open")}
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -326,9 +364,11 @@ export function stackColumns(
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-11 px-1 text-end",
       // An unmanaged stack offers no Deploy, Update images, Stop, Start or Remove: Bayplan changes nothing
-      // on a stack it does not manage.
+      // on a stack it does not manage. It can be opened.
       cell: (s) =>
-        isUnmanaged(s) ? null : (
+        isUnmanaged(s) ? (
+          <UnmanagedRowActions row={s} />
+        ) : (
           <RowActions
             row={s}
             disabled={pendingStateOf(s.state) !== undefined}

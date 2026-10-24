@@ -2396,6 +2396,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/unmanaged-stacks/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A stack Bayplan did not make
+         * @description The services of a swarm namespace or a Compose project that Bayplan does not manage, found by that label and read now, with what its labels say about it: an orphan Bayplan ID (it carries a bayplan.stack.id, which is never sent), a Portainer marker, whether it is Bayplan's own stack or its agent's. Only names, states, images and published ports are part of the answer: no environment value, command or log option. Nothing is stored and no engine is written to. A name no labelled service or container carries is 404 unmanaged_stack_not_found; so is a name one of Bayplan's stacks holds now, with that stack's ID in errors as managedStackId. Needs stacks.read (Viewer).
+         */
+        get: operations["getUnmanagedStack"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/update-agents": {
         parameters: {
             query?: never;
@@ -10071,6 +10091,53 @@ export interface components {
             /** @description Newest attempt first; empty when there are none */
             items: components["schemas"]["UnknownAgentBody"][] | null;
         };
+        UnmanagedFoundByBody: {
+            /** @description com.docker.stack.namespace on a swarm, com.docker.compose.project on a standalone host */
+            label: string;
+            /** @description The stack's name */
+            value: string;
+        };
+        UnmanagedStackBody: {
+            /** @description False for Bayplan's own stack and an agent's, which cannot be adopted */
+            adoptable: boolean;
+            /** @description The label the stack was found by */
+            foundBy: components["schemas"]["UnmanagedFoundByBody"];
+            /** @description The swarm namespace or the Compose project */
+            name: string;
+            /** @description True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
+            orphan: boolean;
+            /**
+             * @description bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other
+             * @enum {string}
+             */
+            owner: "" | "bayplan" | "agent";
+            /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
+            portainer: boolean;
+            /** @description Why the stack cannot be adopted; empty when it can */
+            reason: string;
+            /** @description The services found by the label, by name. Their environment values, commands and log options are never part of the answer */
+            services: components["schemas"]["StackServiceBody"][] | null;
+            /**
+             * Format: int64
+             * @description Services that run now
+             */
+            servicesRunning: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine
+             */
+            servicesTotal: number;
+            /**
+             * @description How many of its services run: running, degraded (some do) or not_running (none do)
+             * @enum {string}
+             */
+            state: "not_running" | "degraded" | "running";
+            /**
+             * @description Where the stack runs: a swarm or a standalone host
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
+        };
         UpdateAgentsBody: {
             /**
              * Format: int64
@@ -15448,6 +15515,41 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    getUnmanagedStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmanagedStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };

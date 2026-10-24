@@ -4,6 +4,8 @@
 package stackops
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -120,12 +122,12 @@ func Discover(h Held, managed []Stack, target stacks.Target, self SelfMarks) []D
 
 	out := make([]Discovered, 0, len(groups))
 	for name, g := range groups {
-		all := func(dockerx.ServiceRow) bool { return true }
+		own := OwnershipOf(DiscoveredStack("", name, target))
 		var rows []ServiceRow
 		if target == stacks.TargetSwarm {
-			rows = swarmRowsWhere(name, g.services, all)
+			rows = swarmRowsWhere(name, g.services, own.OwnsService)
 		} else {
-			rows = standaloneRowsWhere(g.containers, func(dockerx.ContainerRow) bool { return true })
+			rows = standaloneRowsWhere(g.containers, func(c dockerx.ContainerRow) bool { return own.OwnsWorkload(c.Labels) })
 		}
 		if len(rows) == 0 {
 			continue
@@ -172,4 +174,52 @@ func flagsOf(name string, g *group, self SelfMarks) (orphan string, portainer bo
 		owner = OwnerBayplan
 	}
 	return orphan, portainer, owner
+}
+
+// DiscoverNamed looks for one stack the environment holds that Bayplan did not make, live: one read of the
+// cluster for a swarm, one list of the project's containers for a standalone host, never the lists' cache.
+// The bool is false when nothing carries the name. A name that a stack of Bayplan's holds is that stack's
+// and the caller says so before it asks; managed is not consulted here. It is a read.
+func (d Deps) DiscoverNamed(ctx context.Context, envID string, target stacks.Target, name string, self SelfMarks) (Discovered, bool, error) {
+	var h Held
+	switch target {
+	case stacks.TargetSwarm:
+		if d.Clusters == nil {
+			return Discovered{}, false, errors.New("stackops: no cluster reader to read the swarm with")
+		}
+		if err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+			read, e := c.Cluster(ctx)
+			if e != nil {
+				return e
+			}
+			for _, r := range read.Services {
+				if r.Stack == name {
+					h.Services = append(h.Services, r)
+				}
+			}
+			return nil
+		}); err != nil {
+			return Discovered{}, false, err
+		}
+	case stacks.TargetStandalone:
+		node, err := d.StandaloneNode(ctx, envID)
+		if err != nil {
+			return Discovered{}, false, err
+		}
+		if err := d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+			var e error
+			h.Containers, e = c.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+			return e
+		}); err != nil {
+			return Discovered{}, false, err
+		}
+	default:
+		return Discovered{}, false, errors.New("stackops: unknown stack target " + string(target))
+	}
+	for _, found := range Discover(h, nil, target, self) {
+		if found.Name == name {
+			return found, true, nil
+		}
+	}
+	return Discovered{}, false, nil
 }

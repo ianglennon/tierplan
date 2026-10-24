@@ -277,17 +277,11 @@ func cardOf[T any](d Deps, envID string, stack Stack, card string, items []T, er
 	return ResourceCard[T]{Items: items}
 }
 
-// ownsLabels reports whether an object's labels are the stack's own: its swarm namespace or Compose
-// project and the ID of its Bayplan record. A name alone is never ownership: another stack, or a person,
-// can make an object under the same namespace.
+// ownsLabels reports whether an object's labels are the stack's own, by Ownership: its swarm namespace or
+// Compose project and, for a stack Bayplan holds, the ID of its record. A name alone is never ownership:
+// another stack, or a person, can make an object under the same namespace.
 func ownsLabels(stack Stack, labels map[string]string) bool {
-	if labels[stacks.LabelStackID] != stack.ID {
-		return false
-	}
-	if stack.Target == stacks.TargetSwarm {
-		return labels[stacks.LabelSwarmNamespace] == stack.Name
-	}
-	return labels[stacks.LabelComposeProject] == stack.Name
+	return OwnershipOf(stack).OwnsWorkload(labels)
 }
 
 // Resources reads the cards of a stack's Resources tab now. Each card keeps its own error, so a secrets list the

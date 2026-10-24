@@ -134,13 +134,12 @@ func swarmPorts(ps []dockerx.ServicePort) []string {
 	return out
 }
 
-// SwarmRows are the services a stack owns among the services of a swarm: those in its namespace that carry
-// its ID, so a service of the same name that Bayplan did not make is never the stack's. They are in name
-// order.
+// SwarmRows are the services a stack owns among the services of a swarm, by Ownership: for a managed stack
+// those in its namespace that carry its ID, so a service of the same name that Bayplan did not make is never
+// the stack's; for a discovered one every service of its namespace. They are in name order.
 func SwarmRows(stack Stack, all []dockerx.ServiceRow) []ServiceRow {
-	return swarmRowsWhere(stack.Name, all, func(r dockerx.ServiceRow) bool {
-		return r.Stack == stack.Name && r.Labels[stacks.LabelStackID] == stack.ID
-	})
+	own := OwnershipOf(stack)
+	return swarmRowsWhere(stack.Name, all, own.OwnsService)
 }
 
 // swarmRowsWhere draws the rows of the services that keep accepts, named for the stack (the prefix its
@@ -203,13 +202,13 @@ func standaloneRollup(cs []ContainerRow) string {
 	return ServiceNotRunning
 }
 
-// StandaloneRows are the services a stack owns among the containers of a host: those of its Compose
-// project that carry its ID, one-off containers (`compose run`) left out. A service is the containers that
+// StandaloneRows are the services a stack owns among the containers of a host, by Ownership: for a managed
+// stack those of its Compose project that carry its ID, for a discovered one every container of the project;
+// one-off containers (`compose run`) are left out. A service is the containers that
 // share the service label, so a service with none has no row.
 func StandaloneRows(stack Stack, all []dockerx.ContainerRow) []ServiceRow {
-	return standaloneRowsWhere(all, func(c dockerx.ContainerRow) bool {
-		return c.Labels[stacks.LabelComposeProject] == stack.Name && c.Labels[stacks.LabelStackID] == stack.ID
-	})
+	own := OwnershipOf(stack)
+	return standaloneRowsWhere(all, func(c dockerx.ContainerRow) bool { return own.OwnsWorkload(c.Labels) })
 }
 
 // standaloneRowsWhere draws the rows of the services of the containers that keep accepts, one-off containers

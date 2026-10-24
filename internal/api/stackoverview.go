@@ -77,7 +77,14 @@ func listStackServices(ctx context.Context, d StacksDeps, in *StackPathInput) (*
 	if err != nil {
 		return nil, snapshotProblem(d.Log, in.EnvID, err)
 	}
-	body := StackServicesBody{Items: make([]StackServiceBody, 0, len(rows))}
+	body := StackServicesBody{Items: stackServiceBodies(rows)}
+	return &StackServicesOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// stackServiceBodies draws the services of a stack as the answers carry them. Only names, states, images and
+// ports leave: never an environment value, a command or a log option of a service (D-47).
+func stackServiceBodies(rows []stackops.ServiceRow) []StackServiceBody {
+	out := make([]StackServiceBody, 0, len(rows))
 	for _, r := range rows {
 		item := StackServiceBody{
 			ID: r.ID, Name: r.Name, Short: r.Short, Mode: r.Mode, State: r.State, UpdateState: r.UpdateState,
@@ -87,7 +94,7 @@ func listStackServices(ctx context.Context, d StacksDeps, in *StackPathInput) (*
 		for _, c := range r.Containers {
 			item.Containers = append(item.Containers, StackContainerBody{ID: c.ID, Name: c.Name, State: c.State, Health: c.Health})
 		}
-		body.Items = append(body.Items, item)
+		out = append(out, item)
 	}
-	return &StackServicesOutput{CacheControl: "no-store", Body: body}, nil
+	return out
 }

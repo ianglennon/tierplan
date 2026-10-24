@@ -15225,6 +15225,116 @@
         ],
         "type": "object"
       },
+      "UnmanagedFoundByBody": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "description": "com.docker.stack.namespace on a swarm, com.docker.compose.project on a standalone host",
+            "type": "string"
+          },
+          "value": {
+            "description": "The stack's name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "type": "object"
+      },
+      "UnmanagedStackBody": {
+        "additionalProperties": false,
+        "properties": {
+          "adoptable": {
+            "description": "False for Bayplan's own stack and an agent's, which cannot be adopted",
+            "type": "boolean"
+          },
+          "foundBy": {
+            "$ref": "#/components/schemas/UnmanagedFoundByBody",
+            "description": "The label the stack was found by"
+          },
+          "name": {
+            "description": "The swarm namespace or the Compose project",
+            "type": "string"
+          },
+          "orphan": {
+            "description": "True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked",
+            "type": "boolean"
+          },
+          "owner": {
+            "description": "bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other",
+            "enum": [
+              "",
+              "bayplan",
+              "agent"
+            ],
+            "type": "string"
+          },
+          "portainer": {
+            "description": "True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why the stack cannot be adopted; empty when it can",
+            "type": "string"
+          },
+          "services": {
+            "description": "The services found by the label, by name. Their environment values, commands and log options are never part of the answer",
+            "items": {
+              "$ref": "#/components/schemas/StackServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "servicesRunning": {
+            "description": "Services that run now",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "servicesTotal": {
+            "description": "Services the stack has on the engine",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "description": "How many of its services run: running, degraded (some do) or not_running (none do)",
+            "enum": [
+              "not_running",
+              "degraded",
+              "running"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "description": "Where the stack runs: a swarm or a standalone host",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "state",
+          "servicesRunning",
+          "servicesTotal",
+          "services",
+          "foundBy",
+          "orphan",
+          "portainer",
+          "owner",
+          "adoptable",
+          "reason"
+        ],
+        "type": "object"
+      },
       "UpdateAgentsBody": {
         "additionalProperties": false,
         "properties": {
@@ -25031,6 +25141,68 @@
         "summary": "The dashboard of an environment",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/unmanaged-stacks/{name}": {
+      "get": {
+        "description": "The services of a swarm namespace or a Compose project that Bayplan does not manage, found by that label and read now, with what its labels say about it: an orphan Bayplan ID (it carries a bayplan.stack.id, which is never sent), a Portainer marker, whether it is Bayplan's own stack or its agent's. Only names, states, images and published ports are part of the answer: no environment value, command or log option. Nothing is stored and no engine is written to. A name no labelled service or container carries is 404 unmanaged_stack_not_found; so is a name one of Bayplan's stacks holds now, with that stack's ID in errors as managedStackId. Needs stacks.read (Viewer).",
+        "operationId": "getUnmanagedStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm namespace or the Compose project that names the stack",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The swarm namespace or the Compose project that names the stack",
+              "maxLength": 255,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnmanagedStackBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "A stack Bayplan did not make",
+        "tags": [
+          "stacks"
         ]
       }
     },

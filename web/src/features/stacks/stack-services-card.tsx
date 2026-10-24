@@ -211,17 +211,19 @@ function ServiceRows({ envId, row, swarm, open, onToggle }: RowProps) {
   );
 }
 
-// StackServicesCard is the Services card of the Overview (UI-SPEC "Stack page"): each service of the
-// stack with its state, its replicas or containers, its image with the pin and its ports. A swarm
-// service links to its page; a standalone service opens to its containers, which link to theirs. A read
-// that fails says so in the card with its own retry and keeps the rows it had, so the Details card
-// beside it is never blocked by Docker.
-export function StackServicesCard({ envId, stackId, name, target, busy }: StackServicesCardProps) {
+interface ServicesTableProps {
+  envId: string;
+  rows: StackService[];
+  // True for a swarm, whose services link to their page; a standalone host opens each to its containers.
+  swarm: boolean;
+}
+
+// StackServicesTable is the table of services of a stack: each with its state, its replicas or containers, its
+// image with the pin and its ports. A swarm service links to its page; a standalone service opens to its
+// containers, which link to theirs. It is the table of a managed stack's Overview and of an unmanaged stack's.
+export function StackServicesTable({ envId, rows, swarm }: ServicesTableProps) {
   const t = useT();
-  const query = useQuery(stackServicesQuery(envId, stackId, { target, busy }));
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
-  const swarm = target === "swarm";
-  const rows = query.data?.items ?? [];
 
   function toggle(service: string) {
     setOpened((prev) => {
@@ -230,6 +232,48 @@ export function StackServicesCard({ envId, stackId, name, target, busy }: StackS
       return next;
     });
   }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead scope="col">{t("stackOverview.services.columns.service")}</TableHead>
+          <TableHead scope="col">{t("stackOverview.services.columns.state")}</TableHead>
+          <TableHead scope="col">
+            {t(
+              swarm
+                ? "stackOverview.services.columns.replicas"
+                : "stackOverview.services.columns.containers",
+            )}
+          </TableHead>
+          <TableHead scope="col">{t("stackOverview.services.columns.image")}</TableHead>
+          <TableHead scope="col">{t("stackOverview.services.columns.ports")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((row) => (
+          <ServiceRows
+            key={row.name}
+            envId={envId}
+            row={row}
+            swarm={swarm}
+            open={opened.has(row.name)}
+            onToggle={() => toggle(row.name)}
+          />
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+// StackServicesCard is the Services card of the Overview (UI-SPEC "Stack page"): the services table, or a line
+// saying nothing runs. A read that fails says so in the card with its own retry and keeps the rows it had, so the
+// Details card beside it is never blocked by Docker.
+export function StackServicesCard({ envId, stackId, name, target, busy }: StackServicesCardProps) {
+  const t = useT();
+  const query = useQuery(stackServicesQuery(envId, stackId, { target, busy }));
+  const swarm = target === "swarm";
+  const rows = query.data?.items ?? [];
 
   return (
     <SettingsCard title={t("stackOverview.services.title")}>
@@ -261,35 +305,7 @@ export function StackServicesCard({ envId, stackId, name, target, busy }: StackS
         rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t("stackOverview.services.empty")}</p>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead scope="col">{t("stackOverview.services.columns.service")}</TableHead>
-                <TableHead scope="col">{t("stackOverview.services.columns.state")}</TableHead>
-                <TableHead scope="col">
-                  {t(
-                    swarm
-                      ? "stackOverview.services.columns.replicas"
-                      : "stackOverview.services.columns.containers",
-                  )}
-                </TableHead>
-                <TableHead scope="col">{t("stackOverview.services.columns.image")}</TableHead>
-                <TableHead scope="col">{t("stackOverview.services.columns.ports")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <ServiceRows
-                  key={row.name}
-                  envId={envId}
-                  row={row}
-                  swarm={swarm}
-                  open={opened.has(row.name)}
-                  onToggle={() => toggle(row.name)}
-                />
-              ))}
-            </TableBody>
-          </Table>
+          <StackServicesTable envId={envId} rows={rows} swarm={swarm} />
         )
       ) : null}
     </SettingsCard>

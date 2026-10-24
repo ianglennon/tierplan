@@ -370,6 +370,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackRemove(r, d)
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
+	registerUnmanagedStacks(r, d)
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
 	registerStackLogs(r, d)

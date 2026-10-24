@@ -668,7 +668,7 @@ describe("StackList: columns and pending rows", () => {
 describe("StackList unmanaged stacks", () => {
   const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
-  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, and no actions", async () => {
+  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, a link to its page and only Open stack", async () => {
     stacks = {
       items: [
         stack(),
@@ -684,11 +684,20 @@ describe("StackList unmanaged stacks", () => {
     expect(within(row).getByText("1/3")).toBeTruthy();
     // Source is a dash without a Portainer marker and Last deployed is a dash: two cells say so.
     expect(within(row).getAllByText("\u2014")).toHaveLength(2);
-    // The name is text, and the row has no menu: Deploy, Update images, Stop, Start and Remove are not offered.
-    expect(screen.queryByRole("link", { name: "legacy" })).toBeNull();
-    expect(within(row).queryByRole("button")).toBeNull();
+    // The name links to the stack's read-only page, built from the name.
+    expect(within(row).getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy",
+    );
     // A managed row beside it keeps its link and menu.
     expect(within(rowOfName("web")).getByRole("button", { name: /web/ })).toBeTruthy();
+    // The row's menu offers Open stack and nothing that changes the stack: Deploy, Update images, Stop, Start and
+    // Remove are not offered.
+    fireEvent.pointerDown(within(row).getByRole("button", { name: "Actions for legacy" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const items = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
+    expect(items).toEqual(["Open stack"]);
   });
 
   it("renders the name of an unmanaged stack with markup in it as text", async () => {

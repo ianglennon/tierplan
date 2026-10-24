@@ -80,6 +80,15 @@ type Stack struct {
 	CreatedBy       string
 	CreatedAt       time.Time
 	Stopped         bool
+	// Discovered is true for a stack found on the engine by its labels that Bayplan does not hold (D-07). It
+	// is never stored: DiscoveredStack makes one, and Ownership reads it.
+	Discovered bool
+}
+
+// DiscoveredStack is the stack of a name found on an environment's engine by its labels. It has no ID and
+// is never stored; it exists so the overview, the resources and the logs read it like any stack.
+func DiscoveredStack(envID, name string, target stacks.Target) Stack {
+	return Stack{EnvID: envID, Name: name, Target: target, Discovered: true}
 }
 
 // Snapshot is a stack's definition at a moment: the draft, or a revision a deploy took. CreatedBy
