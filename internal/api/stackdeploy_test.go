@@ -1241,7 +1241,7 @@ func (f *envFix) revisions(t *testing.T, stackID string) []revisionRow {
 type rollbackStackAnswer struct {
 	State        string `json:"state"`
 	DraftSavedAt string `json:"draftSavedAt"`
-	Rollback struct {
+	Rollback     struct {
 		Available  bool   `json:"available"`
 		DeployedAt string `json:"deployedAt"`
 		DeployedBy string `json:"deployedBy"`

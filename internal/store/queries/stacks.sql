@@ -180,10 +180,11 @@ JOIN stacks s ON s.id = dr.stack_id
 WHERE s.env_id = ? AND dr.kind = 'draft';
 
 -- name: ListLatestRevisionTimesByEnv :many
--- When the newest revision of each stack of an environment was taken.
+-- When the newest revision of each stack of an environment was taken, not counting a roll back: it copies an earlier
+-- revision and does not deploy the draft, so it must not make a draft saved before it read as deployed (D-03).
 SELECT r.stack_id, CAST(MAX(r.created_at) AS INTEGER) AS taken_at FROM stack_snapshots r
 JOIN stacks s ON s.id = r.stack_id
-WHERE s.env_id = ? AND r.kind = 'revision'
+WHERE s.env_id = ? AND r.kind = 'revision' AND r.origin <> 'rollback'
 GROUP BY r.stack_id;
 
 -- name: ListRevisions :many

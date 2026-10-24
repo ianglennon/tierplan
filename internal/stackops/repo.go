@@ -897,6 +897,12 @@ type DraftSave struct {
 // DraftSaves says, for each stack of an environment that has a draft, who saved it last and when, and
 // whether it holds changes that have not been deployed: it was saved after the stack's newest revision was
 // taken, or the stack has no revision and its draft has been saved since it was created.
+//
+// A roll back revision does not count as "the newest revision". It copies an earlier revision and deploys
+// nothing of the draft, which a roll back leaves untouched (D-03), so a draft saved before the roll back still
+// holds the changes it held (RESEARCH Pitfall 8). Counting it would make a draft read as deployed, and the list
+// would lose its Draft badge. The next deploy of that draft is told the deployed version moved by the
+// concurrent check instead, which compares revision numbers and not times.
 func (r Repo) DraftSaves(ctx context.Context, envID string) (map[string]DraftSave, error) {
 	drafts, err := r.Store.RQ.ListDraftsByEnv(ctx, envID)
 	if err != nil {

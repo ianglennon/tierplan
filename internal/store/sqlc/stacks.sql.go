@@ -671,7 +671,7 @@ func (q *Queries) ListDraftsByEnv(ctx context.Context, envID string) ([]ListDraf
 const listLatestRevisionTimesByEnv = `-- name: ListLatestRevisionTimesByEnv :many
 SELECT r.stack_id, CAST(MAX(r.created_at) AS INTEGER) AS taken_at FROM stack_snapshots r
 JOIN stacks s ON s.id = r.stack_id
-WHERE s.env_id = ? AND r.kind = 'revision'
+WHERE s.env_id = ? AND r.kind = 'revision' AND r.origin <> 'rollback'
 GROUP BY r.stack_id
 `
 
@@ -680,7 +680,8 @@ type ListLatestRevisionTimesByEnvRow struct {
 	TakenAt int64
 }
 
-// When the newest revision of each stack of an environment was taken.
+// When the newest revision of each stack of an environment was taken, not counting a roll back: it copies an earlier
+// revision and does not deploy the draft, so it must not make a draft saved before it read as deployed (D-03).
 func (q *Queries) ListLatestRevisionTimesByEnv(ctx context.Context, envID string) ([]ListLatestRevisionTimesByEnvRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLatestRevisionTimesByEnv, envID)
 	if err != nil {
