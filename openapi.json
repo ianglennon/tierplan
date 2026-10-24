@@ -12309,6 +12309,60 @@
         ],
         "type": "object"
       },
+      "StackHistoryPreviewBody": {
+        "additionalProperties": false,
+        "properties": {
+          "revisions": {
+            "description": "How many revisions the limit would delete now, across all stacks",
+            "format": "int64",
+            "type": "integer"
+          },
+          "stacks": {
+            "description": "How many stacks those revisions belong to",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revisions",
+          "stacks"
+        ],
+        "type": "object"
+      },
+      "StackHistorySettingsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kept": {
+            "description": "How many revisions of each stack Bayplan keeps. The deployed revision and any revision still deploying are kept besides",
+            "format": "int64",
+            "maximum": 200,
+            "minimum": 5,
+            "type": "integer"
+          },
+          "max": {
+            "description": "The highest value Kept may have",
+            "format": "int64",
+            "type": "integer"
+          },
+          "min": {
+            "description": "The lowest value Kept may have",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pruned": {
+            "description": "How many revisions this request deleted: those beyond a lowered limit, and 0 for a read or a limit that was not lowered",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kept",
+          "min",
+          "max",
+          "pruned"
+        ],
+        "type": "object"
+      },
       "StackItem": {
         "additionalProperties": false,
         "properties": {
@@ -15151,6 +15205,22 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "UpdateStackHistorySettingsInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kept": {
+            "description": "The new number of revisions kept per stack, 5 to 200",
+            "format": "int64",
+            "maximum": 200,
+            "minimum": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kept"
+        ],
         "type": "object"
       },
       "UpdateStateBody": {
@@ -27293,6 +27363,147 @@
           }
         },
         "summary": "Change the browser-shell limits",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/stack-history": {
+      "get": {
+        "description": "kept is how many revisions of each stack Bayplan keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.",
+        "operationId": "getStackHistorySettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackHistorySettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Get how many revisions of each stack are kept",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "A value outside 5 to 200 answers 422. Lowering the limit deletes the older revisions of every stack at once, in the same transaction as the new value, and the answer's pruned says how many; the deployed revision and any revision still deploying are never deleted. Deleted revisions cannot be recovered. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new limit and the number of revisions deleted.",
+        "operationId": "updateStackHistorySettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStackHistorySettingsInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackHistorySettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change how many revisions of each stack are kept",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/stack-history/preview": {
+      "get": {
+        "description": "Answers how many revisions across how many stacks a limit of keep (5 to 200) would delete now, by the rule pruning applies: the newest keep of each stack, the deployed revision and any revision still deploying stay. It only reads. Needs settings.write, as the change it previews does.",
+        "operationId": "previewStackHistoryPrune",
+        "parameters": [
+          {
+            "description": "The limit to count for, 5 to 200",
+            "explode": false,
+            "in": "query",
+            "name": "keep",
+            "required": true,
+            "schema": {
+              "description": "The limit to count for, 5 to 200",
+              "format": "int64",
+              "maximum": 200,
+              "minimum": 5,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackHistoryPreviewBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Count the revisions a lower limit would delete",
         "tags": [
           "settings"
         ]

@@ -3210,6 +3210,50 @@ export interface paths {
         patch: operations["updateShellSettings"];
         trace?: never;
     };
+    "/api/settings/stack-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get how many revisions of each stack are kept
+         * @description kept is how many revisions of each stack Bayplan keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.
+         */
+        get: operations["getStackHistorySettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change how many revisions of each stack are kept
+         * @description A value outside 5 to 200 answers 422. Lowering the limit deletes the older revisions of every stack at once, in the same transaction as the new value, and the answer's pruned says how many; the deployed revision and any revision still deploying are never deleted. Deleted revisions cannot be recovered. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new limit and the number of revisions deleted.
+         */
+        patch: operations["updateStackHistorySettings"];
+        trace?: never;
+    };
+    "/api/settings/stack-history/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count the revisions a lower limit would delete
+         * @description Answers how many revisions across how many stacks a limit of keep (5 to 200) would delete now, by the rule pruning applies: the newest keep of each stack, the deployed revision and any revision still deploying stay. It only reads. Needs settings.write, as the change it previews does.
+         */
+        get: operations["previewStackHistoryPrune"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/complete": {
         parameters: {
             query?: never;
@@ -8797,6 +8841,40 @@ export interface components {
             /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
             path: string;
         };
+        StackHistoryPreviewBody: {
+            /**
+             * Format: int64
+             * @description How many revisions the limit would delete now, across all stacks
+             */
+            revisions: number;
+            /**
+             * Format: int64
+             * @description How many stacks those revisions belong to
+             */
+            stacks: number;
+        };
+        StackHistorySettingsBody: {
+            /**
+             * Format: int64
+             * @description How many revisions of each stack Bayplan keeps. The deployed revision and any revision still deploying are kept besides
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description The highest value Kept may have
+             */
+            max: number;
+            /**
+             * Format: int64
+             * @description The lowest value Kept may have
+             */
+            min: number;
+            /**
+             * Format: int64
+             * @description How many revisions this request deleted: those beyond a lowered limit, and 0 for a read or a limit that was not lowered
+             */
+            pruned: number;
+        };
         StackItem: {
             /** @description True when the draft holds changes that have not been deployed */
             hasDraft: boolean;
@@ -9986,6 +10064,13 @@ export interface components {
              * @description New per-person cap on open shells, 1 to 50
              */
             maxPerUser?: number;
+        };
+        UpdateStackHistorySettingsInputBody: {
+            /**
+             * Format: int64
+             * @description The new number of revisions kept per stack, 5 to 200
+             */
+            kept: number;
         };
         UpdateStateBody: {
             /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
@@ -16937,6 +17022,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ShellSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackHistorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistorySettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateStackHistorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStackHistorySettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistorySettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewStackHistoryPrune: {
+        parameters: {
+            query: {
+                /** @description The limit to count for, 5 to 200 */
+                keep: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistoryPreviewBody"];
                 };
             };
             /** @description Error */
