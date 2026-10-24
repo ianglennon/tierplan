@@ -110,6 +110,22 @@ describe("actionLabel", () => {
     expect(actionLabel("something.new", echo)).toBe("something.new");
   });
 
+  it("labels a roll back of a stack with the revision it restored, and any other deploy as a deploy", () => {
+    const rollback = { mode: "rollback", stack: "web", restoredFrom: "4" };
+    expect(actionLabel("stack.deployed", echo, rollback)).toBe(
+      "t:audit.actions.stack.deployed_rollback",
+    );
+    expect(actionLabel("stack.deployed", echo, { mode: "deploy", stack: "web" })).toBe(
+      "t:audit.actions.stack.deployed",
+    );
+    expect(actionLabel("stack.deployed", echo)).toBe("t:audit.actions.stack.deployed");
+    // The mode of another action says nothing.
+    expect(actionLabel("stack.stopped", echo, rollback)).toBe("t:audit.actions.stack.stopped");
+    expect(audit.audit.actions.stack.deployed_rollback).toBe(
+      "Rolled back stack {{name}} to revision #{{revision}}",
+    );
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

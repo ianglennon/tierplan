@@ -364,6 +364,16 @@ describe("JobsIndicator stack jobs", () => {
     expect((rows[1] as HTMLElement).querySelector(".lucide-download")).not.toBeNull();
   });
 
+  it("draws an Undo for a roll back, with its own words", async () => {
+    stackJobs = [stackJob({ kind: "rollback" })];
+    mount();
+    await open("Jobs, 1 in progress");
+    const row = within(await screen.findByRole("list")).getAllByRole("listitem")[0] as HTMLElement;
+    expect(row.querySelector(".lucide-undo-2")).not.toBeNull();
+    expect(row.querySelector(".lucide-rocket")).toBeNull();
+    expect(within(row).getByText("Rolling back")).toBeTruthy();
+  });
+
   it("opens the console of a running deploy from its row", async () => {
     stackJobs = [stackJob({ id: "d7", stackId: "s9" })];
     mount();

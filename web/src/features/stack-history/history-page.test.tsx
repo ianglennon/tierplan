@@ -500,6 +500,63 @@ describe("the Roll back action of the selected revision", () => {
   });
 });
 
+describe("the Roll back action of a revision's row menu", () => {
+  async function menuOf(seq: number) {
+    const trigger = within(rowOf(seq)).getByRole("button", {
+      name: `Actions for revision #${seq}`,
+    });
+    await act(async () => {
+      fireEvent.keyDown(trigger, { key: "Enter" });
+    });
+    return screen.findAllByRole("menuitem");
+  }
+
+  it("offers an Operator Roll back to revision #n… on a good revision that is not deployed", async () => {
+    role = "operator";
+    mount();
+
+    await table();
+    const items = await menuOf(1);
+    expect(items.map((i) => i.textContent)).toEqual([
+      "Open revision #1",
+      "Roll back to revision #1…",
+    ]);
+    expect(items[1]?.getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/review?mode=rollback&revision=1",
+    );
+  });
+
+  it("offers a failed revision, an in-progress one and the deployed one only Open revision", async () => {
+    role = "operator";
+    revisions = [
+      revision(4, { outcome: "pending" }),
+      revision(3, { deployed: true }),
+      revision(2, { outcome: "failed", failedService: "tracer_web", code: "service_rejected" }),
+      revision(1),
+    ];
+    mount();
+
+    await table();
+    for (const seq of [4, 3, 2]) {
+      const items = await menuOf(seq);
+      expect(
+        items.map((i) => i.textContent),
+        `revision ${seq}`,
+      ).toEqual([`Open revision #${seq}`]);
+      await act(async () => {
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      });
+    }
+  });
+
+  it("leaves a Viewer with Open revision only", async () => {
+    mount();
+
+    await table();
+    expect((await menuOf(1)).map((i) => i.textContent)).toEqual(["Open revision #1"]);
+  });
+});
+
 describe("the states of the tab", () => {
   it("shows 8 skeleton rows and a skeleton detail while the list loads", async () => {
     mount();

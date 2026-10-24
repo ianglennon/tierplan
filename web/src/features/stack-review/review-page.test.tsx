@@ -1160,4 +1160,35 @@ describe("in roll back mode", () => {
     ).toBeTruthy();
     expect(rollbackButton().getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("reads Pinned (revision #n) for every service, with no New row and no raw note", async () => {
+    review = () =>
+      Response.json(
+        rollbackReview({
+          images: [
+            {
+              service: "web",
+              image: "nginx:1.27",
+              digest: D2,
+              current: D1,
+              state: "pinned",
+              note: "revision",
+            },
+            {
+              service: "db",
+              image: "postgres:16",
+              digest: D1,
+              current: D1,
+              state: "pinned",
+              note: "revision",
+            },
+          ],
+        }),
+      );
+    mount({ mode: "rollback", revision: 1 });
+    expect(await screen.findAllByText("Pinned (revision #1)")).toHaveLength(2);
+    expect(screen.queryByText("New")).toBeNull();
+    expect(screen.queryByText("revision")).toBeNull();
+    expect(screen.queryByText("Pinned (running)")).toBeNull();
+  });
 });
