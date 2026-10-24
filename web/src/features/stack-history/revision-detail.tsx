@@ -36,13 +36,50 @@ interface RevisionDetailProps {
   // The heading takes focus when a revision is selected, so a keyboard or screen reader user lands on what
   // they chose (UI-SPEC "Interaction and Accessibility Contract").
   headingRef: RefObject<HTMLHeadingElement | null>;
-  // How many revisions the instance keeps of each stack, for the sentence about a revision that was deleted.
-  // Until the retention setting is passed in (plan 08-06) it is the default.
+  // How many revisions the instance keeps of each stack (the history list names it), for the sentence about a
+  // revision that was deleted. Without it, the default.
   retention?: number;
 }
 
 // How many revisions an instance keeps of each stack unless its settings say otherwise.
 const DEFAULT_RETENTION = 20;
+
+// RevisionGone is "That revision is gone": a revision retention deleted, or one that never existed. It names
+// how many revisions the instance keeps of each stack. The list says so for a revision it does not hold, and the
+// detail says so for one deleted since the list was read, so both show the same card.
+export function RevisionGone({
+  envId,
+  stackId,
+  headingRef,
+  retention = DEFAULT_RETENTION,
+}: {
+  envId: string;
+  stackId: string;
+  headingRef: RefObject<HTMLHeadingElement | null>;
+  retention?: number;
+}) {
+  const t = useT();
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <History aria-hidden="true" />
+        </EmptyMedia>
+        <EmptyTitle role="heading" aria-level={3} ref={headingRef} tabIndex={-1}>
+          {t("stackRevision.gone.title")}
+        </EmptyTitle>
+        <EmptyDescription>{t("stackRevision.gone.body", { count: retention })}</EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent>
+        <Button asChild variant="outline" className="max-md:h-11">
+          <Link to="/env/$envId/stacks/$stackId/history" params={{ envId, stackId }} replace>
+            {t("stackRevision.gone.back")}
+          </Link>
+        </Button>
+      </EmptyContent>
+    </Empty>
+  );
+}
 
 // RevisionDetail is the card below the table for the selected revision (UI-SPEC "History tab"): its heading
 // and who made it and when, then what stands out about it: it failed, it is still deploying, or it is the
@@ -64,24 +101,7 @@ export function RevisionDetail({
   const revision = useQuery(revisionQuery(envId, stackId, item.seq));
   if (isRevisionGone(revision.error)) {
     return (
-      <Empty>
-        <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <History aria-hidden="true" />
-          </EmptyMedia>
-          <EmptyTitle role="heading" aria-level={3} ref={headingRef} tabIndex={-1}>
-            {t("stackRevision.gone.title")}
-          </EmptyTitle>
-          <EmptyDescription>{t("stackRevision.gone.body", { count: retention })}</EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button asChild variant="outline" className="max-md:h-11">
-            <Link to="/env/$envId/stacks/$stackId/history" params={{ envId, stackId }} replace>
-              {t("stackRevision.gone.back")}
-            </Link>
-          </Button>
-        </EmptyContent>
-      </Empty>
+      <RevisionGone envId={envId} stackId={stackId} headingRef={headingRef} retention={retention} />
     );
   }
   const op = stack?.lastOperation;

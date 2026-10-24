@@ -136,6 +136,9 @@ beforeEach(() => {
       // The Container shells card under the form (plan 04-23) reads its own limits.
       if (path === "/api/settings/shells")
         return Response.json({ idleMinutes: 30, maxPerUser: 10 });
+      // So does the Stack history card (plan 08-06).
+      if (path === "/api/settings/stack-history")
+        return Response.json({ kept: 20, min: 5, max: 200, pruned: 0 });
       if (path === "/api/version") {
         return Response.json({
           commit: SHA,
@@ -180,7 +183,7 @@ const main = () => within(document.getElementById("main") as HTMLElement);
 const nameField = () => screen.getByLabelText("Instance name") as HTMLInputElement;
 const urlField = () => screen.getByLabelText("Public URL") as HTMLInputElement;
 const agentField = () => screen.getByLabelText("Agent URL") as HTMLInputElement;
-// The instance form's own button: the Container shells card below it has one too.
+// The instance form's own button: the Container shells and Stack history cards below it have one too.
 const instanceForm = () => nameField().closest("form") as HTMLFormElement;
 const saveButton = () =>
   within(instanceForm()).getByRole("button", { name: "Save settings" }) as HTMLButtonElement;

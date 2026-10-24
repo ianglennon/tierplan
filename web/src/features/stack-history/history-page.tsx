@@ -19,8 +19,9 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RevisionDetail } from "@/features/stack-history/revision-detail";
+import { RevisionDetail, RevisionGone } from "@/features/stack-history/revision-detail";
 import { RevisionTable } from "@/features/stack-history/revision-table";
+import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -72,6 +73,8 @@ export function HistoryPage({ envId, stackId, rev }: HistoryPageProps) {
   const stack = useQuery(stackQuery(envId, stackId));
   const history = useQuery(revisionsQuery(envId, stackId));
   const deploy = useNeeds("stacks.deploy", envId);
+  // Only someone who may read the settings is sent there from the retention note.
+  const canReadSettings = usePermission("settings.read");
   const name = stack.data?.name ?? stackId;
   const items = history.data?.items ?? null;
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -173,6 +176,17 @@ export function HistoryPage({ envId, stackId, rev }: HistoryPageProps) {
           selected={selected?.seq}
           fresh={fresh}
         />
+        <p className="text-sm text-muted-foreground">
+          {t("stackRetention.note", { count: history.data?.kept })}
+          {canReadSettings ? (
+            <>
+              {" "}
+              <Link to="/settings/general" className="underline underline-offset-4">
+                {t("stackRetention.openSettings")}
+              </Link>
+            </>
+          ) : null}
+        </p>
       </section>
       {selected ? (
         <RevisionDetail
@@ -181,26 +195,15 @@ export function HistoryPage({ envId, stackId, rev }: HistoryPageProps) {
           item={selected}
           stack={stack.data}
           headingRef={headingRef}
+          retention={history.data?.kept}
         />
       ) : (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <History aria-hidden="true" />
-            </EmptyMedia>
-            <EmptyTitle role="heading" aria-level={3} ref={headingRef} tabIndex={-1}>
-              {t("stackHistory.gone.title")}
-            </EmptyTitle>
-            <EmptyDescription>{t("stackHistory.gone.body")}</EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button asChild variant="outline" className="max-md:h-11">
-              <Link to="/env/$envId/stacks/$stackId/history" params={{ envId, stackId }} replace>
-                {t("stackHistory.gone.back")}
-              </Link>
-            </Button>
-          </EmptyContent>
-        </Empty>
+        <RevisionGone
+          envId={envId}
+          stackId={stackId}
+          headingRef={headingRef}
+          retention={history.data?.kept}
+        />
       )}
     </div>
   );

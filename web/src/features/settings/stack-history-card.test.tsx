@@ -85,11 +85,12 @@ const patches = () => sent.filter((s) => s.method === "PATCH" && s.path.endsWith
 const previews = () => sent.filter((s) => s.path === "/api/settings/stack-history/preview");
 
 async function loaded() {
-  const field = await screen.findByLabelText("Revisions kept per stack");
-  await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
+  // The loaded form replaces the placeholder field, so the field is read after the placeholder is gone.
+  await screen.findByLabelText("Revisions kept per stack");
+  await waitFor(() => expect(screen.queryByText("Loading the stack history setting…")).toBeNull());
   await waitFor(() => expect(queryClient.getQueryData(["me"])).toBeTruthy());
   await act(async () => {});
-  return field as HTMLInputElement;
+  return screen.getByLabelText("Revisions kept per stack") as HTMLInputElement;
 }
 
 const save = () => screen.getByRole("button", { name: "Save settings" });
@@ -135,8 +136,9 @@ describe("the Stack history card", () => {
     expect(document.querySelector('[data-slot="skeleton"]')).toBeTruthy();
     expect(save().hasAttribute("disabled")).toBe(true);
     await act(async () => release(Response.json(held)));
-    await waitFor(() => expect(field.disabled).toBe(false));
-    expect(field.value).toBe("20");
+    // The loaded form replaces the placeholder field.
+    const next = await loaded();
+    expect(next.value).toBe("20");
     expect(document.querySelector('[data-slot="skeleton"]')).toBeNull();
   });
 

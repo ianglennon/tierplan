@@ -62,11 +62,6 @@
       },
       "by": "by {{user}},"
     },
-    "gone": {
-      "title": "That revision is gone",
-      "body": "Bayplan keeps only the newest revisions of each stack, and this one was deleted.",
-      "back": "Back to history"
-    },
     "empty": {
       "title": "No revisions yet",
       "body": "Every deploy of {{name}} is listed here, so you can compare it with what's running and roll back to it.",
