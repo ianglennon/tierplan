@@ -47,6 +47,7 @@ type StackRevisionItem struct {
 type StackRevisionListBody struct {
 	Items  []StackRevisionItem `json:"items" doc:"The revisions of the stack, newest first by revision number. A pruned revision is gone from the list"`
 	Capped bool                `json:"capped" doc:"True when the stack has more revisions than the 500 the list holds; the oldest are left out"`
+	Kept   int                 `json:"kept" doc:"How many revisions of each stack Bayplan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides"`
 }
 
 // StackRevisionListOutput wraps StackRevisionListBody for huma.
@@ -84,7 +85,7 @@ func listStackRevisions(ctx context.Context, d StacksDeps, in *StackPathInput) (
 	if err != nil {
 		return nil, stackInternal(d, "list revisions", in.EnvID, err)
 	}
-	body := StackRevisionListBody{Items: make([]StackRevisionItem, 0, len(rows)), Capped: capped}
+	body := StackRevisionListBody{Items: make([]StackRevisionItem, 0, len(rows)), Capped: capped, Kept: d.revisionsKept()}
 	for _, row := range rows {
 		body.Items = append(body.Items, revisionItem(st, row))
 	}

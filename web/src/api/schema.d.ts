@@ -9394,6 +9394,11 @@ export interface components {
             capped: boolean;
             /** @description The revisions of the stack, newest first by revision number. A pruned revision is gone from the list */
             items: components["schemas"]["StackRevisionItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many revisions of each stack Bayplan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides
+             */
+            kept: number;
         };
         StackRevisionPinBody: {
             /** @description The sha256 digest of the reference; empty when it has none */

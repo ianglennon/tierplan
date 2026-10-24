@@ -1971,3 +1971,69 @@ func TestStandaloneOneClickRollback(t *testing.T) {
 		t.Errorf("stack = %+v, want the failed state gone after the roll back", a)
 	}
 }
+
+// Retention (plan 08-06, STK-08, D-01): a deploy that ends prunes its stack to the instance's limit.
+
+func seqsOfRows(rows []revisionRow) []int64 {
+	out := make([]int64, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Seq)
+	}
+	return out
+}
+
+func TestDeployPrunesTheStack(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	operator := f.caller(t, e, "operator-1", "operator")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "keep")
+	f.inst.ApplyStackRevisionsKept(5)
+
+	// Seven good deploys: the sixth takes the first revision out of the window, the seventh the second.
+	composes := []string{composeWeb127, composeWeb128, composeWeb129}
+	for i := 0; i < 7; i++ {
+		f.deployGood(t, operator, st.ID, composes[i%len(composes)])
+	}
+	if got := seqsOfRows(f.revisions(t, st.ID)); !slices.Equal(got, []int64{3, 4, 5, 6, 7}) {
+		t.Fatalf("revisions after seven deploys with 5 kept = %v, want 3 to 7", got)
+	}
+
+	// A deploy that ends failed prunes too, and the deployed revision (#7) stays whatever happens to the window.
+	f.deployThenCancel(t, operator, st, composeWeb127)
+	rows := f.revisions(t, st.ID)
+	if got := seqsOfRows(rows); !slices.Equal(got, []int64{4, 5, 6, 7, 8}) || rows[len(rows)-1].Outcome != "failed" {
+		t.Fatalf("revisions after a failed deploy = %+v, want 4 to 8 with #8 failed", rows)
+	}
+
+	// Raising the limit keeps what is there; nothing comes back and nothing more goes.
+	f.inst.ApplyStackRevisionsKept(50)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	if got := seqsOfRows(f.revisions(t, st.ID)); !slices.Equal(got, []int64{4, 5, 6, 7, 8, 9}) {
+		t.Fatalf("revisions after raising the limit = %v, want 4 to 9", got)
+	}
+}
+
+func TestDeployedRevisionOutlastsTheWindowAfterFailures(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	operator := f.caller(t, e, "operator-1", "operator")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "pinned")
+	f.inst.ApplyStackRevisionsKept(5)
+
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	for i := 0; i < 5; i++ {
+		f.deployThenCancel(t, operator, st, composeWeb128+"# "+itoaT(int64(i))+"\n")
+	}
+	// Revision 1 is the newest good one: six revisions are left, the five newest failures and the deployed one.
+	rows := f.revisions(t, st.ID)
+	if got := seqsOfRows(rows); !slices.Equal(got, []int64{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("revisions = %+v, want 1 to 6: five in the window and the deployed #1", rows)
+	}
+	f.deployThenCancel(t, operator, st, composeWeb128+"# six\n")
+	rows = f.revisions(t, st.ID)
+	if got := seqsOfRows(rows); !slices.Equal(got, []int64{1, 3, 4, 5, 6, 7}) || rows[0].Outcome != "good" {
+		t.Fatalf("revisions = %+v, want the deployed #1 kept and #2 pruned", rows)
+	}
+}

@@ -13786,11 +13786,17 @@
               "array",
               "null"
             ]
+          },
+          "kept": {
+            "description": "How many revisions of each stack Bayplan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides",
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "items",
-          "capped"
+          "capped",
+          "kept"
         ],
         "type": "object"
       },

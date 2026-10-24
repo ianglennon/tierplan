@@ -41,6 +41,7 @@ type stackRevisionsAnswer struct {
 		AdoptedFrom string `json:"adoptedFrom"`
 	} `json:"items"`
 	Capped bool `json:"capped"`
+	Kept   int  `json:"kept"`
 }
 
 func TestStackRevisionsList(t *testing.T) {
@@ -573,5 +574,21 @@ func TestRevisionChangesOfAStandaloneStack(t *testing.T) {
 	}
 	if n := len(f.fake.Writes()); n != writes {
 		t.Errorf("engine writes went from %d to %d, reading the changes writes nothing", writes, n)
+	}
+}
+
+func TestStackRevisionsListNamesTheRetentionLimit(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "limit")
+
+	if got := answerOf[stackRevisionsAnswer](t, viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions", "")).Kept; got != 20 {
+		t.Fatalf("kept = %d, want the default 20", got)
+	}
+	f.inst.ApplyStackRevisionsKept(7)
+	if got := answerOf[stackRevisionsAnswer](t, viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions", "")).Kept; got != 7 {
+		t.Fatalf("kept = %d, want the instance setting 7", got)
 	}
 }

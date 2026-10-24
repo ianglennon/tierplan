@@ -19,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -99,6 +100,9 @@ type StacksDeps struct {
 	OnChanges func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// RevisionsKept is how many revisions of each stack are kept (D-01); the server passes the instance
+	// setting. Nil means the default of 20.
+	RevisionsKept func() int
 	// ReadEnv, when set, is called before the stacks of an environment are read for the All stacks list;
 	// an error makes that environment a failed one. Tests use it to fail one environment's read.
 	ReadEnv func(ctx context.Context, envID string) error
@@ -134,6 +138,16 @@ type StacksDeps struct {
 }
 
 func (d StacksDeps) repo() stackops.Repo { return stackops.Repo{Store: d.Store, Vault: d.Vault} }
+
+// revisionsKept is the retention limit now: the instance's setting, or the default when none is wired.
+func (d StacksDeps) revisionsKept() int {
+	if d.RevisionsKept != nil {
+		if n := d.RevisionsKept(); n >= 1 {
+			return n
+		}
+	}
+	return instance.DefaultStackRevisionsKept
+}
 
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{

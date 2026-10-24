@@ -524,6 +524,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		return nil, restoredStateError{fmt.Errorf("load instance settings: %w", err)}
 	}
 
+	// Revisions beyond the retention limit go once at startup, after the deploys that were running are ended
+	// (their revisions are failed now, none is pending): a lowered limit, a restored database and a stack
+	// that last pruned before this version all reach the limit here (D-01). A failure is logged: a stack
+	// with too many revisions still works.
+	if pruned, perr := (stackops.Repo{Store: st, Vault: vlt}).PruneAll(ctx, inst.StackRevisionsKept()); perr != nil {
+		log.Warn("could not prune the stack revisions beyond the retention limit", "error", perr)
+	} else if pruned > 0 {
+		log.Info("pruned stack revisions beyond the retention limit", "count", pruned, "kept", inst.StackRevisionsKept())
+	}
+
 	// HTTPS comes from a supplied pair or a generated self-signed certificate
 	// (D-12). It is prepared here so a bad pair stops startup before listening.
 	tlsCfg, err := TLSConfig(cfg, inst.PublicURL(), inst.AgentURL(), nil)
@@ -793,7 +803,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackops.NewLocks(), Log: log},
+		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackops.NewLocks(), RevisionsKept: inst.StackRevisionsKept, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},

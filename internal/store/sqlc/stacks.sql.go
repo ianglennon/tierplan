@@ -9,6 +9,31 @@ import (
 	"context"
 )
 
+const countPrunableRevisions = `-- name: CountPrunableRevisions :one
+SELECT CAST(COUNT(*) AS INTEGER) AS revisions, CAST(COUNT(DISTINCT s.stack_id) AS INTEGER) AS stacks
+FROM stack_snapshots s
+WHERE s.kind = 'revision' AND s.outcome <> 'pending'
+  AND s.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                    WHERE k.stack_id = s.stack_id AND k.kind = 'revision'
+                    ORDER BY k.seq DESC LIMIT ?1)
+  AND s.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+                WHERE g.stack_id = s.stack_id AND g.kind = 'revision' AND g.outcome = 'good')
+`
+
+type CountPrunableRevisionsRow struct {
+	Revisions int64
+	Stacks    int64
+}
+
+// How many revisions across how many stacks PruneRevisions would delete for keep, over every stack: the
+// same predicate, read only.
+func (q *Queries) CountPrunableRevisions(ctx context.Context, keep int64) (CountPrunableRevisionsRow, error) {
+	row := q.db.QueryRowContext(ctx, countPrunableRevisions, keep)
+	var i CountPrunableRevisionsRow
+	err := row.Scan(&i.Revisions, &i.Stacks)
+	return i, err
+}
+
 const deleteDraft = `-- name: DeleteDraft :execrows
 DELETE FROM stack_snapshots WHERE id = ? AND kind = 'draft'
 `
@@ -838,6 +863,33 @@ func (q *Queries) ListSnapshotVars(ctx context.Context, snapshotID string) ([]St
 	return items, nil
 }
 
+const listStackIDs = `-- name: ListStackIDs :many
+SELECT id FROM stacks ORDER BY id
+`
+
+func (q *Queries) ListStackIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listStackIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStacksByEnv = `-- name: ListStacksByEnv :many
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? ORDER BY name
@@ -919,6 +971,32 @@ func (q *Queries) NextRevisionSeq(ctx context.Context, stackID string) (int64, e
 	var seq int64
 	err := row.Scan(&seq)
 	return seq, err
+}
+
+const pruneRevisions = `-- name: PruneRevisions :execrows
+DELETE FROM stack_snapshots
+WHERE stack_snapshots.stack_id = ?1 AND stack_snapshots.kind = 'revision' AND stack_snapshots.outcome <> 'pending'
+  AND stack_snapshots.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                  WHERE k.stack_id = stack_snapshots.stack_id AND k.kind = 'revision'
+                  ORDER BY k.seq DESC LIMIT ?2)
+  AND stack_snapshots.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+              WHERE g.stack_id = stack_snapshots.stack_id AND g.kind = 'revision' AND g.outcome = 'good')
+`
+
+type PruneRevisionsParams struct {
+	StackID string
+	Keep    int64
+}
+
+// Retention (D-01): a stack keeps its newest keep revisions by seq, its newest good revision (the deployed
+// one) however old, and any revision still pending. The rest are deleted; the foreign keys cascade to their
+// files and variables, so a sealed value goes with its revision. A draft is never touched.
+func (q *Queries) PruneRevisions(ctx context.Context, arg PruneRevisionsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneRevisions, arg.StackID, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setDraftBaseSeq = `-- name: SetDraftBaseSeq :execrows

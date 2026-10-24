@@ -956,6 +956,11 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)
 	}
+	// The outcome is stored, so this revision is no longer pending and the deployed one is the newest good: prune
+	// the stack to the instance's limit (D-01). A failure is logged and never fails the record.
+	if _, err := repo.Prune(wctx, st.ID, d.revisionsKept()); err != nil {
+		d.Log.Warn("could not prune the revisions of a stack", "stack", st.ID, "error", err)
+	}
 	// The stack's state is read from the cluster cache, so read the swarm again: a stack that reads
 	// finished must not show what it ran before. A failed read leaves the last one. A standalone host's
 	// snapshot was dropped by the write itself.

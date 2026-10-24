@@ -200,3 +200,30 @@ LEFT JOIN stack_deploys d ON d.id = (
 WHERE r.stack_id = ? AND r.kind = 'revision'
 ORDER BY r.seq DESC
 LIMIT ?;
+
+-- name: PruneRevisions :execrows
+-- Retention (D-01): a stack keeps its newest keep revisions by seq, its newest good revision (the deployed
+-- one) however old, and any revision still pending. The rest are deleted; the foreign keys cascade to their
+-- files and variables, so a sealed value goes with its revision. A draft is never touched.
+DELETE FROM stack_snapshots
+WHERE stack_snapshots.stack_id = sqlc.arg(stack_id) AND stack_snapshots.kind = 'revision' AND stack_snapshots.outcome <> 'pending'
+  AND stack_snapshots.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                  WHERE k.stack_id = stack_snapshots.stack_id AND k.kind = 'revision'
+                  ORDER BY k.seq DESC LIMIT sqlc.arg(keep))
+  AND stack_snapshots.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+              WHERE g.stack_id = stack_snapshots.stack_id AND g.kind = 'revision' AND g.outcome = 'good');
+
+-- name: CountPrunableRevisions :one
+-- How many revisions across how many stacks PruneRevisions would delete for keep, over every stack: the
+-- same predicate, read only.
+SELECT CAST(COUNT(*) AS INTEGER) AS revisions, CAST(COUNT(DISTINCT s.stack_id) AS INTEGER) AS stacks
+FROM stack_snapshots s
+WHERE s.kind = 'revision' AND s.outcome <> 'pending'
+  AND s.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                    WHERE k.stack_id = s.stack_id AND k.kind = 'revision'
+                    ORDER BY k.seq DESC LIMIT sqlc.arg(keep))
+  AND s.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+                WHERE g.stack_id = s.stack_id AND g.kind = 'revision' AND g.outcome = 'good');
+
+-- name: ListStackIDs :many
+SELECT id FROM stacks ORDER BY id;
