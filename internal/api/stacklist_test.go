@@ -660,3 +660,145 @@ func TestStackListSearchFindsAnUnmanagedStackByItsServiceName(t *testing.T) {
 		t.Errorf("q=cache listed %v, want legacy", names)
 	}
 }
+
+// unmanagedMix makes a managed stack, web, and two stacks of the swarm that Bayplan did not make, and returns
+// the env Admin.
+func unmanagedMix(t *testing.T, f *envFix, e envBody) *roleCaller {
+	t.Helper()
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	newStack(t, admin, "web")
+	reconfigureSwarm(t, f, e,
+		foreignSwarmService("legacy", "app", 1, 1, nil),
+		foreignSwarmService("portainer-blog", "app", 0, 1, nil),
+	)
+	return admin
+}
+
+func TestStackListKindFiltersManagedAndUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := unmanagedMix(t, f, e)
+
+	for query, want := range map[string][]string{
+		"":                {"legacy", "portainer-blog", "web"},
+		"?kind=managed":   {"web"},
+		"?kind=unmanaged": {"legacy", "portainer-blog"},
+	} {
+		got := listWith(t, admin, query)
+		if names := stackNames(got.Items); !slices.Equal(names, want) {
+			t.Errorf("%q listed %v, want %v", query, names, want)
+		}
+		if got.Total != len(want) {
+			t.Errorf("%q total = %d, want %d", query, got.Total, len(want))
+		}
+	}
+}
+
+func TestStackListKindCountsComeFromTheUnfilteredSet(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := unmanagedMix(t, f, e)
+
+	want := kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}
+	for _, query := range []string{"", "?kind=managed", "?kind=unmanaged", "?q=nomatch", "?status=degraded", "?kind=unmanaged&q=legacy"} {
+		if got := listWith(t, admin, query); got.KindCounts != want {
+			t.Errorf("%q kindCounts = %+v, want %+v whatever was typed", query, got.KindCounts, want)
+		}
+	}
+}
+
+func TestStackListStatusChipsFilterManagedStacksOnly(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha := newStack(t, admin, "alpha")
+	if job := f.deployAndWait(t, operator, alpha.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy alpha: %+v", job)
+	}
+	// alpha is degraded (one of two services runs); legacy is degraded too, and unmanaged.
+	reconfigureSwarm(t, f, e,
+		ownedService(alpha, "worker", 1, 3),
+		foreignSwarmService("legacy", "app", 1, 2, nil),
+	)
+
+	degraded := listWith(t, admin, "?status=degraded")
+	if names := stackNames(degraded.Items); !slices.Equal(names, []string{"alpha"}) {
+		t.Errorf("status=degraded listed %v, want the managed alpha only", names)
+	}
+	if degraded.StatusCounts.Degraded != 1 {
+		t.Errorf("degraded count = %d, want 1: an unmanaged stack is in no chip", degraded.StatusCounts.Degraded)
+	}
+	if none := listWith(t, admin, "?status=degraded&kind=unmanaged"); len(none.Items) != 0 || none.Total != 0 {
+		t.Errorf("status=degraded&kind=unmanaged listed %v, want nothing", stackNames(none.Items))
+	}
+}
+
+func TestStackListRefusesAKindThatIsNeitherManagedNorUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+
+	rec := admin.do(http.MethodGet, "stacks?kind=other", "")
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "kind_invalid") {
+		t.Errorf("kind=other: %d %s, want 422 kind_invalid", rec.Code, rec.Body)
+	}
+}
+
+func TestAllStacksCountsUnmanagedPerEnvironmentAndTakesTheKindFilter(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	admin := unmanagedMix(t, f, a)
+	f.seedStack(t, b.ID, "edge-proxy", stacks.TargetSwarm)
+
+	all := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, ""))
+	if all.KindCounts != (kindCountsAnswer{All: 4, Managed: 2, Unmanaged: 2}) {
+		t.Errorf("kindCounts = %+v, want 2 managed and 2 unmanaged over both environments", all.KindCounts)
+	}
+	perEnv := map[string]kindCountsAnswer{}
+	for _, g := range all.Groups {
+		perEnv[g.EnvID] = g.KindCounts
+	}
+	if perEnv[a.ID] != (kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}) || perEnv[b.ID] != (kindCountsAnswer{All: 1, Managed: 1}) {
+		t.Errorf("per-environment kindCounts = %+v", perEnv)
+	}
+
+	only := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?kind=unmanaged"))
+	if only.Total != 2 || len(only.Groups) != 1 || only.Groups[0].EnvID != a.ID || only.KindCounts.All != 4 {
+		t.Errorf("kind=unmanaged answered %+v, want A's two unmanaged stacks with the counts unchanged", only)
+	}
+	if rec := f.allStacks(t, f.cookie, "?kind=other"); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("kind=other: %d, want 422", rec.Code)
+	}
+	_ = admin
+}
+
+func TestStackListSaysWhenTheLookForUnmanagedStacksFailedAndStillListsTheManagedOnes(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	f.seedStack(t, b.ID, "edge-proxy", stacks.TargetSwarm)
+
+	// B's agent is not connected: what it runs cannot be read, so nothing can be discovered there.
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+b.ID))
+	if len(got.Groups) != 1 || !got.Groups[0].DiscoveryFailed || len(got.Groups[0].Stacks) != 1 || got.Groups[0].Stacks[0].Name != "edge-proxy" {
+		t.Errorf("B = %+v, want edge-proxy listed and discoveryFailed", got.Groups)
+	}
+
+	// A has no stacks and discovery works: no group, no failure.
+	ok := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+a.ID))
+	if len(ok.Groups) != 0 {
+		t.Errorf("A = %+v, want no group: it has no stacks of any kind", ok.Groups)
+	}
+}
+
+func TestAllStacksKeepsAGroupForAnEnvironmentWithNoStacksWhoseLookFailed(t *testing.T) {
+	t.Parallel()
+	f, _, b := twoStackEnvironments(t, nil)
+
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+b.ID))
+
+	if len(got.Groups) != 1 || got.Groups[0].EnvID != b.ID || len(got.Groups[0].Stacks) != 0 || !got.Groups[0].DiscoveryFailed {
+		t.Errorf("groups = %+v, want B's group with no stacks and discoveryFailed, so the page can say so", got.Groups)
+	}
+}

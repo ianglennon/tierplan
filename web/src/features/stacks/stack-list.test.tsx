@@ -185,7 +185,7 @@ describe("StackList", () => {
     expect(await screen.findByRole("heading", { name: "Stacks", level: 1 })).toBeTruthy();
     const link = await screen.findByRole("link", { name: "web" });
     expect(link.getAttribute("href")).toBe("/env/e1/stacks/s1");
-    expect(screen.getByText(/Stacks Bayplan manages on Prod\./)).toBeTruthy();
+    expect(screen.getByText(/Stacks on Prod\./)).toBeTruthy();
     expect(screen.getByText(/1 stack$/)).toBeTruthy();
   });
 
@@ -707,5 +707,141 @@ describe("StackList unmanaged stacks", () => {
     expect(tip.textContent).toBe(
       "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
     );
+  });
+});
+
+describe("StackList: the Show group, captions and discovery", () => {
+  const counts = (all: number, managed: number, unmanagedCount: number) => ({
+    all,
+    managed,
+    unmanaged: unmanagedCount,
+  });
+
+  it("shows a group named Show beside the search with All, Managed and Unmanaged and their counts", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    const show = screen.getByRole("group", { name: "Show" });
+    expect(within(show).getByRole("radio", { name: "All, 3" })).toBeTruthy();
+    expect(within(show).getByRole("radio", { name: "Managed, 1" })).toBeTruthy();
+    expect(within(show).getByRole("radio", { name: "Unmanaged, 2" })).toBeTruthy();
+    // It sits in toolbar row 1, with the search.
+    expect(show.parentElement?.contains(screen.getByRole("searchbox"))).toBe(true);
+  });
+
+  it("puts the kind in the URL, and takes it out when the chosen one is pressed again", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("radio", { name: "Unmanaged, 2" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "unmanaged" });
+    fireEvent.click(screen.getByRole("radio", { name: "Managed, 1" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "managed" });
+    fireEvent.click(screen.getByRole("radio", { name: "Managed, 1" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: undefined });
+  });
+
+  it("restores the kind from the URL and sends it to the server", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount({ search: { kind: "unmanaged" } });
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByRole("radio", { name: "Unmanaged, 2" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get("kind")).toBe("unmanaged"));
+  });
+
+  it("offers Clear filters while a kind is on, and clears it", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    const { onChange } = mount({ search: { kind: "managed" } });
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, kind: undefined });
+  });
+
+  it("captions the stacks and the unmanaged ones among them, plural-aware", async () => {
+    stacks = { items: [stack(), unmanaged("legacy"), unmanaged("blog")] };
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText(/Stacks on Prod\./)).toBeTruthy();
+    expect(screen.getByText(/3 stacks, 2 unmanaged$/)).toBeTruthy();
+    cleanup();
+
+    stacks = { items: [unmanaged("legacy")] };
+    listExtra = { kindCounts: counts(1, 0, 1) };
+    mount();
+    await screen.findByText("legacy");
+    expect(screen.getByText(/1 stack, 1 unmanaged$/)).toBeTruthy();
+  });
+
+  it("leaves the unmanaged part out of the caption when there are none", async () => {
+    listExtra = { kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText(/1 stack$/)).toBeTruthy();
+    expect(screen.queryByText(/unmanaged$/)).toBeNull();
+  });
+
+  it("lists an environment that has only unmanaged stacks and does not say there are no stacks", async () => {
+    stacks = { items: [unmanaged("legacy")] };
+    listExtra = { kindCounts: counts(1, 0, 1) };
+    mount();
+    expect(await screen.findByText("legacy")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "No stacks", level: 2 })).toBeNull();
+  });
+
+  it("says there are no unmanaged stacks, and clears the filter", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 1, kindCounts: counts(1, 1, 0) };
+    const { onChange } = mount({ search: { kind: "unmanaged" } });
+    expect(
+      await screen.findByRole("heading", { name: "No unmanaged stacks", level: 2 }),
+    ).toBeTruthy();
+    expect(screen.getByText("Every stack on Prod is managed by Bayplan.")).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, kind: undefined });
+  });
+
+  it("says there are no managed stacks when every stack was created elsewhere", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 2, kindCounts: counts(2, 0, 2) };
+    mount({ search: { kind: "managed" } });
+    expect(
+      await screen.findByRole("heading", { name: "No managed stacks", level: 2 }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The stacks on Prod were all created elsewhere. Adopt one to manage it here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Clear filters" }).length).toBeGreaterThan(0);
+  });
+
+  it("says no stack matches the filters for a status chip with the Unmanaged kind", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 3, kindCounts: counts(3, 1, 2) };
+    mount({ search: { kind: "unmanaged", status: "degraded" } });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match these filters.", level: 2 }),
+    ).toBeTruthy();
+  });
+
+  it("shows a retry row when the look for unmanaged stacks failed, with the managed stacks still listed", async () => {
+    listExtra = { discoveryFailed: true, kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText("Couldn't look for unmanaged stacks on Prod.")).toBeTruthy();
+    const before = requests.length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requests.length).toBeGreaterThan(before));
+  });
+
+  it("shows no retry row when the look worked", async () => {
+    listExtra = { discoveryFailed: false, kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.queryByText(/Couldn't look for unmanaged stacks/)).toBeNull();
   });
 });
