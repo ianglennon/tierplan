@@ -97,6 +97,7 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
           stackId={stackId}
           seq={seq}
           deployedSeq={detail?.deployedSeq ?? 0}
+          pending={detail?.item.outcome === "pending"}
         />
       </TabsContent>
       <TabsContent value="yaml" className="flex min-w-0 flex-col gap-2">
