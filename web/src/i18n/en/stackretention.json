@@ -1,0 +1,26 @@
+{
+  "stackRetention": {
+    "title": "Stack history",
+    "caption": "How many revisions Bayplan keeps for each stack.",
+    "label": "Revisions kept per stack",
+    "helper": "The deployed revision and the last good one are always kept, even when older. Older revisions are deleted, along with their variables and secret files.",
+    "error": "Use a whole number from 5 to 200.",
+    "loading": "Loading the stack history setting…",
+    "loadFailed": "Couldn't load the stack history setting.",
+    "note": "Bayplan keeps the last {{count, number}} revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.",
+    "openSettings": "Open settings",
+    "confirm": {
+      "title": "Delete older revisions?",
+      "body": "Lowering this to {{keep, number}} deletes {{revisions}} across {{stacks}}. They can't be recovered.",
+      "bodyUnknown": "Older revisions are deleted the next time pruning runs. They can't be recovered.",
+      "revisions_one": "{{count, number}} revision",
+      "revisions_other": "{{count, number}} revisions",
+      "stacks_one": "{{count, number}} stack",
+      "stacks_other": "{{count, number}} stacks",
+      "keep": "Keep limit",
+      "delete_one": "Save and delete {{count, number}} revision",
+      "delete_other": "Save and delete {{count, number}} revisions",
+      "deleteUnknown": "Save and delete older revisions"
+    }
+  }
+}

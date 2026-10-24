@@ -17,6 +17,13 @@ const ENV = "e1";
 type Json = Record<string, unknown>;
 
 let role: "viewer" | "operator";
+// Whether the person may read the instance settings (an instance administrator).
+let settingsReader: boolean;
+// How many revisions of each stack the instance keeps, as the list names it.
+let kept: number;
+// The revisions the server no longer holds although the list still names them: retention deleted them between
+// the two reads.
+let goneSeqs: Set<number>;
 let revisions: Json[];
 let listStatus: number;
 let lastOperation: Json | undefined;
@@ -50,6 +57,9 @@ function revision(seq: number, over: Json = {}): Json {
 
 beforeEach(() => {
   role = "viewer";
+  settingsReader = false;
+  kept = 20;
+  goneSeqs = new Set();
   listStatus = 200;
   listCalls = 0;
   draftSaved = false;
@@ -73,7 +83,11 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
+      if (path === "/api/me") {
+        return Response.json(
+          makeMe(settingsReader ? { instanceAdmin: true } : { envs: { [ENV]: role } }),
+        );
+      }
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -104,7 +118,14 @@ beforeEach(() => {
             { status: listStatus },
           );
         }
-        return Response.json({ items: revisions, capped: false });
+        return Response.json({ items: revisions, capped: false, kept });
+      }
+      const detail = /\/revisions\/(\d+)$/.exec(path);
+      if (detail && goneSeqs.has(Number(detail[1]))) {
+        return Response.json(
+          { type: "revision_not_found", title: "Not Found", status: 404, detail: "gone" },
+          { status: 404 },
+        );
       }
       return Response.json({}, { status: 404 });
     }),
@@ -151,6 +172,73 @@ function rowOf(seq: number) {
 function highlighted(row: HTMLElement) {
   return row.className.split(/\s+/).includes("bg-muted");
 }
+
+// Retention (plan 08-06, STK-08, D-01): the note under the table, and the gone state naming the limit.
+describe("the retention note", () => {
+  const NOTE =
+    "Bayplan keeps the last 5 revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.";
+
+  it("says how many revisions are kept and what always stays, under the table", async () => {
+    kept = 5;
+    mount();
+
+    const tbl = await table();
+    const note = await screen.findByText(NOTE);
+    expect(tbl.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("names the instance's own limit", async () => {
+    kept = 50;
+    mount();
+
+    expect(
+      await screen.findByText(/^Bayplan keeps the last 50 revisions of each stack\./),
+    ).toBeTruthy();
+  });
+
+  it("offers Open settings to someone who may read the settings", async () => {
+    kept = 5;
+    settingsReader = true;
+    mount();
+
+    await screen.findByText(NOTE);
+    const link = screen.getByRole("link", { name: "Open settings" });
+    expect(link.getAttribute("href")).toBe("/settings/general");
+  });
+
+  it("offers no way to the settings to someone who may not read them", async () => {
+    kept = 5;
+    mount();
+
+    await screen.findByText(NOTE);
+    expect(screen.queryByRole("link", { name: "Open settings" })).toBeNull();
+  });
+
+  it("names the limit in the gone state of a revision the list does not hold", async () => {
+    kept = 5;
+    mount(99);
+
+    expect(await screen.findByRole("heading", { name: "That revision is gone" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Bayplan keeps the last 5 revisions of each stack, and this one was deleted.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("names the same limit when the server says the revision was deleted since the list was read", async () => {
+    kept = 7;
+    goneSeqs = new Set([3]);
+    mount(3);
+
+    expect(await screen.findByRole("heading", { name: "That revision is gone" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Bayplan keeps the last 7 revisions of each stack, and this one was deleted.",
+      ),
+    ).toBeTruthy();
+  });
+});
 
 describe("the revision table", () => {
   it("lists the revisions newest first under a caption, with the columns and the count", async () => {
