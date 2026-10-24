@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/bayplan/internal/instance"
 )
 
 // Settings: instance name and public URL (plan 26, D-03, D-04, AUTH-08).
@@ -827,5 +828,224 @@ func TestShellSettingsAreForTheInstanceAdministratorOnly(t *testing.T) {
 	}
 	if f.inst.ShellCap() != 10 {
 		t.Fatalf("cap = %d after a refused PATCH, want 10", f.inst.ShellCap())
+	}
+}
+
+// Stack history retention (plan 08-06, STK-08, D-01): how many revisions of each stack are kept.
+
+type stackHistorySettingsResp struct {
+	Kept   int `json:"kept"`
+	Min    int `json:"min"`
+	Max    int `json:"max"`
+	Pruned int `json:"pruned"`
+}
+
+type stackHistoryPreviewResp struct {
+	Revisions int `json:"revisions"`
+	Stacks    int `json:"stacks"`
+}
+
+func (f *authFixture) getStackHistorySettings(t *testing.T, cookie string) (int, stackHistorySettingsResp) {
+	t.Helper()
+	rec := f.call(t, authReq{method: http.MethodGet, path: "/api/settings/stack-history", cookie: cookie})
+	var s stackHistorySettingsResp
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+			t.Fatalf("not a stack history settings body: %v: %s", err, rec.Body)
+		}
+	}
+	return rec.Code, s
+}
+
+func (f *authFixture) patchStackHistorySettings(t *testing.T, cookie, csrf, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodPatch, path: "/api/settings/stack-history", body: body, cookie: cookie, csrf: csrf})
+}
+
+func (f *authFixture) previewStackHistory(t *testing.T, cookie, keep string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(t, authReq{method: http.MethodGet, path: "/api/settings/stack-history/preview?keep=" + keep, cookie: cookie})
+}
+
+// seedRevisions gives a stack of its own n good revisions, each with a sealed variable, and returns how many
+// revisions and variables the store holds for it.
+func (f *authFixture) seedRevisions(t *testing.T, name string, n int) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT OR IGNORE INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'e', '', 1, 1, 1)`,
+		`INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at) VALUES ('s-` + name + `', 'env-1', '` + name + `', 'swarm', 'inline', '', 'ada', 1)`,
+	} {
+		if _, err := f.st.Write.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	for i := 1; i <= n; i++ {
+		id := "r-" + name + "-" + itoaT(int64(i))
+		if _, err := f.st.Write.ExecContext(ctx, `INSERT INTO stack_snapshots (id, stack_id, kind, seq, outcome, created_by, created_at) VALUES (?, ?, 'revision', ?, 'good', 'ada', ?)`, id, "s-"+name, i, i); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.st.Write.ExecContext(ctx, `INSERT INTO stack_snapshot_vars (snapshot_id, name, value_sealed, secret) VALUES (?, 'K', 'sealed', 1)`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func (f *authFixture) countStored(t *testing.T) (revisions, vars int) {
+	t.Helper()
+	row := f.st.Read.QueryRow(`SELECT (SELECT COUNT(*) FROM stack_snapshots WHERE kind = 'revision'), (SELECT COUNT(*) FROM stack_snapshot_vars)`)
+	if err := row.Scan(&revisions, &vars); err != nil {
+		t.Fatal(err)
+	}
+	return revisions, vars
+}
+
+func TestStackHistorySettingsStartAtTwentyWithTheirBounds(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	code, s := f.getStackHistorySettings(t, cookie)
+	if code != http.StatusOK || s.Kept != 20 || s.Min != 5 || s.Max != 200 {
+		t.Fatalf("got %d %+v, want 200 with kept 20, min 5, max 200", code, s)
+	}
+}
+
+func TestStackHistorySettingsAreForTheInstanceAdministratorOnly(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	f.addUser(t, "viewer", false) // no role at all
+	cookie, csrf := f.signIn(t, "viewer", false)
+	if code, _ := f.getStackHistorySettings(t, cookie); code != http.StatusForbidden {
+		t.Fatalf("GET without settings.read: %d, want 403", code)
+	}
+	if rec := f.patchStackHistorySettings(t, cookie, csrf, `{"kept":50}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("PATCH without settings.write: %d, want 403", rec.Code)
+	}
+	if rec := f.previewStackHistory(t, cookie, "5"); rec.Code != http.StatusForbidden {
+		t.Fatalf("preview without settings.write: %d, want 403", rec.Code)
+	}
+	if f.inst.StackRevisionsKept() != 20 {
+		t.Fatalf("kept = %d after a refused PATCH, want 20", f.inst.StackRevisionsKept())
+	}
+}
+
+func TestPatchStackHistorySettingsRefusesValuesOutsideTheRangeAndChangesNothing(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.seedRevisions(t, "web", 8)
+	for _, body := range []string{`{"kept":3}`, `{"kept":4}`, `{"kept":201}`, `{"kept":0}`, `{"kept":-5}`, `{}`} {
+		if rec := f.patchStackHistorySettings(t, cookie, csrf, body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422: %s", body, rec.Code, rec.Body)
+		}
+	}
+	if f.inst.StackRevisionsKept() != 20 {
+		t.Fatalf("kept = %d after refusals, want 20", f.inst.StackRevisionsKept())
+	}
+	if n, _ := f.countStored(t); n != 8 {
+		t.Fatalf("%d revisions after refusals, want all 8", n)
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 0 {
+		t.Fatalf("%d settings.updated entries after refusals, want none", n)
+	}
+}
+
+func TestPatchStackHistorySettingsToTheCurrentValueWritesNoAuditRow(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	rec := f.patchStackHistorySettings(t, cookie, csrf, `{"kept":20}`)
+	var got stackHistorySettingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Kept != 20 || got.Pruned != 0 {
+		t.Fatalf("status %d body %s (%v), want 200 with kept 20 and nothing pruned", rec.Code, rec.Body, err)
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 0 {
+		t.Fatalf("%d settings.updated entries, want none: a PATCH that changes nothing is not audited", n)
+	}
+}
+
+func TestPatchStackHistorySettingsLoweringAuditsAndPrunesEveryStack(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.seedRevisions(t, "web", 8) // 3 beyond 5
+	f.seedRevisions(t, "db", 6)  // 1 beyond 5
+	f.seedRevisions(t, "few", 3) // none
+
+	rec := f.patchStackHistorySettings(t, cookie, csrf, `{"kept":5}`)
+	var got stackHistorySettingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Kept != 5 || got.Pruned != 4 {
+		t.Fatalf("status %d body %s (%v), want 200 with kept 5 and 4 pruned", rec.Code, rec.Body, err)
+	}
+	if f.inst.StackRevisionsKept() != 5 {
+		t.Fatalf("cached = %d, want 5 at once", f.inst.StackRevisionsKept())
+	}
+	// The sealed variables of the pruned revisions went with them.
+	if revs, vars := f.countStored(t); revs != 13 || vars != 13 {
+		t.Fatalf("%d revisions and %d variables left, want 13 and 13 (5 + 5 + 3)", revs, vars)
+	}
+	entries := f.audits(t, "settings.updated")
+	if len(entries) != 1 || entries[0].ActorID != "id-admin" || entries[0].Result != "success" {
+		t.Fatalf("audit = %+v, want one success entry by id-admin", entries)
+	}
+	d := f.auditDetails(t, "settings.updated")[0]
+	if d["stack_revisions_kept_from"] != "20" || d["stack_revisions_kept_to"] != "5" || d["pruned"] != "4" {
+		t.Fatalf("details = %v, want from 20, to 5 and 4 pruned", d)
+	}
+	// It is stored: the next start reads 5.
+	if again, err := instance.Load(context.Background(), f.st, config.Config{}); err != nil || again.StackRevisionsKept() != 5 {
+		t.Fatalf("reloaded = %v, %v, want 5", again, err)
+	}
+}
+
+func TestPatchStackHistorySettingsRaisingTheLimitPrunesNothing(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.seedRevisions(t, "web", 8)
+	rec := f.patchStackHistorySettings(t, cookie, csrf, `{"kept":200}`)
+	var got stackHistorySettingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Kept != 200 || got.Pruned != 0 {
+		t.Fatalf("status %d body %s (%v), want 200 with kept 200 and nothing pruned", rec.Code, rec.Body, err)
+	}
+	if n, _ := f.countStored(t); n != 8 {
+		t.Fatalf("%d revisions after raising the limit, want all 8", n)
+	}
+	d := f.auditDetails(t, "settings.updated")[0]
+	if d["stack_revisions_kept_from"] != "20" || d["stack_revisions_kept_to"] != "200" || d["pruned"] != "0" {
+		t.Fatalf("details = %v, want from 20, to 200 and 0 pruned", d)
+	}
+}
+
+func TestStackHistorySettingsPreviewCountsWhatALowerLimitWouldDelete(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	cookie, _ := f.signIn(t, "admin", false)
+	f.seedRevisions(t, "web", 8)
+	f.seedRevisions(t, "db", 6)
+
+	rec := f.previewStackHistory(t, cookie, "5")
+	var got stackHistoryPreviewResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Revisions != 4 || got.Stacks != 2 {
+		t.Fatalf("status %d body %s (%v), want 200 with 4 revisions in 2 stacks", rec.Code, rec.Body, err)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	rec = f.previewStackHistory(t, cookie, "20")
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil || got.Revisions != 0 || got.Stacks != 0 {
+		t.Fatalf("status %d body %s (%v), want nothing to delete at the current limit", rec.Code, rec.Body, err)
+	}
+	for _, keep := range []string{"4", "201", "x", ""} {
+		if rec := f.previewStackHistory(t, cookie, keep); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("keep=%q: status = %d, want 422", keep, rec.Code)
+		}
+	}
+	// A preview only reads.
+	if n, _ := f.countStored(t); n != 14 {
+		t.Fatalf("%d revisions after previews, want all 14", n)
+	}
+	if n := len(f.audits(t, "settings.updated")); n != 0 {
+		t.Fatalf("%d settings.updated entries after previews, want none", n)
 	}
 }
