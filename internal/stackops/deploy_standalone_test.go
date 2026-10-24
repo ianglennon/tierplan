@@ -343,3 +343,77 @@ func TestStandaloneDeployOnAReadOnlyHostFailsTheCheckStepAndRunsNothing(t *testi
 		t.Errorf("SDK calls %d, writes %v, lookups %v, want nothing asked of the host", stand.calls, rig.fake.Writes(), rig.fake.DistributionRefs())
 	}
 }
+
+// A standalone roll back sends the images the revision stored (plan 08-05, STK-08, D-06, T-08-18).
+func TestStandaloneRollbackSendsTheStoredDigest(t *testing.T) {
+	t.Parallel()
+	older := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	newer := "nginx:1.27-alpine@sha256:" + strings.Repeat("b", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": newer})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", newer))
+	// The tag has moved again on the registry: a roll back must not follow it.
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("c", 64))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	pins := &memPins{}
+	in := standaloneInput("demo", webStandalone)
+	in.Pins, in.RevisionID, in.Reviewed, in.Rollback = pins, "rev-3", map[string]string{"web": older}, true
+
+	res, job := rig.deployStandalone(t, in)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result %+v, job %s %v", res, job.State, itemStates(job))
+	}
+	if stand.project == nil || stand.project.Services["web"].Image != older {
+		t.Fatalf("the SDK was given %+v, want web at exactly the stored reference %q", stand.project, older)
+	}
+	if got := pins.pinsOf("rev-3"); got["web"] != older {
+		t.Errorf("stored pins = %v, want the roll back's revision to hold the stored reference", got)
+	}
+	if refs := rig.fake.DistributionRefs(); len(refs) != 0 {
+		t.Errorf("distribution checks = %v, a roll back asks no registry", refs)
+	}
+	if res.Updated != 1 {
+		t.Errorf("result = %+v, want the web container recreated from the older image", res)
+	}
+}
+
+func TestAReviewedStandaloneDeployRefusesAnOlderDigestButARollbackSendsIt(t *testing.T) {
+	t.Parallel()
+	older := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	newer := "nginx:1.27-alpine@sha256:" + strings.Repeat("b", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": newer})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", newer))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	in := standaloneInput("demo", webStandalone)
+	in.Reviewed = map[string]string{"web": older}
+
+	res, _ := rig.deployStandalone(t, in)
+
+	if res.OK() || res.Code != stackops.CodePinsInvalid || stand.calls != 0 {
+		t.Fatalf("result %+v after %d runs, want a reviewed deploy of an older digest refused (pins_invalid) before anything runs", res, stand.calls)
+	}
+	in.Rollback = true
+	if res, _ = rig.deployStandalone(t, in); !res.OK() || stand.calls != 1 {
+		t.Errorf("result %+v after %d runs, want the same pins accepted as a roll back", res, stand.calls)
+	}
+}
+
+func TestAStandaloneRollbackWithoutAStoredImageFailsTheLookupStepAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	in := standaloneInput("demo", webStandalone)
+	in.Reviewed, in.Rollback = map[string]string{}, true
+
+	res, job := rig.deployStandalone(t, in)
+
+	if res.OK() || res.Code != stackops.CodePinsInvalid || res.FailedService != "web" || stand.calls != 0 {
+		t.Fatalf("result %+v after %d runs, want pins_invalid at web and nothing run", res, stand.calls)
+	}
+	if states := itemStates(job); states["lookup"] != "failed:pins_invalid" {
+		t.Errorf("items = %v, want the lookup step failed", states)
+	}
+}

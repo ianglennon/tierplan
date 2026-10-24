@@ -78,6 +78,11 @@ type StandaloneDeployInput struct {
 	// Update, when not nil, is an update of the images (D-16): the services in it are looked up again
 	// even though their text did not change.
 	Update map[string]bool
+	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by service
+	// name in the compose file, and are used as they are (RestoredStandalonePins). They are not compared with
+	// what the host runs now, which a reviewed deploy does and which would refuse an older digest (the point is
+	// to move the host back), and no registry is asked for anything (STK-08, T-08-18).
+	Rollback bool
 	// Pins is where the pins of the stack's last good revision are read from and where this deploy's are
 	// stored, on the revision RevisionID. Nil means neither.
 	Pins       PinStore
@@ -247,7 +252,14 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	}
 	read := d.nodeReader(in.EnvID, in.NodeID)
 	var pinned PinOutcome
-	if in.Reviewed != nil {
+	if in.Rollback {
+		pins, err := RestoredStandalonePins(project, in.Reviewed)
+		var invalid *PinsInvalidError
+		if errors.As(err, &invalid) {
+			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
+		}
+		pinned = PinOutcome{Pins: pins}
+	} else if in.Reviewed != nil {
 		pins, err := d.reviewedPins(ctx, in.EnvID, items, standaloneLivePins(live.Containers), stored, in.Update, in.Reviewed, read)
 		var invalid *PinsInvalidError
 		switch {

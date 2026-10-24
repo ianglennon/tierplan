@@ -223,7 +223,8 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. " +
 			"A stack with no earlier version that ran well is 409 no_previous_version. " +
 			"Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. " +
-			"Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
+			"A stack of a standalone host rolls back the same way, through the Compose SDK: the containers whose configuration differs are recreated from the images the revision stored, networks and volumes a later revision added stay on the host, and the foreign-project check is made before anything is written. " +
+			"A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackRollbackInput) (*StackDeployOutput, error) {
@@ -623,10 +624,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err := d.ops().CheckTarget(ctx, env.ID, st); err != nil {
 		return nil, targetProblem(d, env.ID, err)
 	}
-	if st.Target == stacks.TargetStandalone {
-		// Rolling a standalone stack back is a later plan's: the engine for it is not here yet.
-		return nil, targetProblem(d, env.ID, stackops.ErrTargetEngineMissing)
-	}
+	standalone := st.Target == stacks.TargetStandalone
 	var req StackRollbackRequest
 	if in.Body != nil {
 		req = *in.Body
@@ -656,12 +654,23 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	// cannot be redeployed as it stands is refused here, with the reason, and leaves no revision behind. The
 	// project it returns is the one that is rendered and deployed.
 	masker := stacks.NewMasker(target.Copy.Vars, target.Copy.Files)
-	prep, err := d.ops().PrepareRollback(ctx, st, target, pins)
-	if err != nil {
+	var prep stackops.RollbackPlan
+	node := ""
+	if standalone {
+		// A standalone host runs the Compose SDK: the revision is prepared with its stored images and no swarm
+		// conversion, and the node it runs on is the environment's one engine.
+		if prep, err = d.ops().PrepareRollbackStandalone(ctx, st, target, pins); err != nil {
+			return nil, rollbackPrepareProblem(err, masker)
+		}
+		if node, err = d.ops().StandaloneNode(ctx, env.ID); err != nil {
+			return nil, snapshotProblem(d.Log, env.ID, err)
+		}
+	} else if prep, err = d.ops().PrepareRollback(ctx, st, target, pins); err != nil {
 		return nil, rollbackPrepareProblem(err, masker)
 	}
 	// What a deploy of this revision would need is judged for the caller, as a deploy is: an Operator
-	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again.
+	// cannot roll back to a version only an Admin may deploy (T-07-91). The job judges it again. A standalone
+	// stack has no converted plan, so its compose file alone is judged, as a standalone deploy's is.
 	caller := stackops.Caller{Principal: p, Actor: p.Name}
 	pol, err := d.ops().Policy(ctx, caller, env.ID, target.Copy, prep.Plan)
 	if err != nil {
@@ -715,20 +724,33 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
+	l := launch{
+		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
+		restores: target.Seq, rendering: rendering, release: release, owned: &jobOwnsLock,
+	}
+	if standalone {
+		standaloneIn := stackops.StandaloneDeployInput{
+			EnvID: env.ID, NodeID: node, Stack: st, Copy: target.Copy, Reviewed: pins, Rollback: true,
+			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+		}
+		l.items = stackops.StandaloneItemSpecs()
+		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
+			standaloneIn.OnDone = onDone
+			d.ops().DeployStandalone(jctx, standaloneIn, r)
+		}
+		return launchStackDeploy(ctx, d, l)
+	}
 	swarmIn := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: target.Copy,
 		Caller: caller, Masker: rendering.masker,
 		Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
 	}
-	return launchStackDeploy(ctx, d, launch{
-		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
-		restores: target.Seq, items: stackops.DeployItemSpecs(),
-		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
-			swarmIn.OnDone = onDone
-			d.ops().DeploySwarm(jctx, swarmIn, r)
-		},
-		rendering: rendering, release: release, owned: &jobOwnsLock,
-	})
+	l.items = stackops.DeployItemSpecs()
+	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
+		swarmIn.OnDone = onDone
+		d.ops().DeploySwarm(jctx, swarmIn, r)
+	}
+	return launchStackDeploy(ctx, d, l)
 }
 
 // restorableRevision reads the revision a roll back or its review names. The stack was read by (environment, ID)

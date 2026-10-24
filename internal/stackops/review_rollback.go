@@ -41,10 +41,6 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 		return errors.New("stackops: a roll back review needs the revision to restore")
 	}
 	target := *in.Target
-	if in.Stack.Target == stacks.TargetStandalone {
-		// Rolling a standalone stack back is a later plan's: its engine is not here yet.
-		return ErrTargetEngineMissing
-	}
 	// Every text leaves masked: the secrets of the revision and of the one that runs, whichever step added it.
 	masker := rollbackMasker(target, in.Previous)
 	defer func() {
@@ -54,17 +50,13 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 		}
 	}()
 
+	if in.Stack.Target == stacks.TargetStandalone {
+		return d.reviewRollbackStandalone(ctx, in, rv)
+	}
+
 	prep, err := d.PrepareRollback(ctx, in.Stack, target, in.TargetPins)
 	if err != nil {
-		var pe *PrepareError
-		if !errors.As(err, &pe) {
-			return err
-		}
-		rv.Problems = append(rv.Problems, stacks.Problem{
-			Severity: stacks.SeverityError, Code: CodeRevisionNotDeployable, Message: notDeployableMessage(target.Seq, pe),
-			File: stacks.ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		})
-		return nil
+		return notDeployable(rv, target.Seq, err)
 	}
 	project := prep.Loaded.Project
 	objs, err := stacks.ResolveObjects(project, prep.Files, prep.Vars)
@@ -156,6 +148,110 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	}
 
 	rv.YAML = d.rollbackYAMLChange(in, prep, restored)
+	return nil
+}
+
+// notDeployable puts the one blocking problem of a revision that cannot be redeployed in rv and ends the review
+// without an error. An error that is not a *PrepareError is the review's own failure and is returned.
+func notDeployable(rv *Review, seq int64, err error) error {
+	var pe *PrepareError
+	if !errors.As(err, &pe) {
+		return err
+	}
+	rv.Problems = append(rv.Problems, stacks.Problem{
+		Severity: stacks.SeverityError, Code: CodeRevisionNotDeployable, Message: notDeployableMessage(seq, pe),
+		File: stacks.ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+	})
+	return nil
+}
+
+// reviewRollbackStandalone is reviewRollback for a standalone host (STK-08): the revision is prepared with its
+// stored images (PrepareRollbackStandalone), prepared as the deploy prepares a project, and compared with the
+// host's containers by config hash and field diff, as reviewStandalone does for a draft. It asks no registry,
+// looks no tag up and never writes. A network or volume a later revision added and this one does not declare
+// is not listed: a standalone deploy leaves them on the host (D-52).
+func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *Review) error {
+	target := *in.Target
+	prep, err := d.PrepareRollbackStandalone(ctx, in.Stack, target, in.TargetPins)
+	if err != nil {
+		return notDeployable(rv, target.Seq, err)
+	}
+	project := prep.Loaded.Project
+	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, prep.Files, prep.Vars)
+	if err != nil {
+		rv.Problems = append(rv.Problems, objectErrorProblem(err))
+		return nil
+	}
+	node, err := d.StandaloneNode(ctx, in.EnvID)
+	if err != nil {
+		return err
+	}
+	live, err := d.readStandalone(ctx, in.EnvID, node, in.Stack.Name)
+	if err != nil {
+		return err
+	}
+	if foreignLive(live, in.Stack.ID) {
+		rv.Problems = append(rv.Problems, stacks.Problem{
+			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
+			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		})
+	}
+	// The compose rules judge the revision's own file; there is no converted swarm spec on a standalone host.
+	pol, err := d.Policy(ctx, in.Caller, in.EnvID, target.Copy, convert.Plan{})
+	if err != nil {
+		return err
+	}
+	rv.Problems = append(rv.Problems, pol.Problems...)
+	if pol.Kinds != nil {
+		rv.NeedsAdmin = pol.Kinds
+	}
+
+	restored, err := RestoredStandalonePins(project, in.TargetPins)
+	if err != nil {
+		return err // PrepareRollbackStandalone checked these: the project is the same, so this is not expected
+	}
+	items := standaloneItems(project)
+	pinned := PinOutcome{Pins: restored}
+	rv.Pins = pinned.Refs()
+	rv.Images = rollbackStandaloneImageRows(items, restored, standaloneCurrent(live.Containers))
+	rv.Summary.ImagesPinned = len(rv.Images)
+	// The rendering is made before the project is prepared: preparing adds the labels and the pinned images
+	// a deploy sends, which are not part of what the revision stored.
+	rv.YAML = d.rollbackYAMLChange(in, prep, restored)
+
+	if err := stacks.PrepareStandalone(project, in.Stack.ID, standalonePins(items, pinned), objs); err != nil {
+		rv.Problems = append(rv.Problems, prepareProblem(err))
+		return nil
+	}
+	diff, err := diffStandalone(project, live.Containers)
+	if err != nil {
+		return err
+	}
+	// The comparison hides the secrets of the revision to restore and of the one that runs.
+	cin := in
+	cin.Copy = target.Copy
+	cmp, err := d.compareOnNode(ctx, cin, node, project, live.Containers, diff)
+	if err != nil {
+		return err
+	}
+	for _, c := range cmp.Changes {
+		rv.Services = append(rv.Services, c.Row)
+		bump(&rv.Summary.Services, c.Row.Change)
+	}
+	// What a recreate carries with it follows the changed services; it is not counted as changed.
+	rv.Services = append(rv.Services, cmp.Carried...)
+	for _, name := range diff.Removed {
+		rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
+		rv.Summary.Services.Removed++
+	}
+	for _, name := range missingNetworks(project, live.Networks) {
+		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: name})
+		rv.Summary.Networks.Added++
+	}
+	for _, name := range missingVolumes(project, live.Volumes) {
+		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "volume", Name: name})
+		rv.Summary.Volumes.Added++
+	}
 	return nil
 }
 

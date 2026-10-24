@@ -603,6 +603,20 @@ type standaloneUp struct {
 	calls   int
 }
 
+// failWith makes the next runs of the Compose stand-in end with err; nil makes them succeed again.
+func (u *standaloneUp) failWith(err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.err = err
+}
+
+// lastProject is the project the stand-in was last given and how many times it has been run.
+func (u *standaloneUp) lastProject() (*types.Project, int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.project, u.calls
+}
+
 func (u *standaloneUp) run(_ context.Context, _ *dockerx.Client, p *types.Project, _ dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -679,18 +693,18 @@ func TestAFailedStandaloneDeployIsRecordedAsFailed(t *testing.T) {
 	}
 }
 
-func TestARollBackOfAStandaloneStackIsRefusedUntilItsEngineExists(t *testing.T) {
+func TestARollBackOfAStandaloneStackThatNeverRanWellHasNothingToRestore(t *testing.T) {
 	t.Parallel()
-	f, e, _ := standaloneEnv(t, nil)
+	f, e, up := standaloneEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "solo")
 	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/rollback", "")
-	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_engine_missing" {
-		t.Errorf("rollback: %d %s, want 409 target_engine_missing", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_previous_version" {
+		t.Errorf("rollback: %d %s, want 409 no_previous_version", rec.Code, rec.Body)
 	}
-	if w := f.fake.Writes(); len(w) != 0 {
-		t.Errorf("writes = %v", w)
+	if w := f.fake.Writes(); len(w) != 0 || up.calls != 0 {
+		t.Errorf("writes = %v, compose runs = %d, want none", w, up.calls)
 	}
 }
 

@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
@@ -1853,5 +1854,120 @@ func TestDeployAfterRollbackNeedsAcknowledgement(t *testing.T) {
 	rec = operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`,"acknowledgeConcurrent":true}`)
 	if rec.Code != http.StatusAccepted {
 		t.Errorf("deploy with the acknowledgement: %d %s, want 202", rec.Code, rec.Body)
+	}
+}
+
+// A standalone stack rolls back to any good revision through the Compose SDK with the images that revision stored
+// (plan 08-05, STK-08, D-02, D-03, D-06, T-08-18).
+func TestStandaloneRollbackToAChosenRevision(t *testing.T) {
+	t.Parallel()
+	f, e, up := standaloneEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	f.deployGood(t, operator, st.ID, composeWeb129)
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 3 {
+		t.Fatalf("revisions = %+v, want three", revs)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(revs[0].Pins), &pins); err != nil || !strings.HasPrefix(pins["web"], "nginx:1.27-alpine@sha256:") {
+		t.Fatalf("revision 1 pins = %s (%v), want the 1.27 image pinned to a digest", revs[0].Pins, err)
+	}
+
+	// An edit saved after the last deploy is the draft's, and a roll back leaves it alone (D-03).
+	edited := composeWeb129 + "# not deployed yet\n"
+	saveCompose(t, operator, st.ID, edited, `[]`)
+	draftBefore := answerOf[draftAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+
+	// The tag has moved on the registry since: a roll back must not follow it.
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("b", 64))
+	lookups := len(f.fake.DistributionRefs())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":1,"expectedDeployed":3}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[rollbackStarted](t, rec)
+	if started.Revision != 4 {
+		t.Errorf("revision = %d, want 4: the roll back is a revision of its own", started.Revision)
+	}
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back asks no registry", lookups, n)
+	}
+	project, calls := up.lastProject()
+	if project == nil || calls != 4 || project.Services["web"].Image != pins["web"] {
+		t.Fatalf("the Compose engine ran %d times with %+v, want a fourth run with exactly what revision 1 ran, %q", calls, project, pins["web"])
+	}
+	revs = f.revisions(t, st.ID)
+	if len(revs) != 4 || revs[3].Outcome != "good" || revs[3].Pins != revs[0].Pins {
+		t.Errorf("revisions = %+v, want a good revision 4 with revision 1's pins", revs)
+	}
+	if origin, from := f.revisionOrigin(t, st.ID, 4); origin != "rollback" || from != 1 {
+		t.Errorf("revision 4 = %q restored from %d, want rollback of 1", origin, from)
+	}
+
+	// The draft is as it was: same content, same version (D-03).
+	draftAfter := answerOf[draftAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+	if draftAfter.Version != draftBefore.Version || len(draftAfter.Files) != 1 || draftAfter.Files[0].Content != edited {
+		t.Errorf("draft after = %+v, want version %d and the edit untouched", draftAfter, draftBefore.Version)
+	}
+
+	job := answerOf[struct {
+		Mode             string `json:"mode"`
+		State            string `json:"state"`
+		Revision         int64  `json:"revision"`
+		RecordedRevision int64  `json:"recordedRevision"`
+	}](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/deploys/"+started.JobID, ""))
+	if job.Mode != "rollback" || job.Revision != 1 || job.RecordedRevision != 4 {
+		t.Errorf("job = %+v, want a roll back that restores 1 and was recorded as 4", job)
+	}
+}
+
+// The Phase 7 one-click roll back: after a deploy that failed on a standalone host, a roll back with no body
+// restores the revision that last ran well.
+func TestStandaloneOneClickRollback(t *testing.T) {
+	t.Parallel()
+	f, e, up := standaloneEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rb")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	up.failWith(errors.New("Error response from daemon: port is already allocated"))
+	if job := f.awaitDeploy(t, f.deployDraft(t, operator, st.ID, composeWeb128)); job.State == "done" {
+		t.Fatalf("deploy = %+v, want it failed", job)
+	}
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 2 || revs[1].Outcome != "failed" {
+		t.Fatalf("revisions = %+v, want a good one and a failed one", revs)
+	}
+	up.failWith(nil)
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[rollbackStarted](t, rec)
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" || started.Revision != 3 {
+		t.Fatalf("job = %+v revision %d, want it done as revision 3", job, started.Revision)
+	}
+	if origin, from := f.revisionOrigin(t, st.ID, 3); origin != "rollback" || from != 1 {
+		t.Errorf("revision 3 = %q restored from %d, want rollback of 1", origin, from)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(revs[0].Pins), &pins); err != nil {
+		t.Fatal(err)
+	}
+	if project, _ := up.lastProject(); project == nil || project.Services["web"].Image != pins["web"] {
+		t.Errorf("the Compose engine was given %+v, want revision 1's image %q", project, pins["web"])
+	}
+	if a := readStack(t, operator, st.ID); a.State == "deploy_failed" {
+		t.Errorf("stack = %+v, want the failed state gone after the roll back", a)
 	}
 }

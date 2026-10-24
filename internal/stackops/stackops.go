@@ -40,8 +40,8 @@ var (
 	// *DraftConflictError.
 	ErrDraftConflict = errors.New("stackops: the draft was saved by someone else")
 	// ErrTargetEngineMissing means the stack's target has no engine for the operation asked for in this
-	// version: a standalone stack deploys with the Compose SDK, but rolling one back, and the other
-	// operations of the later plans, wait for their plans.
+	// version. Deploying to and rolling back a standalone stack both have one now, so no operation answers
+	// it at present; the sentinel and its 409 stay for an operation a later plan adds that a target lacks.
 	ErrTargetEngineMissing = errors.New("stackops: this version cannot deploy to that kind of environment yet")
 	// ErrTargetChanged means the environment is no longer the kind of target the stack was created
 	// for: the stack deploys to a swarm and the environment is a standalone host, or the reverse.

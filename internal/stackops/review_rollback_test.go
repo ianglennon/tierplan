@@ -4,11 +4,13 @@
 package stackops_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -111,12 +113,116 @@ func TestRollbackReviewRefusesAnUndeployableRevision(t *testing.T) {
 	}
 }
 
-func TestRollbackReviewOfAStandaloneStackIsRefusedUntilItsEngineExists(t *testing.T) {
+// standaloneRollbackInput is a review of rolling a standalone stack back to a revision whose copy is composeText and
+// which ran pins (by service name in the compose file).
+func (r *swarmRig) standaloneRollbackInput(t *testing.T, name, composeText string, pins map[string]string) stackops.ReviewInput {
+	t.Helper()
+	target := stackops.Snapshot{
+		Seq: 1, Kind: stackops.KindRevision, Outcome: stackops.OutcomeGood,
+		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(composeText)}}},
+	}
+	in := r.standaloneReviewInput(t, name, composeText, nil)
+	in.Mode, in.Target, in.TargetPins, in.Copy = stackops.ReviewModeRollback, &target, pins, target.Copy
+	return in
+}
+
+func TestStandaloneRollbackReview(t *testing.T) {
 	t.Parallel()
-	rig := newSwarmRig(t, standalone)
-	in := rig.rollbackReviewInput(t, "plain", poolsCompose, map[string]string{"plain_web": "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)})
-	in.Stack.Target = stacks.TargetStandalone
-	if _, err := rig.deps.Review(testsupport.Context(t), in); err == nil || !strings.Contains(err.Error(), "cannot deploy") {
-		t.Fatalf("err = %v, want ErrTargetEngineMissing", err)
+	// The host runs the default pins of the hosted stack (digest a). The revision to restore ran web at digest b.
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+	older := "nginx:1.27-alpine@" + stackopstest.Digest("b")
+	runningDB := "postgres:16@" + stackopstest.Digest("a")
+	// The tag has moved on the registry since the revision ran: a roll back must not follow it.
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", stackopstest.Digest("c"))
+	lookups, writes := len(rig.fake.DistributionRefs()), len(rig.fake.Writes())
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.standaloneRollbackInput(t, "demo", hostedCompose, map[string]string{"web": older, "db": runningDB}))
+
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back review asks no registry", lookups, n)
+	}
+	if n := len(rig.fake.Writes()); n != writes {
+		t.Errorf("a review wrote %v", rig.fake.Writes()[writes:])
+	}
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) {
+		t.Fatalf("services = %v, want web changed (the image moves to the stored digest) and db left alone", got)
+	}
+	if rv.Pins["web"] != older || rv.Pins["db"] != runningDB {
+		t.Errorf("pins = %v, want the stored references", rv.Pins)
+	}
+	if len(rv.Images) != 2 {
+		t.Fatalf("images = %+v, want one row for each service", rv.Images)
+	}
+	for _, row := range rv.Images {
+		if row.State != stackops.ImagePinned || row.Note != "revision" {
+			t.Errorf("image row = %+v, want pinned with the note revision", row)
+		}
+	}
+	web := rv.Images[1]
+	if web.Service != "web" || web.Digest != stackopstest.Digest("b") || web.Current != stackopstest.Digest("a") {
+		t.Errorf("web image row = %+v, want the stored digest against the running one", web)
+	}
+	if rv.Summary.ImagesNew != 0 || rv.Summary.ImagesPinned != 2 || rv.Summary.Services.Changed != 1 {
+		t.Errorf("summary = %+v, want two images pinned, none new and one service changed", rv.Summary)
+	}
+	if rv.Concurrent != nil {
+		t.Errorf("concurrent = %+v, a roll back review has none", rv.Concurrent)
+	}
+}
+
+func TestStandaloneRollbackReviewOfWhatRunsFindsNothingToDo(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+	running := map[string]string{"web": "nginx:1.27-alpine@" + stackopstest.Digest("a"), "db": "postgres:16@" + stackopstest.Digest("a")}
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.standaloneRollbackInput(t, "demo", hostedCompose, running))
+
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Services) != 0 || len(rv.Objects) != 0 || len(rv.Problems) != 0 {
+		t.Errorf("review = services %v objects %v problems %+v, want nothing to roll back", changesOf(rv), objectsOf(rv), rv.Problems)
+	}
+}
+
+func TestStandaloneRollbackReviewListsOnlyWhatTheRevisionDeclaresToCreate(t *testing.T) {
+	t.Parallel()
+	// The host holds the stack as the file declares it, with the volume. The revision to restore declares the same
+	// services and a network of its own, which the host lacks: it is created. The volume a later revision added
+	// and this one does not declare is not listed: a deploy leaves it on the host (D-52).
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+	earlier := "services:\n  web:\n    image: nginx:1.27-alpine\n    networks: [front]\n    ports:\n      - \"8080:80\"\n    restart: unless-stopped\n    environment:\n      MODE: prod\n    depends_on: [db]\n  db:\n    image: postgres:16\nnetworks:\n  front: {}\n"
+	pins := map[string]string{"web": "nginx:1.27-alpine@" + stackopstest.Digest("a"), "db": "postgres:16@" + stackopstest.Digest("a")}
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.standaloneRollbackInput(t, "demo", earlier, pins))
+
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if got := objectsOf(rv); !slices.Equal(got, []string{"added network demo_front"}) {
+		t.Errorf("objects = %v, want the revision's network alone, and no removed volume", got)
+	}
+}
+
+func TestStandaloneRollbackReviewRefusesAnUndeployableRevision(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", hostedCompose, nil))
+
+	rv, err := rig.deps.Review(testsupport.Context(t), rig.standaloneRollbackInput(t, "demo", hostedCompose, map[string]string{"web": "nginx:1.27-alpine@" + stackopstest.Digest("a")}))
+
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Problems) != 1 || rv.Problems[0].Code != stackops.CodeRevisionNotDeployable || !strings.Contains(rv.Problems[0].Message, "db") {
+		t.Fatalf("problems = %+v, want one blocking revision_not_deployable naming db", rv.Problems)
+	}
+	if len(rv.Images) != 0 || len(rv.Services) != 0 {
+		t.Errorf("review = images %+v services %v, want nothing beside the problem", rv.Images, changesOf(rv))
 	}
 }

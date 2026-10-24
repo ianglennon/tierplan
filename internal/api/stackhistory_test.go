@@ -541,3 +541,37 @@ func TestRevisionChangesIsLimitedPerUser(t *testing.T) {
 		t.Errorf("a read after the others finished: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
+
+// The Changes tab reads for a standalone stack too (plan 08-05): the revision is prepared with its stored images and
+// compared with the host's containers, where plan 08-04 answered 409 target_engine_missing.
+func TestRevisionChangesOfAStandaloneStack(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "chg")
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.28-alpine", "two"))
+	writes := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("changes of a standalone stack as a viewer: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[revisionChangesAnswer](t, rec)
+	// The test host holds no containers (the Compose engine is a stand-in), so the revision's service has none to
+	// compare with and reads as added.
+	if got.DeployedSeq != 2 || got.Identical || len(got.Services) != 1 || got.Services[0].Short != "web" {
+		t.Fatalf("changes = %+v, want revision 2 deployed and the one service listed", got)
+	}
+	for _, v := range liveValues {
+		if strings.Contains(rec.Body.String(), v) {
+			t.Fatalf("a value %q reached a viewer: %s", v, rec.Body)
+		}
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("engine writes went from %d to %d, reading the changes writes nothing", writes, n)
+	}
+}
