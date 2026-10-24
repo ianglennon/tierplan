@@ -2256,6 +2256,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What rolling back to a revision would change
+         * @description The services a roll back to the revision would add, change or remove against what is running now, the same comparison the roll back review makes (the revision converted with the digests it stored, no registry asked). Only a revision that ended good qualifies: a pending or failed one is 409 revision_not_good, a number the stack does not hold is 404 revision_not_found, and a stack ID of another environment is 404 stack_not_found. A revision that can no longer be redeployed is 409 revision_not_deployable. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two of these reads running; a third is 429 check_busy. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRevisionChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/rollback": {
         parameters: {
             query?: never;
@@ -9277,6 +9297,19 @@ export interface components {
             /** @description Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
         };
+        StackRevisionChangesBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none
+             */
+            deployedSeq: number;
+            /** @description True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision */
+            identical: boolean;
+            /** @description The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden> */
+            services: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description How many services the roll back would add, change and remove */
+            summary: components["schemas"]["StackReviewCountsBody"];
+        };
         StackRevisionDetailBody: {
             /**
              * Format: int64
@@ -14995,6 +15028,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackRevisionDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRevisionChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The revision number */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionChangesBody"];
                 };
             };
             /** @description Error */

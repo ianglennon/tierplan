@@ -287,20 +287,27 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 	for _, r := range rv.Images {
 		b.Images = append(b.Images, StackReviewImageBody{Service: r.Service, Image: r.Image, Digest: r.Digest, Current: r.Current, State: r.State, Note: r.Note})
 	}
-	for _, c := range rv.Services {
-		hidden := c.HiddenChanges
-		if hidden == nil {
-			hidden = []string{}
-		}
-		b.Services = append(b.Services, StackReviewServiceBody{
-			Name: c.Name, Short: c.Short, Change: c.Change, Current: specTree(c.Current), Next: specTree(c.Next),
-			HiddenChanges: hidden, Settings: c.Settings, Because: c.Because,
-		})
-	}
+	b.Services = serviceBodies(rv.Services)
 	for _, o := range rv.Objects {
 		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail})
 	}
 	return b
+}
+
+// serviceBodies turns the service changes of a review into their answer. The list is never null.
+func serviceBodies(changes []stacks.ServiceChange) []StackReviewServiceBody {
+	out := make([]StackReviewServiceBody, 0, len(changes))
+	for _, c := range changes {
+		hidden := c.HiddenChanges
+		if hidden == nil {
+			hidden = []string{}
+		}
+		out = append(out, StackReviewServiceBody{
+			Name: c.Name, Short: c.Short, Change: c.Change, Current: specTree(c.Current), Next: specTree(c.Next),
+			HiddenChanges: hidden, Settings: c.Settings, Because: c.Because,
+		})
+	}
+	return out
 }
 
 func countsBody(c stackops.Counts) StackReviewCountsBody {

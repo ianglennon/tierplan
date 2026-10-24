@@ -21,6 +21,7 @@ export type StackRevision = components["schemas"]["StackRevisionItem"];
 export type StackRevisionList = components["schemas"]["StackRevisionListBody"];
 export type StackRevisionDetail = components["schemas"]["StackRevisionDetailBody"];
 export type StackRevisionImageChange = components["schemas"]["StackRevisionImageChange"];
+export type StackRevisionChanges = components["schemas"]["StackRevisionChangesBody"];
 
 // The query key of a stack's revisions. It extends the stack's key, so the events feed that refreshes the
 // stacks list for any event carrying the stack's label, and every action that refreshes the stack's page,
@@ -81,6 +82,37 @@ export function revisionQuery(envId: string, stackId: string, seq: number) {
     },
     retry: (count, error) => !isStackGone(error) && !isRevisionGone(error) && count < 3,
     refetchInterval: () => (document.visibilityState === "visible" ? LIST_REFETCH_MS : false),
+  });
+}
+
+// The query key of what rolling back to a revision would change. It extends the revision's key, so whatever
+// refreshes the history refreshes an open Changes tab too: what runs now is what it is compared with.
+export function revisionChangesKey(envId: string, stackId: string, seq: number) {
+  return [...revisionKey(envId, stackId, seq), "changes"] as const;
+}
+
+// What rolling back to a revision would change against what runs now. The server redacts the live settings of the
+// running services for a caller who may not reveal secrets, so nothing here needs to hide them. It is read once
+// and again when the history is refreshed, not on a timer: each read asks the swarm, and the server allows a user
+// two at a time (429 check_busy). A stack or revision that is gone, a revision that cannot be rolled back to and a
+// busy server are not retried: the person presses Retry.
+export function revisionChangesQuery(envId: string, stackId: string, seq: number) {
+  return queryOptions({
+    queryKey: revisionChangesKey(envId, stackId, seq),
+    queryFn: async (): Promise<StackRevisionChanges> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/revisions/{seq}/changes", {
+        params: { path: { envId, stackId, seq } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: (count, error) =>
+      !isStackGone(error) &&
+      !(error instanceof StacksLoadError && [404, 409, 429].includes(error.status)) &&
+      count < 3,
   });
 }
 

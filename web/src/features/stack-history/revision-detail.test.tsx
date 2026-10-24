@@ -23,6 +23,9 @@ let detailStatus: number;
 let detailType: string;
 let detail: Json;
 let detailCalls: number;
+let changesStatus: number;
+let changesType: string;
+let changes: Json;
 
 function item(seq: number, over: Partial<StackRevision> = {}): StackRevision {
   return {
@@ -82,6 +85,16 @@ function oldRevision(): Json {
   };
 }
 
+// What the server answers for what rolling back to revision 1 would change while revision 3 runs.
+function oldChanges(): Json {
+  return {
+    deployedSeq: 3,
+    services: [],
+    summary: { added: 0, changed: 0, removed: 0 },
+    identical: true,
+  };
+}
+
 const NO_DIFF = { changedLines: 0, hunks: [], lines: [] };
 
 beforeEach(() => {
@@ -89,12 +102,24 @@ beforeEach(() => {
   detailType = "";
   detailCalls = 0;
   detail = oldRevision();
+  changesStatus = 200;
+  changesType = "";
+  changes = oldChanges();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
+      if (path.startsWith(`/api/env/${ENV}/stacks/s1/revisions/`) && path.endsWith("/changes")) {
+        if (changesStatus !== 200) {
+          return Response.json(
+            { type: changesType, title: "Problem", status: changesStatus, detail: "x" },
+            { status: changesStatus },
+          );
+        }
+        return Response.json(changes);
+      }
       if (path.startsWith(`/api/env/${ENV}/stacks/s1/revisions/`)) {
         detailCalls++;
         if (detailStatus !== 200) {
@@ -133,6 +158,13 @@ function mount(seq = 1, over: Partial<StackRevision> = {}, retention?: number) {
       </TestRouter>
     </QueryClientProvider>,
   );
+}
+
+async function openYaml() {
+  const tab = await screen.findByRole("tab", { name: "YAML diff" });
+  fireEvent.mouseDown(tab);
+  fireEvent.click(tab);
+  return tab;
 }
 
 async function openContents() {
@@ -240,7 +272,7 @@ describe("the Contents tab", () => {
 
   it("has no Reveal control on any tab", async () => {
     mount();
-    for (const name of ["YAML diff", "Rendered", "Contents"]) {
+    for (const name of ["Changes", "YAML diff", "Rendered", "Contents"]) {
       const tab = await screen.findByRole("tab", { name });
       fireEvent.mouseDown(tab);
       fireEvent.click(tab);
@@ -254,6 +286,7 @@ describe("the Contents tab", () => {
 describe("the YAML diff tab", () => {
   it("draws the difference from the deployed revision under its caption", async () => {
     mount();
+    await openYaml();
 
     const table = await screen.findByRole("table", {
       name: "Rendered YAML, revision #1 against #3",
@@ -265,6 +298,7 @@ describe("the YAML diff tab", () => {
   it("says a revision with the same content as the deployed one has no changes", async () => {
     detail = { ...oldRevision(), item: item(2), yaml: NO_DIFF };
     mount(2);
+    await openYaml();
 
     expect(await screen.findByText("No changes")).toBeTruthy();
     expect(
@@ -276,6 +310,7 @@ describe("the YAML diff tab", () => {
   it("says the deployed revision itself has no changes", async () => {
     detail = { ...oldRevision(), item: item(3, { deployed: true }), deployedSeq: 3, yaml: NO_DIFF };
     mount(3, { deployed: true });
+    await openYaml();
 
     expect(await screen.findByText("No changes")).toBeTruthy();
     expect(screen.getByText("This is the deployed revision.", { selector: "p" })).toBeTruthy();
@@ -284,11 +319,13 @@ describe("the YAML diff tab", () => {
   it("says there is nothing to compare when no revision is deployed or none was rendered", async () => {
     detail = { ...oldRevision(), deployedSeq: 0, yaml: NO_DIFF };
     mount();
+    await openYaml();
     expect(await screen.findByText("Nothing to compare with")).toBeTruthy();
     cleanup();
 
     detail = { ...oldRevision(), rendered: "", yaml: NO_DIFF };
     mount();
+    await openYaml();
     expect(await screen.findByText("No rendering stored")).toBeTruthy();
   });
 });
@@ -324,6 +361,7 @@ describe("loading, errors and a gone revision", () => {
     detailStatus = 500;
     detailType = "internal";
     mount();
+    await openYaml();
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Couldn't load this revision's YAML.")).toBeTruthy();

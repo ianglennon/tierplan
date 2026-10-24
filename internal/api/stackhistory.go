@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -54,7 +55,7 @@ type StackRevisionListOutput struct {
 	Body         StackRevisionListBody
 }
 
-func registerStackHistory(r *httpx.Router, d StacksDeps) {
+func registerStackHistory(r *httpx.Router, d StacksDeps, changesLimiter *streamLimiter) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStackRevisions", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/revisions",
 		Summary: "The revisions of a stack",
@@ -69,6 +70,7 @@ func registerStackHistory(r *httpx.Router, d StacksDeps) {
 			return listStackRevisions(ctx, d, in)
 		})
 	registerStackRevision(r, d)
+	registerStackRevisionChanges(r, d, changesLimiter)
 }
 
 func listStackRevisions(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackRevisionListOutput, error) {
@@ -214,3 +216,112 @@ func getStackRevision(ctx context.Context, d StacksDeps, in *StackRevisionInput)
 	}
 	return &StackRevisionDetailOutput{CacheControl: "no-store", Body: body}, nil
 }
+
+// StackRevisionChangesBody is what rolling back to a revision would change against what is running.
+type StackRevisionChangesBody struct {
+	DeployedSeq int64                    `json:"deployedSeq" doc:"The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none"`
+	Services    []StackReviewServiceBody `json:"services" doc:"The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>"`
+	Summary     StackReviewCountsBody    `json:"summary" doc:"How many services the roll back would add, change and remove"`
+	Identical   bool                     `json:"identical" doc:"True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision"`
+}
+
+// StackRevisionChangesOutput wraps StackRevisionChangesBody for huma.
+type StackRevisionChangesOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackRevisionChangesBody
+}
+
+// maxChangesPerUser is how many reads of a revision's changes one user may have running: each reads the swarm.
+const maxChangesPerUser = 2
+
+// newChangesLimiter is the limiter of the changes route.
+func newChangesLimiter() *streamLimiter {
+	return &streamLimiter{max: maxChangesPerUser, open: map[string]int{}}
+}
+
+func registerStackRevisionChanges(r *httpx.Router, d StacksDeps, lim *streamLimiter) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "getStackRevisionChanges", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/revisions/{seq}/changes",
+		Summary: "What rolling back to a revision would change",
+		Description: "The services a roll back to the revision would add, change or remove against what is running now, the same comparison the roll back review makes (the revision converted with the digests it stored, no registry asked). " +
+			"Only a revision that ended good qualifies: a pending or failed one is 409 revision_not_good, a number the stack does not hold is 404 revision_not_found, and a stack ID of another environment is 404 stack_not_found. " +
+			"A revision that can no longer be redeployed is 409 revision_not_deployable. " +
+			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, " +
+			"and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. " +
+			"One user may have two of these reads running; a third is 429 check_busy. Needs stacks.read (Viewer).",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackRevisionInput) (*StackRevisionChangesOutput, error) {
+			return getStackRevisionChanges(ctx, d, lim, in)
+		})
+}
+
+func getStackRevisionChanges(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackRevisionInput) (*StackRevisionChangesOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	repo := d.repo()
+	// The stack is read by its environment and ID, then the revision by (stack, seq): another environment's stack
+	// or revision is not found (T-08-17).
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	target, err := restorableRevision(ctx, d, repo, env.ID, st.ID, in.Seq)
+	if err != nil {
+		return nil, err
+	}
+	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
+	if !ok {
+		return nil, httpx.Problem(http.StatusTooManyRequests, problemCheckBusy, "Too many comparisons are running. Try again in a moment.")
+	}
+	defer release()
+	if d.OnChanges != nil {
+		d.OnChanges(ctx)
+	}
+
+	ri := stackops.ReviewInput{
+		EnvID: env.ID, Stack: st, Copy: target.Copy, Mode: stackops.ReviewModeRollback, Target: &target,
+		Pins: repo, Revisions: repo, Caller: stackops.Caller{Principal: p, Actor: p.Name},
+	}
+	if ri.TargetPins, err = repo.RevisionPins(ctx, target.ID); err != nil {
+		return nil, stackInternal(d, "read the pins of the revision to compare", env.ID, err)
+	}
+	if ri.TargetRendering, err = repo.RevisionRendering(ctx, target.ID); err != nil {
+		return nil, stackInternal(d, "read the rendering of the revision to compare", env.ID, err)
+	}
+	var deployedSeq int64
+	if good, ok, err := repo.LatestGoodRevision(ctx, st.ID); err != nil {
+		return nil, stackInternal(d, "read the running revision", env.ID, err)
+	} else if ok {
+		deployedSeq = good.Seq
+		ri.Previous = &good.Copy
+		ri.Deployed = &stackops.DeployedRevision{Seq: good.Seq, By: good.CreatedBy, At: good.CreatedAt}
+		if ri.Rendering, err = repo.GoodRendering(ctx, st.ID); err != nil {
+			return nil, stackInternal(d, "read the last rendering", env.ID, err)
+		}
+	}
+	rv, err := d.ops().Review(ctx, ri)
+	if err != nil {
+		return nil, targetProblem(d, env.ID, err)
+	}
+	for _, pr := range rv.Problems {
+		if pr.Code == stackops.CodeRevisionNotDeployable {
+			// The sentence is masked by the review.
+			return nil, httpx.Problem(http.StatusConflict, problemRevisionNotDeployable, pr.Message)
+		}
+	}
+	// The services hold the live settings of what runs. Only a caller who may reveal secrets sees them (D-47).
+	services := rv.Services
+	if !redact.CanReveal(ctx, d.Checker, p, env.ID) {
+		services = stackops.RedactChanges(services, st.Target)
+	}
+	return &StackRevisionChangesOutput{CacheControl: "no-store", Body: StackRevisionChangesBody{
+		DeployedSeq: deployedSeq, Services: serviceBodies(services), Summary: countsBody(rv.Summary.Services), Identical: len(rv.Services) == 0,
+	}}, nil
+}
+
+// problemRevisionNotDeployable is the code of a revision that no longer loads, converts or has an image stored for
+// each service.
+const problemRevisionNotDeployable = stackops.CodeRevisionNotDeployable

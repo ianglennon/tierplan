@@ -13538,6 +13538,41 @@
         ],
         "type": "object"
       },
+      "StackRevisionChangesBody": {
+        "additionalProperties": false,
+        "properties": {
+          "deployedSeq": {
+            "description": "The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "identical": {
+            "description": "True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision",
+            "type": "boolean"
+          },
+          "services": {
+            "description": "The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads \u003chidden\u003e",
+            "items": {
+              "$ref": "#/components/schemas/StackReviewServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/StackReviewCountsBody",
+            "description": "How many services the roll back would add, change and remove"
+          }
+        },
+        "required": [
+          "deployedSeq",
+          "services",
+          "summary",
+          "identical"
+        ],
+        "type": "object"
+      },
       "StackRevisionDetailBody": {
         "additionalProperties": false,
         "properties": {
@@ -24330,6 +24365,79 @@
           }
         },
         "summary": "One revision of a stack",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}/changes": {
+      "get": {
+        "description": "The services a roll back to the revision would add, change or remove against what is running now, the same comparison the roll back review makes (the revision converted with the digests it stored, no registry asked). Only a revision that ended good qualifies: a pending or failed one is 409 revision_not_good, a number the stack does not hold is 404 revision_not_found, and a stack ID of another environment is 404 stack_not_found. A revision that can no longer be redeployed is 409 revision_not_deployable. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is \u003chidden\u003e, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two of these reads running; a third is 429 check_busy. Needs stacks.read (Viewer).",
+        "operationId": "getStackRevisionChanges",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The revision number",
+            "in": "path",
+            "name": "seq",
+            "required": true,
+            "schema": {
+              "description": "The revision number",
+              "format": "int64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackRevisionChangesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What rolling back to a revision would change",
         "tags": [
           "stacks"
         ]

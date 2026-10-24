@@ -351,7 +351,7 @@ var liveValues = []string{"key-one-8c1d", "key-two-3f6a", "pw-one-9e2f", "pw-two
 func liveValuesCompose(image, n string) string {
 	keys := map[string]string{"one": "key-one-8c1d", "two": "key-two-3f6a"}
 	pws := map[string]string{"one": "pw-one-9e2f", "two": "pw-two-5d0b"}
-	logs := map[string]string{"one": "tcp://u:pw-one-4b7a@h", "two": "tcp://u:pw-two-7c3e@h"}
+	logs := map[string]string{"one": "tcp://u:pw-one-4b7a@h", "two": "tcp://u:pw-two-7c3e@h"} //nolint:gosec // a made-up value the test must never find in an answer
 	return "services:\n  web:\n    image: " + image + "\n    environment:\n      API_KEY: " + keys[n] + "\n      MODE: prod\n" +
 		"    command: [\"nginx\", \"--pw=" + pws[n] + "\"]\n    logging:\n      driver: syslog\n      options:\n        syslog-address: " + logs[n] + "\n"
 }
@@ -387,7 +387,7 @@ func TestRevisionChangesRedactsForAViewer(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "API_KEY=\\u003chidden\\u003e") && !strings.Contains(rec.Body.String(), "API_KEY=<hidden>") {
 		t.Errorf("the environment entry is not withheld by name: %s", rec.Body)
 	}
-	for _, want := range []string{"TaskTemplate.ContainerSpec.Env[API_KEY]", "TaskTemplate.ContainerSpec.Command", "TaskTemplate.LogDriver.Options.syslog-address"} {
+	for _, want := range []string{"TaskTemplate.ContainerSpec.Env[API_KEY]", "TaskTemplate.ContainerSpec.Args", "TaskTemplate.LogDriver.Options.syslog-address"} {
 		if !slices.Contains(svc.HiddenChanges, want) {
 			t.Errorf("hidden changes = %v, want %s listed", svc.HiddenChanges, want)
 		}

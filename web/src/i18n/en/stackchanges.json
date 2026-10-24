@@ -1,0 +1,11 @@
+{
+  "stackChanges": {
+    "loading": "Loading the changes of revision #{{seq}}…",
+    "caption": "What rolling back to #{{seq}} would change, compared with the deployed revision #{{deployed}}.",
+    "error": {
+      "title": "Couldn't load this revision's changes.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    }
+  }
+}

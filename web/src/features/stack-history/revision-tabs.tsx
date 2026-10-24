@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RevisionChanges } from "@/features/stack-history/revision-changes";
 import { RevisionContents } from "@/features/stack-history/revision-contents";
 import { RevisionRendered } from "@/features/stack-history/revision-rendered";
 import { RevisionYaml } from "@/features/stack-history/revision-yaml";
@@ -22,15 +23,15 @@ interface RevisionTabsProps {
   name: string;
 }
 
-type Tab = "yaml" | "rendered" | "contents";
+type Tab = "changes" | "yaml" | "rendered" | "contents";
 
-// RevisionTabs is what a selected revision was (UI-SPEC "Revision detail"): the YAML difference from the
-// deployed revision, the compose file it deployed and its contents. The tab is
-// local state and the arrow keys move between tabs. One read feeds them all, so a failed read says so in the
-// tab that is open, with Retry.
+// RevisionTabs is what a selected revision was (UI-SPEC "Revision detail"): what rolling back to it would change
+// against what runs (the tab it opens on), the YAML difference from the deployed revision, the compose file it
+// deployed and its contents. The tab is local state and the arrow keys move between tabs. One read feeds all but
+// the first, so a failed read says so in the tab that is open, with Retry.
 export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
   const t = useT();
-  const [tab, setTab] = useState<Tab>("yaml");
+  const [tab, setTab] = useState<Tab>("changes");
   const revision = useQuery(revisionQuery(envId, stackId, seq));
   const detail = revision.data;
 
@@ -77,6 +78,9 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="min-w-0 gap-3">
       <TabsList variant="line" aria-label={t("stackRevision.tabs.label", { seq })}>
+        <TabsTrigger value="changes" className="max-md:h-11">
+          {t("stackRevision.tabs.changes")}
+        </TabsTrigger>
         <TabsTrigger value="yaml" className="max-md:h-11">
           {t("stackRevision.tabs.yaml")}
         </TabsTrigger>
@@ -87,6 +91,14 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
           {t("stackRevision.tabs.contents")}
         </TabsTrigger>
       </TabsList>
+      <TabsContent value="changes" className="flex min-w-0 flex-col gap-2">
+        <RevisionChanges
+          envId={envId}
+          stackId={stackId}
+          seq={seq}
+          deployedSeq={detail?.deployedSeq ?? 0}
+        />
+      </TabsContent>
       <TabsContent value="yaml" className="flex min-w-0 flex-col gap-2">
         {detail ? <RevisionYaml detail={detail} /> : failed("yaml")}
       </TabsContent>

@@ -2,6 +2,7 @@
   "stackRevision": {
     "tabs": {
       "label": "Revision #{{seq}}",
+      "changes": "Changes",
       "yaml": "YAML diff",
       "rendered": "Rendered",
       "contents": "Contents"
