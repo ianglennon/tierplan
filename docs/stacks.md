@@ -324,6 +324,23 @@ and an output log, all with the stack's secret values removed before anything is
 
 You may have at most five jobs running at once.
 
+### Volumes are never recreated
+
+On a standalone host, the Docker Compose engine notices when a named volume exists but its driver, options or
+labels differ from the compose file, and it asks: *"Recreate (data will be lost)?"*. Answering yes removes the
+volume and creates it again, which deletes the data in it. **Bayplan always answers no** (decision D-46): a deploy
+whose compose file changes a volume's driver, options or labels leaves the volume as it is, goes on, and the
+containers mount the existing volume with its data. The change is not applied, and the console log says which
+volume was left alone.
+
+To change those settings, remove the volume by hand on the **Volumes** page and deploy the stack again. Docker
+refuses to remove a volume a container still mounts, so the containers that use it must be gone first. The volume
+is then created with the new settings and is empty, so copy the data out first if you need it.
+
+This changed in Phase 8: a standalone stack deployed with an earlier version recreated a volume whose settings
+differed, so the same edit that was applied then is left alone now. Networks are different: the Compose engine
+still recreates a network when its settings change, which restarts the containers attached to it and loses no data.
+
 ## When a deploy fails, is cancelled or is interrupted
 
 **Bayplan stops, reports and never rolls back by itself.** The console names the service it stopped at with
