@@ -339,13 +339,15 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
           <h3 ref={title} tabIndex={-1} className="text-xl font-semibold break-all outline-none">
             {t(
               job.mode === "rollback"
-                ? "stackDeploy.rollback.title"
+                ? job.revision
+                  ? "stackRollback.console.title"
+                  : "stackDeploy.rollback.title"
                 : job.mode === "start"
                   ? "stackStop.console.title"
                   : job.mode === "remove"
                     ? "stackRemove.console.title"
                     : "stackDeploy.title",
-              { name },
+              { name, revision: job.revision },
             )}
           </h3>
           <div className="flex items-center gap-3">

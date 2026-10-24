@@ -238,6 +238,8 @@
         "draft_saved": "Stack draft saved",
         "draft_discarded": "Stack draft discarded",
         "deployed": "Stack deployed",
+        "deployed_rollback": "Rolled back stack {{name}} to revision #{{revision}}",
+        "deployed_rollback_anon": "Rolled back stack {{name}}",
         "stopped": "Stack stopped",
         "started": "Stack started",
         "removed": "Stack removed",

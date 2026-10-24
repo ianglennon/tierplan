@@ -1187,7 +1187,10 @@ describe("in roll back mode", () => {
       );
     mount({ mode: "rollback", revision: 1 });
     expect(await screen.findAllByText("Pinned (revision #1)")).toHaveLength(2);
-    expect(screen.queryByText("New")).toBeNull();
+    // The YAML diff has a New column; the Images card has no New badge.
+    expect(
+      screen.queryAllByText("New").filter((el) => el.getAttribute("data-slot") === "badge"),
+    ).toHaveLength(0);
     expect(screen.queryByText("revision")).toBeNull();
     expect(screen.queryByText("Pinned (running)")).toBeNull();
   });

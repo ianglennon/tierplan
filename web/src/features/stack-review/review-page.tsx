@@ -347,7 +347,11 @@ export function ReviewPage({
             </Alert>
           ) : null}
           <ReviewSummary summary={data?.summary} />
-          <ImagePinTable images={data ? (data.images ?? []) : undefined} mode={mode} />
+          <ImagePinTable
+            images={data ? (data.images ?? []) : undefined}
+            mode={mode}
+            revision={revision}
+          />
           {unchanged ? (
             <Empty className="border">
               <EmptyHeader>

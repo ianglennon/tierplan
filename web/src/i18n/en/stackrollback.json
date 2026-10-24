@@ -29,6 +29,22 @@
         "lost": "The server didn't answer. The roll back may have started: check the stack before you try again.",
         "generic": "Couldn't start the roll back. Check the connection and try again."
       }
-    }
+    },
+    "rowAction": "Roll back to revision #{{seq}}…",
+    "images": {
+      "pinned": "Pinned (revision #{{seq}})"
+    },
+    "console": {
+      "title": "Rolling back {{name}} to #{{revision}}",
+      "complete": "{{name}} is running the content of revision #{{revision}}. Bayplan recorded it as revision #{{recorded}}.",
+      "openHistory": "Open history",
+      "failedRecorded": "Bayplan recorded the failed attempt as revision #{{recorded}}.",
+      "errors": {
+        "notGood": "That revision can't be rolled back to. Pick a revision that finished well.",
+        "gone": "That revision is gone. Open the history and pick another."
+      }
+    },
+    "lastDeployed": "Revision #{{revision}}, deployed {{time}} by {{user}}",
+    "lastDeployedAnon": "Revision #{{revision}}, deployed {{time}}"
   }
 }

@@ -88,12 +88,12 @@ export function DeployFailedAlert({ stack }: DeployFailedAlertProps) {
               </Link>
             </Button>
           ) : null}
+          {/* The caption names the revision the one-click roll back restores, when it was deployed and by whom. */}
           <RollbackAction
             envId={stack.envId}
             stackId={stack.id}
             retry={rollback}
             variant="outline"
-            caption={false}
           />
         </div>
       </AlertDescription>

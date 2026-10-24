@@ -26,6 +26,7 @@ import { TruncatedText } from "@/features/resources/resource-table";
 import { ImageChangeSummary } from "@/features/stack-history/image-change-summary";
 import { RevisionKindCell, RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { RevisionResultCell } from "@/features/stack-history/revision-result-cell";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +45,22 @@ interface RevisionTableProps {
 // Scale": History tab).
 const BODY_MAX = "max-h-[324px]";
 
-function RowActions({ envId, stackId, seq }: { envId: string; stackId: string; seq: number }) {
+// RowActions is the row's menu: Open revision, and for an Operator Roll back to revision #n… on a revision that
+// finished well and is not the deployed one. A failed or in-progress revision cannot be rolled back to (D-06) and
+// the deployed one has nothing to roll back (D-51), so they offer Open revision only.
+function RowActions({
+  envId,
+  stackId,
+  item,
+}: {
+  envId: string;
+  stackId: string;
+  item: StackRevision;
+}) {
   const t = useT();
+  const needs = useNeeds("stacks.deploy", envId);
+  const seq = item.seq;
+  const canRollBack = needs.allowed && item.outcome === "good" && !item.deployed;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -70,6 +85,17 @@ function RowActions({ envId, stackId, seq }: { envId: string; stackId: string; s
             {t("stackHistory.table.open", { seq })}
           </Link>
         </DropdownMenuItem>
+        {canRollBack ? (
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link
+              to="/env/$envId/stacks/$stackId/review"
+              params={{ envId, stackId }}
+              search={{ mode: "rollback", revision: seq }}
+            >
+              {t("stackRollback.rowAction", { seq })}
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -143,7 +169,7 @@ export function RevisionTable({
                 <ImageChangeSummary item={item} />
               </TableCell>
               <TableCell className="text-end">
-                <RowActions envId={envId} stackId={stackId} seq={item.seq} />
+                <RowActions envId={envId} stackId={stackId} item={item} />
               </TableCell>
             </TableRow>
           ))}
