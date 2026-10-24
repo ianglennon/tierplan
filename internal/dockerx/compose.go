@@ -242,6 +242,19 @@ func isDigits(s string) bool {
 	return s != ""
 }
 
+// keepVolumes is the answer the Compose SDK gets to every question it asks during an up: no (D-46). The only
+// question an up reaches is the one the reconciler asks when a named volume exists but its driver, options or
+// labels differ from the compose file: "Recreate (data will be lost)?". The SDK's always-yes prompt answered
+// it by removing the volume and creating it again, which deleted the data of a stack because someone edited a
+// label. Answering no is what a person does at the CLI to keep the data: the volume stays as it is, the
+// deploy goes on, and the containers mount the existing volume. The question is logged at Info through the
+// SDK's logging, which InitCompose sends to slog, so the operator can see which volume was left alone.
+// Changing a volume's settings needs the volume removed by hand and the stack deployed again.
+func keepVolumes(message string, _ bool) (bool, error) {
+	logrus.Info(message + " Bayplan answers no and keeps the volume as it is.")
+	return false, nil
+}
+
 // composeService builds the SDK for one deploy over this client, wrapped in the guard. Each deploy gets an
 // instance of its own, so the events of one reach only its callback.
 func (c *Client) composeService(p *types.Project, on func(ComposeEvent)) (api.Compose, error) {
@@ -268,7 +281,7 @@ func (c *Client) composeService(p *types.Project, on func(ComposeEvent)) (api.Co
 	}
 	svc, err := compose.NewComposeService(cli,
 		compose.WithMaxConcurrency(composeMaxConcurrency),
-		compose.WithPrompt(compose.AlwaysOkPrompt()),
+		compose.WithPrompt(keepVolumes),
 		compose.WithStreams(io.Discard, io.Discard, strings.NewReader("")),
 		compose.WithEventProcessor(&eventBridge{project: p, on: on}),
 	)

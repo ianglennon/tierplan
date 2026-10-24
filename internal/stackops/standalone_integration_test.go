@@ -865,3 +865,90 @@ func TestStandaloneStopStartKeepsSecrets(t *testing.T) {
 		t.Errorf("the stack is still recorded as stopped after the start")
 	}
 }
+
+// TestVolumeConfigEditKeepsTheVolume redeploys a stack whose compose file changed the labels of a named
+// volume that holds data, on a real engine through the Compose SDK (plan 08-07, STK-13, D-46). The SDK's
+// reconciler asks before it recreates a volume whose settings differ from the file, and Bayplan answers no:
+// the volume is the same one (its creation time is unchanged), the marker file written into it is still
+// there, and the deploy went on.
+func TestVolumeConfigEditKeepsTheVolume(t *testing.T) {
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	image := registry + "/bp/vol:1"
+	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	pins := &memPins{}
+	const name = "ivolkeep"
+	const volume = name + "_data"
+	compose := func(volumeLabels string) string {
+		return "services:\n  app:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n" +
+			"    volumes:\n      - data:/data\nvolumes:\n  data:" + volumeLabels + "\n"
+	}
+	ctx := testsupport.Context(t)
+	revision := 0
+	deploy := func(text string) {
+		t.Helper()
+		revision++
+		in := standaloneInput(name, text)
+		in.Pins, in.RevisionID = pins, "rev-"+strconv.Itoa(revision)
+		res, job := rig.deployStandalone(t, in)
+		if !res.OK() {
+			t.Fatalf("deploy %d: %+v items %v", revision, res, itemStates(job))
+		}
+	}
+	created := func() (time.Time, map[string]string) {
+		t.Helper()
+		rows, err := cli.VolumesWithLabel(ctx, stacks.LabelComposeProject, name)
+		if err != nil {
+			t.Fatalf("list the project's volumes: %v", err)
+		}
+		for _, v := range rows {
+			if v.Name == volume {
+				return v.Created, v.Labels
+			}
+		}
+		t.Fatalf("volumes = %+v, want %s", rows, volume)
+		return time.Time{}, nil
+	}
+
+	deploy(compose(" {}"))
+	if out, err := node.Sh(ctx, "docker run --rm -v "+volume+":/data busybox:1.36.1 sh -c 'echo kept > /data/marker'"); err != nil {
+		t.Fatalf("write the marker into %s: %v\n%s", volume, err, out)
+	}
+	before, _ := created()
+	if before.IsZero() {
+		t.Fatalf("the volume %s has no creation time to compare", volume)
+	}
+
+	// The edit: the volume gains a label, so its settings differ from the volume the engine holds.
+	deploy(compose("\n    labels:\n      tier: db"))
+
+	after, labels := created()
+	if !after.Equal(before) {
+		t.Errorf("the volume was created at %v after the redeploy, want the one made at %v kept", after, before)
+	}
+	if _, edited := labels["tier"]; edited {
+		t.Errorf("the volume carries the label of the edit %v, want its settings left as they were", labels)
+	}
+	out, err := node.Sh(ctx, "docker run --rm -v "+volume+":/data busybox:1.36.1 cat /data/marker")
+	if err != nil {
+		t.Fatalf("read the marker from %s: %v\n%s", volume, err, out)
+	}
+	if got := strings.TrimSpace(out); got != "kept" {
+		t.Errorf("the marker in %s reads %q, want %q: the redeploy must not recreate a volume", volume, got, "kept")
+	}
+	rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+	if err != nil || len(rows) != 1 || rows[0].State != "running" {
+		t.Errorf("containers after the redeploy = %+v, %v, want the stack's one running", rows, err)
+	}
+}

@@ -358,3 +358,25 @@ func TestComposeUpForcesTheRecreateOfTheServicesItIsGiven(t *testing.T) {
 		}
 	}
 }
+
+// TestComposePromptKeepsVolumes holds the answer to every question the Compose SDK can ask during an up: no,
+// with no error, so a deploy never removes a volume to apply a changed setting (plan 08-07, D-46).
+func TestComposePromptKeepsVolumes(t *testing.T) {
+	initCompose(t)
+	for _, tc := range []struct {
+		name, message string
+		fallback      bool
+	}{
+		{"the reconcile question", `Volume "shop_data" exists but doesn't match configuration in compose file. Recreate (data will be lost)?`, false},
+		{"the same question with a yes default", `Volume "shop_data" exists but doesn't match configuration in compose file. Recreate (data will be lost)?`, true},
+		{"any other question", "Remove everything?", true},
+		{"no message", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := keepVolumes(tc.message, tc.fallback)
+			if err != nil || got {
+				t.Errorf("keepVolumes(%q, %v) = %v, %v, want false and no error", tc.message, tc.fallback, got, err)
+			}
+		})
+	}
+}
