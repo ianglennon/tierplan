@@ -9,7 +9,7 @@
 -- adopted stack. Revisions taken before this migration read deploy, except the roll backs the backfill below
 -- finds.
 ALTER TABLE stack_snapshots ADD COLUMN origin TEXT NOT NULL DEFAULT 'deploy'
-    CHECK (origin IN ('deploy', 'update', 'rollback', 'adopted'));
+    CHECK (origin IN ('deploy','update','rollback','adopted'));
 
 -- The seq of the revision a roll back copied (0 for any other revision). Phase 7's CopyRevision stored it in
 -- base_seq; this column names it plainly and does not depend on how base_seq is read.
