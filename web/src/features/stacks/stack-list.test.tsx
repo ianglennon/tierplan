@@ -846,3 +846,78 @@ describe("StackList: the Show group, captions and discovery", () => {
     expect(screen.queryByText(/Couldn't look for unmanaged stacks/)).toBeNull();
   });
 });
+
+describe("StackList: flags on unmanaged stacks", () => {
+  const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+  it("adds the lost-record sentence to the Tooltip of an orphan row's Unmanaged badge", async () => {
+    stacks = { items: [unmanaged("orphan", {}, { orphan: true })] };
+    mount();
+    await screen.findByText("orphan");
+    fireEvent.focus(within(rowOfName("orphan")).getByText("Unmanaged"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here. Created by Bayplan (another instance or a lost record).",
+    );
+  });
+
+  it("shows the Portainer badge in Source for a Portainer stack and a dash for any other", async () => {
+    stacks = {
+      items: [unmanaged("viaportainer", {}, { portainer: true }), unmanaged("plain")],
+    };
+    mount();
+    await screen.findByText("viaportainer");
+    const source = (name: string) => within(rowOfName(name)).getAllByRole("cell")[3] as HTMLElement;
+    expect(within(source("viaportainer")).getByText("Portainer")).toBeTruthy();
+    expect(within(source("plain")).queryByText("Portainer")).toBeNull();
+    expect(source("plain").textContent).toBe("—");
+  });
+
+  it("badges Bayplan's own stack and the agent's stack beside Unmanaged, with the reason in a Tooltip", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "self",
+          {},
+          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+        ),
+        unmanaged(
+          "agents",
+          {},
+          { owner: "agent", adoptable: false, reason: "This stack runs Bayplan's agent." },
+        ),
+        unmanaged("blog"),
+      ],
+    };
+    mount();
+    await screen.findByText("self");
+    const own = rowOfName("self");
+    expect(within(own).getByText("Unmanaged")).toBeTruthy();
+    expect(within(own).getByText("Bayplan")).toBeTruthy();
+    expect(within(rowOfName("agents")).getByText("Bayplan agent")).toBeTruthy();
+    expect(within(rowOfName("blog")).queryByText(/^Bayplan/)).toBeNull();
+
+    fireEvent.focus(within(own).getByText("Bayplan"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe("This is Bayplan's own stack.");
+  });
+
+  it("draws every flag as a neutral outline badge, never a status fill, and keeps names as text", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "<b>flagged</b>",
+          { state: "degraded", servicesRunning: 1, servicesTotal: 2 },
+          { orphan: true, portainer: true, owner: "agent", adoptable: false, reason: "r" },
+        ),
+      ],
+    };
+    mount();
+    const name = await screen.findByText("<b>flagged</b>");
+    expect(name.querySelector("b")).toBeNull();
+    const row = name.closest("tr") as HTMLElement;
+    for (const word of ["Unmanaged", "Bayplan agent", "Portainer"]) {
+      const badge = within(row).getByText(word);
+      expect(badge.getAttribute("data-variant")).toBe("outline");
+    }
+  });
+});
