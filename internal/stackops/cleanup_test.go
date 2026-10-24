@@ -262,8 +262,9 @@ func TestCancelDuringTheWaitEndsTheServicesAsCreatedAndRemovesNothingInUse(t *te
 	rig.fake.SetTaskState("t_api", "preparing", "")
 	_, in := stackInput(t, "t", cancelCompose, tokFile("s3cret"))
 	d := rig.startDeploy(t, in)
-	d.until(t, "the stuck row to count its tasks", func(items map[string]jobs.Item) bool {
-		return items["service:t_api"].Unit == "tasks"
+	// The cancel must come after web has settled, or a loaded host can still have web waiting.
+	d.until(t, "the stuck row to count its tasks and web to settle", func(items map[string]jobs.Item) bool {
+		return items["service:t_api"].Unit == "tasks" && items["service:t_web"].Result["settled"] == "true"
 	})
 	if err := rig.hub.Cancel(d.job.ID); err != nil {
 		t.Fatal(err)
