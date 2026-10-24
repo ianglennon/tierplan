@@ -841,7 +841,13 @@ func TestStackLogsOfAStandaloneStackFollowAContainerThatRestartedFromItsLastLine
 // stackDownload runs a download of a stack's log as the given signed-in user, to its end.
 func stackDownload(t *testing.T, f *envFix, envID, stackID, query, cookie string) *dlWriter {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/env/"+envID+"/stacks/"+stackID+"/logs/download?"+query, nil)
+	return downloadAt(t, f, "/api/env/"+envID+"/stacks/"+stackID+"/logs/download?"+query, cookie)
+}
+
+// downloadAt runs a download of a log at a path, as the given signed-in user, to its end.
+func downloadAt(t *testing.T, f *envFix, path, cookie string) *dlWriter {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("User-Agent", authUA)
 	req.RemoteAddr = authIP + ":40000"
 	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it

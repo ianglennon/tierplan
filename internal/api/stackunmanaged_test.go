@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // The read-only page of a stack Bayplan did not make (plan 08-09, STK-12, D-09, D-10, D-47): found by its
@@ -121,7 +124,7 @@ func TestUnmanagedStackDetail(t *testing.T) {
 	}
 }
 
-func TestUnmanagedStackDetailOfAStandaloneProject(t *testing.T) {
+func TestUnmanagedStandaloneProjectPage(t *testing.T) {
 	t.Parallel()
 	f, e, _ := standaloneEnv(t, nil)
 	viewer := f.caller(t, e, "viewer-1", "viewer")
@@ -203,5 +206,204 @@ func TestUnmanagedStackNameIsBounded(t *testing.T) {
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Errorf("a name of 256 characters: %d %s, want 422", rec.Code, rec.Body)
+	}
+}
+
+// foreignStackWithData is a swarm namespace, legacy, that holds a service with a labelled network, a labelled
+// volume, a network and a volume it only uses, and a secret and a config, beside another namespace's objects.
+func foreignStackWithData() dockertest.FakeConfig {
+	ns := func(n string) map[string]string { return map[string]string{"com.docker.stack.namespace": n} }
+	cfg := swarmManagerEngine(
+		dockertest.FakeService{
+			ID: "svc-legacy-app", Name: "legacy_app", Mode: "replicated", Running: 1, Desired: 1, Image: "nginx:1.27", Labels: ns("legacy"),
+			Networks: []string{"n-default", "shared"},
+			Mounts: []dockertest.FakeServiceMount{
+				{Type: "volume", Source: "legacy_data", Target: "/data"}, {Type: "volume", Source: "shared-vol", Target: "/s"},
+			},
+			Secrets: []dockertest.FakeServiceObject{{ID: "sec-pw", Name: "legacy_pw", File: "pw"}},
+			Configs: []dockertest.FakeServiceObject{{ID: "cfg-app", Name: "legacy_conf", File: "/etc/app.conf"}},
+		},
+		dockertest.FakeService{ID: "svc-blog-app", Name: "blog_app", Mode: "replicated", Running: 1, Desired: 1, Image: "nginx:1.27", Labels: ns("blog")},
+	)
+	cfg.Networks = []dockertest.FakeNetwork{
+		{ID: "n-default", Name: "legacy_default", Driver: "overlay", Scope: "swarm", Labels: ns("legacy")},
+		{ID: "n-shared", Name: "shared", Driver: "overlay", Scope: "swarm"},
+		{ID: "n-blog", Name: "blog_default", Driver: "overlay", Scope: "swarm", Labels: ns("blog")},
+	}
+	cfg.Volumes = []dockertest.FakeVolume{
+		{Name: "legacy_data", Driver: "local", Labels: ns("legacy")}, {Name: "shared-vol", Driver: "local"},
+		{Name: "blog_data", Driver: "local", Labels: ns("blog")},
+	}
+	cfg.Secrets = []dockertest.FakeSecret{{ID: "sec-pw", Name: "legacy_pw", Labels: ns("legacy")}}
+	cfg.Configs = []dockertest.FakeConfigObject{{ID: "cfg-app", Name: "legacy_conf", Labels: ns("legacy")}}
+	return cfg
+}
+
+func TestUnmanagedResourcesPreviewOwnership(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	f.fake.Reconfigure(foreignStackWithData())
+	if err := f.clusters.Refresh(testsupport.Context(t), e.ID); err != nil {
+		t.Fatal(err)
+	}
+	writesBefore := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodGet, unmanagedPath("legacy", "/resources"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unmanaged resources: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[stackResourcesAnswer](t, rec)
+	if got.Tasks == nil || got.Containers != nil {
+		t.Fatalf("a swarm stack answers the tasks card and not the containers card: %s", rec.Body)
+	}
+	type row struct{ name, owner string }
+	var nets, vols, secrets, configs []row
+	for _, n := range got.Networks.Items {
+		nets = append(nets, row{n.Name, n.Ownership})
+	}
+	for _, v := range got.Volumes.Items {
+		vols = append(vols, row{v.Name, v.Ownership})
+	}
+	for _, o := range got.Secrets.Items {
+		secrets = append(secrets, row{o.Name, o.Ownership})
+	}
+	for _, o := range got.Configs.Items {
+		configs = append(configs, row{o.Name, o.Ownership})
+	}
+	check := func(what string, got, want []row) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Errorf("%s = %v, want %v", what, got, want)
+		}
+	}
+	check("networks", nets, []row{{"legacy_default", "stack"}, {"shared", "external"}})
+	check("volumes", vols, []row{{"legacy_data", "stack"}, {"shared-vol", "external"}})
+	check("secrets", secrets, []row{{"legacy_pw", "external"}})
+	check("configs", configs, []row{{"legacy_conf", "external"}})
+	if got.Tasks.Error != "" || got.Networks.Error != "" || got.Volumes.Error != "" || got.Secrets.Error != "" || got.Configs.Error != "" {
+		t.Errorf("a card carries an error: %s", rec.Body)
+	}
+	// D-47: names and ownership only. No secret value, no config content, no label leaves.
+	if strings.Contains(rec.Body.String(), "labels") || strings.Contains(rec.Body.String(), "namespace") {
+		t.Errorf("the answer carries labels of the foreign stack: %s", rec.Body)
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the engine received %d writes while reading an unmanaged stack's resources, want none", after-writesBefore)
+	}
+}
+
+func TestUnmanagedResourcesOfAStackThatIsGoneOrManagedIs404(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	newStack(t, admin, "web")
+	for _, name := range []string{"nothing-here", "web"} {
+		rec := viewer.do(http.MethodGet, unmanagedPath(name, "/resources"), "")
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "unmanaged_stack_not_found" {
+			t.Errorf("resources of %s: %d %s, want 404 unmanaged_stack_not_found", name, rec.Code, rec.Body)
+		}
+	}
+}
+
+// legacyLogs is the log fixture of an unmanaged stack: the tasks and lines of the stack-log tests, under the
+// namespace legacy that Bayplan did not make.
+func newLegacyLogsFix(t *testing.T) *stackLogsFix {
+	t.Helper()
+	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
+	cfg := f.cfg
+	ns := map[string]string{"com.docker.stack.namespace": "legacy"}
+	cfg.ServiceRows = []dockertest.FakeService{
+		{ID: "svc-web", Name: "legacy_web", Mode: "replicated", Running: 2, Desired: 2, Image: "nginx:1.27", Labels: ns},
+		{ID: "svc-api", Name: "legacy_api", Mode: "replicated", Running: 1, Desired: 1, Image: "nginx:1.27", Labels: ns},
+	}
+	f.reconfigure(t, cfg)
+	return f
+}
+
+func (f *stackLogsFix) unmanagedPath(name, tail, query string) string {
+	return "/api/env/" + f.env.ID + "/" + unmanagedPath(name, tail) + "?" + query
+}
+
+func TestUnmanagedLogsFollowTheLabel(t *testing.T) {
+	t.Parallel()
+	f := newLegacyLogsFix(t)
+
+	c := openSSE(t, f.authFixture, f.unmanagedPath("legacy", "/logs/stream", "sid="+sidA), f.user.cookie, "")
+
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
+	}
+	rd := stackReadyOf(t, c)
+	wantTasks := []stackReadyTask{
+		{"tk-a1", "api", 1, "mgr-1", "running"},
+		{"tk-w1", "web", 1, "mgr-1", "running"},
+		{"tk-w2", "web", 2, "wrk-ready", "running"},
+	}
+	if rd.Target != "swarm" || !slices.Equal(rd.Tasks, wantTasks) {
+		t.Fatalf("ready = %+v, want the live tasks of the services found by label: %+v", rd, wantTasks)
+	}
+	lines, _ := readStackLines(t, c, 5)
+	if got, want := stackTexts(lines), []string{"web1 a", "api a", "web2 a", "api b", "web1 b"}; !slices.Equal(got, want) {
+		t.Fatalf("lines = %v, want %v: both services merged by time", got, want)
+	}
+	// One viewed row names the stack and has no stack ID.
+	rows := f.viewedRows(t)
+	if len(rows) != 1 || rows[0].TargetType != "stack" || rows[0].TargetID != "" || rows[0].Details["stack"] != "legacy" {
+		t.Errorf("logs.viewed rows = %+v, want one that names legacy and carries no stack ID", rows)
+	}
+}
+
+func TestUnmanagedLogDownloadMergesTheServicesFoundByLabel(t *testing.T) {
+	t.Parallel()
+	f := newLegacyLogsFix(t)
+
+	w := downloadAt(t, f.envFix, f.unmanagedPath("legacy", "/logs/download", ""), f.user.cookie)
+
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	want := strings.Join([]string{
+		dlLine("web.1@mgr-1", 5, "web0 old"),
+		dlLine("web.1@mgr-1", 10, "web1 a"),
+		dlLine("api.1@mgr-1", 20, "api a"),
+		dlLine("web.2@wrk-ready", 30, "web2 a"),
+		dlLine("api.1@mgr-1", 40, "api b"),
+		dlLine("web.1@mgr-1", 60, "web1 b"),
+	}, "\n") + "\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, `attachment; filename="legacy-`) {
+		t.Errorf("Content-Disposition = %q", cd)
+	}
+	rows := f.auditRowsOf(t, audit.ActionLogsDownloaded)
+	if len(rows) != 1 || rows[0].TargetType != "stack" || rows[0].TargetID != "" || rows[0].Details["stack"] != "legacy" {
+		t.Errorf("logs.downloaded rows = %+v, want one that names legacy and carries no stack ID", rows)
+	}
+}
+
+func TestUnmanagedLogsRefuseACallerWithoutStacksReadAndAStackThatIsGoneOrManaged(t *testing.T) {
+	t.Parallel()
+	f := newLegacyLogsFix(t)
+	f.addUser(t, "nobody", false)
+	cookie, _ := f.signIn(t, "nobody", false)
+
+	if c := openSSE(t, f.authFixture, f.unmanagedPath("legacy", "/logs/stream", "sid="+sidA), cookie, ""); c.status0() != http.StatusForbidden && c.status0() != http.StatusNotFound {
+		t.Errorf("stream, a user with no role: status = %d, want a refusal", c.status0())
+	}
+	if w := downloadAt(t, f.envFix, f.unmanagedPath("legacy", "/logs/download", ""), cookie); w.code() != http.StatusForbidden && w.code() != http.StatusNotFound {
+		t.Errorf("download, a user with no role: status = %d, want a refusal", w.code())
+	}
+	// shop is a stack of Bayplan's, and nothing carries the name nowhere.
+	for _, name := range []string{"shop", "nowhere"} {
+		if c := openSSE(t, f.authFixture, f.unmanagedPath(name, "/logs/stream", "sid="+sidA), f.user.cookie, ""); c.status0() != http.StatusNotFound {
+			t.Errorf("stream of %s: status = %d: %s, want 404", name, c.status0(), c.bodyString())
+		}
+		if w := downloadAt(t, f.envFix, f.unmanagedPath(name, "/logs/download", ""), f.user.cookie); w.code() != http.StatusNotFound {
+			t.Errorf("download of %s: status = %d, want 404", name, w.code())
+		}
 	}
 }

@@ -567,3 +567,202 @@ func TestResourcesOfAStandaloneStackListTheVolumesOfItsProjectOnTheHost(t *testi
 		t.Errorf("volume = %+v", v)
 	}
 }
+
+// The Resources of a stack Bayplan did not make (plan 08-09, STK-12, D-13, D-18): the same cards over what its
+// labels and its services find, with the ownership badges previewing what adopting would own.
+
+func legacyNS(ns string) map[string]string { return map[string]string{"com.docker.stack.namespace": ns} }
+
+func TestResourcesOfADiscoveredSwarmStackPreviewWhatAdoptingWouldOwn(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.TasksFollowWrites = false
+		c.Tasks = []swarm.Task{
+			resourcesTask("t-app-1", "svc-app", "node-1", 1, "running", "running", time.Minute),
+			resourcesTask("t-blog-1", "svc-blog", "node-1", 1, "running", "running", time.Minute),
+		}
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "n-default", Name: "legacy_default", Driver: "overlay", Scope: "swarm", Labels: legacyNS("legacy")},
+			// Labelled with the namespace and attached by no service: still the stack's.
+			{ID: "n-spare", Name: "legacy_spare", Driver: "overlay", Scope: "swarm", Labels: legacyNS("legacy")},
+			{ID: "n-shared", Name: "shared", Driver: "overlay", Scope: "swarm"},
+			{ID: "n-blog", Name: "blog_default", Driver: "overlay", Scope: "swarm", Labels: legacyNS("blog")},
+			{ID: "n-free", Name: "unrelated", Driver: "overlay", Scope: "swarm"},
+		}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "legacy_data", Driver: "local", Labels: legacyNS("legacy")},
+			{Name: "shared-vol", Driver: "local"},
+			{Name: "blog_data", Driver: "local", Labels: legacyNS("blog")},
+			{Name: "loose", Driver: "local"},
+		}
+		c.Secrets = []dockertest.FakeSecret{
+			{ID: "sec-pw", Name: "legacy_pw", Labels: legacyNS("legacy")},
+			{ID: "sec-ext", Name: "shared_cert"},
+			{ID: "sec-free", Name: "unrelated"},
+		}
+		c.Configs = []dockertest.FakeConfigObject{{ID: "cfg-app", Name: "legacy_app_conf", Labels: legacyNS("legacy")}}
+	},
+		dockertest.FakeService{
+			ID: "svc-app", Name: "legacy_app", Mode: "replicated", Running: 1, Desired: 1, Image: "x", Labels: legacyNS("legacy"),
+			Networks: []string{"n-default", "shared"},
+			Mounts: []dockertest.FakeServiceMount{
+				{Type: "volume", Source: "legacy_data", Target: "/data"},
+				{Type: "volume", Source: "shared-vol", Target: "/shared"},
+				{Type: "bind", Source: "/srv/conf", Target: "/conf"},
+			},
+			Secrets: []dockertest.FakeServiceObject{{ID: "sec-pw", Name: "legacy_pw", File: "pw"}, {ID: "sec-ext", Name: "shared_cert", File: "cert"}},
+			Configs: []dockertest.FakeServiceObject{{ID: "cfg-app", Name: "legacy_app_conf", File: "/etc/app.conf"}},
+		},
+		// Another stack of the swarm that uses the same external secret is not this stack's user of it.
+		dockertest.FakeService{
+			ID: "svc-blog", Name: "blog_app", Mode: "replicated", Running: 1, Desired: 1, Image: "y", Labels: legacyNS("blog"),
+			Secrets: []dockertest.FakeServiceObject{{ID: "sec-ext", Name: "shared_cert", File: "cert"}},
+		},
+	)
+	st := stackops.DiscoveredStack(rig.envID, "legacy", stacks.TargetSwarm)
+
+	res := rig.deps.Resources(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+
+	if res.Tasks.Error != "" || len(res.Tasks.Items) != 1 || res.Tasks.Items[0].Task.ID != "t-app-1" || res.Tasks.Items[0].Service != "app" {
+		t.Errorf("tasks = %+v, want the one task of legacy's service, not blog's", res.Tasks)
+	}
+	type row struct{ name, owner string }
+	rows := func(names []row) string {
+		out := ""
+		for _, r := range names {
+			out += r.name + ":" + r.owner + " "
+		}
+		return out
+	}
+	var nets []row
+	for _, n := range res.Networks.Items {
+		nets = append(nets, row{n.Name, n.Ownership})
+	}
+	if want := []row{{"legacy_default", "stack"}, {"legacy_spare", "stack"}, {"shared", "external"}}; rows(nets) != rows(want) {
+		t.Errorf("networks = %s, want %s: the labelled ones Stack, the one the service attaches External", rows(nets), rows(want))
+	}
+	var vols []row
+	for _, v := range res.Volumes.Items {
+		vols = append(vols, row{v.Name, v.Ownership})
+	}
+	if want := []row{{"legacy_data", "stack"}, {"shared-vol", "external"}}; rows(vols) != rows(want) {
+		t.Errorf("volumes = %s, want %s: a bind mount and another stack's volume are not listed", rows(vols), rows(want))
+	}
+	var secrets []row
+	for _, o := range res.Secrets.Items {
+		secrets = append(secrets, row{o.Name, o.Ownership})
+	}
+	if want := []row{{"legacy_pw", "external"}, {"shared_cert", "external"}}; rows(secrets) != rows(want) {
+		t.Errorf("secrets = %s, want %s: always External, even one that carries the namespace label", rows(secrets), rows(want))
+	}
+	for _, o := range res.Secrets.Items {
+		if o.Name == "shared_cert" && (len(o.UsedBy) != 1 || o.UsedBy[0].Name != "app") {
+			t.Errorf("shared_cert users = %+v, want the stack's app alone", o.UsedBy)
+		}
+	}
+	if len(res.Configs.Items) != 1 || res.Configs.Items[0].Name != "legacy_app_conf" || res.Configs.Items[0].Ownership != stackops.OwnerExternal {
+		t.Errorf("configs = %+v, want legacy_app_conf, External", res.Configs.Items)
+	}
+}
+
+func TestResourcesOfADiscoveredStandaloneStackPreviewWhatAdoptingWouldOwn(t *testing.T) {
+	t.Parallel()
+	project := func(p, service string) map[string]string {
+		return map[string]string{"com.docker.compose.project": p, "com.docker.compose.service": service}
+	}
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		standalone(c)
+		c.TasksFollowWrites = false
+		c.Containers = []dockertest.FakeContainer{
+			{
+				ID: "c-web", Names: []string{"/shop-web-1"}, Image: "nginx:1.27", State: "running", Labels: project("shop", "web"),
+				Mounts: []string{"shop_data", "ext-vol", "/srv/conf"},
+				Networks: map[string]dockertest.FakeEndpoint{
+					"shop_default": {NetworkID: "n-default"}, "shared-net": {NetworkID: "n-shared"}, "bridge": {NetworkID: "n-bridge"},
+				},
+			},
+			{ID: "c-db", Names: []string{"/shop-db-1"}, Image: "postgres:17", State: "exited", Labels: project("shop", "db")},
+			{ID: "c-run", Names: []string{"/shop-run-1"}, Image: "nginx:1.27", State: "running", Labels: map[string]string{
+				"com.docker.compose.project": "shop", "com.docker.compose.service": "web", "com.docker.compose.oneoff": "True",
+			}},
+			{ID: "c-else", Names: []string{"/elsewhere-web-1"}, Image: "nginx:1.27", State: "running", Labels: project("elsewhere", "web")},
+		}
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "n-default", Name: "shop_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+			{ID: "n-shared", Name: "shared-net", Driver: "bridge", Scope: "local"},
+			{ID: "n-bridge", Name: "bridge", Driver: "bridge", Scope: "local"},
+			{ID: "n-else", Name: "elsewhere_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "elsewhere"}},
+		}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "shop_data", Driver: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}},
+			{Name: "ext-vol", Driver: "local"},
+			{Name: "elsewhere_data", Driver: "local", Labels: map[string]string{"com.docker.compose.project": "elsewhere"}},
+			{Name: "loose", Driver: "local"},
+		}
+	})
+	st := stackops.DiscoveredStack(rig.envID, "shop", stacks.TargetStandalone)
+
+	res := rig.deps.Resources(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+
+	var names []string
+	for _, c := range res.Containers.Items {
+		names = append(names, c.Name)
+	}
+	if res.Containers.Error != "" || !slices.Equal(names, []string{"shop-db-1", "shop-web-1"}) {
+		t.Errorf("containers = %v (error %q), want the project's two, the one-off and another project's left out", names, res.Containers.Error)
+	}
+	got := func() []string {
+		var out []string
+		for _, n := range res.Networks.Items {
+			out = append(out, n.Name+":"+n.Ownership)
+		}
+		for _, v := range res.Volumes.Items {
+			out = append(out, v.Name+":"+v.Ownership)
+		}
+		return out
+	}()
+	want := []string{"shared-net:external", "shop_default:stack", "ext-vol:external", "shop_data:stack"}
+	if !slices.Equal(got, want) {
+		t.Errorf("networks and volumes = %v, want %v: the project's labelled ones Stack, what its containers use without the label External, the default bridge and a bind mount left out", got, want)
+	}
+	if res.Secrets.Error != "" || len(res.Secrets.Items) != 0 || res.Configs.Error != "" || len(res.Configs.Items) != 0 {
+		t.Errorf("secrets = %+v configs = %+v, want empty cards: a compose secret is a file, and nothing declares one here", res.Secrets, res.Configs)
+	}
+}
+
+func TestManagedResourcesUnchanged(t *testing.T) {
+	t.Parallel()
+	// A stack of Bayplan's is its objects by ID: what carries its namespace without its ID is somebody else's, and
+	// what a service of its own mentions without declaring it is not listed.
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.TasksFollowWrites = false
+		c.Tasks = []swarm.Task{
+			resourcesTask("t-mine", "svc-mine", "node-1", 1, "running", "running", time.Minute),
+			resourcesTask("t-hand", "svc-hand", "node-1", 1, "running", "running", time.Minute),
+		}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "web_data", Driver: "local", Labels: ownedBy("web", "stack-web")},
+			{Name: "web_hand", Driver: "local", Labels: legacyNS("web")},
+		}
+		c.Secrets = []dockertest.FakeSecret{
+			{ID: "sec-mine", Name: "web_tok_1a2b3c4d", Labels: ownedBy("web", "stack-web")},
+			{ID: "sec-hand", Name: "web_hand", Labels: legacyNS("web")},
+		}
+	},
+		dockertest.FakeService{ID: "svc-mine", Name: "web_mine", Mode: "replicated", Running: 1, Desired: 1, Image: "x", Labels: ownedBy("web", "stack-web"),
+			Mounts: []dockertest.FakeServiceMount{{Type: "volume", Source: "mentioned-only", Target: "/m"}}},
+		dockertest.FakeService{ID: "svc-hand", Name: "web_hand", Mode: "replicated", Running: 1, Desired: 1, Image: "y", Labels: legacyNS("web")},
+	)
+
+	res := rig.deps.Resources(testsupport.Context(t), rig.envID, swarmStack(), stackops.Declared{})
+
+	if len(res.Tasks.Items) != 1 || res.Tasks.Items[0].Task.ID != "t-mine" {
+		t.Errorf("tasks = %+v, want the stack's own service's task alone", res.Tasks.Items)
+	}
+	if len(res.Volumes.Items) != 1 || res.Volumes.Items[0].Name != "web_data" || res.Volumes.Items[0].Ownership != stackops.OwnerStack {
+		t.Errorf("volumes = %+v, want web_data, Stack: a volume a service mentions and the file does not declare is not listed", res.Volumes.Items)
+	}
+	if len(res.Secrets.Items) != 1 || res.Secrets.Items[0].FullName != "web_tok_1a2b3c4d" || res.Secrets.Items[0].Ownership != stackops.OwnerStack {
+		t.Errorf("secrets = %+v, want the stack's own secret alone", res.Secrets.Items)
+	}
+}
