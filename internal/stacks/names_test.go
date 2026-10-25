@@ -4,6 +4,7 @@
 package stacks_test
 
 import (
+	"math/rand/v2"
 	"regexp"
 	"strconv"
 	"strings"
@@ -156,5 +157,59 @@ func TestNameRuleTextMatchesTheRule(t *testing.T) {
 	}
 	if !strings.Contains(stacks.NameRuleText(stacks.TargetStandalone), "lowercase") {
 		t.Errorf("the standalone text does not say lowercase")
+	}
+}
+
+func TestObjectNameStaysInsideTheAgentRule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ stack, name string }{
+		{"MyApp", "tok"}, {"web", "db_password"}, {"a", "b"}, {"A-_b", "n.ame"},
+		{strings.Repeat("A", 61), strings.Repeat("n", 60)}, {strings.Repeat("a", 255), "x"},
+		{strings.Repeat("a", 20) + "-", strings.Repeat("-", 50) + "z"}, {"my stack", "tok"}, {"a/b", "c d"},
+		{"-lead", "tok"}, {"_lead", "tok"}, {"", "tok"}, {"ünï", "tok"},
+	} {
+		full, hash := stacks.ObjectName(tc.stack, tc.name, []byte("x"))
+		if !agentObjectName.MatchString(full) || !strings.HasSuffix(full, "_"+hash) || !hex8.MatchString(hash) {
+			t.Errorf("ObjectName(%q, %q) = %q (hash %q), want a name inside the agent's rule that ends _<hash>", tc.stack, tc.name, full, hash)
+		}
+	}
+	// Every name either target takes, with generated secret names: a quick loop in place of a property library.
+	const stackChars = "abcxyzABCXYZ0189_-"
+	const nameChars = "abcxyz0189_.-"
+	rng := rand.New(rand.NewPCG(1, 2))
+	pick := func(chars string, n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = chars[rng.IntN(len(chars))]
+		}
+		return string(b)
+	}
+	for i := 0; i < 2000; i++ {
+		stack := string("aZ09"[rng.IntN(4)]) + pick(stackChars, rng.IntN(60))
+		name := pick(nameChars, 1+rng.IntN(70))
+		if !stacks.NameValid(stacks.TargetSwarm, stack) {
+			t.Fatalf("generator made %q, which the swarm rule refuses", stack)
+		}
+		full, _ := stacks.ObjectName(stack, name, []byte("c"))
+		if !agentObjectName.MatchString(full) {
+			t.Fatalf("ObjectName(%q, %q) = %q, outside the agent's rule", stack, name, full)
+		}
+	}
+}
+
+func TestObjectNameUnchangedForPhase7Names(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ stack, name string }{
+		{"web", "tok"}, {"my-stack_2", "db_password"}, {"s", "a.b"}, {strings.Repeat("s", 63), strings.Repeat("n", 60)},
+	} {
+		hash := stacks.ObjectHash(tc.name, []byte("x"))
+		prefix := tc.stack + "_" + tc.name
+		if room := 64 - len("_"+hash); len(prefix) > room {
+			prefix = strings.TrimRight(prefix[:room], "_.-")
+		}
+		want := prefix + "_" + hash
+		if got, _ := stacks.ObjectName(tc.stack, tc.name, []byte("x")); got != want {
+			t.Errorf("ObjectName(%q, %q) = %q, want the Phase 7 name %q", tc.stack, tc.name, got, want)
+		}
 	}
 }

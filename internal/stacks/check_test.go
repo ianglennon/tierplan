@@ -1196,3 +1196,83 @@ func TestCheckNeverSaysAPlainFieldComesFromASecret(t *testing.T) {
 		stackstest.NoSecretRun(t, pw.Value, messagesOf(res.Problems)...)
 	})
 }
+
+func swarmNameCheck(t *testing.T, name, compose string) stacks.CheckResult {
+	t.Helper()
+	return stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetSwarm, Copy: copyOf(compose)})
+}
+
+func swarmNameProblems(res stacks.CheckResult) stacks.Problems {
+	var out stacks.Problems
+	for _, p := range res.Problems {
+		if p.Code == stacks.CodeSwarmNameInvalid {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func TestCheckSwarmObjectNames(t *testing.T) {
+	t.Parallel()
+	t.Run("a service key that makes the name too long", func(t *testing.T) {
+		t.Parallel()
+		long := strings.Repeat("s", 60)
+		res := swarmNameCheck(t, "MyApp", "services:\n  "+long+":\n    image: nginx:1.27\n")
+		ps := swarmNameProblems(res)
+		if len(ps) != 1 || ps[0].Severity != stacks.SeverityError || ps[0].Key != "services."+long || ps[0].File != stacks.ComposeFile || ps[0].Line != 2 {
+			t.Fatalf("problems = %+v, want one error swarm_name_invalid at services.%s on line 2", res.Problems, long)
+		}
+		if want := "Swarm can't create a service named “MyApp_" + long + "”: swarm allows only letters, numbers, dash and underscore in service and network names, up to 63 characters."; ps[0].Message != want {
+			t.Errorf("message = %q, want %q", ps[0].Message, want)
+		}
+		if res.Problems.Errors() == 0 {
+			t.Error("the problem does not block the deploy")
+		}
+	})
+	t.Run("a dotted service key", func(t *testing.T) {
+		t.Parallel()
+		ps := swarmNameProblems(swarmNameCheck(t, "MyApp", "services:\n  web.v2:\n    image: nginx:1.27\n"))
+		if len(ps) != 1 || ps[0].Key != "services.web.v2" {
+			t.Fatalf("problems = %+v, want one on services.web.v2", ps)
+		}
+	})
+	t.Run("a network with an explicit name swarm refuses", func(t *testing.T) {
+		t.Parallel()
+		compose := "services:\n  web:\n    image: nginx:1.27\n    networks: [front]\nnetworks:\n  front:\n    name: front.net\n"
+		ps := swarmNameProblems(swarmNameCheck(t, "MyApp", compose))
+		if len(ps) != 1 || ps[0].Key != "networks.front" || !strings.Contains(ps[0].Message, "a network named “front.net”") {
+			t.Fatalf("problems = %+v, want one on networks.front naming front.net", ps)
+		}
+	})
+	t.Run("an external network is never checked", func(t *testing.T) {
+		t.Parallel()
+		compose := "services:\n  web:\n    image: nginx:1.27\n    networks: [shared]\nnetworks:\n  shared:\n    external: true\n    name: shared.net\n"
+		if ps := swarmNameProblems(swarmNameCheck(t, "MyApp", compose)); len(ps) != 0 {
+			t.Errorf("problems = %+v, want none: an external network is not created", ps)
+		}
+	})
+	t.Run("the longest name with a one-character service is clean", func(t *testing.T) {
+		t.Parallel()
+		name := strings.Repeat("A", 61)
+		res := swarmNameCheck(t, name, "services:\n  w:\n    image: nginx:1.27\n")
+		if ps := swarmNameProblems(res); len(ps) != 0 {
+			t.Errorf("problems = %+v, want none for a 61-byte stack with service w", ps)
+		}
+	})
+	t.Run("a standalone stack is never checked for it", func(t *testing.T) {
+		t.Parallel()
+		res := stacks.Check(context.Background(), stacks.CheckInput{Name: "shop", Target: stacks.TargetStandalone, Copy: copyOf("services:\n  web.v2:\n    image: nginx:1.27\n")})
+		if ps := swarmNameProblems(res); len(ps) != 0 {
+			t.Errorf("problems = %+v, want none on a standalone host", ps)
+		}
+	})
+}
+
+func TestCheckSwarmObjectNamesPassForPhase7Stacks(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"web", strings.Repeat("a", 40), "my-stack_2"} {
+		if ps := swarmNameProblems(swarmNameCheck(t, name, stacks.StarterCompose)); len(ps) != 0 {
+			t.Errorf("starter under %q: %+v, want no swarm_name_invalid", name, ps)
+		}
+	}
+}

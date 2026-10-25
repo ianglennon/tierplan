@@ -284,3 +284,88 @@ func TestALoadThatPanicsIsAnErrorNotACrash(t *testing.T) {
 		t.Errorf("the problem quotes the panic: %q", p.Message)
 	}
 }
+
+const unusualStackCompose = `services:
+  web:
+    image: nginx:1.27-alpine
+    volumes:
+      - data:/data
+    networks:
+      - back
+      - ext
+      - named
+    secrets:
+      - tok
+    configs:
+      - cfg
+networks:
+  back: {}
+  ext:
+    external: true
+  named:
+    name: my-explicit-net
+volumes:
+  data: {}
+secrets:
+  tok:
+    file: ./tok.txt
+configs:
+  cfg:
+    file: ./cfg.txt
+`
+
+func unusualStackCopy() stacks.WorkingCopy {
+	c := copyOf(unusualStackCompose)
+	c.Files = append(c.Files, stacks.File{Path: "tok.txt", Content: []byte("t")}, stacks.File{Path: "cfg.txt", Content: []byte("c")})
+	return c
+}
+
+func TestLoadKeepsAnUnusualStackName(t *testing.T) {
+	t.Parallel()
+	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{Name: "MyApp", Target: stacks.TargetSwarm, Copy: unusualStackCopy()})
+	if err != nil {
+		t.Fatalf("Load of a stack named MyApp: %v", err)
+	}
+	p := loaded.Project
+	if p.Name != "MyApp" {
+		t.Errorf("project name = %q, want MyApp", p.Name)
+	}
+	for key, want := range map[string]string{"back": "MyApp_back", "ext": "ext", "named": "my-explicit-net"} {
+		if got := p.Networks[key].Name; got != want {
+			t.Errorf("network %s = %q, want %q", key, got, want)
+		}
+	}
+	if got := p.Volumes["data"].Name; got != "MyApp_data" {
+		t.Errorf("volume data = %q, want MyApp_data", got)
+	}
+	if got := p.Secrets["tok"].Name; got != "MyApp_tok" {
+		t.Errorf("secret tok = %q, want MyApp_tok", got)
+	}
+	if got := p.Configs["cfg"].Name; got != "MyApp_cfg" {
+		t.Errorf("config cfg = %q, want MyApp_cfg", got)
+	}
+}
+
+func TestLoadUnchangedForComposeNames(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"web", "my-stack_2", "0abc"} {
+		if got := stacks.ProjectNameFor(name); got != name {
+			t.Errorf("ProjectNameFor(%q) = %q, want it unchanged", name, got)
+		}
+		loaded, err := stacks.Load(context.Background(), stacks.LoadInput{Name: name, Target: stacks.TargetSwarm, Copy: unusualStackCopy()})
+		if err != nil {
+			t.Fatalf("Load %q: %v", name, err)
+		}
+		p := loaded.Project
+		if p.Name != name || p.Networks["back"].Name != name+"_back" || p.Volumes["data"].Name != name+"_data" ||
+			p.Networks["named"].Name != "my-explicit-net" || p.Networks["ext"].Name != "ext" {
+			t.Errorf("%q: project %q, networks %+v, volumes %+v, want compose-go's own names", name, p.Name, p.Networks, p.Volumes)
+		}
+	}
+	// A name compose-go would not take is given the nearest name it would, never an empty one.
+	for name, want := range map[string]string{"MyApp": "myapp", "_x": "x", "---": "stack", "": "stack"} {
+		if got := stacks.ProjectNameFor(name); got != want {
+			t.Errorf("ProjectNameFor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

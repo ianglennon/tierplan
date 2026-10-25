@@ -227,3 +227,6 @@ func (u *unsetNames) sorted() []string {
 	sort.Strings(out)
 	return out
 }
+
+// ProjectNameFor is the compose project name a stack is loaded under.
+func ProjectNameFor(name string) string { return name }
