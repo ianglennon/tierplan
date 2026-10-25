@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -43,6 +43,12 @@ afterEach(() => {
   vi.unstubAllGlobals();
   client.clear();
 });
+
+// permissionsKnown waits for the user's permissions to be read, so a name that stays text is text because they do
+// not allow a link and not because they have not arrived.
+async function permissionsKnown() {
+  await waitFor(() => expect(client.getQueryData(["me"])).toBeTruthy());
+}
 
 function shell(children: React.ReactNode) {
   render(
@@ -89,7 +95,7 @@ describe("StackLink", () => {
     role = "none";
     mount({ name: "legacy" });
     // The permissions have to be known before the answer can be a link, and here they never allow it.
-    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await permissionsKnown();
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByTestId("host").textContent).toBe("legacy");
   });
@@ -145,7 +151,7 @@ describe("StackSentence", () => {
         envId="env-1"
       />,
     );
-    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    await permissionsKnown();
     expect(screen.queryByRole("link")).toBeNull();
     expect(screen.getByTestId("host").textContent).toContain("legacy has a definition");
   });
