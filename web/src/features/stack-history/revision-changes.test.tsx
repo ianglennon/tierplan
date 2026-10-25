@@ -114,6 +114,44 @@ describe("the Changes tab", () => {
   });
 });
 
+describe("settings that differ because of drift", () => {
+  const IMAGE = "TaskTemplate.ContainerSpec.Image";
+
+  // The row of a setting in the opened service, found by the path it prints under its label.
+  function rowOf(path: string): HTMLElement {
+    const cell = screen.getByText(path);
+    const row = cell.closest("tr");
+    if (!row) throw new Error(`no table row holds ${path}`);
+    return row;
+  }
+
+  it("marks a setting the stack's drift check found changed outside the stack, and only that setting", async () => {
+    body = { ...body, driftedPaths: { tracer_web: [IMAGE] } };
+    mount();
+
+    await screen.findByText("web");
+    expect(within(rowOf(IMAGE)).getByText("Drifted")).toBeTruthy();
+    expect(within(rowOf("TaskTemplate.ContainerSpec.Env[MODE]")).queryByText("Drifted")).toBeNull();
+    expect(screen.getAllByText("Drifted")).toHaveLength(1);
+  });
+
+  it("marks a drifted setting whose value is hidden by its path", async () => {
+    body = { ...body, driftedPaths: { tracer_web: ["TaskTemplate.ContainerSpec.Env[API_KEY]"] } };
+    mount();
+
+    const table = await screen.findByRole("table", { name: "Hidden changes to web" });
+    expect(within(table).getByText("Drifted")).toBeTruthy();
+  });
+
+  it("marks nothing when the stack has no drift result, or another service drifted", async () => {
+    body = { ...body, driftedPaths: { tracer_db: [IMAGE] } };
+    mount();
+
+    await screen.findByText("web");
+    expect(screen.queryByText("Drifted")).toBeNull();
+  });
+});
+
 describe("when nothing would change", () => {
   beforeEach(() => {
     body = {
