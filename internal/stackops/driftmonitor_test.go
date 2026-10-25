@@ -138,6 +138,27 @@ func startMonitor(t *testing.T, envID string, src *fakeDriftSource, deps stackop
 	return r
 }
 
+// awaitAll waits until the worker has stored a result for every stack named, in whatever order. Stacks whose
+// timers ran out at the same clock move are checked in one pass or in two, depending on how fast the timers' goroutines
+// run, so a test must not depend on which.
+func (r *monitorRig) awaitAll(t *testing.T, stackIDs ...string) []seenCheck {
+	t.Helper()
+	want := map[string]bool{}
+	for _, id := range stackIDs {
+		want[id] = true
+	}
+	var others []seenCheck
+	for len(want) > 0 {
+		got := testsupport.Await(t, "the worker to store a result for each of its stacks", r.seen)
+		if got.outcome == stackops.DriftOutcomeStored && want[got.stack] {
+			delete(want, got.stack)
+			continue
+		}
+		others = append(others, got)
+	}
+	return others
+}
+
 // await waits for the worker to report outcome for stackID ("" for a pass that held back) and returns the reports
 // it read on the way.
 func (r *monitorRig) await(t *testing.T, stackID, outcome string) []seenCheck {
@@ -312,8 +333,7 @@ func TestDriftMonitorDebouncesEvents(t *testing.T) {
 	}
 
 	m.clk.Advance(3 * time.Second)
-	m.await(t, "web-id", stackops.DriftOutcomeStored)
-	m.await(t, "db-id", stackops.DriftOutcomeStored)
+	m.awaitAll(t, "db-id", "web-id")
 	if calls.count("web-id") != 2 || calls.count("db-id") != 2 {
 		t.Errorf("checks of web and db = %d and %d, want 2 and 2: one look and one check for the three events", calls.count("web-id"), calls.count("db-id"))
 	}
@@ -353,11 +373,8 @@ func TestDriftMonitorMapsServiceEventsByName(t *testing.T) {
 	m.quiet(t)
 
 	m.clk.Advance(3 * time.Second)
-	skipped := m.await(t, "shop-id", stackops.DriftOutcomeStored)
-	for _, s := range skipped {
-		if s.stack != "box-id" || s.outcome != stackops.DriftOutcomeStored {
-			t.Errorf("the worker also reported %+v, want only the box container and the shop service to be checked", s)
-		}
+	for _, s := range m.awaitAll(t, "box-id", "shop-id") {
+		t.Errorf("the worker also reported %+v, want only the box container and the shop service to be checked", s)
 	}
 	if calls.count("shop-id") != 2 || calls.count("box-id") != 2 {
 		t.Errorf("checks of shop and box = %d and %d, want 2 and 2 (one look, one event each)", calls.count("shop-id"), calls.count("box-id"))

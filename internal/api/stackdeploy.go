@@ -852,6 +852,9 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 		d.BeforeJob(ctx)
 	}
 	job, err := d.Jobs.Start(spec, func(jctx context.Context, r *jobs.Reporter) {
+		// Declared first, so it runs last: the environment's lock is free by then, which is when the background
+		// drift check can look at the stack again (D-22). Whatever the operation was, and however it ended.
+		defer d.driftRecheck(l.env.ID, l.st.ID)
 		defer l.release()
 		select {
 		case <-ready:
@@ -884,6 +887,13 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	deploy = row
 	close(ready)
 	return &StackDeployOutput{CacheControl: "no-store", Body: StackDeployBody{JobID: job.ID, Revision: l.rev.Seq}}, nil
+}
+
+// driftRecheck asks the background drift check to look at a stack again, when it is wired.
+func (d StacksDeps) driftRecheck(envID, stackID string) {
+	if d.DriftRecheck != nil {
+		d.DriftRecheck(envID, stackID)
+	}
 }
 
 // revisionRendering stores the masked rendering of a revision: the stack as the deploy sent it, with

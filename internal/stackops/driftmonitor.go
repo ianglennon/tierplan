@@ -5,14 +5,17 @@ package stackops
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // The timing of the background drift check (D-22). A stack is checked about every five minutes, with jitter so the
@@ -27,10 +30,30 @@ const (
 	// driftRetryAfterFailure is how soon a timed check is tried again when a stack could not be read (an environment
 	// that is offline, a swarm without a manager). It is held to the interval when that is shorter.
 	driftRetryAfterFailure = 30 * time.Second
+	// driftResubscribeStart and driftResubscribeMax bound the wait before the worker asks the hub for its events
+	// again after the hub closed the subscription; it doubles up to the maximum and starts again at an event.
+	driftResubscribeStart = time.Second
+	driftResubscribeMax   = 30 * time.Second
 )
 
-// The kinds of key a pending check is held under: a stack by its ID.
-const keyID = "id:"
+// The events the worker acts on. A swarm stack is judged by its services, so only a service event names one; a
+// standalone stack by its containers, and the actions that leave a container changed, stopped or gone.
+const (
+	driftEventService   = "service"
+	driftEventContainer = "container"
+)
+
+var driftContainerActions = map[string]bool{
+	"create": true, "destroy": true, "start": true, "stop": true, "die": true, "kill": true, "update": true, "rename": true,
+}
+
+// The kinds of key a pending check is held under: a stack named by an event, a service named by an event that did
+// not name its stack, a stack by its ID.
+const (
+	keyName    = "name:"
+	keyService = "svc:"
+	keyID      = "id:"
+)
 
 // DriftSource is what the drift worker reads about the stacks of an environment: Repo, or a stand-in for it in a test.
 type DriftSource interface {
@@ -174,7 +197,7 @@ func (m *DriftMonitor) EnvStarted(envID string) {
 	ctx, cancel := context.WithCancel(m.ctx)
 	w := &driftWorker{
 		m: m, envID: envID, cancel: cancel, done: make(chan struct{}), wake: make(chan struct{}, 1),
-		dirty: map[string]struct{}{},
+		timers: map[string]struct{}{}, dirty: map[string]struct{}{}, prints: map[string]string{},
 	}
 	m.workers[envID] = w
 	m.wg.Add(1)
@@ -228,11 +251,16 @@ type driftWorker struct {
 	done   chan struct{}
 	// wake tells the loop that something is ready to check. Capacity one: a second wake while one is pending adds nothing.
 	wake chan struct{}
+	wg   sync.WaitGroup
 
 	mu sync.Mutex
-	// dirty are the keys ready to be checked.
+	// timers are the keys whose debounce has not run out; dirty are the keys ready to be checked.
+	timers  map[string]struct{}
 	dirty   map[string]struct{}
 	tickDue bool
+
+	// prints is the fingerprint of the engine's state at each stack's last stored check.
+	prints map[string]string
 }
 
 func (w *driftWorker) clock() Clock { return w.m.d.Clock }
@@ -275,9 +303,28 @@ func (w *driftWorker) putBack(keys []string, tick bool) {
 	w.mu.Unlock()
 }
 
-// run is the loop of the environment: a timed look at every stack, and a look at a stack that was asked for.
+// run is the loop of the environment. It does no reading of its own besides the pass: an event only notes the stack it
+// names, so the hub never finds the subscription behind.
 func (w *driftWorker) run(ctx context.Context) {
 	d := w.m.d
+	var (
+		events    <-chan dockerx.EventRow
+		unsub     = func() {}
+		resub     <-chan time.Time
+		backoff   = driftResubscribeStart
+		subscribe = func() {
+			if d.Subscribe == nil {
+				return
+			}
+			_, ch, cancel := d.Subscribe(ctx, w.envID)
+			events, unsub = ch, cancel
+		}
+	)
+	defer func() {
+		unsub()
+		w.wg.Wait()
+	}()
+	subscribe()
 	// The first look comes a few seconds after the environment starts, when the monitor has probed it.
 	tick := w.clock().After(d.Debounce)
 	for {
@@ -291,6 +338,22 @@ func (w *driftWorker) run(ctx context.Context) {
 			w.mu.Lock()
 			w.tickDue = true
 			w.mu.Unlock()
+		case ev, ok := <-events:
+			if !ok {
+				// The hub closes a subscriber that falls behind, and a stream that ends: ask again after a pause.
+				unsub()
+				events, unsub = nil, func() {}
+				resub = w.clock().After(backoff)
+				backoff = min(backoff*2, driftResubscribeMax)
+				continue
+			}
+			backoff = driftResubscribeStart
+			w.onEvent(ctx, ev)
+			continue
+		case <-resub:
+			resub = nil
+			subscribe()
+			continue
 		}
 		failed := w.pass(ctx)
 		if ticked {
@@ -301,6 +364,82 @@ func (w *driftWorker) run(ctx context.Context) {
 			tick = w.clock().After(next)
 		}
 	}
+}
+
+// onEvent notes the stack an event names and starts its debounce. Events that cannot change what a check finds are let
+// go: a health check result, another stack's kind of object, a container of a swarm task.
+func (w *driftWorker) onEvent(ctx context.Context, ev dockerx.EventRow) {
+	if ev.InvalidateOnly {
+		return
+	}
+	var key string
+	switch ev.Type {
+	case driftEventService:
+		if ns := ev.Attributes[stacks.LabelSwarmNamespace]; ns != "" {
+			key = keyName + ns
+		} else if ev.Name != "" {
+			key = keyService + ev.Name
+		}
+	case driftEventContainer:
+		if !driftContainerActions[ev.Action] {
+			return
+		}
+		if p := ev.Attributes[stacks.LabelComposeProject]; p != "" {
+			key = keyName + p
+		}
+	}
+	if key == "" {
+		return
+	}
+	w.mu.Lock()
+	if _, ok := w.timers[key]; ok {
+		w.mu.Unlock()
+		return
+	}
+	w.timers[key] = struct{}{}
+	w.mu.Unlock()
+	due := w.clock().After(w.m.d.Debounce)
+	w.wg.Go(func() {
+		select {
+		case <-due:
+			w.mu.Lock()
+			delete(w.timers, key)
+			w.dirty[key] = struct{}{}
+			w.mu.Unlock()
+			w.signal()
+		case <-ctx.Done():
+		}
+	})
+}
+
+// heldCache is what the environment holds, read at most once for each kind of target in a pass.
+type heldCache struct {
+	w    *driftWorker
+	read [2]*heldRead
+}
+
+type heldRead struct {
+	held Held
+	err  error
+}
+
+func (c *heldCache) get(ctx context.Context, swarm bool) (Held, error) {
+	i := 0
+	if swarm {
+		i = 1
+	}
+	if c.read[i] == nil {
+		h, err := c.w.m.heldOf(ctx, c.w.envID, swarm)
+		c.read[i] = &heldRead{held: h, err: err}
+	}
+	return c.read[i].held, c.read[i].err
+}
+
+func (m *DriftMonitor) heldOf(ctx context.Context, envID string, swarm bool) (Held, error) {
+	if m.d.HeldFunc != nil {
+		return m.d.HeldFunc(ctx, envID, swarm)
+	}
+	return m.d.Ops.Cached(ctx, envID, swarm)
 }
 
 func (m *DriftMonitor) drift(ctx context.Context, in DriftInput) (DriftResult, error) {
@@ -338,10 +477,45 @@ func (w *driftWorker) pass(ctx context.Context) (failed bool) {
 		w.putBack(keys, tick)
 		return true
 	}
+	held := &heldCache{w: w}
+	// timed is the stacks the timer asked for; the rest were named by an event or an operation that ended.
+	timed := map[string]bool{}
 	var targets []Stack
-	for _, st := range own {
-		if tick || slices.Contains(keys, keyID+st.ID) {
+	add := func(st Stack, byTimer bool) {
+		if !slices.ContainsFunc(targets, func(t Stack) bool { return t.ID == st.ID }) {
 			targets = append(targets, st)
+		}
+		if byTimer {
+			timed[st.ID] = true
+		}
+	}
+	for _, st := range own {
+		if tick {
+			add(st, true)
+		}
+	}
+	for _, k := range keys {
+		switch {
+		case strings.HasPrefix(k, keyID):
+			if i := slices.IndexFunc(own, func(s Stack) bool { return s.ID == strings.TrimPrefix(k, keyID) }); i >= 0 {
+				add(own[i], false)
+			}
+		case strings.HasPrefix(k, keyName):
+			if i := slices.IndexFunc(own, func(s Stack) bool { return s.Name == strings.TrimPrefix(k, keyName) }); i >= 0 {
+				add(own[i], false)
+			}
+		case strings.HasPrefix(k, keyService):
+			// A service event that did not name its stack: the service is found among what each stack owns.
+			svc := strings.TrimPrefix(k, keyService)
+			h, err := held.get(ctx, true)
+			if err != nil {
+				continue
+			}
+			for _, st := range own {
+				if st.Target == stacks.TargetSwarm && slices.ContainsFunc(h.RowsOf(st), func(r ServiceRow) bool { return r.Name == svc }) {
+					add(st, false)
+				}
+			}
 		}
 	}
 	sort.SliceStable(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
@@ -359,7 +533,7 @@ func (w *driftWorker) pass(ctx context.Context) (failed bool) {
 			}
 			return failed
 		}
-		outcome := w.check(ctx, st)
+		outcome := w.check(ctx, st, held, timed[st.ID])
 		if outcome == DriftOutcomeFailed {
 			failed = true
 		}
@@ -375,16 +549,32 @@ func (w *driftWorker) report(stackID, outcome string) {
 }
 
 // check is the check of one stack, and says what became of it (the DriftOutcome values).
-func (w *driftWorker) check(ctx context.Context, st Stack) string {
+func (w *driftWorker) check(ctx context.Context, st Stack, held *heldCache, timed bool) string {
 	m := w.m
 	repo := m.d.Repo
-	if _, has, err := repo.GoodRevisionInfo(ctx, st.ID); err != nil {
+	info, has, err := repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil {
 		w.logFailure(ctx, st, "read the deployed revision", err)
 		return DriftOutcomeFailed
-	} else if !has || st.Stopped {
-		// A stack that was stopped or never deployed has nothing to compare; the list shows no badge for it.
+	}
+	// A stack that was stopped or never deployed has nothing to compare; the list shows no badge for it.
+	if !has || st.Stopped {
 		return DriftOutcomeIgnored
 	}
+
+	// What the engine holds is read from the caches the lists use. When it is the same as at the last stored check, a
+	// timed look has nothing to find. An event or an operation that ended always looks: the cache can be a few seconds
+	// behind the engine, and the event is the evidence that something moved.
+	print := ""
+	if h, herr := held.get(ctx, st.Target == stacks.TargetSwarm); herr == nil {
+		print = heldFingerprint(h, st, info.Seq)
+	}
+	if timed && print != "" && w.prints[st.ID] == print {
+		if cur, ok := m.d.Store.Get(st.ID); ok && DriftCurrent(cur, st, info.Seq) {
+			return DriftOutcomeSkipped
+		}
+	}
+
 	good, ok, err := repo.LatestGoodRevision(ctx, st.ID)
 	if err != nil {
 		w.logFailure(ctx, st, "read the deployed revision", err)
@@ -405,8 +595,36 @@ func (w *driftWorker) check(ctx context.Context, st Stack) string {
 		w.logFailure(ctx, st, "check the stack", err)
 		return DriftOutcomeFailed
 	}
+
+	// A check that ran while an operation took the lock, or that an operation finished under, describes a state that
+	// is gone. It is dropped; the call that ends the operation asks for the check that counts.
+	if m.locked(w.envID) {
+		return DriftOutcomeDropped
+	}
+	now, hasNow, err := repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil || !hasNow || now.Seq != info.Seq {
+		return DriftOutcomeDropped
+	}
+	if fresh, ferr := m.stackOf(ctx, w.envID, st.ID); ferr != nil || fresh.Stopped != st.Stopped {
+		return DriftOutcomeDropped
+	}
 	m.d.Store.Put(st.ID, res)
+	w.prints[st.ID] = print
 	return DriftOutcomeStored
+}
+
+// stackOf is the stack as it is stored now.
+func (m *DriftMonitor) stackOf(ctx context.Context, envID, stackID string) (Stack, error) {
+	all, err := m.d.Repo.Stacks(ctx, envID)
+	if err != nil {
+		return Stack{}, err
+	}
+	for _, s := range all {
+		if s.ID == stackID {
+			return s, nil
+		}
+	}
+	return Stack{}, ErrStackNotFound
 }
 
 func (w *driftWorker) logFailure(ctx context.Context, st Stack, what string, err error) {
@@ -415,4 +633,27 @@ func (w *driftWorker) logFailure(ctx context.Context, st Stack, what string, err
 	}
 	// An environment that is offline is the normal reason, and the environment's own banners say so.
 	w.m.d.Log.Debug("the drift check could not "+what, "environment", w.envID, "stack", st.ID, "error", err)
+}
+
+// heldFingerprint names what the cached state of the environment holds for the stack, with the revision that is
+// deployed and whether it is running: a service of a swarm by its ID, when it last changed, how many replicas it wants
+// and its image, a container of a host by its ID, state and image. It changes whenever the stack does.
+func heldFingerprint(h Held, st Stack, seq int64) string {
+	own := OwnershipOf(st)
+	var parts []string
+	if st.Target == stacks.TargetSwarm {
+		for _, s := range h.Services {
+			if own.OwnsService(s) {
+				parts = append(parts, fmt.Sprintf("%s:%d:%d:%s", s.ID, s.UpdatedAt.UnixNano(), s.Desired, s.Image))
+			}
+		}
+	} else {
+		for _, c := range h.Containers {
+			if own.OwnsWorkload(c.Labels) {
+				parts = append(parts, c.ID+":"+c.State+":"+c.ImageID)
+			}
+		}
+	}
+	sort.Strings(parts)
+	return fmt.Sprintf("rev%d,%s", seq, strings.Join(parts, ","))
 }
