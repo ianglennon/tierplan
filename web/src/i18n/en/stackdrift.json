@@ -31,7 +31,8 @@
       "loading": "Checking for drift…",
       "stopped": {
         "title": "Stopped stacks don't drift.",
-        "body": "{{name}} was stopped on purpose, so its services are scaled down. Start it to check it again."
+        "body": "{{name}} was stopped on purpose, so its services are scaled down. Start it to check it again.",
+        "body_standalone": "{{name}} was stopped on purpose, so its containers are stopped. Start it to check it again."
       },
       "empty": {
         "title": "No drift",
@@ -63,6 +64,8 @@
       "extra": "Extra",
       "settings_one": "{{count}} setting differs",
       "settings_other": "{{count}} settings differ",
+      "containers_one": "{{count}} container",
+      "containers_other": "{{count}} containers",
       "caption": "Drift in {{service}}",
       "deployed": "Deployed",
       "running": "Running now"

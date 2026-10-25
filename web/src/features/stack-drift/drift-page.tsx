@@ -84,7 +84,7 @@ function Body({ envId, stackId, name, data, target }: BodyProps) {
       return (
         <>
           <DriftSummary services={data.services ?? []} target={target} />
-          <DriftServiceList services={data.services ?? []} />
+          <DriftServiceList services={data.services ?? []} target={target} />
         </>
       );
     case "none":
@@ -114,7 +114,10 @@ function Body({ envId, stackId, name, data, target }: BodyProps) {
               {t("stackDrift.page.stopped.title")}
             </EmptyTitle>
             <EmptyDescription className="break-words">
-              {t("stackDrift.page.stopped.body", { name })}
+              {t("stackDrift.page.stopped.body", {
+                name,
+                ...(target === "standalone" ? { context: "standalone" } : {}),
+              })}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

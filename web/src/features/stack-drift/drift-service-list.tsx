@@ -30,12 +30,26 @@ const TINT = { changed: "", missing: "bg-status-offline/8", extra: "bg-status-on
 interface RowProps {
   service: StackDriftService;
   defaultOpen: boolean;
+  target: "swarm" | "standalone";
+}
+
+// scaleOf is how many containers a compose service's spec says run it: its scale, and one when it says none.
+function scaleOf(spec: StackDriftService["current"]): number {
+  const scale = spec?.scale;
+  return typeof scale === "number" && scale > 0 ? scale : 1;
+}
+
+// containersOf is how many containers a service of a standalone host drifted by. A drift body reads from what the
+// revision deployed (current) to what runs now (next): a missing service is counted by the containers it was deployed
+// with, and a changed or an extra one by the containers that run now.
+export function containersOf(service: StackDriftService): number {
+  return scaleOf(service.change === "missing" ? service.current : service.next);
 }
 
 // ServiceRow is one service that drifted: the change in words with its glyph, the name in mono and how many settings
 // differ. A changed service expands to the field-level difference between what was deployed and what runs now; a
 // missing or an extra one has no spec to compare and is its summary row.
-function ServiceRow({ service, defaultOpen }: RowProps) {
+function ServiceRow({ service, defaultOpen, target }: RowProps) {
   const t = useT();
   const [open, setOpen] = useState(defaultOpen);
   const hidden = service.hiddenChanges ?? [];
@@ -58,6 +72,11 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
       {service.change === "changed" ? (
         <span className="text-xs text-muted-foreground">
           {t("stackDrift.list.settings", { count: service.settings })}
+        </span>
+      ) : null}
+      {target === "standalone" ? (
+        <span className="text-xs text-muted-foreground">
+          {t("stackDrift.list.containers", { count: containersOf(service) })}
         </span>
       ) : null}
     </>
@@ -110,17 +129,21 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
 
 // DriftServiceList is the page's list of the services that drifted (UI-SPEC "Drift"), in the order the server gave:
 // changed and missing ones by name, then the extra ones. Each changed service opens to the settings that differ, all
-// of them open when three or fewer services changed. Masked values never appear: the server sends them hidden, and a
+// of them open when three or fewer services changed. On a standalone host each row also counts the containers. Masked values never appear: the server sends them hidden, and a
 // change to a hidden one is only a path.
 export function DriftServiceList({ services, target = "swarm" }: DriftServiceListProps) {
-  void target;
   const t = useT();
   if (services.length === 0) return null;
   const changed = services.filter((s) => s.change === "changed").length;
   return (
     <ul className="flex flex-col gap-2" aria-label={t("stackDrift.list.label")}>
       {services.map((s) => (
-        <ServiceRow key={s.name} service={s} defaultOpen={changed <= OPEN_BY_DEFAULT} />
+        <ServiceRow
+          key={s.name}
+          service={s}
+          defaultOpen={changed <= OPEN_BY_DEFAULT}
+          target={target}
+        />
       ))}
     </ul>
   );

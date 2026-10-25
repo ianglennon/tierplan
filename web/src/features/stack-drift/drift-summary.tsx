@@ -10,6 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { containersOf } from "@/features/stack-drift/drift-service-list";
 import { useT } from "@/i18n/use-t";
 
 interface DriftSummaryProps {
@@ -18,12 +19,15 @@ interface DriftSummaryProps {
   target: "swarm" | "standalone";
 }
 
-// DriftSummary is the Summary of drift (UI-SPEC "Drift"): a native table with one row, Services on a swarm and
-// Containers on a standalone host, and a column for each way a service can drift. The words are real text.
+// DriftSummary is the Summary of drift (UI-SPEC "Drift"): a native table with a column for each way a service can
+// drift and a Services row. A standalone host's services are run by containers, so it has a Containers row as well,
+// which counts the containers of the services in each column. The words are real text.
 export function DriftSummary({ services, target }: DriftSummaryProps) {
   const t = useT();
   const count = (change: StackDriftService["change"]) =>
     services.filter((s) => s.change === change).length;
+  const containers = (change: StackDriftService["change"]) =>
+    services.filter((s) => s.change === change).reduce((n, s) => n + containersOf(s), 0);
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">
       <Table>
@@ -39,16 +43,22 @@ export function DriftSummary({ services, target }: DriftSummaryProps) {
         <TableBody>
           <TableRow>
             <TableHead scope="row" className="font-medium">
-              {t(
-                target === "standalone"
-                  ? "stackDrift.summary.containers"
-                  : "stackDrift.summary.services",
-              )}
+              {t("stackDrift.summary.services")}
             </TableHead>
             <TableCell>{count("changed")}</TableCell>
             <TableCell>{count("missing")}</TableCell>
             <TableCell>{count("extra")}</TableCell>
           </TableRow>
+          {target === "standalone" ? (
+            <TableRow>
+              <TableHead scope="row" className="font-medium">
+                {t("stackDrift.summary.containers")}
+              </TableHead>
+              <TableCell>{containers("changed")}</TableCell>
+              <TableCell>{containers("missing")}</TableCell>
+              <TableCell>{containers("extra")}</TableCell>
+            </TableRow>
+          ) : null}
         </TableBody>
       </Table>
     </div>
