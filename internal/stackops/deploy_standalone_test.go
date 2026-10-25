@@ -250,6 +250,29 @@ func TestStandaloneDeployShowsTheRemovalOfAContainerTheFileNoLongerDeclares(t *t
 	}
 }
 
+// A scale-down removes a container of a service the file still declares (a person ran `docker compose up
+// --scale web=2` and a restore puts the stack back). The SDK stops and removes it; its row is not left
+// running to be reported as interrupted when the job ends (found on a real host by plan 08-28).
+func TestStandaloneDeployEndsTheRowOfASurplusContainerTheSDKRemoved(t *testing.T) {
+	t.Parallel()
+	pin := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": pin})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", pin))
+	rig.deps.Up = newScriptedUp(nil, []dockerx.ComposeEvent{
+		container("demo-web-2", "web", "Stopping", false), container("demo-web-2", "web", "Stopped", true),
+		container("demo-web-2", "web", "Removing", false), container("demo-web-2", "web", "Removed", true),
+	}).up
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result %+v, job %s %v, want a deploy that worked and ended done", res, job.State, itemStates(job))
+	}
+	if row := itemByID(t, job, "container:demo-web-2"); row.State != jobs.ItemDone || row.Result["state"] != "removed" {
+		t.Errorf("surplus container row = %+v, want done and removed", row)
+	}
+}
+
 func TestStandaloneDeployDecidesFromTheSDKsAnswerAndNotFromItsWords(t *testing.T) {
 	t.Parallel()
 	t.Run("an error event with a clean return is a deploy that worked", func(t *testing.T) {
