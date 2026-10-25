@@ -98,7 +98,7 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
             busy={data.lastOperation?.state === "running"}
           />
         )}
-        <StackDetailsCard stack={data} />
+        <StackDetailsCard stack={data} drift={drift} />
       </div>
     </div>
   );

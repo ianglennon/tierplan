@@ -275,6 +275,7 @@ function view(over: Partial<DriftView> = {}): DriftView {
     checking: false,
     failed: false,
     checkedAt: 0,
+    checks: 0,
     recheck: () => {},
     ...over,
   };
@@ -353,13 +354,14 @@ describe("Check again", () => {
     mount(<DriftPage envId={ENV} stackId="s1" />);
     await screen.findByRole("list", { name: "Services that drifted" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy());
-    expect(screen.queryByRole("status")).toBeNull();
+    // The live region is there from the start and says nothing until a check that was asked for has ended.
+    expect(screen.getByRole("status").textContent).toBe("");
     const before = driftCalls.filter((c) => c.fresh).length;
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
 
-    const live = await screen.findByRole("status");
-    expect(live.textContent).toMatch(/^Checked /);
+    const live = screen.getByRole("status");
+    await waitFor(() => expect(live.textContent).toMatch(/^Checked /));
     expect(live.getAttribute("aria-live")).toBe("polite");
     expect(driftCalls.filter((c) => c.fresh).length).toBe(before + 1);
   });

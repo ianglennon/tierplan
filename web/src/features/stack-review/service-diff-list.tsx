@@ -74,7 +74,7 @@ function ImageText({ text }: { text: string }) {
 // HiddenChanges lists the settings whose value changed to or from one that is hidden: the path
 // alone, as "Changed (hidden)". The server decided that they changed before it hid them and never
 // sent the values, so there is nothing else to show (STK-06, T-07-69).
-function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
+export function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
   const t = useT();
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">

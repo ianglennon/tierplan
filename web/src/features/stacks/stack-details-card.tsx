@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { Link } from "@tanstack/react-router";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Loader2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { DriftView } from "@/api/stack-drift";
@@ -72,10 +72,49 @@ function CopyId({ id }: { id: string }) {
   );
 }
 
+// DriftValue is the Drift row (UI-SPEC "Drift"): the newest result the page has, else the stack's own summary of the
+// newest check the server holds. While there is none it says it is checking, or that it could not.
+function DriftValue({ stack, drift }: { stack: StackDetail; drift?: DriftView }) {
+  const t = useT();
+  const result = drift?.data ?? stack.drift;
+  if (!result) {
+    if (drift?.failed) return <>{t("stackDrift.details.failed")}</>;
+    if (drift?.checking) {
+      return (
+        <span className="inline-flex items-center gap-1">
+          <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+          {t("stackDrift.details.checking")}
+        </span>
+      );
+    }
+    return <>{t("stackDrift.details.unchecked")}</>;
+  }
+  switch (result.state) {
+    case "none":
+      return <>{t("stackDrift.details.none")}</>;
+    case "drifted":
+      return (
+        <Link
+          to="/env/$envId/stacks/$stackId/drift"
+          params={{ envId: stack.envId, stackId: stack.id }}
+          className="rounded-sm text-accent-ink hover:underline"
+        >
+          {t("stackDrift.details.differences", { count: result.count })}
+        </Link>
+      );
+    case "stopped":
+      return <>{t("stackDrift.details.stopped")}</>;
+    case "not_deployed":
+      return <>{t("stackDrift.details.notDeployed")}</>;
+    default:
+      return <>{t("stackDrift.details.failed")}</>;
+  }
+}
+
 // StackDetailsCard is the Details card of the Overview (UI-SPEC "Stack page"): where the stack is,
 // how it deploys, when it was made and last deployed, whether a draft waits, and its ID. A person
 // and a name are the server's words, drawn as text.
-export function StackDetailsCard({ stack, drift: _drift }: StackDetailsCardProps) {
+export function StackDetailsCard({ stack, drift }: StackDetailsCardProps) {
   const t = useT();
   const envName = useEnvName(stack.envId);
   const by = (user: string) => t("stackOverview.details.by", { user });
@@ -106,6 +145,26 @@ export function StackDetailsCard({ stack, drift: _drift }: StackDetailsCardProps
           ) : (
             t("stackOverview.details.never")
           )}
+        </Row>
+        <Row label={t("stackDrift.details.deployedRevision")}>
+          {stack.deployedRevision ? (
+            <>
+              <Link
+                to="/env/$envId/stacks/$stackId/history"
+                params={{ envId: stack.envId, stackId: stack.id }}
+                search={{ rev: stack.deployedRevision }}
+                className="rounded-sm text-accent-ink hover:underline"
+              >
+                #{stack.deployedRevision}
+              </Link>{" "}
+              <RelativeTime value={stack.lastDeployedAt} /> {by(stack.lastDeployedBy)}
+            </>
+          ) : (
+            t("stackDrift.details.never")
+          )}
+        </Row>
+        <Row label={t("stackDrift.details.drift")}>
+          <DriftValue stack={stack} drift={drift} />
         </Row>
         <Row label={t("stackOverview.details.draft")}>
           {stack.hasDraft ? (

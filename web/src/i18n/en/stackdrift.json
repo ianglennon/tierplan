@@ -11,6 +11,7 @@
       "deployedRevision": "Deployed revision",
       "drift": "Drift",
       "never": "Never",
+      "unchecked": "—",
       "checking": "Checking…",
       "none": "None",
       "differences_one": "{{count}} difference",

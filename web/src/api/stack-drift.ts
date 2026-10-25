@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
@@ -61,6 +61,8 @@ export interface DriftView {
   failed: boolean;
   // When the fresh check last finished, in milliseconds; 0 before it has.
   checkedAt: number;
+  // How many fresh checks have finished well: it goes up by one with each, though the answer be the same.
+  checks: number;
   recheck: () => void;
 }
 
@@ -68,13 +70,16 @@ export interface DriftView {
 // "The page runs a fresh check on open and shows the last cached result under a skeleton while it does"). The result
 // of the fresh check is shown when there is one, and the newest one the server held until then.
 export function useDrift(envId: string, stackId: string): DriftView {
+  const queryClient = useQueryClient();
   const cached = useQuery(driftQuery(envId, stackId));
-  const fresh = useQuery({ ...driftQuery(envId, stackId, { fresh: true }), staleTime: 0 });
+  const freshOptions = driftQuery(envId, stackId, { fresh: true });
+  const fresh = useQuery({ ...freshOptions, staleTime: 0 });
   return {
     data: fresh.data ?? cached.data,
     checking: fresh.isFetching,
     failed: fresh.isError && !fresh.isFetching,
     checkedAt: fresh.dataUpdatedAt,
+    checks: queryClient.getQueryState(freshOptions.queryKey)?.dataUpdateCount ?? 0,
     recheck: () => void fresh.refetch(),
   };
 }

@@ -2,13 +2,55 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import type { StackDriftService } from "@/api/stack-drift";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { useT } from "@/i18n/use-t";
 
 interface DriftSummaryProps {
   services: StackDriftService[];
+  // A standalone host drifts by its containers, a swarm by its services.
   target: "swarm" | "standalone";
 }
 
-// DriftSummary is filled in by the green step of plan 08-19, task 2.
-export function DriftSummary(_props: DriftSummaryProps) {
-  return null;
+// DriftSummary is the Summary of drift (UI-SPEC "Drift"): a native table with one row, Services on a swarm and
+// Containers on a standalone host, and a column for each way a service can drift. The words are real text.
+export function DriftSummary({ services, target }: DriftSummaryProps) {
+  const t = useT();
+  const count = (change: StackDriftService["change"]) =>
+    services.filter((s) => s.change === change).length;
+  return (
+    <div className="rounded-lg ring-1 ring-foreground/10">
+      <Table>
+        <caption className="sr-only">{t("stackDrift.summary.caption")}</caption>
+        <TableHeader>
+          <TableRow>
+            <TableHead scope="col" aria-label={t("stackDrift.summary.kind")} className="w-40" />
+            <TableHead scope="col">{t("stackDrift.summary.changed")}</TableHead>
+            <TableHead scope="col">{t("stackDrift.summary.missing")}</TableHead>
+            <TableHead scope="col">{t("stackDrift.summary.extra")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow>
+            <TableHead scope="row" className="font-medium">
+              {t(
+                target === "standalone"
+                  ? "stackDrift.summary.containers"
+                  : "stackDrift.summary.services",
+              )}
+            </TableHead>
+            <TableCell>{count("changed")}</TableCell>
+            <TableCell>{count("missing")}</TableCell>
+            <TableCell>{count("extra")}</TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+  );
 }

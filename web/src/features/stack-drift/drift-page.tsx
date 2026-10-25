@@ -3,37 +3,21 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import { type StackDriftService, useDrift } from "@/api/stack-drift";
+import { useDrift } from "@/api/stack-drift";
 import { stackQuery } from "@/api/stacks";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { DriftServiceList } from "@/features/stack-drift/drift-service-list";
+import { DriftSummary } from "@/features/stack-drift/drift-summary";
 import { useT } from "@/i18n/use-t";
+import { formatRelative } from "@/lib/format";
 
 interface DriftPageProps {
   envId: string;
   stackId: string;
-}
-
-// The services that drifted, one row each: the change in words and the service's name.
-function ServiceRows({ services }: { services: StackDriftService[] }) {
-  const t = useT();
-  return (
-    <ul className="flex flex-col gap-2" aria-label={t("stackDrift.list.label")}>
-      {services.map((s) => (
-        <li
-          key={s.name}
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 text-sm ring-1 ring-foreground/10"
-        >
-          <span className="font-medium">{t(`stackDrift.list.${s.change}`)}</span>
-          <span data-slot="service-name" className="font-mono text-sm font-medium break-all">
-            {s.short}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 // DriftPage is the page of a stack's drift (UI-SPEC "Drift page"): what runs on the environment against the revision
@@ -46,6 +30,32 @@ export function DriftPage({ envId, stackId }: DriftPageProps) {
   const drift = useDrift(envId, stackId);
   const name = stack.data?.name ?? stackId;
   const data = drift.data;
+
+  // A check that was asked for with "Check again" is announced when it ends: when the page holds a newer result than
+  // it did when the person asked. The check that opens the page is not: the person has just arrived and asked for
+  // nothing.
+  const askedFrom = useRef<number | null>(null);
+  const [announced, setAnnounced] = useState("");
+  const { checking, failed, checkedAt, checks } = drift;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only the end of a check announces
+  useEffect(() => {
+    if (askedFrom.current === null || checking) return;
+    if (failed) {
+      askedFrom.current = null;
+      return;
+    }
+    if (checks === askedFrom.current) return;
+    askedFrom.current = null;
+    const when = formatRelative(new Date(checkedAt).toISOString(), new Date(), t);
+    setAnnounced(t("stackDrift.page.checkedAnnounce", { time: when }));
+  }, [checking, failed, checks, checkedAt]);
+
+  function onCheckAgain() {
+    askedFrom.current = checks;
+    setAnnounced("");
+    drift.recheck();
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[1152px] flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
@@ -71,15 +81,26 @@ export function DriftPage({ envId, stackId }: DriftPageProps) {
             variant="ghost"
             className="max-md:h-11"
             disabled={drift.checking}
-            onClick={drift.recheck}
+            onClick={onCheckAgain}
           >
             <RotateCcw aria-hidden="true" />
             {drift.checking ? t("stackDrift.page.checkingButton") : t("stackDrift.page.checkAgain")}
           </Button>
+          <span role="status" aria-live="polite" className="sr-only">
+            {announced}
+          </span>
         </div>
       </div>
       <p className="text-xs text-muted-foreground">{t("stackDrift.page.intro")}</p>
-      {data?.state === "drifted" ? <ServiceRows services={data.services ?? []} /> : null}
+      {data?.state === "drifted" ? (
+        <>
+          <DriftSummary
+            services={data.services ?? []}
+            target={stack.data?.target === "standalone" ? "standalone" : "swarm"}
+          />
+          <DriftServiceList services={data.services ?? []} />
+        </>
+      ) : null}
     </div>
   );
 }
