@@ -1251,12 +1251,20 @@ func TestCheckSwarmObjectNames(t *testing.T) {
 			t.Errorf("problems = %+v, want none: an external network is not created", ps)
 		}
 	})
-	t.Run("the longest name with a one-character service is clean", func(t *testing.T) {
+	t.Run("the longest name with a one-character service and a short network is clean", func(t *testing.T) {
 		t.Parallel()
 		name := strings.Repeat("A", 61)
-		res := swarmNameCheck(t, name, "services:\n  w:\n    image: nginx:1.27\n")
-		if ps := swarmNameProblems(res); len(ps) != 0 {
-			t.Errorf("problems = %+v, want none for a 61-byte stack with service w", ps)
+		compose := "services:\n  w:\n    image: nginx:1.27\n    networks: [f]\nnetworks:\n  f:\n    name: f\n"
+		if ps := swarmNameProblems(swarmNameCheck(t, name, compose)); len(ps) != 0 {
+			t.Errorf("problems = %+v, want none for a 61-byte stack with service w and a network named f", ps)
+		}
+	})
+	t.Run("the default network of the longest name is reported, because swarm would refuse it", func(t *testing.T) {
+		t.Parallel()
+		name := strings.Repeat("A", 61)
+		ps := swarmNameProblems(swarmNameCheck(t, name, "services:\n  w:\n    image: nginx:1.27\n"))
+		if len(ps) != 1 || ps[0].Key != "networks.default" || !strings.Contains(ps[0].Message, "a network named “"+name+"_default”") {
+			t.Errorf("problems = %+v, want one on networks.default: %s_default is 69 bytes", ps, name)
 		}
 	})
 	t.Run("a standalone stack is never checked for it", func(t *testing.T) {

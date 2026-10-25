@@ -133,7 +133,7 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 			}
 		}()
 		project, err := load(ctx, details, func(o *loader.Options) {
-			o.SetProjectName(in.Name, true)
+			o.SetProjectName(ProjectNameFor(in.Name), true)
 			o.SkipInclude = true
 			o.SkipExtends = true
 			o.SkipResolveEnvironment = true
@@ -161,6 +161,7 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 		return nil, &LoadError{Err: res.err}
 	}
 	project := res.project
+	keepStackName(project, in.Name, ProjectNameFor(in.Name))
 	fillBareEnvironment(project, env, unset)
 	return &Loaded{Project: project, Unset: unset.sorted()}, nil
 }
@@ -228,5 +229,53 @@ func (u *unsetNames) sorted() []string {
 	return out
 }
 
-// ProjectNameFor is the compose project name a stack is loaded under.
-func ProjectNameFor(name string) string { return name }
+// ProjectNameFor is the compose project name a stack is loaded under: the stack's name when compose-go takes it
+// as a project name, else the nearest name compose-go takes (lowercase, with the characters it refuses dropped),
+// and "stack" when nothing is left. A swarm stack may hold uppercase letters (D-48, D-53), which compose-go
+// refuses in a project name; Load loads such a stack under this name and puts the stack's own name back on
+// what compose-go named after the project.
+func ProjectNameFor(name string) string {
+	norm := loader.NormalizeProjectName(name)
+	switch {
+	case norm == "":
+		return "stack"
+	case norm == name:
+		return name
+	}
+	return norm
+}
+
+// keepStackName renames what compose-go named <projectName>_<key> to <stackName>_<key>: every network, volume,
+// secret and config that is not external and was not given an explicit name. It runs only when the stack's name
+// is not the project name compose-go was given, so the names of a stack compose-go takes as it is are never
+// touched. A name a file wrote out that happens to read <projectName>_<key> is renamed too; it is the stack's
+// own prefix by another route, and the stack name is the namespace swarm keeps its objects under (D-48).
+func keepStackName(p *types.Project, stackName, projectName string) {
+	if stackName == projectName {
+		return
+	}
+	prefix, to := projectName+"_", stackName+"_"
+	rename := func(name, key string, external bool) string {
+		if !external && name == prefix+key {
+			return to + key
+		}
+		return name
+	}
+	for key, n := range p.Networks {
+		n.Name = rename(n.Name, key, bool(n.External))
+		p.Networks[key] = n
+	}
+	for key, v := range p.Volumes {
+		v.Name = rename(v.Name, key, bool(v.External))
+		p.Volumes[key] = v
+	}
+	for key, sc := range p.Secrets {
+		sc.Name = rename(sc.Name, key, bool(sc.External))
+		p.Secrets[key] = sc
+	}
+	for key, c := range p.Configs {
+		c.Name = rename(c.Name, key, bool(c.External))
+		p.Configs[key] = c
+	}
+	p.Name = stackName
+}

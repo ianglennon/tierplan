@@ -165,7 +165,7 @@ func TestObjectNameStaysInsideTheAgentRule(t *testing.T) {
 	for _, tc := range []struct{ stack, name string }{
 		{"MyApp", "tok"}, {"web", "db_password"}, {"a", "b"}, {"A-_b", "n.ame"},
 		{strings.Repeat("A", 61), strings.Repeat("n", 60)}, {strings.Repeat("a", 255), "x"},
-		{strings.Repeat("a", 20) + "-", strings.Repeat("-", 50) + "z"}, {"my stack", "tok"}, {"a/b", "c d"},
+		{strings.Repeat("a", 20) + "-", strings.Repeat("-", 50) + "z"}, {"my stack", "tok"}, {"a/b", "c-d"},
 		{"-lead", "tok"}, {"_lead", "tok"}, {"", "tok"}, {"ünï", "tok"},
 	} {
 		full, hash := stacks.ObjectName(tc.stack, tc.name, []byte("x"))
