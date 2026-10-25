@@ -128,7 +128,7 @@ type AdoptInput struct {
 // stack that is Bayplan's own, its agent's, or whose name the target cannot hold is a *NotAdoptableError. A
 // definition that cannot be written, or does not pass the check, is the *RebuildError of RebuildLive.
 func (d Deps) AdoptCommit(ctx context.Context, repo Repo, in AdoptInput) (Stack, error) {
-	a, err := d.AdoptCommitWith(ctx, repo, in)
+	a, err := d.AdoptWithOutcome(ctx, repo, in)
 	return a.Stack, err
 }
 
@@ -140,8 +140,8 @@ type Adopted struct {
 	Services int
 }
 
-// AdoptCommitWith is AdoptCommit with the outcome the caller records.
-func (d Deps) AdoptCommitWith(ctx context.Context, repo Repo, in AdoptInput) (Adopted, error) {
+// AdoptWithOutcome is AdoptCommit with the outcome the caller records.
+func (d Deps) AdoptWithOutcome(ctx context.Context, repo Repo, in AdoptInput) (Adopted, error) {
 	if slices.ContainsFunc(in.Managed, func(s Stack) bool { return s.Name == in.Name }) {
 		return Adopted{}, ErrNameTaken
 	}

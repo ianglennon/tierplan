@@ -103,7 +103,7 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 	}
 	defer release()
 
-	adopted, err := d.ops().AdoptCommitWith(ctx, repo, stackops.AdoptInput{
+	adopted, err := d.ops().AdoptWithOutcome(ctx, repo, stackops.AdoptInput{
 		EnvID: env.ID, Name: in.Name, Target: target, Fingerprint: in.Body.Fingerprint,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Managed: own, Self: d.selfMarks(row.Kind),
 	})
