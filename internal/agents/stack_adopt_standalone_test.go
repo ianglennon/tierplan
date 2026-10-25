@@ -351,3 +351,236 @@ func TestStandaloneAdoptThroughAnAgent(t *testing.T) {
 	}
 	f.noDenials(t)
 }
+
+// waitJob waits until the stack job ends and fails the test unless it ended done.
+func (f *saFix) waitJob(t *testing.T, stackID, jobID, what string) saJob {
+	t.Helper()
+	var job saJob
+	testsupport.Poll(t, standaloneDeployWait, "the "+what+" job "+jobID+" to end", func() (bool, string) {
+		code, body := f.srv.Do(http.MethodGet, f.api()+"/"+stackID+"/deploys/"+jobID, nil)
+		if code != http.StatusOK {
+			return false, fmt.Sprintf("GET the job = %d %s", code, body)
+		}
+		job = saJob{}
+		if err := json.Unmarshal(body, &job); err != nil {
+			return false, string(body)
+		}
+		return job.State != "running", string(body)
+	})
+	if job.State != "done" {
+		raw, _ := json.Marshal(job)
+		t.Fatalf("the %s of stack %s ended %s, want done: %s", what, stackID, job.State, raw)
+	}
+	return job
+}
+
+// rollback sends the roll back route's body and returns the job it started and the number of the revision it took.
+func (f *saFix) rollback(t *testing.T, stackID string, body map[string]any) (jobID string, revision int64) {
+	t.Helper()
+	code, raw := f.srv.Do(http.MethodPost, f.api()+"/"+stackID+"/rollback", body)
+	var started struct {
+		JobID    string `json:"jobId"`
+		Revision int64  `json:"revision"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(raw, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the roll back %v = %d %s", body, code, raw)
+	}
+	return started.JobID, started.Revision
+}
+
+// TestStandaloneRollbackThroughAnAgent proves a roll back on a real standalone host (STK-08, D-02, D-03): a stack
+// deployed at the images of two tags (revisions #1 and #2) is reviewed for a roll back to #1 and rolled back, and
+// its container runs the image of tag one again, by the digest revision #1 stored. History then lists #3, a
+// roll back of #1, as the revision the stack stands at.
+func TestStandaloneRollbackThroughAnAgent(t *testing.T) {
+	f := startSAFix(t, dockertest.RegistryOptions{})
+
+	// Two tags of one image, each with a digest of its own, removed from the host so the deploy has to fetch.
+	const name = "srb"
+	refs := []string{f.registry + "/hist/app:a", f.registry + "/hist/app:b"}
+	digests := make([]string, len(refs))
+	for i, ref := range refs {
+		digests[i] = dockertest.PushVariant(t, f.host, dockertest.ServiceTestImage, ref, "tag-"+string(rune('a'+i)), nil)
+	}
+	if digests[0] == digests[1] {
+		t.Fatalf("the two tags have the same digest %s", digests[0])
+	}
+	sh(t, f.host, "docker image rm "+strings.Join(refs, " "))
+	composeOf := func(image string) string {
+		return "services:\n  app:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n"
+	}
+
+	// Two deploys, two images: revisions #1 and #2, each good.
+	id := f.create(t, name, composeOf(refs[0]), nil)
+	ran := make([]saState, len(refs))
+	for i, ref := range refs {
+		if i > 0 {
+			f.save(t, id, composeOf(ref), nil)
+		}
+		f.deployOK(t, id)
+		states := f.states(t, name)
+		if len(states) != 1 || !strings.HasSuffix(states["app"].ImageRef, "@"+digests[i]) {
+			t.Fatalf("after deploy %d the container is %+v, want one running the image %s@%s", i+1, states, ref, digests[i])
+		}
+		ran[i] = states["app"]
+	}
+	if ran[0].ImageID == ran[1].ImageID {
+		t.Fatalf("both tags give the image %s: the roll back would prove nothing", ran[0].ImageID)
+	}
+
+	// The review of the roll back to #1: the service is pinned to the digest revision #1 stored.
+	code, body := f.srv.Do(http.MethodPost, f.api()+"/"+id+"/review", map[string]any{"mode": "rollback", "revision": 1})
+	var rv struct {
+		Revision    int64 `json:"revision"`
+		DeployedSeq int64 `json:"deployedSeq"`
+		Images      []struct {
+			Service, Digest, Current, State string
+		} `json:"images"`
+		Problems []struct {
+			Severity, Code, Message string
+		} `json:"problems"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &rv) != nil {
+		t.Fatalf("POST the review of the roll back to #1 = %d %s", code, body)
+	}
+	for _, p := range rv.Problems {
+		if p.Severity == "error" {
+			t.Errorf("the roll back review found an error: %s (%s)", p.Message, p.Code)
+		}
+	}
+	if rv.Revision != 1 || rv.DeployedSeq != 2 {
+		t.Errorf("the roll back review is of revision %d against deployed %d, want 1 against 2", rv.Revision, rv.DeployedSeq)
+	}
+	if len(rv.Images) != 1 {
+		t.Fatalf("the roll back review lists %d images, want the one service's: %s", len(rv.Images), body)
+	}
+	if r := rv.Images[0]; r.Service != "app" || r.State != "pinned" || r.Digest != digests[0] || r.Current != digests[1] {
+		t.Errorf("the roll back review's image row = %+v, want app pinned to %s (from %s)", r, digests[0], digests[1])
+	}
+
+	// The roll back, as the review sends it.
+	jobID, revision := f.rollback(t, id, map[string]any{"revision": 1, "expectedDeployed": rv.DeployedSeq})
+	if revision != 3 {
+		t.Errorf("the roll back took revision %d, want 3", revision)
+	}
+	f.waitJob(t, id, jobID, "roll back")
+
+	// The container runs tag one's image again, the digest revision #1 stored.
+	states := f.states(t, name)
+	if got := states["app"]; len(states) != 1 || got.ImageID != ran[0].ImageID || !strings.HasSuffix(got.ImageRef, "@"+digests[0]) {
+		t.Errorf("after the roll back the container is %+v, want one running image %s (%s@%s)", states, ran[0].ImageID, refs[0], digests[0])
+	}
+	if got := f.containers(t, name)["app"]; len(got) != 1 || !strings.HasSuffix(got[0], " running") {
+		t.Errorf("containers of app after the roll back = %v, want one running", got)
+	}
+
+	// History: #3 is a roll back of #1, good, and the one the stack stands at.
+	code, body = f.srv.Do(http.MethodGet, f.api()+"/"+id+"/revisions", nil)
+	var hist struct {
+		Items []struct {
+			Seq          int64  `json:"seq"`
+			Origin       string `json:"origin"`
+			RestoredFrom int64  `json:"restoredFrom"`
+			Outcome      string `json:"outcome"`
+			Deployed     bool   `json:"deployed"`
+		} `json:"items"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &hist) != nil {
+		t.Fatalf("GET the revisions = %d %s", code, body)
+	}
+	if len(hist.Items) != 3 || hist.Items[0].Seq != 3 {
+		t.Fatalf("History lists %+v, want revisions 3, 2 and 1 newest first", hist.Items)
+	}
+	if r := hist.Items[0]; r.Origin != "rollback" || r.RestoredFrom != 1 || r.Outcome != "good" || !r.Deployed {
+		t.Errorf("revision #3 = %+v, want a good roll back of #1, deployed", r)
+	}
+	for _, r := range hist.Items[1:] {
+		if r.Deployed || r.Outcome != "good" {
+			t.Errorf("revision #%d = %+v, want good and no longer the deployed one", r.Seq, r)
+		}
+	}
+	f.noDenials(t)
+}
+
+// saDrift is the part of the answer of GET .../drift these tests read.
+type saDrift struct {
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+	Count    int    `json:"count"`
+	Services []struct {
+		Short, Change string
+		Settings      int
+	} `json:"services"`
+}
+
+// driftNow reads the stack again and returns the drift check.
+func (f *saFix) driftNow(t *testing.T, stackID string) (saDrift, string) {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodGet, f.api()+"/"+stackID+"/drift?fresh=true", nil)
+	var d saDrift
+	if code != http.StatusOK || json.Unmarshal(body, &d) != nil {
+		t.Fatalf("GET the drift of stack %s = %d %s", stackID, code, body)
+	}
+	return d, string(body)
+}
+
+// TestStandaloneDriftThroughAnAgent proves drift on a real standalone host (STK-14, D-21, D-23): a stack deployed
+// by Bayplan reads no drift; a second container of its service made with the Compose CLI alone (up --scale) is
+// drift, and putting the stack back with a restore ends it, removing that container. The container made outside
+// carries the stack's ID label, the one thing a person copying a container of the stack would also carry: a
+// container of the project without it is another owner's by design and is not the stack's to report.
+func TestStandaloneDriftThroughAnAgent(t *testing.T) {
+	f := startSAFix(t, dockertest.RegistryOptions{})
+	image := f.registry + "/bp/app:1"
+	f.pushBusybox(t, image, nil)
+
+	const name = "sdr"
+	compose := func(extra string) string {
+		return "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n" + extra
+	}
+	id := f.create(t, name, compose(""), nil)
+	f.deployOK(t, id)
+	first := f.states(t, name)
+	if len(first) != 1 {
+		t.Fatalf("containers after the deploy = %v, want web", first)
+	}
+	if d, raw := f.driftNow(t, id); d.State != "none" || d.Revision != 1 {
+		t.Fatalf("drift right after the deploy = %s, want none against revision 1", raw)
+	}
+
+	// A person adds a second container of web with the Compose CLI alone; the first is left as it is.
+	composeUp(t, f, name, compose("    labels:\n      bayplan.stack.id: "+id+"\n"), "--scale", "web=2", "--no-recreate")
+	if got := f.containers(t, name)["web"]; len(got) != 2 {
+		t.Fatalf("containers of web after up --scale web=2 = %v, want two", got)
+	}
+	testsupport.Poll(t, 2*time.Minute, "a fresh drift check to find web changed", func() (bool, string) {
+		d, raw := f.driftNow(t, id)
+		if d.State != "drifted" {
+			return false, raw
+		}
+		for _, s := range d.Services {
+			if s.Short == "web" && s.Change == "changed" && s.Settings > 0 {
+				return true, raw
+			}
+		}
+		return false, raw
+	})
+
+	// A restore puts the deployed revision back: the second container goes, the first is the one it was.
+	jobID, revision := f.rollback(t, id, map[string]any{"mode": "restore", "revision": 1, "expectedDeployed": 1})
+	if revision != 2 {
+		t.Errorf("the restore took revision %d, want 2", revision)
+	}
+	f.waitJob(t, id, jobID, "restore")
+	testsupport.Poll(t, 2*time.Minute, "a fresh drift check to read none after the restore", func() (bool, string) {
+		d, raw := f.driftNow(t, id)
+		return d.State == "none", raw
+	})
+	if got := f.containers(t, name)["web"]; len(got) != 1 || !strings.HasSuffix(got[0], " running") {
+		t.Errorf("containers of web after the restore = %v, want one running", got)
+	}
+	if after := f.states(t, name); after["web"].ID != first["web"].ID {
+		t.Errorf("web after the restore is container %s, want the first one, %s, left alone", after["web"].ID, first["web"].ID)
+	}
+	f.noDenials(t)
+}
