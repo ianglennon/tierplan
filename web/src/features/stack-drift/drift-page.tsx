@@ -84,7 +84,7 @@ function Body({ envId, stackId, name, data, target }: BodyProps) {
       return (
         <>
           <DriftSummary services={data.services ?? []} target={target} />
-          <DriftServiceList services={data.services ?? []} target={target} />
+          <DriftServiceList services={data.services ?? []} target={target} stackName={name} />
         </>
       );
     case "none":

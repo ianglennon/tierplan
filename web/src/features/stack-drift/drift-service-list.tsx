@@ -8,6 +8,7 @@ import type { StackDriftService } from "@/api/stack-drift";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { diffSpecs } from "@/features/spec-editor/diff";
 import { SpecDiff } from "@/features/spec-editor/spec-diff";
+import { DriftCause } from "@/features/stack-drift/drift-cause";
 import { HiddenChanges } from "@/features/stack-review/service-diff-list";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,8 @@ interface DriftServiceListProps {
   services: StackDriftService[];
   // A standalone host's services are run by containers, which the rows count.
   target?: "swarm" | "standalone";
+  // The stack's name, for the sentence about a difference found when the stack was adopted.
+  stackName?: string;
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -31,6 +34,7 @@ interface RowProps {
   service: StackDriftService;
   defaultOpen: boolean;
   target: "swarm" | "standalone";
+  stackName?: string;
 }
 
 // scaleOf is how many containers a compose service's spec says run it: its scale, and one when it says none.
@@ -49,7 +53,7 @@ export function containersOf(service: StackDriftService): number {
 // ServiceRow is one service that drifted: the change in words with its glyph, the name in mono and how many settings
 // differ. A changed service expands to the field-level difference between what was deployed and what runs now; a
 // missing or an extra one has no spec to compare and is its summary row.
-function ServiceRow({ service, defaultOpen, target }: RowProps) {
+function ServiceRow({ service, defaultOpen, target, stackName }: RowProps) {
   const t = useT();
   const [open, setOpen] = useState(defaultOpen);
   const hidden = service.hiddenChanges ?? [];
@@ -81,12 +85,20 @@ function ServiceRow({ service, defaultOpen, target }: RowProps) {
       ) : null}
     </>
   );
+  // Why the service differs, in muted text below its name: what the audit log knows, or that it changed outside Bayplan.
+  // It is never inside the row's button, because its time is a control of its own.
+  const cause = (
+    <p data-slot="drift-cause" className="basis-full text-xs text-muted-foreground">
+      <DriftCause cause={service.cause} stackName={stackName} />
+    </p>
+  );
 
   if (service.change !== "changed") {
     return (
       <li className={cn("rounded-lg ring-1 ring-foreground/10", TINT[service.change])}>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
           {summary}
+          {cause}
         </div>
       </li>
     );
@@ -107,6 +119,7 @@ function ServiceRow({ service, defaultOpen, target }: RowProps) {
             {summary}
           </button>
         </CollapsibleTrigger>
+        <div className="px-3 pb-2 ps-10 max-md:ps-3">{cause}</div>
         <CollapsibleContent className="flex flex-col gap-3 border-t p-3">
           {rows.length > 0 || hidden.length === 0 ? (
             <SpecDiff
@@ -131,7 +144,7 @@ function ServiceRow({ service, defaultOpen, target }: RowProps) {
 // changed and missing ones by name, then the extra ones. Each changed service opens to the settings that differ, all
 // of them open when three or fewer services changed. On a standalone host each row also counts the containers. Masked values never appear: the server sends them hidden, and a
 // change to a hidden one is only a path.
-export function DriftServiceList({ services, target = "swarm" }: DriftServiceListProps) {
+export function DriftServiceList({ services, target = "swarm", stackName }: DriftServiceListProps) {
   const t = useT();
   if (services.length === 0) return null;
   const changed = services.filter((s) => s.change === "changed").length;
@@ -143,6 +156,7 @@ export function DriftServiceList({ services, target = "swarm" }: DriftServiceLis
           service={s}
           defaultOpen={changed <= OPEN_BY_DEFAULT}
           target={target}
+          stackName={stackName}
         />
       ))}
     </ul>
