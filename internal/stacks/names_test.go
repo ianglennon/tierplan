@@ -176,7 +176,7 @@ func TestObjectNameStaysInsideTheAgentRule(t *testing.T) {
 	// Every name either target takes, with generated secret names: a quick loop in place of a property library.
 	const stackChars = "abcxyzABCXYZ0189_-"
 	const nameChars = "abcxyz0189_.-"
-	rng := rand.New(rand.NewPCG(1, 2))
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // a seeded generator keeps the test deterministic; nothing here is secret
 	pick := func(chars string, n int) string {
 		b := make([]byte, n)
 		for i := range b {

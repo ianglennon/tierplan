@@ -459,12 +459,8 @@ func TestUnmanagedStackWithAnUnusualName(t *testing.T) {
 		foreignSwarmService("a/b", "web", 1, 1, nil),
 	)
 
-	var listed []stackAnswer
-	for _, it := range listWith(t, admin, "").Items {
-		listed = append(listed, it)
-	}
 	by := map[string]stackAnswer{}
-	for _, it := range listed {
+	for _, it := range listWith(t, admin, "").Items {
 		by[it.Name] = it
 	}
 	if u := by["MyApp"].Unmanaged; u == nil || !u.Adoptable || u.Reason != "" {

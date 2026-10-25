@@ -61,7 +61,7 @@ func safeStackPart(stack string) string {
 		}
 	}
 	out := strings.TrimLeftFunc(b.String(), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+		return r == '_' || r == '.' || r == '-'
 	})
 	if out == "" {
 		return "stack"

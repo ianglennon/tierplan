@@ -236,11 +236,8 @@ func (u *unsetNames) sorted() []string {
 // what compose-go named after the project.
 func ProjectNameFor(name string) string {
 	norm := loader.NormalizeProjectName(name)
-	switch {
-	case norm == "":
+	if norm == "" {
 		return "stack"
-	case norm == name:
-		return name
 	}
 	return norm
 }
