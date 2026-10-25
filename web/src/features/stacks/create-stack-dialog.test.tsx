@@ -121,6 +121,7 @@ function mount(scope: "env" | "global" = "env") {
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: "/" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/unmanaged-stacks/$name" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
     ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
@@ -343,9 +344,29 @@ describe("CreateStackDialog: the name check", () => {
     expect(alert.textContent).toContain(
       "A stack named legacy already exists on this environment, not managed by Bayplan.",
     );
-    expect(alert.textContent).toContain(
-      "Pick another name. Bayplan will be able to take over existing stacks in a later version.",
-    );
+    expect(alert.textContent).toContain("Pick another name, or adopt the existing stack.");
+    expect(alert.textContent).not.toContain("later version");
+    // The way to the stack that is there: its read-only page.
+    const toStack = within(alert).getByRole("link", { name: "Open legacy" });
+    expect(toStack.getAttribute("href")).toBe("/env/e1/unmanaged-stacks/legacy");
+  });
+
+  it("offers no way to the stack that is there to a user who cannot read stacks", async () => {
+    me = makeMe({
+      permissions: { global: [], environments: { [ENV]: ["stacks.create", "environments.read"] } },
+    });
+    checkAnswer = () =>
+      Response.json({
+        status: "clash",
+        message: "A stack named legacy already exists on this environment, not managed by Bayplan.",
+      });
+    mount();
+    const dialog = await open();
+    typeName(dialog, "legacy");
+    fireEvent.blur(within(dialog).getByLabelText("Name"));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("Pick another name, or adopt the existing stack.");
+    expect(within(alert).queryByRole("link")).toBeNull();
   });
 
   it("takes the alert away when the name is changed", async () => {
@@ -425,7 +446,8 @@ describe("CreateStackDialog: the name check", () => {
     expect(alert.textContent).toContain(
       "A stack named legacy already exists on this environment, not managed by Bayplan.",
     );
-    expect(alert.textContent).toContain("Pick another name.");
+    expect(alert.textContent).toContain("Pick another name, or adopt the existing stack.");
+    expect(within(alert).getByRole("link", { name: "Open legacy" })).toBeTruthy();
   });
 
   it("stops the name field at 63 characters", async () => {

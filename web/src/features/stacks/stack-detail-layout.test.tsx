@@ -15,7 +15,7 @@ import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
 
-let role: "viewer" | "operator" = "viewer";
+let role: "viewer" | "operator" | "admin" = "viewer";
 let detail: Record<string, unknown>;
 let status: number;
 let client: QueryClient;
@@ -58,6 +58,22 @@ beforeEach(() => {
           );
         }
         return Response.json(detail);
+      }
+      if (path === `/api/env/${ENV}/unmanaged-stacks/legacy`) {
+        return Response.json({
+          name: "legacy",
+          target: "swarm",
+          state: "running",
+          servicesRunning: 1,
+          servicesTotal: 1,
+          services: [],
+          foundBy: { label: "com.docker.stack.namespace", value: "legacy" },
+          orphan: false,
+          portainer: false,
+          owner: "",
+          adoptable: true,
+          reason: "",
+        });
       }
       if (req.method === "POST" && path === `/api/env/${ENV}/stacks/s1/start`) {
         posts.push(path);
@@ -395,5 +411,51 @@ describe("the operation lock", () => {
     const box = alert.closest('[data-slot="stopped-alert"]') as HTMLElement;
 
     expect(within(box).queryByRole("button", { name: "Start stack" })).toBeNull();
+  });
+});
+
+describe("the unmanaged variant", () => {
+  function mountUnmanaged() {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <StackDetailLayout variant="unmanaged" envId={ENV} name="legacy">
+              <div>The tab</div>
+            </StackDetailLayout>
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("has the Overview, Resources and Logs tabs and no Editor or History tab", async () => {
+    mountUnmanaged();
+    await screen.findByRole("heading", { name: "legacy", level: 2 });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Resources",
+      "Logs",
+    ]);
+    expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy/logs",
+    );
+    expect(screen.getByText("The tab")).toBeTruthy();
+  });
+
+  it("offers an Admin no action on the stack as a whole: no Deploy, Update, Stop, Start or Remove", async () => {
+    role = "admin";
+    mountUnmanaged();
+    await screen.findByRole("heading", { name: "legacy", level: 2 });
+    for (const name of [/deploy/i, /update/i, /stop/i, /start/i, /remove/i]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+      expect(screen.queryByRole("link", { name })).toBeNull();
+    }
+  });
+
+  it("leaves the page of a stack Bayplan manages as it was", async () => {
+    mount();
+    expect(await screen.findByRole("tab", { name: "Editor" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "History" })).toBeTruthy();
   });
 });

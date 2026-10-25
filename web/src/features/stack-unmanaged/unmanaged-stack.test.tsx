@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -58,6 +58,9 @@ const service = (short: string, over: Partial<Service> = {}): Service => ({
 let body: Record<string, unknown>;
 let resources: Record<string, unknown>;
 let notFound: { managedStackId?: string } | null;
+// What the stack's own read does: answer, fail with a 500, or wait for release() before it answers.
+let failing: boolean;
+let held: Promise<void> | null;
 let client: QueryClient;
 
 beforeEach(() => {
@@ -123,7 +126,9 @@ beforeEach(() => {
     configs: { items: [], error: "" },
   };
   notFound = null;
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  failing = false;
+  held = null;
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
   setCsrfToken(null);
   vi.stubGlobal(
     "fetch",
@@ -134,6 +139,8 @@ beforeEach(() => {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
       if (path === `/api/env/${ENV}/unmanaged-stacks/legacy`) {
+        if (held) await held;
+        if (failing) return Response.json({ title: "x", status: 500 }, { status: 500 });
         if (notFound) {
           return Response.json(
             {
@@ -404,5 +411,127 @@ describe("the Unmanaged stack page: Logs", () => {
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
     expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
     expect(await screen.findByRole("button", { name: "Download…" })).toBeTruthy();
+  });
+});
+
+describe("the Unmanaged stack page: states", () => {
+  it("shows the header, the alert and the cards as skeletons in their final places while it loads", async () => {
+    let release = () => {};
+    held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mount();
+    // The breadcrumb names the stack at once; the header, the alert and the two cards are skeletons.
+    expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "legacy", level: 2 })).toBeNull();
+    expect(screen.queryByText("Bayplan doesn't manage this stack")).toBeNull();
+    expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThanOrEqual(4);
+    // The tabs are there already, so the page does not jump when the stack arrives.
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
+    release();
+    expect(await screen.findByRole("heading", { name: "legacy", level: 2 })).toBeTruthy();
+    await waitFor(() => expect(document.querySelectorAll("[data-slot=skeleton]").length).toBe(0));
+  });
+
+  it("says it could not load the stack, with a Retry that reads it again", async () => {
+    failing = true;
+    mount();
+    expect(await screen.findByText("Couldn't load legacy.")).toBeTruthy();
+    expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
+    failing = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading legacy" }));
+    expect(await screen.findByRole("heading", { name: "legacy", level: 2 })).toBeTruthy();
+    expect(screen.queryByText("Couldn't load legacy.")).toBeNull();
+  });
+
+  it("turns into This stack is gone when no labelled service or container has the name", async () => {
+    notFound = {};
+    mount();
+    expect(
+      await screen.findByRole("heading", { name: "This stack is gone", level: 2 }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to stacks" }).getAttribute("href")).toBe(
+      "/env/e1/stacks",
+    );
+    // Nothing of the page is left, and no way to a managed stack is offered when there is none.
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
+  });
+
+  it("offers Open stack when a stack of Bayplan's holds the name now", async () => {
+    notFound = { managedStackId: "stk-9" };
+    mount();
+    const open = await screen.findByRole("link", { name: "Open stack" });
+    expect(open.getAttribute("href")).toBe("/env/e1/stacks/stk-9");
+    expect(screen.getByRole("link", { name: "Back to stacks" })).toBeTruthy();
+  });
+
+  it("turns into the gone state without a reload when the stack is removed while the page is open", async () => {
+    mount();
+    expect(await screen.findByRole("heading", { name: "legacy", level: 2 })).toBeTruthy();
+    notFound = {};
+    await act(async () => {
+      await client.invalidateQueries();
+    });
+    expect(
+      await screen.findByRole("heading", { name: "This stack is gone", level: 2 }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "legacy", level: 2 })).toBeNull();
+  });
+
+  it("shows the real states of a degraded stack and no advice that does not apply", async () => {
+    mount();
+    expect(await screen.findByText("Degraded")).toBeTruthy();
+    const db = (await screen.findByRole("link", { name: "db" })).closest("tr") as HTMLElement;
+    expect(within(db).getByText("0/1")).toBeTruthy();
+    expect(screen.queryByText("This stack looks like it was created by Portainer")).toBeNull();
+    expect(screen.queryByText("Created by Bayplan (another instance or a lost record)")).toBeNull();
+  });
+
+  it("counts one service in the singular and many in the plural", async () => {
+    body = { ...body, servicesTotal: 1, services: [service("app")] };
+    mount();
+    expect(await screen.findByText("1 service")).toBeTruthy();
+    cleanup();
+    body = { ...body, servicesTotal: 2, services: [service("app"), service("db")] };
+    mount();
+    expect(await screen.findByText("2 services")).toBeTruthy();
+  });
+
+  it("says nothing runs for a stack with no service left and shows no service rows", async () => {
+    body = { ...body, state: "not_running", servicesRunning: 0, servicesTotal: 0, services: [] };
+    mount();
+    expect(await screen.findByText("No service of this stack is running.")).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("wraps the long name and label in mono in the Details and clamps the display name to two lines", async () => {
+    const long = `legacy-${"x".repeat(240)}`;
+    body = {
+      ...body,
+      name: long,
+      foundBy: { label: "com.docker.stack.namespace", value: long },
+    };
+    mount();
+    const heading = await screen.findByRole("heading", { level: 2 });
+    expect(heading.className).toContain("line-clamp-2");
+    expect(heading.className).toContain("break-all");
+    const found = await screen.findByText(`Label com.docker.stack.namespace = ${long}`);
+    expect(found.className).toContain("break-all");
+    expect(found.className).toContain("font-mono");
+  });
+
+  it("keeps a table of sixty services inside a card that scrolls sideways", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => service(`svc-${String(i).padStart(2, "0")}`));
+    body = { ...body, servicesTotal: 60, servicesRunning: 60, state: "running", services: many };
+    mount();
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(61);
+    expect(table.parentElement?.className).toContain("overflow-x-auto");
   });
 });
