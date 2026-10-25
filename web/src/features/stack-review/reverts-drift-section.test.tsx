@@ -123,9 +123,7 @@ describe("the section", () => {
     expect(within(first).getByText("3")).toBeTruthy();
     expect(within(first).getByText("1")).toBeTruthy();
     expect(within(first).getByText("Mode.Replicated.Replicas")).toBeTruthy();
-    expect(first.textContent).toContain(
-      "web was scaled from 1 to 3 by alice in Bayplan, 2 h ago.",
-    );
+    expect(first.textContent).toContain("web was scaled from 1 to 3 by alice in Bayplan, 2 h ago.");
     // Nothing in the audit log explains the second one, which reads as a change made outside Bayplan.
     expect(within(second).getByText("HOTFIX=1")).toBeTruthy();
     expect(within(second).getByText("not set")).toBeTruthy();
