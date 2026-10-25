@@ -16,6 +16,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AdoptedBanner } from "@/features/stacks/adopted-banner";
 import { StackDetailsCard } from "@/features/stacks/stack-details-card";
 import { StackServicesCard } from "@/features/stacks/stack-services-card";
 import { useNeeds } from "@/hooks/use-needs";
@@ -77,19 +78,23 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
     );
   }
   return (
-    <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
-      {data.state === "not_deployed" ? (
-        <NotDeployed envId={envId} stackId={stackId} name={data.name} />
-      ) : (
-        <StackServicesCard
-          envId={envId}
-          stackId={stackId}
-          name={data.name}
-          target={data.target}
-          busy={data.lastOperation?.state === "running"}
-        />
-      )}
-      <StackDetailsCard stack={data} />
+    <div className="flex flex-col gap-6">
+      {/* The page's deploy alerts sit above the tabs, so this is the first thing the Overview itself says. */}
+      <AdoptedBanner stack={data} />
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        {data.state === "not_deployed" ? (
+          <NotDeployed envId={envId} stackId={stackId} name={data.name} />
+        ) : (
+          <StackServicesCard
+            envId={envId}
+            stackId={stackId}
+            name={data.name}
+            target={data.target}
+            busy={data.lastOperation?.state === "running"}
+          />
+        )}
+        <StackDetailsCard stack={data} />
+      </div>
     </div>
   );
 }
