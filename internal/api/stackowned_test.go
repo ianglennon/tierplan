@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 func TestStackOwnedLabelsNameTheStackAndTheBayplanID(t *testing.T) {
@@ -49,7 +52,7 @@ func TestStackOwnedLabelsNameTheStackAndTheBayplanID(t *testing.T) {
 // stacks hold that ID under the name the object says it belongs to.
 func TestStackOwnedIDIsConfirmedOnlyForAStackOfTheEnvironment(t *testing.T) {
 	t.Parallel()
-	known := stackIDs{"stk-1": "web"}
+	known := knownStacks([]stackops.Stack{{ID: "stk-1", Name: "web"}})
 	for name, tc := range map[string]struct {
 		stack, id, want string
 	}{
@@ -67,6 +70,52 @@ func TestStackOwnedIDIsConfirmedOnlyForAStackOfTheEnvironment(t *testing.T) {
 	var none stackIDs
 	if got := none.confirm("web", "stk-1"); got != "" {
 		t.Errorf("confirm with no stacks read = %q, want empty", got)
+	}
+}
+
+// TestStackOwnedLinksAPendingAdoptedStacksUnlabelledObject: an adopted stack that has not been deployed yet owns the
+// services and containers of its name that carry no bayplan.stack.id, or the stale one recorded at adoption, so their
+// pages link to it; any other ID under that name is a claim that links to nothing (T-07-146, T-08-68). Once the
+// first deploy is done only its own ID links. A secret or a config is linked by its ID alone: the ones an adopted
+// stack references are not its own.
+func TestStackOwnedLinksAPendingAdoptedStacksUnlabelledObject(t *testing.T) {
+	t.Parallel()
+	adopted := func(pending bool) stackops.Stack {
+		return stackops.Stack{
+			ID: "stk-adopted", Name: "shop", Source: stacks.Source{Kind: stacks.SourceAdopted, Ref: "shop"},
+			Adoption: stacks.Adoption{Pending: pending, PriorID: "stale-id"},
+		}
+	}
+	managed := stackops.Stack{ID: "stk-1", Name: "web"}
+	for name, tc := range map[string]struct {
+		stacks          []stackops.Stack
+		stack, id       string
+		want, wantAsObj string
+	}{
+		"no ID, pending":                  {[]stackops.Stack{adopted(true)}, "shop", "", "stk-adopted", ""},
+		"the stale ID, pending":           {[]stackops.Stack{adopted(true)}, "shop", "stale-id", "stk-adopted", ""},
+		"its own ID, pending":             {[]stackops.Stack{adopted(true)}, "shop", "stk-adopted", "stk-adopted", "stk-adopted"},
+		"another ID, pending":             {[]stackops.Stack{adopted(true)}, "shop", "stk-other", "", ""},
+		"no ID, deployed":                 {[]stackops.Stack{adopted(false)}, "shop", "", "", ""},
+		"the stale ID, deployed":          {[]stackops.Stack{adopted(false)}, "shop", "stale-id", "", ""},
+		"its own ID, deployed":            {[]stackops.Stack{adopted(false)}, "shop", "stk-adopted", "stk-adopted", "stk-adopted"},
+		"no ID, under another name":       {[]stackops.Stack{adopted(true)}, "blog", "", "", ""},
+		"its ID under another name":       {[]stackops.Stack{adopted(true)}, "blog", "stk-adopted", "", ""},
+		"no ID, a stack Bayplan made":     {[]stackops.Stack{managed}, "web", "", "", ""},
+		"the stale ID, a stack it made":   {[]stackops.Stack{managed}, "web", "stale-id", "", ""},
+		"its own ID, a stack it made":     {[]stackops.Stack{managed}, "web", "stk-1", "stk-1", "stk-1"},
+		"no stack of that name at all":    {nil, "shop", "", "", ""},
+		"a stack with an empty name says": {[]stackops.Stack{adopted(true)}, "", "", "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			known := knownStacks(tc.stacks)
+			if got := known.confirm(tc.stack, tc.id); got != tc.want {
+				t.Errorf("confirm(%q, %q) = %q, want %q", tc.stack, tc.id, got, tc.want)
+			}
+			if got := known.confirmObject(tc.stack, tc.id); got != tc.wantAsObj {
+				t.Errorf("confirmObject(%q, %q) = %q, want %q", tc.stack, tc.id, got, tc.wantAsObj)
+			}
+		})
 	}
 }
 

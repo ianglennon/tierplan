@@ -1071,6 +1071,64 @@ func TestServiceRowsAndDetailsLinkOnlyTheStacksBayplanManages(t *testing.T) {
 	}
 }
 
+// TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending: the Services list, a service's detail and its
+// spec link a service that carries no bayplan.stack.id, or the stale one recorded at adoption, to the adopted stack while
+// its first deploy is pending ("Managed by stack shop"), and never link another ID under that name (T-07-146). After the
+// first deploy only the stack's own ID links.
+func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *testing.T) {
+	t.Parallel()
+	svc := func(id, name string, labels map[string]string) dockertest.FakeService {
+		return dockertest.FakeService{ID: id, Name: name, Mode: "replicated", Running: 1, Desired: 1, Image: scaleImage, Version: 3, Labels: labels}
+	}
+	f, e := serviceEnv(t,
+		svc("svc-bare", "shop_bare", map[string]string{"com.docker.stack.namespace": "shop"}),
+		svc("svc-stale", "shop_stale", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stale-id"}),
+		svc("svc-forged", "shop_forged", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-other"}),
+		svc("svc-own", "shop_own", map[string]string{"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stk-ad"}),
+	)
+	err := f.st.Q.InsertAdoptedStack(testsupport.Context(t), sqlc.InsertAdoptedStackParams{
+		ID: "stk-ad", EnvID: e.ID, Name: "shop", Target: "swarm", SourceKind: "adopted", SourceRef: "shop", CreatedBy: "seed", CreatedAt: 1,
+		Adoption: `{"priorId":"stale-id","pending":true}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type linked struct {
+		BayplanStackID string `json:"bayplanStackId"`
+	}
+	check := func(when string, want map[string]string) {
+		t.Helper()
+		list := decode[struct {
+			Items []struct {
+				Name string `json:"name"`
+				linked
+			} `json:"items"`
+		}](t, f.get(t, e, "services"))
+		if len(list.Items) != len(want) {
+			t.Fatalf("%s: list = %+v, want %d rows", when, list.Items, len(want))
+		}
+		for _, it := range list.Items {
+			if it.BayplanStackID != want[it.Name] {
+				t.Errorf("%s: list row %s bayplanStackId = %q, want %q", when, it.Name, it.BayplanStackID, want[it.Name])
+			}
+		}
+		for id, name := range map[string]string{"svc-bare": "shop_bare", "svc-stale": "shop_stale", "svc-forged": "shop_forged", "svc-own": "shop_own"} {
+			for _, path := range []string{"services/" + id, "services/" + id + "/spec"} {
+				if got := decode[linked](t, f.get(t, e, path)); got.BayplanStackID != want[name] {
+					t.Errorf("%s: %s bayplanStackId = %q, want %q", when, path, got.BayplanStackID, want[name])
+				}
+			}
+		}
+	}
+
+	check("pending", map[string]string{"shop_bare": "stk-ad", "shop_stale": "stk-ad", "shop_forged": "", "shop_own": "stk-ad"})
+
+	if _, err := f.st.Q.ClearStackAdoptionPending(testsupport.Context(t), "stk-ad"); err != nil {
+		t.Fatal(err)
+	}
+	check("deployed", map[string]string{"shop_bare": "", "shop_stale": "", "shop_forged": "", "shop_own": "stk-ad"})
+}
+
 // TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt is the stack_owned 409 a service
 // page gets: the stack in errors as stack, and as bayplanStackId when the SPA may link to it.
 func TestAStackOwnedRefusalNamesTheBayplanStackOnlyWhenBayplanManagesIt(t *testing.T) {
