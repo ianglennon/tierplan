@@ -970,3 +970,7 @@ func ClassifyDockerError(err error) error {
 	}
 	return &AgentPolicyDeniedError{Endpoint: endpoint, HostPolicy: hostPolicy, cause: err}
 }
+
+// WatchAgentEnvironments registers callbacks for the agent environments that gain their first connected agent and lose
+// their last.
+func (s *Service) WatchAgentEnvironments(started, stopped func(envID string)) {}

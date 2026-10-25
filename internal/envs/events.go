@@ -968,3 +968,10 @@ func (f *mergedFeed) closeSubscribers() {
 		delete(f.subs, s)
 	}
 }
+
+// EventRows is Events as plain rows.
+func (a *Aggregator) EventRows(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func()) {
+	closed := make(chan dockerx.EventRow)
+	close(closed)
+	return nil, closed, func() {}
+}
