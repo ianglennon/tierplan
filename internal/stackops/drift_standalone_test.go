@@ -223,10 +223,14 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 		return nil
 	})
 	judge("an owned container the revision does not declare", func(h *stackopstest.Hosted) {
-		h.Containers = append(h.Containers, cloneContainer(h, "worker", "ghost", 1))
+		h.Containers = append(h.Containers, cloneContainer(h, "worker", "ghost", 1), cloneContainer(h, "worker", "ghost", 2))
 	}, func(res stackops.DriftResult) []string {
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"extra ghost"}) || res.Count != 1 {
 			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with ghost extra, counted once", res.State, driftNames(res), res.Count)}
+		}
+		// The page counts containers, so an extra service says how many run it.
+		if cur := string(res.Services[0].Diff.Current); cur != `{"scale":2}` || len(res.Services[0].Diff.Next) != 0 {
+			return []string{fmt.Sprintf("current = %s next = %s, want the two containers that run it said as its scale", cur, res.Services[0].Diff.Next)}
 		}
 		return nil
 	})

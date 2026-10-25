@@ -123,9 +123,13 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 		res.Services = append(res.Services, row)
 	}
 	for _, name := range extraServices(project.Services, owned) {
-		res.Services = append(res.Services, DriftService{
-			Name: name, Short: name, Change: DriftExtra, Diff: stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved},
-		})
+		extra := stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved}
+		// An extra service has no spec to show, but how many containers run it is what the page counts: it is
+		// said the way a compose service says it, as its scale, when there is more than one.
+		if n := containersOf(owned, name); n > 1 {
+			extra.Current = json.RawMessage(`{"scale":` + strconv.Itoa(n) + `}`)
+		}
+		res.Services = append(res.Services, DriftService{Name: name, Short: name, Change: DriftExtra, Diff: extra})
 		res.Count++
 	}
 
@@ -147,6 +151,17 @@ func extraServices[V any](declared map[string]V, owned []dockerx.ComposeContaine
 	}
 	sort.Strings(out)
 	return out
+}
+
+// containersOf is how many of the containers run a service.
+func containersOf(containers []dockerx.ComposeContainer, service string) int {
+	n := 0
+	for _, c := range containers {
+		if c.Service == service {
+			n++
+		}
+	}
+	return n
 }
 
 // imageChange is the image a service's container runs and the one the revision pinned for it.

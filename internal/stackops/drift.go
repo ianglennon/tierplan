@@ -41,7 +41,8 @@ const (
 
 // DriftService is one service that differs from the deployed revision. Diff is the review's row for it, masked by the
 // revision's masker: Current is what runs now and Next what the revision deployed, as in a roll back review (a
-// missing service has only Next, an extra one neither).
+// missing service has only Next, an extra one neither; on a standalone host an extra service that more than one
+// container runs holds its scale as Current, which is what a page counts its containers by).
 type DriftService struct {
 	Name, Short, Change string
 	Diff                stacks.ServiceChange
