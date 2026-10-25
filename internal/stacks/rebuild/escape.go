@@ -212,7 +212,7 @@ func plainDependsOn(svc *yaml.Node) {
 				j -= 2
 				continue
 			}
-			if !(key == "condition" && val == "service_started") {
+			if key != "condition" || val != "service_started" {
 				simple = false
 			}
 		}
