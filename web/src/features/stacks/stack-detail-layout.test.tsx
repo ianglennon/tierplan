@@ -429,16 +429,20 @@ describe("the unmanaged variant", () => {
     );
   }
 
-  it("has the Overview, Resources and Logs tabs and no Editor or History tab", async () => {
+  it("has the Overview, Generated compose, Resources and Logs tabs and no Editor or History tab", async () => {
     mountUnmanaged();
     await screen.findByRole("heading", { name: "legacy", level: 2 });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Overview",
+      "Generated compose",
       "Resources",
       "Logs",
     ]);
     expect(screen.getByRole("tab", { name: "Logs" }).getAttribute("href")).toBe(
       "/env/e1/unmanaged-stacks/legacy/logs",
+    );
+    expect(screen.getByRole("tab", { name: "Generated compose" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy/compose",
     );
     expect(screen.getByText("The tab")).toBeTruthy();
   });
