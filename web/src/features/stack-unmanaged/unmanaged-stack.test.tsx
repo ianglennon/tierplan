@@ -62,6 +62,8 @@ let notFound: { managedStackId?: string } | null;
 let failing: boolean;
 let held: Promise<void> | null;
 let client: QueryClient;
+// The name of the stack the fake engine holds, as the address carries it.
+let served = "legacy";
 
 beforeEach(() => {
   body = {
@@ -126,6 +128,7 @@ beforeEach(() => {
     configs: { items: [], error: "" },
   };
   notFound = null;
+  served = "legacy";
   failing = false;
   held = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
@@ -138,7 +141,7 @@ beforeEach(() => {
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
-      if (path === `/api/env/${ENV}/unmanaged-stacks/legacy`) {
+      if (path === `/api/env/${ENV}/unmanaged-stacks/${encodeURIComponent(served)}`) {
         if (held) await held;
         if (failing) return Response.json({ title: "x", status: 500 }, { status: 500 });
         if (notFound) {
@@ -157,7 +160,7 @@ beforeEach(() => {
         }
         return Response.json(body);
       }
-      if (path === `/api/env/${ENV}/unmanaged-stacks/legacy/resources`) {
+      if (path === `/api/env/${ENV}/unmanaged-stacks/${encodeURIComponent(served)}/resources`) {
         return Response.json(resources);
       }
       return Response.json({}, { status: 404 });
@@ -171,13 +174,14 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(name = "legacy") {
+  served = name;
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <StackDetailLayout variant="unmanaged" envId={ENV} name="legacy">
-            <UnmanagedOverview envId={ENV} name="legacy" />
+          <StackDetailLayout variant="unmanaged" envId={ENV} name={name}>
+            <UnmanagedOverview envId={ENV} name={name} />
           </StackDetailLayout>
         </TooltipProvider>
       </TestRouter>
@@ -249,6 +253,28 @@ describe("the Unmanaged stack page: header and notes", () => {
         "Remove it from Portainer without deleting it, or the two tools will fight over it. Bayplan doesn't contact Portainer.",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("the Unmanaged stack page: unusual names (D-48, D-53)", () => {
+  it("opens a mixed-case name and says nothing about adopting when it can be adopted", async () => {
+    body = { ...body, name: "MyApp", adoptable: true, reason: "" };
+    mount("MyApp");
+    expect(await screen.findByRole("heading", { name: "MyApp", level: 2 })).toBeTruthy();
+    expect(screen.queryByText("Can't be adopted")).toBeNull();
+  });
+
+  it("opens a name with a space and a slash through an encoded address, and says why it can't be adopted", async () => {
+    const reason =
+      "Bayplan can't adopt My App/x: a stack name on a swarm takes only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters.";
+    body = { ...body, name: "My App/x", adoptable: false, reason };
+    mount("My App/x");
+    expect(await screen.findByRole("heading", { name: "My App/x", level: 2 })).toBeTruthy();
+    const note = (await screen.findByText("Can't be adopted")).closest("[data-slot=alert]");
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(within(note as HTMLElement).getByText(reason)).toBeTruthy();
+    // The note is the reason of the server, as given; a Bayplan-owned stack's reason reads the same way.
+    expect(screen.queryByRole("button", { name: /adopt/i })).toBeNull();
   });
 });
 

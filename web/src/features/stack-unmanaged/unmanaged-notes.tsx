@@ -45,3 +45,17 @@ export function PortainerAdvice() {
     </Alert>
   );
 }
+
+// NotAdoptableNote says why a stack cannot be adopted when the server says it cannot: Bayplan's own stack, its
+// agent's, or a name the stack-name rule of the environment's target refuses (D-49, D-53). The reason is the
+// server's own sentence, worded from the same rule text as the Create stack refusal, and is shown as given.
+export function NotAdoptableNote({ reason }: { reason: string }) {
+  const t = useT();
+  return (
+    <Alert role="status">
+      <Info aria-hidden="true" />
+      <AlertTitle>{t("stackUnmanaged.notAdoptable.title")}</AlertTitle>
+      <AlertDescription>{reason}</AlertDescription>
+    </Alert>
+  );
+}

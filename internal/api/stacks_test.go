@@ -387,7 +387,7 @@ func TestStackRefusals(t *testing.T) {
 		t.Errorf("a viewer listing: %d %s, want 200", rec.Code, rec.Body)
 	}
 
-	for _, name := range []string{"Web", "-web", "my stack", "", strings.Repeat("a", 64), "a.b"} {
+	for _, name := range []string{"-web", "my stack", "", strings.Repeat("a", 62), strings.Repeat("a", 64), "a/b", ".web", "a.b"} {
 		body, _ := json.Marshal(map[string]string{"name": name})
 		rec := admin.createStack(string(body))
 		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" {
@@ -1122,4 +1122,46 @@ func TestCreateStackFromAnEmptyUploadMakesAnEmptyComposeFile(t *testing.T) {
 	if got := composeOf(t, admin, answerOf[stackAnswer](t, rec).ID); got != "" {
 		t.Errorf("compose.yaml = %q, want the empty file that was uploaded, not the starter", got)
 	}
+}
+
+// One stack-name rule for create and adopt (plan 08-10, D-48, D-53): the rule is the target's, and the create
+// route, the name check and discovery all apply it.
+
+func TestCreateTakesTheRelaxedName(t *testing.T) {
+	t.Parallel()
+	t.Run("a swarm takes both cases and refuses a dot", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		got := newStack(t, admin, "MyApp")
+		if got.Name != "MyApp" || got.Target != "swarm" {
+			t.Fatalf("created = %+v, want MyApp on a swarm", got)
+		}
+		if names := stackNames(listWith(t, admin, "").Items); !slices.Equal(names, []string{"MyApp"}) {
+			t.Errorf("listed %v, want MyApp", names)
+		}
+		// Swarm looks object names up regardless of case, so a case variant is the same name.
+		rec := admin.createStack(`{"name":"myapp"}`)
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_taken" {
+			t.Errorf("myapp next to MyApp: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
+		}
+		rec = admin.createStack(`{"name":"Shop.Front"}`)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" || !strings.Contains(rec.Body.String(), swarmNameSentence) {
+			t.Errorf("Shop.Front: %d %s, want 422 stack_name_invalid with the swarm sentence", rec.Code, rec.Body)
+		}
+	})
+	t.Run("a standalone host takes compose-go's project name", func(t *testing.T) {
+		t.Parallel()
+		f, e, _ := standaloneEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		for _, name := range []string{"MyApp", "Shop.Front", "shop.front"} {
+			rec := admin.createStack(`{"name":"` + name + `"}`)
+			if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" || !strings.Contains(rec.Body.String(), standaloneNameSentence) {
+				t.Errorf("%s: %d %s, want 422 stack_name_invalid with the standalone sentence", name, rec.Code, rec.Body)
+			}
+		}
+		if got := newStack(t, admin, "shop-front"); got.Target != "standalone" {
+			t.Errorf("created = %+v, want shop-front on a standalone host", got)
+		}
+	})
 }

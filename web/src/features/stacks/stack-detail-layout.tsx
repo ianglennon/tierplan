@@ -26,6 +26,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
 import {
+  NotAdoptableNote,
   OrphanIdNote,
   PortainerAdvice,
   UnmanagedNote,
@@ -486,6 +487,7 @@ function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutPr
       {data ? (
         <>
           <UnmanagedNote />
+          {!data.adoptable && data.reason ? <NotAdoptableNote reason={data.reason} /> : null}
           {data.orphan ? <OrphanIdNote /> : null}
           {data.portainer ? <PortainerAdvice /> : null}
         </>

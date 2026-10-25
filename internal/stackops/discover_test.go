@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -230,4 +231,62 @@ func TestManagedRowsUnchanged(t *testing.T) {
 	if len(host) != 1 || host[0].Name != "web" || len(host[0].Containers) != 1 || host[0].State != stackops.ServiceRunning {
 		t.Errorf("StandaloneRows = %+v, want web alone with its one container", host)
 	}
+}
+
+func TestDiscoverUnusualNames(t *testing.T) {
+	t.Parallel()
+	t.Run("a swarm lists a mixed-case name as adoptable and the others with the swarm reason", func(t *testing.T) {
+		t.Parallel()
+		long := strings.Repeat("a", 62)
+		h := stackops.Held{Services: []dockerx.ServiceRow{
+			foreignService("MyApp", "MyApp_web", 1, 1, nil),
+			foreignService("My App", "My App_web", 1, 1, nil),
+			foreignService("Shop.Front", "Shop.Front_web", 1, 1, nil),
+			foreignService(long, long+"_web", 1, 1, nil),
+		}}
+		got := stackops.Discover(h, nil, stacks.TargetSwarm, stackops.SelfMarks{})
+		by := map[string]stackops.Discovered{}
+		for _, d := range got {
+			by[d.Name] = d
+		}
+		if len(got) != 4 {
+			t.Fatalf("Discover = %d groups, want 4: a name the rule refuses is still listed", len(got))
+		}
+		if d := by["MyApp"]; !d.Adoptable() || d.NameReason != "" {
+			t.Errorf("MyApp = %+v, want adoptable", d)
+		}
+		for _, name := range []string{"My App", "Shop.Front", long} {
+			want := "Bayplan can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
+			if d := by[name]; d.Adoptable() || d.NameReason != want {
+				t.Errorf("%q = adoptable %v reason %q, want not adoptable with %q", name, d.Adoptable(), d.NameReason, want)
+			}
+		}
+	})
+	t.Run("a standalone host refuses a dotted project", func(t *testing.T) {
+		t.Parallel()
+		h := stackops.Held{Containers: []dockerx.ContainerRow{
+			foreignContainer("c1", "shop.front", "web", "running", nil),
+			foreignContainer("c2", "shop-front", "web", "running", nil),
+		}}
+		got := stackops.Discover(h, nil, stacks.TargetStandalone, stackops.SelfMarks{})
+		by := map[string]stackops.Discovered{}
+		for _, d := range got {
+			by[d.Name] = d
+		}
+		want := "Bayplan can't adopt shop.front: a stack name on a standalone host takes only " + stacks.NameRuleText(stacks.TargetStandalone) + "."
+		if d := by["shop.front"]; d.Adoptable() || d.NameReason != want {
+			t.Errorf("shop.front = adoptable %v reason %q, want not adoptable with %q", d.Adoptable(), d.NameReason, want)
+		}
+		if d := by["shop-front"]; !d.Adoptable() {
+			t.Errorf("shop-front = %+v, want adoptable", d)
+		}
+	})
+	t.Run("an owner's reason comes first", func(t *testing.T) {
+		t.Parallel()
+		h := stackops.Held{Services: []dockerx.ServiceRow{foreignService("Bay.Plan", "Bay.Plan_srv", 1, 1, nil)}}
+		got := stackops.Discover(h, nil, stacks.TargetSwarm, stackops.SelfMarks{Namespace: "Bay.Plan"})
+		if len(got) != 1 || got[0].Owner != stackops.OwnerBayplan || got[0].Adoptable() {
+			t.Fatalf("Discover = %+v, want Bayplan's own stack, not adoptable", got)
+		}
+	})
 }

@@ -52,7 +52,7 @@ type UnmanagedStackBody struct {
 	Orphan          bool                 `json:"orphan" doc:"True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked"`
 	Portainer       bool                 `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
 	Owner           string               `json:"owner" enum:",bayplan,agent" doc:"bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other"`
-	Adoptable       bool                 `json:"adoptable" doc:"False for Bayplan's own stack and an agent's, which cannot be adopted"`
+	Adoptable       bool                 `json:"adoptable" doc:"False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason          string               `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 }
 
@@ -200,16 +200,10 @@ func getUnmanagedStack(ctx context.Context, d StacksDeps, in *UnmanagedStackPath
 		Name: u.Name, Target: string(u.Target), State: string(u.State),
 		ServicesRunning: u.Running, ServicesTotal: u.Total, Services: stackServiceBodies(u.Rows),
 		FoundBy: UnmanagedFoundByBody{Label: stacks.LabelComposeProject, Value: u.Name},
-		Orphan:  u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Owner == "",
+		Orphan:  u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Adoptable(), Reason: notAdoptableReason(u),
 	}
 	if u.Target == stacks.TargetSwarm {
 		body.FoundBy.Label = stacks.LabelSwarmNamespace
-	}
-	switch u.Owner {
-	case stackops.OwnerBayplan:
-		body.Reason = reasonOwnStack
-	case stackops.OwnerAgent:
-		body.Reason = reasonAgentStack
 	}
 	return &UnmanagedStackOutput{CacheControl: "no-store", Body: body}, nil
 }

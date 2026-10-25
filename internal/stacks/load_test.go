@@ -147,19 +147,6 @@ func TestStarterComposeLoadsForBothTargets(t *testing.T) {
 	}
 }
 
-func TestNameValid(t *testing.T) {
-	t.Parallel()
-	for name, want := range map[string]bool{
-		"web": true, "a": true, "0abc": true, "my-stack_2": true, strings.Repeat("a", 63): true,
-		"": false, "Web": false, "-web": false, "_web": false, "my stack": false, "my.stack": false,
-		strings.Repeat("a", 64): false, "ünï": false,
-	} {
-		if got := stacks.NameValid(name); got != want {
-			t.Errorf("NameValid(%q) = %v, want %v", name, got, want)
-		}
-	}
-}
-
 func TestLoadHonoursItsDeadline(t *testing.T) {
 	t.Parallel()
 	// A deadline that is over before the load starts ends it with the context's error, whether or not

@@ -5,12 +5,14 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -493,6 +495,12 @@ func TestAllStacksCapsTheRowsAcrossEnvironmentsAndSaysHowManyThereAre(t *testing
 // The live name check of the Create stack dialog (plan 07-24, STK-01, D-12): it answers one environment's
 // verdict on a name and writes nothing.
 
+// swarmNameSentence and standaloneNameSentence are the refusals of the stack-name rule of each target (D-53).
+const (
+	swarmNameSentence      = "Use only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters."
+	standaloneNameSentence = "Use only lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters."
+)
+
 type nameCheckAnswer struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
@@ -521,10 +529,11 @@ func TestNameCheckAnswersAvailableTakenClashAndInvalid(t *testing.T) {
 		{"fresh", "available", ""},
 		{"web", "taken", "A stack named web already exists on " + e.Name + "."},
 		{"legacy", "clash", "A stack named legacy already exists on this environment, not managed by Bayplan."},
-		{"Bad Name", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{"-dash", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{strings.Repeat("a", 64), "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{"", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+		{"Bad Name", "invalid", swarmNameSentence},
+		{"Shop.Front", "invalid", swarmNameSentence},
+		{"-dash", "invalid", swarmNameSentence},
+		{strings.Repeat("a", 62), "invalid", swarmNameSentence},
+		{"", "invalid", swarmNameSentence},
 	} {
 		code, got, rec := nameCheck(t, admin, c.name)
 		if code != http.StatusOK || got.Status != c.status || got.Message != c.message {
@@ -800,5 +809,140 @@ func TestAllStacksKeepsAGroupForAnEnvironmentWithNoStacksWhoseLookFailed(t *test
 
 	if len(got.Groups) != 1 || got.Groups[0].EnvID != b.ID || len(got.Groups[0].Stacks) != 0 || !got.Groups[0].DiscoveryFailed {
 		t.Errorf("groups = %+v, want B's group with no stacks and discoveryFailed, so the page can say so", got.Groups)
+	}
+}
+
+func TestStackNameCheckFollowsTheTarget(t *testing.T) {
+	t.Parallel()
+	t.Run("a swarm takes MyApp", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		code, got, rec := nameCheck(t, admin, "MyApp")
+		if code != http.StatusOK || got.Status != "available" {
+			t.Errorf("name-check MyApp on a swarm = %d %s, want available", code, rec.Body)
+		}
+		// The name travels percent-encoded in the query and is read back whole.
+		code, got, rec = nameCheck(t, admin, "My App&x=1")
+		if code != http.StatusOK || got.Status != "invalid" || got.Message != swarmNameSentence {
+			t.Errorf("name-check with a space and an ampersand = %d %s, want invalid with the swarm sentence", code, rec.Body)
+		}
+	})
+	t.Run("a standalone host refuses it", func(t *testing.T) {
+		t.Parallel()
+		f, e, _ := standaloneEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		code, got, rec := nameCheck(t, admin, "MyApp")
+		if code != http.StatusOK || got.Status != "invalid" || got.Message != standaloneNameSentence {
+			t.Errorf("name-check MyApp on a standalone host = %d %s, want invalid with the standalone sentence", code, rec.Body)
+		}
+		code, got, rec = nameCheck(t, admin, "shop-front")
+		if code != http.StatusOK || got.Status != "available" {
+			t.Errorf("name-check shop-front = %d %s, want available", code, rec.Body)
+		}
+	})
+}
+
+func TestNameRuleIsTheSameForCreateAndAdopt(t *testing.T) {
+	t.Parallel()
+	long61, long62 := strings.Repeat("a", 61), strings.Repeat("a", 62)
+	names := []string{"web", "MyApp", "myapp", "my_app-2", "Shop.Front", "shop.front", "my stack", "a/b", "-web", long61, long62}
+	for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+		t.Run(string(target), func(t *testing.T) {
+			t.Parallel()
+			var f *envFix
+			var e envBody
+			if target == stacks.TargetSwarm {
+				f, e = stackEnv(t, nil)
+			} else {
+				f, e, _ = standaloneEnv(t, nil)
+			}
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			// A managed stack, so that "taken" has something to be taken by: on a swarm MyApp is the same name
+			// as it (case), and so is the 61-byte one.
+			for _, name := range []string{"myapp", long61} {
+				if stacks.NameValid(target, name) {
+					newStack(t, admin, name)
+				}
+			}
+
+			for _, name := range names {
+				valid := stacks.NameValid(target, name)
+				taken := valid && target == stacks.TargetSwarm && (strings.EqualFold(name, "myapp") || name == long61)
+				takenStandalone := valid && target == stacks.TargetStandalone && (name == "myapp" || name == long61)
+				code, got, rec := nameCheck(t, admin, name)
+				switch {
+				case code != http.StatusOK:
+					t.Errorf("name-check %q: %d %s", name, code, rec.Body)
+				case !valid:
+					if got.Status != "invalid" || got.Message != "Use only "+stacks.NameRuleText(target)+"." {
+						t.Errorf("name-check %q = %+v, want invalid with the rule's sentence", name, got)
+					}
+				case taken || takenStandalone:
+					if got.Status != "taken" {
+						t.Errorf("name-check %q = %+v, want taken", name, got)
+					}
+				case got.Status != "available":
+					t.Errorf("name-check %q = %+v, want available", name, got)
+				}
+				// Create and the name check agree on what the rule refuses.
+				if !valid {
+					body, _ := json.Marshal(map[string]string{"name": name})
+					if rec := admin.createStack(string(body)); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" {
+						t.Errorf("create %q: %d %s, want 422 stack_name_invalid", name, rec.Code, rec.Body)
+					}
+				}
+			}
+
+			// Adopting: objects labelled with each name are listed, adoptable exactly when the same rule takes the
+			// name, and the reason is worded from the same rule text as the create refusal. A fresh environment
+			// is read, so that no earlier read of the host is served from the short-lived cache.
+			if target == stacks.TargetSwarm {
+				f, e = stackEnv(t, nil)
+			} else {
+				f, e, _ = standaloneEnv(t, nil)
+			}
+			admin = f.caller(t, e, "envadmin-1", "admin")
+			if target == stacks.TargetSwarm {
+				var svcs []dockertest.FakeService
+				for _, name := range names {
+					svcs = append(svcs, foreignSwarmService(name, "app", 1, 1, nil))
+				}
+				reconfigureSwarm(t, f, e, svcs...)
+			} else {
+				cfg := swarmManagerEngine()
+				cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+				for i, name := range names {
+					cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+						ID: "c" + strconv.Itoa(i), Names: []string{"/p" + strconv.Itoa(i) + "-web-1"}, Image: "nginx:1.27", State: "running",
+						Labels: map[string]string{"com.docker.compose.project": name, "com.docker.compose.service": "web"},
+					})
+				}
+				f.fake.Reconfigure(cfg)
+			}
+			listed := map[string]stackAnswer{}
+			for _, it := range listWith(t, admin, "").Items {
+				listed[it.Name] = it
+			}
+			for _, name := range names {
+				it, ok := listed[name]
+				if !ok || it.Unmanaged == nil {
+					t.Errorf("%q is not listed as unmanaged: %+v", name, it)
+					continue
+				}
+				valid := stacks.NameValid(target, name)
+				want := ""
+				if !valid {
+					where := "a swarm"
+					if target == stacks.TargetStandalone {
+						where = "a standalone host"
+					}
+					want = "Bayplan can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
+				}
+				if it.Unmanaged.Adoptable != valid || it.Unmanaged.Reason != want {
+					t.Errorf("%q: adoptable %v reason %q, want adoptable %v reason %q", name, it.Unmanaged.Adoptable, it.Unmanaged.Reason, valid, want)
+				}
+			}
+		})
 	}
 }

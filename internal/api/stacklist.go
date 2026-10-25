@@ -519,17 +519,23 @@ func (d StacksDeps) discover(ctx context.Context, reads *stackReads, managed []s
 	return stackops.Discover(held, managed, target, self), target, true
 }
 
+// notAdoptableReason is why a discovered stack cannot be adopted, empty when it can: the owner reasons
+// first (D-49), then the name rule of its target (D-53).
+func notAdoptableReason(u stackops.Discovered) string {
+	switch u.Owner {
+	case stackops.OwnerBayplan:
+		return reasonOwnStack
+	case stackops.OwnerAgent:
+		return reasonAgentStack
+	}
+	return u.NameReason
+}
+
 // unmanagedRow is the list row of a stack found on the engine. It has no ID: it is known by its name on its
 // environment, and no label value is ever used as an ID.
 func unmanagedRow(u stackops.Discovered, envID, envName string) stackRow {
 	running, total := u.Running, u.Total
-	body := &StackUnmanagedBody{Orphan: u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Owner == ""}
-	switch u.Owner {
-	case stackops.OwnerBayplan:
-		body.Reason = reasonOwnStack
-	case stackops.OwnerAgent:
-		body.Reason = reasonAgentStack
-	}
+	body := &StackUnmanagedBody{Orphan: u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Adoptable(), Reason: notAdoptableReason(u)}
 	r := stackRow{
 		item: StackItem{
 			Name: u.Name, Target: string(u.Target), Source: "unmanaged", Managed: false, State: string(u.State),
@@ -561,7 +567,7 @@ type StackNameCheckBody struct {
 // StackNameCheckInput is the path and query of the name check.
 type StackNameCheckInput struct {
 	EnvironmentPathInput
-	Name string `query:"name" maxLength:"200" doc:"The name to check"`
+	Name string `query:"name" maxLength:"255" doc:"The name to check"`
 }
 
 // StackNameCheckOutput wraps StackNameCheckBody for huma.
@@ -597,27 +603,21 @@ func checkStackName(ctx context.Context, d StacksDeps, in *StackNameCheckInput) 
 		return &StackNameCheckOutput{CacheControl: "no-store", Body: StackNameCheckBody{Status: status, Message: message}}, nil
 	}
 	name := in.Name
-	if !stacks.NameValid(name) {
-		return answer("invalid", stackNameInvalidMessage)
+	// The target comes from the stored facts of the environment (no engine call); the name is held to its
+	// rule first (D-53, T-08-37).
+	target, err := d.stackTargetOf(ctx, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !stacks.NameValid(target, name) {
+		return answer("invalid", stackNameInvalidMessage(target))
 	}
 	own, err := d.repo().Stacks(ctx, env.ID)
 	if err != nil {
 		return nil, stackInternal(d, "name check", env.ID, err)
 	}
-	if slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+	if stackNameTaken(own, target, name) {
 		return answer("taken", stackNameTakenMessage(name, env.Name))
-	}
-	if d.Clusters == nil {
-		d.Log.Error("the stack routes have no cluster reader")
-		return nil, huma.Error500InternalServerError("internal error")
-	}
-	swarm, err := d.Clusters.IsSwarm(ctx, env.ID)
-	if err != nil {
-		return nil, snapshotProblem(d.Log, env.ID, err)
-	}
-	target := stacks.TargetStandalone
-	if swarm {
-		target = stacks.TargetSwarm
 	}
 	foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
 	if err != nil {

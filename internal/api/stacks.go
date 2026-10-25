@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -63,12 +64,43 @@ const (
 	stackStartEmpty   = "empty"
 	stackStartUpload  = "upload"
 
-	// stackNameInvalidMessage is the sentence for a name the rule refuses, on create and on the name check.
-	stackNameInvalidMessage = "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."
-
 	// maxStackBody is the largest request body of a stack route: a compose file and files beside it.
 	maxStackBody = 8 << 20
 )
+
+// stackNameInvalidMessage is the sentence for a name the rule of target refuses, on create and on the name
+// check. It is built from stacks.NameRuleText, as the not-adoptable reason of a discovered stack is, so the
+// two cannot word the rule differently (D-53).
+func stackNameInvalidMessage(target stacks.Target) string {
+	return "Use only " + stacks.NameRuleText(target) + "."
+}
+
+// stackTargetOf is the target of an environment from its stored facts: a swarm or a standalone host.
+func (d StacksDeps) stackTargetOf(ctx context.Context, envID string) (stacks.Target, error) {
+	if d.Clusters == nil {
+		d.Log.Error("the stack routes have no cluster reader")
+		return "", huma.Error500InternalServerError("internal error")
+	}
+	swarm, err := d.Clusters.IsSwarm(ctx, envID)
+	if err != nil {
+		return "", snapshotProblem(d.Log, envID, err)
+	}
+	if swarm {
+		return stacks.TargetSwarm, nil
+	}
+	return stacks.TargetStandalone, nil
+}
+
+// stackNameTaken reports whether one of the environment's managed stacks holds name. Swarm looks object
+// names up regardless of case, so on a swarm two names that differ only in case are one (T-08-95).
+func stackNameTaken(own []stackops.Stack, target stacks.Target, name string) bool {
+	return slices.ContainsFunc(own, func(s stackops.Stack) bool {
+		if target == stacks.TargetSwarm {
+			return strings.EqualFold(s.Name, name)
+		}
+		return s.Name == name
+	})
+}
 
 // StacksDeps are the dependencies of the stack routes.
 type StacksDeps struct {
@@ -183,7 +215,7 @@ type StackUnmanagedBody struct {
 	Orphan    bool   `json:"orphan" doc:"True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack"`
 	Portainer bool   `json:"portainer" doc:"True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/"`
 	Owner     string `json:"owner" enum:",bayplan,agent" doc:"bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other"`
-	Adoptable bool   `json:"adoptable" doc:"False for Bayplan's own stack and an agent's, which cannot be adopted"`
+	Adoptable bool   `json:"adoptable" doc:"False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason    string `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
 }
 
@@ -281,7 +313,7 @@ type StackPathInput struct {
 
 // StackCreateRequest is the body of POST /api/env/{envId}/stacks.
 type StackCreateRequest struct {
-	Name    string `json:"name" maxLength:"200" doc:"The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid"`
+	Name    string `json:"name" maxLength:"255" doc:"The stack's name. On a swarm: letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters. On a standalone host: lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters. Anything else is 422 stack_name_invalid"`
 	Start   string `json:"start,omitempty" doc:"What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid"`
 	Compose string `json:"compose,omitempty" maxLength:"1100000" doc:"The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large"`
 }
@@ -336,7 +368,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 		Summary: "Create a stack",
 		Description: "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. " +
 			"The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. " +
-			"The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). " +
+			"The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). " +
 			"A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. " +
 			"start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackBody,
@@ -560,14 +592,29 @@ func lockBody(h stackops.Holder) *StackLockBody {
 	}
 }
 
+// stackNameTakenProblem is the 409 for a name one of the environment's stacks holds.
+func stackNameTakenProblem(name, envName string) error {
+	return &huma.ErrorModel{
+		Type: problemStackNameTaken, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+		Detail: stackNameTakenMessage(name, envName),
+		Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
+	}
+}
+
 func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*StackDetailOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
 	}
 	name := in.Body.Name
-	if !stacks.NameValid(name) {
-		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage)
+	// The target comes from the stored facts of the environment, not the engine; the name is held to the
+	// rule of that target before anything else is read (D-53, T-08-37).
+	target, err := d.stackTargetOf(ctx, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !stacks.NameValid(target, name) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemStackNameInvalid, stackNameInvalidMessage(target))
 	}
 	compose := in.Body.Compose
 	if compose == "" {
@@ -582,18 +629,6 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	if len(compose) > stacks.MaxFileBytes {
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemFileTooLarge, "A file is at most 1 MiB.")
 	}
-	if d.Clusters == nil {
-		d.Log.Error("the stack routes have no cluster reader")
-		return nil, huma.Error500InternalServerError("internal error")
-	}
-	swarm, err := d.Clusters.IsSwarm(ctx, env.ID)
-	if err != nil {
-		return nil, snapshotProblem(d.Log, env.ID, err)
-	}
-	target := stacks.TargetStandalone
-	if swarm {
-		target = stacks.TargetSwarm
-	}
 
 	// A name the environment already uses for something Bayplan does not manage is refused (D-12):
 	// Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's own
@@ -601,6 +636,9 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 	own, err := d.repo().Stacks(ctx, env.ID)
 	if err != nil {
 		return nil, stackInternal(d, "list", env.ID, err)
+	}
+	if stackNameTaken(own, target, name) {
+		return nil, stackNameTakenProblem(name, env.Name)
 	}
 	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
 		foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
@@ -620,11 +658,7 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 		Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}},
 	})
 	if errors.Is(err, stackops.ErrNameTaken) {
-		return nil, &huma.ErrorModel{
-			Type: problemStackNameTaken, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-			Detail: stackNameTakenMessage(name, env.Name),
-			Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
-		}
+		return nil, stackNameTakenProblem(name, env.Name)
 	}
 	if err != nil {
 		return nil, stackInternal(d, "create", env.ID, err)

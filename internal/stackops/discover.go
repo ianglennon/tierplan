@@ -61,6 +61,27 @@ type Discovered struct {
 	Portainer bool
 	// Owner is OwnerBayplan, OwnerAgent or empty (D-49).
 	Owner string
+	// NameReason is why the name cannot be a stack name on Target, empty when it can: the stack is listed
+	// but not adoptable (D-53). The owner reasons (D-49) come before it, and the caller words them.
+	NameReason string
+}
+
+// Adoptable says whether the stack can be adopted: it is nobody's own (D-49) and its name follows the rule
+// of its target (D-48, D-53).
+func (d Discovered) Adoptable() bool { return d.Owner == "" && d.NameReason == "" }
+
+// NameNotAdoptableReason is the sentence for a stack whose name breaks the stack-name rule of target, built from
+// stacks.NameRuleText exactly as the create refusal is, so create and adopt cannot word the rule differently
+// (D-53). It is empty when the name follows the rule.
+func NameNotAdoptableReason(target stacks.Target, name string) string {
+	if stacks.NameValid(target, name) {
+		return ""
+	}
+	where := "a swarm"
+	if target != stacks.TargetSwarm {
+		where = "a standalone host"
+	}
+	return "Bayplan can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
 }
 
 // PortainerMarked says whether labels carry a mark of Portainer: a key that starts io.portainer., or a
@@ -140,6 +161,7 @@ func Discover(h Held, managed []Stack, target stacks.Target, self SelfMarks) []D
 		}
 		d.State, _, _ = DeriveState(StateInput{Deployed: true, Services: rows})
 		d.OrphanID, d.Portainer, d.Owner = flagsOf(name, g, self)
+		d.NameReason = NameNotAdoptableReason(target, name)
 		out = append(out, d)
 	}
 	slices.SortFunc(out, func(a, b Discovered) int { return strings.Compare(a.Name, b.Name) })

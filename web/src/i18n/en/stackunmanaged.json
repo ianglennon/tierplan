@@ -8,6 +8,9 @@
       "bayplan": "Bayplan",
       "agent": "Bayplan agent"
     },
+    "notAdoptable": {
+      "title": "Can't be adopted"
+    },
     "missing": "—",
     "show": {
       "label": "Show",

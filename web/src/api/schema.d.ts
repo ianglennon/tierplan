@@ -1939,7 +1939,7 @@ export interface paths {
         put?: never;
         /**
          * Create a stack
-         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
+         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
          */
         post: operations["createStack"];
         delete?: never;
@@ -8677,7 +8677,7 @@ export interface components {
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large */
             compose?: string;
-            /** @description The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid */
+            /** @description The stack's name. On a swarm: letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters. On a standalone host: lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters. Anything else is 422 stack_name_invalid */
             name: string;
             /** @description What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid */
             start?: string;
@@ -9678,7 +9678,7 @@ export interface components {
             lines: string[] | null;
         };
         StackUnmanagedBody: {
-            /** @description False for Bayplan's own stack and an agent's, which cannot be adopted */
+            /** @description False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
             adoptable: boolean;
             /** @description True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
             orphan: boolean;
@@ -10118,7 +10118,7 @@ export interface components {
             value: string;
         };
         UnmanagedStackBody: {
-            /** @description False for Bayplan's own stack and an agent's, which cannot be adopted */
+            /** @description False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
             adoptable: boolean;
             /** @description The label the stack was found by */
             foundBy: components["schemas"]["UnmanagedFoundByBody"];

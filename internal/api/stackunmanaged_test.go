@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -444,5 +445,56 @@ func TestUnmanagedLogDownloadOfAStandaloneProjectMergesItsContainers(t *testing.
 	}, "\n") + "\n"
 	if got := w.body.String(); got != want {
 		t.Errorf("body =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestUnmanagedStackWithAnUnusualName(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	reconfigureSwarm(t, f, e,
+		foreignSwarmService("MyApp", "web", 1, 1, nil),
+		foreignSwarmService("My App", "web", 1, 1, nil),
+		foreignSwarmService("a/b", "web", 1, 1, nil),
+	)
+
+	var listed []stackAnswer
+	for _, it := range listWith(t, admin, "").Items {
+		listed = append(listed, it)
+	}
+	by := map[string]stackAnswer{}
+	for _, it := range listed {
+		by[it.Name] = it
+	}
+	if u := by["MyApp"].Unmanaged; u == nil || !u.Adoptable || u.Reason != "" {
+		t.Errorf("MyApp = %+v, want listed and adoptable", by["MyApp"])
+	}
+	for _, name := range []string{"My App", "a/b"} {
+		u := by[name].Unmanaged
+		want := "Bayplan can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
+		if u == nil || u.Adoptable || u.Reason != want {
+			t.Errorf("%q = %+v, want listed, not adoptable, with the swarm reason", name, by[name])
+		}
+	}
+
+	// The page of each opens, the name travelling as an encoded path parameter.
+	for _, name := range []string{"MyApp", "My App", "a/b"} {
+		rec := viewer.do(http.MethodGet, unmanagedPath(name, ""), "")
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %q: %d %s, want 200", name, rec.Code, rec.Body)
+			continue
+		}
+		got := answerOf[unmanagedAnswer](t, rec)
+		if got.Name != name || got.FoundBy.Value != name || got.ServicesTotal != 1 {
+			t.Errorf("GET %q = %+v, want the stack of that exact name", name, got)
+		}
+		if adoptable := name == "MyApp"; got.Adoptable != adoptable || (got.Reason == "") != adoptable {
+			t.Errorf("GET %q: adoptable %v reason %q, want adoptable %v", name, got.Adoptable, got.Reason, adoptable)
+		}
+	}
+	// Resources of the name too.
+	if rec := viewer.do(http.MethodGet, unmanagedPath("My App", "/resources"), ""); rec.Code != http.StatusOK {
+		t.Errorf("resources of My App: %d %s, want 200", rec.Code, rec.Body)
 	}
 }

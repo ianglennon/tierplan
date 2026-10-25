@@ -11822,8 +11822,8 @@
             "type": "string"
           },
           "name": {
-            "description": "The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid",
-            "maxLength": 200,
+            "description": "The stack's name. On a swarm: letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters. On a standalone host: lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters. Anything else is 422 stack_name_invalid",
+            "maxLength": 255,
             "type": "string"
           },
           "start": {
@@ -14232,7 +14232,7 @@
         "additionalProperties": false,
         "properties": {
           "adoptable": {
-            "description": "False for Bayplan's own stack and an agent's, which cannot be adopted",
+            "description": "False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses",
             "type": "boolean"
           },
           "orphan": {
@@ -15247,7 +15247,7 @@
         "additionalProperties": false,
         "properties": {
           "adoptable": {
-            "description": "False for Bayplan's own stack and an agent's, which cannot be adopted",
+            "description": "False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses",
             "type": "boolean"
           },
           "foundBy": {
@@ -23495,7 +23495,7 @@
         ]
       },
       "post": {
-        "description": "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
+        "description": "Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).",
         "operationId": "createStack",
         "parameters": [
           {
@@ -23576,7 +23576,7 @@
             "name": "name",
             "schema": {
               "description": "The name to check",
-              "maxLength": 200,
+              "maxLength": 255,
               "type": "string"
             }
           }
