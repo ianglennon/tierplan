@@ -17,20 +17,20 @@ import (
 // plan 08-27: the worker ran for "agent:..." keys, found no stack under them, and never checked a swarm).
 
 func TestServiceAnnouncesAnAgentEnvironmentOnItsFirstAgentAndWhenItsLastOneLeaves(t *testing.T) {
-	r := newTunRig(t, nil)
-	r.pastGrace()
-	env := r.srv.NewEnvironment(t, "Remote")
+	// Two managers of one swarm are two agents of one environment.
+	r := newSwarmRigBare(t, managerNodes(), nil)
+	env := r.env
 	started, stopped := make(chan string, 8), make(chan string, 8)
 	r.svc.WatchAgentEnvironments(func(id string) { started <- id }, func(id string) { stopped <- id })
 
-	a1 := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1"}, nil)
+	a1 := r.connect(t, env, managerConfig(1, r.nodes, nil), managerFacts(1))
 	r.srv.Events.WaitLen(t, 1)
 	if got := announced(t, started, "the start"); got != env.ID {
 		t.Fatalf("started = %q, want the environment %s and not the agent's monitor key", got, env.ID)
 	}
 
 	// A second agent of the same environment is not a new environment.
-	a2 := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-2"}, nil)
+	a2 := r.connect(t, env, managerConfig(2, r.nodes, nil), managerFacts(2))
 	r.srv.Events.WaitLen(t, 2)
 	if len(started) != 0 {
 		t.Fatalf("the second agent announced the environment again: %d starts", len(started))

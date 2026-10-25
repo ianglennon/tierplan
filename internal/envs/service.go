@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -170,6 +171,8 @@ type Service struct {
 	// connected holds the live agent sessions by environment and agent ID, the
 	// map the status of an agent environment is read through.
 	connected map[string]map[string]*tunnel.Session
+	// envWatchers are told when an agent environment gains its first connected agent and loses its last.
+	envWatchers []watcher
 }
 
 // NewService returns the registry. dockerHost is the raw DOCKER_HOST setting
@@ -494,12 +497,14 @@ func (s *Service) environment(ctx context.Context, row sqlc.Environment) (Enviro
 func (s *Service) Connected(sess *tunnel.Session) {
 	s.mu.Lock()
 	byAgent := s.connected[sess.EnvID]
+	first := len(byAgent) == 0
 	if byAgent == nil {
 		byAgent = map[string]*tunnel.Session{}
 		s.connected[sess.EnvID] = byAgent
 	}
 	byAgent[sess.AgentID] = sess
 	ctx := s.runCtx
+	watchers := slices.Clone(s.envWatchers)
 	s.mu.Unlock()
 
 	key := AgentTarget(sess.AgentID)
@@ -509,15 +514,22 @@ func (s *Service) Connected(sess *tunnel.Session) {
 	if err := s.mon.Start(ctx, key, sess.Transport()); err != nil {
 		s.log.Error("monitor an agent", "agent", sess.AgentID, "environment", sess.EnvID, "error", err)
 	}
+	if first {
+		for _, w := range watchers {
+			w.started(sess.EnvID)
+		}
+	}
 }
 
 // Disconnected implements tunnel.Observer.
 func (s *Service) Disconnected(sess *tunnel.Session, code string) {
 	s.mu.Lock()
+	last := false
 	if byAgent := s.connected[sess.EnvID]; byAgent != nil && byAgent[sess.AgentID] == sess {
 		delete(byAgent, sess.AgentID)
 		if len(byAgent) == 0 {
 			delete(s.connected, sess.EnvID)
+			last = true
 		}
 	} else {
 		// A newer session of the same agent has already taken its place, and
@@ -525,9 +537,27 @@ func (s *Service) Disconnected(sess *tunnel.Session, code string) {
 		s.mu.Unlock()
 		return
 	}
+	watchers := slices.Clone(s.envWatchers)
 	s.mu.Unlock()
 	s.mon.Stop(AgentTarget(sess.AgentID))
 	s.log.Info("agent target stopped", "agent", sess.AgentID, "environment", sess.EnvID, "reason", code)
+	if last {
+		for _, w := range watchers {
+			w.stopped(sess.EnvID)
+		}
+	}
+}
+
+// WatchAgentEnvironments registers callbacks for the agent environments that gain their first connected agent (started)
+// and lose their last (stopped), by the environment's ID. An agent environment has no monitor of its own, only a target
+// for each agent keyed by the agent's ID, so Monitor.Watch never announces one: a worker that follows environments by ID
+// (the background drift check of stacks) learns of an agent environment here. Register it before the first agent
+// connects: an environment that already has one is not announced. The callbacks run on the goroutine that reports the
+// session, after the service's lock is released.
+func (s *Service) WatchAgentEnvironments(started, stopped func(envID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.envWatchers = append(s.envWatchers, watcher{started: started, stopped: stopped})
 }
 
 var _ tunnel.Observer = (*Service)(nil)
@@ -970,7 +1000,3 @@ func ClassifyDockerError(err error) error {
 	}
 	return &AgentPolicyDeniedError{Endpoint: endpoint, HostPolicy: hostPolicy, cause: err}
 }
-
-// WatchAgentEnvironments registers callbacks for the agent environments that gain their first connected agent and lose
-// their last.
-func (s *Service) WatchAgentEnvironments(started, stopped func(envID string)) {}

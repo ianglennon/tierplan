@@ -739,9 +739,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
-		Subscribe: hub.Subscribe, Log: log,
+		Subscribe: aggregator.EventRows, Log: log,
 	})
+	// The worker follows an environment by its ID: the local host is announced by the monitor, an agent environment (a
+	// swarm, or a host with an agent) by the service when its first agent connects, and its events are the environment's
+	// merged feed. The monitor's own keys for an agent's target are not environment IDs (STK-14).
 	monitor.Watch(driftMonitor.EnvStarted, driftMonitor.EnvStopped)
+	envSvc.WatchAgentEnvironments(driftMonitor.EnvStarted, driftMonitor.EnvStopped)
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
 	registryEgress := registry.NewEgressPolicy(cfg.RegistryBlockCIDRs)
 	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)

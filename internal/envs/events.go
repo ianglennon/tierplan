@@ -674,6 +674,33 @@ func (a *Aggregator) Events(ctx context.Context, envID string) (backlog []NodeEv
 	}
 }
 
+// EventRows is Events as plain Docker event rows, for a reader that wants the events of an environment and not the node
+// each came from (the background drift check of stacks). The rows are the merged feed's, so a cluster event reported by
+// every manager arrives once. The channel is closed when the feed's is, and when cancel is called or ctx ends.
+func (a *Aggregator) EventRows(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func()) {
+	nodeBacklog, nodeCh, unsub := a.Events(ctx, envID)
+	backlog = make([]dockerx.EventRow, len(nodeBacklog))
+	for i, ev := range nodeBacklog {
+		backlog[i] = ev.EventRow
+	}
+	rows := make(chan dockerx.EventRow, 64)
+	fctx, stop := context.WithCancel(ctx)
+	go func() {
+		defer close(rows)
+		for ev := range nodeCh {
+			select {
+			case rows <- ev.EventRow:
+			case <-fctx.Done():
+				return
+			}
+		}
+	}()
+	return backlog, rows, func() {
+		stop()
+		unsub()
+	}
+}
+
 // Recent returns up to n of the newest buffered rows of an environment's merged
 // feed, newest first.
 func (a *Aggregator) Recent(ctx context.Context, envID string, n int) []NodeEvent {
@@ -967,11 +994,4 @@ func (f *mergedFeed) closeSubscribers() {
 		close(s.ch)
 		delete(f.subs, s)
 	}
-}
-
-// EventRows is Events as plain rows.
-func (a *Aggregator) EventRows(ctx context.Context, envID string) (backlog []dockerx.EventRow, ch <-chan dockerx.EventRow, cancel func()) {
-	closed := make(chan dockerx.EventRow)
-	close(closed)
-	return nil, closed, func() {}
 }
