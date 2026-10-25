@@ -270,6 +270,14 @@ type StackDetail struct {
 	Rollback StackRollbackBody `json:"rollback" doc:"Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it"`
 	// LastOperation is the newest operation, left out for a stack never deployed.
 	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
+	// Adoption is set on a stack Bayplan adopted.
+	Adoption *StackAdoptionBody `json:"adoption,omitempty" doc:"Left out unless the stack was adopted (source adopted): whether its first deploy is still to come"`
+}
+
+// StackAdoptionBody is where an adopted stack stands.
+type StackAdoptionBody struct {
+	Pending     bool   `json:"pending" doc:"True until the stack's first good deploy: its services do not carry Bayplan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart)"`
+	AdoptedFrom string `json:"adoptedFrom" doc:"The name of the stack on the engine that was adopted"`
 }
 
 // StackLockBody is who holds the environment's stack operation lock.
@@ -587,6 +595,9 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	}
 	if h, ok := d.Locks.Held(st.EnvID); ok {
 		detail.Lock = lockBody(h)
+	}
+	if st.Source.Kind == stacks.SourceAdopted {
+		detail.Adoption = &StackAdoptionBody{Pending: st.Adoption.Pending, AdoptedFrom: st.Source.Ref}
 	}
 	return detail, nil
 }

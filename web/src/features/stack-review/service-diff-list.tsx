@@ -17,6 +17,7 @@ import {
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { diffSpecs } from "@/features/spec-editor/diff";
 import { SpecDiff } from "@/features/spec-editor/spec-diff";
+import { OwnershipOnlyGroup } from "@/features/stack-review/ownership-only-group";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,8 @@ interface ServiceDiffListProps {
   // A number that goes up when every row that can open should open ("Show differences" on the Adopt page). 0 or absent
   // leaves each row as it is.
   openAll?: number;
+  // "standalone" words the Ownership labels only group for containers and not for services.
+  context?: "standalone";
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -239,37 +242,54 @@ function ServiceRow({ service, defaultOpen, headings, caption, openAll }: RowPro
 // services a standalone deploy recreates or restarts because another is recreated. A first deploy lists
 // every service as Added. Masked values never appear on either side: the server sends them
 // hidden, and a change to a hidden one is only a path.
-export function ServiceDiffList({ services, headings, caption, openAll }: ServiceDiffListProps) {
+export function ServiceDiffList({
+  services,
+  headings,
+  caption,
+  openAll,
+  context,
+}: ServiceDiffListProps) {
+  // The services that differ in nothing but Bayplan's ownership labels are their own group above the list
+  // (UI-SPEC "Review additions"); a service with a real change as well stays in the list.
+  const labelsOnly = useMemo(() => services.filter((s) => s.ownershipOnly), [services]);
   // The server lists added and changed services by name, then the ones a recreate carries, then
   // the removed ones; the order is kept here too, so a list that came in another order still ends
   // with what goes away.
-  const ordered = useMemo(
-    () => [
-      ...services.filter((s) => s.change !== "removed" && !isCarried(s)),
-      ...services.filter(isCarried),
-      ...services.filter((s) => s.change === "removed"),
-    ],
-    [services],
-  );
-  if (ordered.length === 0) return null;
+  const ordered = useMemo(() => {
+    const rest = services.filter((s) => !s.ownershipOnly);
+    return [
+      ...rest.filter((s) => s.change !== "removed" && !isCarried(s)),
+      ...rest.filter(isCarried),
+      ...rest.filter((s) => s.change === "removed"),
+    ];
+  }, [services]);
+  if (ordered.length === 0 && labelsOnly.length === 0) return null;
   // Only a row that can open counts for whether they open: a carried one has nothing to show.
   const open = ordered.filter((s) => s.change === "added" || s.change === "changed").length;
+  const list =
+    ordered.length === 0 ? null : (
+      <ul className="flex flex-col gap-2">
+        {ordered.map((s) =>
+          isCarried(s) ? (
+            <CarriedRow key={s.name} service={s} />
+          ) : (
+            <ServiceRow
+              key={s.name}
+              service={s}
+              defaultOpen={open <= OPEN_BY_DEFAULT}
+              headings={headings}
+              caption={caption}
+              openAll={openAll}
+            />
+          ),
+        )}
+      </ul>
+    );
+  if (labelsOnly.length === 0) return list;
   return (
-    <ul className="flex flex-col gap-2">
-      {ordered.map((s) =>
-        isCarried(s) ? (
-          <CarriedRow key={s.name} service={s} />
-        ) : (
-          <ServiceRow
-            key={s.name}
-            service={s}
-            defaultOpen={open <= OPEN_BY_DEFAULT}
-            headings={headings}
-            caption={caption}
-            openAll={openAll}
-          />
-        ),
-      )}
-    </ul>
+    <div className="flex flex-col gap-4">
+      <OwnershipOnlyGroup services={labelsOnly} context={context} />
+      {list}
+    </div>
   );
 }

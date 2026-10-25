@@ -11932,6 +11932,24 @@
         ],
         "type": "object"
       },
+      "StackAdoptionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "adoptedFrom": {
+            "description": "The name of the stack on the engine that was adopted",
+            "type": "string"
+          },
+          "pending": {
+            "description": "True until the stack's first good deploy: its services do not carry Bayplan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pending",
+          "adoptedFrom"
+        ],
+        "type": "object"
+      },
       "StackCancelBody": {
         "additionalProperties": false,
         "properties": {
@@ -12271,6 +12289,10 @@
       "StackDetail": {
         "additionalProperties": false,
         "properties": {
+          "adoption": {
+            "$ref": "#/components/schemas/StackAdoptionBody",
+            "description": "Left out unless the stack was adopted (source adopted): whether its first deploy is still to come"
+          },
           "createdAt": {
             "description": "When it was created, RFC 3339 UTC",
             "type": "string"
@@ -13672,9 +13694,32 @@
         ],
         "type": "object"
       },
+      "StackReviewAdoptionBody": {
+        "additionalProperties": false,
+        "properties": {
+          "ownershipOnly": {
+            "description": "How many services the deploy recreates for the ownership labels alone (they restart briefly)",
+            "format": "int64",
+            "type": "integer"
+          },
+          "pending": {
+            "description": "True: the deploy is the stack's first since it was adopted, and adds Bayplan's ownership labels to every service",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pending",
+          "ownershipOnly"
+        ],
+        "type": "object"
+      },
       "StackReviewBody": {
         "additionalProperties": false,
         "properties": {
+          "adoption": {
+            "$ref": "#/components/schemas/StackReviewAdoptionBody",
+            "description": "Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does"
+          },
           "concurrent": {
             "$ref": "#/components/schemas/StackConcurrentBody",
             "description": "Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"
@@ -13967,6 +14012,10 @@
               "null"
             ]
           },
+          "ownershipOnly": {
+            "description": "Left out unless true: true when the service differs from what runs in nothing but Bayplan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false",
+            "type": "boolean"
+          },
           "settings": {
             "description": "How many settings differ between current and next, hidden ones included",
             "format": "int64",
@@ -14009,6 +14058,11 @@
             "$ref": "#/components/schemas/StackReviewCountsBody",
             "description": "Networks the stack owns"
           },
+          "ownershipOnly": {
+            "description": "Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review",
+            "format": "int64",
+            "type": "integer"
+          },
           "secrets": {
             "$ref": "#/components/schemas/StackReviewCountsBody",
             "description": "Secrets Bayplan makes from the stack's files; a changed file counts as changed"
@@ -14029,7 +14083,8 @@
           "secrets",
           "configs",
           "imagesPinned",
-          "imagesNew"
+          "imagesNew",
+          "ownershipOnly"
         ],
         "type": "object"
       },

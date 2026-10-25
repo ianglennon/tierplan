@@ -34,56 +34,63 @@ export function ReviewSummary({ summary }: ReviewSummaryProps) {
   return (
     <SettingsCard title={t("stackReview.summary.title")}>
       {summary ? (
-        <Table>
-          <caption className="sr-only">{t("stackReview.summary.caption")}</caption>
-          <TableHeader>
-            <TableRow>
-              <TableHead scope="col">{t("stackReview.summary.resource")}</TableHead>
-              <TableHead scope="col" className="text-end">
-                {t("stackReview.summary.added")}
-              </TableHead>
-              <TableHead scope="col" className="text-end">
-                {t("stackReview.summary.changed")}
-              </TableHead>
-              <TableHead scope="col" className="text-end">
-                {t("stackReview.summary.removed")}
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {ROWS.map((row) => {
-              const counts = summary[row];
-              return (
-                <TableRow key={row}>
-                  <TableHead scope="row" className="font-medium">
-                    {t(`stackReview.summary.${row}`)}
-                  </TableHead>
-                  <TableCell className="text-end tabular-nums">{counts.added}</TableCell>
-                  <TableCell className="text-end tabular-nums">
-                    {counts.changed}
-                    {HASHED.has(row) && counts.changed > 0 ? (
-                      <span className="block text-xs text-muted-foreground">
-                        {t("stackReview.summary.newVersions", { count: counts.changed })}
-                      </span>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="text-end tabular-nums">{counts.removed}</TableCell>
-                </TableRow>
-              );
-            })}
-            <TableRow>
-              <TableHead scope="row" className="font-medium">
-                {t("stackReview.summary.images")}
-              </TableHead>
-              <TableCell colSpan={3} className="text-end">
-                {t("stackReview.summary.imagesCount", {
-                  pinned: summary.imagesPinned,
-                  new: summary.imagesNew,
-                })}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
+        <>
+          <Table>
+            <caption className="sr-only">{t("stackReview.summary.caption")}</caption>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col">{t("stackReview.summary.resource")}</TableHead>
+                <TableHead scope="col" className="text-end">
+                  {t("stackReview.summary.added")}
+                </TableHead>
+                <TableHead scope="col" className="text-end">
+                  {t("stackReview.summary.changed")}
+                </TableHead>
+                <TableHead scope="col" className="text-end">
+                  {t("stackReview.summary.removed")}
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {ROWS.map((row) => {
+                const counts = summary[row];
+                return (
+                  <TableRow key={row}>
+                    <TableHead scope="row" className="font-medium">
+                      {t(`stackReview.summary.${row}`)}
+                    </TableHead>
+                    <TableCell className="text-end tabular-nums">{counts.added}</TableCell>
+                    <TableCell className="text-end tabular-nums">
+                      {counts.changed}
+                      {HASHED.has(row) && counts.changed > 0 ? (
+                        <span className="block text-xs text-muted-foreground">
+                          {t("stackReview.summary.newVersions", { count: counts.changed })}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="text-end tabular-nums">{counts.removed}</TableCell>
+                  </TableRow>
+                );
+              })}
+              <TableRow>
+                <TableHead scope="row" className="font-medium">
+                  {t("stackReview.summary.images")}
+                </TableHead>
+                <TableCell colSpan={3} className="text-end">
+                  {t("stackReview.summary.imagesCount", {
+                    pinned: summary.imagesPinned,
+                    new: summary.imagesNew,
+                  })}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+          {summary.ownershipOnly > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("stackOwnership.summary.line", { count: summary.ownershipOnly })}
+            </p>
+          ) : null}
+        </>
       ) : (
         <div data-testid="summary-skeleton" aria-hidden="true" className="flex flex-col gap-2">
           {ROWS.map((row) => (

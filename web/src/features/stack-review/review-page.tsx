@@ -252,6 +252,9 @@ export function ReviewPage({
   const shown = tab ?? (unchanged && yamlChanged > 0 ? "yaml" : "changes");
   const firstDeploy = !rollback && changed.length > 0 && changed.every((s) => s.change === "added");
   const failed = review.isError && !data;
+  // A standalone host recreates containers; a swarm, services (the group and the warning word it).
+  const ownershipContext: { context?: "standalone" } =
+    stack.data?.target === "standalone" ? { context: "standalone" } : {};
 
   // Pressing Deploy stack while it is off says why, for a touch screen that has no hover.
   function pressed() {
@@ -346,6 +349,20 @@ export function ReviewPage({
               <AlertDescription>{t("stackReview.firstDeploy.body")}</AlertDescription>
             </Alert>
           ) : null}
+          {data?.adoption?.pending && data.summary.ownershipOnly > 0 ? (
+            <Alert role="status">
+              <Info aria-hidden="true" />
+              <AlertTitle>
+                {t("stackOwnership.restart.title", {
+                  count: data.summary.ownershipOnly,
+                  ...ownershipContext,
+                })}
+              </AlertTitle>
+              <AlertDescription>
+                {t("stackOwnership.restart.body", ownershipContext)}
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <ReviewSummary summary={data?.summary} />
           <ImagePinTable
             images={data ? (data.images ?? []) : undefined}
@@ -381,7 +398,7 @@ export function ReviewPage({
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="changes" className="flex flex-col gap-4">
-                <ServiceDiffList services={changed} />
+                <ServiceDiffList services={changed} context={ownershipContext.context} />
                 <OtherResourcesTable objects={data.objects ?? []} />
               </TabsContent>
               <TabsContent value="yaml">

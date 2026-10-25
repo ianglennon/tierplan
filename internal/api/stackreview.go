@@ -39,13 +39,14 @@ type StackReviewCountsBody struct {
 
 // StackReviewSummaryBody is the counts the review opens with.
 type StackReviewSummaryBody struct {
-	Services     StackReviewCountsBody `json:"services" doc:"Services"`
-	Networks     StackReviewCountsBody `json:"networks" doc:"Networks the stack owns"`
-	Volumes      StackReviewCountsBody `json:"volumes" doc:"Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
-	Secrets      StackReviewCountsBody `json:"secrets" doc:"Secrets Bayplan makes from the stack's files; a changed file counts as changed"`
-	Configs      StackReviewCountsBody `json:"configs" doc:"Configs Bayplan makes from the stack's files; a changed file counts as changed"`
-	ImagesPinned int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
-	ImagesNew    int                   `json:"imagesNew" doc:"Services whose digest the review just looked up"`
+	Services      StackReviewCountsBody `json:"services" doc:"Services"`
+	Networks      StackReviewCountsBody `json:"networks" doc:"Networks the stack owns"`
+	Volumes       StackReviewCountsBody `json:"volumes" doc:"Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
+	Secrets       StackReviewCountsBody `json:"secrets" doc:"Secrets Bayplan makes from the stack's files; a changed file counts as changed"`
+	Configs       StackReviewCountsBody `json:"configs" doc:"Configs Bayplan makes from the stack's files; a changed file counts as changed"`
+	ImagesPinned  int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
+	ImagesNew     int                   `json:"imagesNew" doc:"Services whose digest the review just looked up"`
+	OwnershipOnly int                   `json:"ownershipOnly" doc:"Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review"`
 }
 
 // StackReviewImageBody is one service's image.
@@ -69,6 +70,13 @@ type StackReviewServiceBody struct {
 	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent"`
 	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
 	Because       string         `json:"because,omitempty" doc:"Left out unless set: for a recreated or restarted service, the name of the recreated service that carries it"`
+	OwnershipOnly bool           `json:"ownershipOnly,omitempty" doc:"Left out unless true: true when the service differs from what runs in nothing but Bayplan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false"`
+}
+
+// StackReviewAdoptionBody is what the first deploy of an adopted stack does that the file does not say.
+type StackReviewAdoptionBody struct {
+	Pending       bool `json:"pending" doc:"True: the deploy is the stack's first since it was adopted, and adds Bayplan's ownership labels to every service"`
+	OwnershipOnly int  `json:"ownershipOnly" doc:"How many services the deploy recreates for the ownership labels alone (they restart briefly)"`
 }
 
 // StackReviewObjectBody is a network, secret or config a deploy would add, change or remove.
@@ -135,6 +143,7 @@ type StackReviewBody struct {
 	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
 	Concurrent   *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
 	Revision     int64                    `json:"revision" doc:"For mode rollback, the number of the revision the review restores; 0 for any other mode"`
+	Adoption     *StackReviewAdoptionBody `json:"adoption,omitempty" doc:"Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does"`
 	DeployedSeq  int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
 }
 
@@ -259,7 +268,7 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		Summary: StackReviewSummaryBody{
 			Services: countsBody(rv.Summary.Services), Networks: countsBody(rv.Summary.Networks), Volumes: countsBody(rv.Summary.Volumes),
 			Secrets: countsBody(rv.Summary.Secrets), Configs: countsBody(rv.Summary.Configs),
-			ImagesPinned: rv.Summary.ImagesPinned, ImagesNew: rv.Summary.ImagesNew,
+			ImagesPinned: rv.Summary.ImagesPinned, ImagesNew: rv.Summary.ImagesNew, OwnershipOnly: rv.Summary.OwnershipOnly,
 		},
 		Images:       make([]StackReviewImageBody, 0, len(rv.Images)),
 		Services:     make([]StackReviewServiceBody, 0, len(rv.Services)),
@@ -289,6 +298,9 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		b.Images = append(b.Images, StackReviewImageBody{Service: r.Service, Image: r.Image, Digest: r.Digest, Current: r.Current, State: r.State, Note: r.Note})
 	}
 	b.Services = serviceBodies(rv.Services)
+	if a := rv.Adoption; a != nil {
+		b.Adoption = &StackReviewAdoptionBody{Pending: a.Pending, OwnershipOnly: a.OwnershipOnly}
+	}
 	for _, o := range rv.Objects {
 		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail})
 	}
@@ -305,7 +317,7 @@ func serviceBodies(changes []stacks.ServiceChange) []StackReviewServiceBody {
 		}
 		out = append(out, StackReviewServiceBody{
 			Name: c.Name, Short: c.Short, Change: c.Change, Current: specTree(c.Current), Next: specTree(c.Next),
-			HiddenChanges: hidden, Settings: c.Settings, Because: c.Because,
+			HiddenChanges: hidden, Settings: c.Settings, Because: c.Because, OwnershipOnly: c.OwnershipOnly,
 		})
 	}
 	return out

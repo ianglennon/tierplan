@@ -8798,6 +8798,12 @@ export interface components {
             /** @description The team's name; set when kind is team */
             teamName?: string;
         };
+        StackAdoptionBody: {
+            /** @description The name of the stack on the engine that was adopted */
+            adoptedFrom: string;
+            /** @description True until the stack's first good deploy: its services do not carry Bayplan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart) */
+            pending: boolean;
+        };
         StackCancelBody: {
             /** @description The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled */
             jobId: string;
@@ -8908,6 +8914,8 @@ export interface components {
             services?: string[] | null;
         };
         StackDetail: {
+            /** @description Left out unless the stack was adopted (source adopted): whether its first deploy is still to come */
+            adoption?: components["schemas"]["StackAdoptionBody"];
             /** @description When it was created, RFC 3339 UTC */
             createdAt: string;
             /** @description Who created the stack */
@@ -9495,7 +9503,18 @@ export interface components {
             /** @description The Volumes card */
             volumes: components["schemas"]["StackVolumesCardBody"];
         };
+        StackReviewAdoptionBody: {
+            /**
+             * Format: int64
+             * @description How many services the deploy recreates for the ownership labels alone (they restart briefly)
+             */
+            ownershipOnly: number;
+            /** @description True: the deploy is the stack's first since it was adopted, and adds Bayplan's ownership labels to every service */
+            pending: boolean;
+        };
         StackReviewBody: {
+            /** @description Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does */
+            adoption?: components["schemas"]["StackReviewAdoptionBody"];
             /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
             concurrent?: components["schemas"]["StackConcurrentBody"];
             /**
@@ -9616,6 +9635,8 @@ export interface components {
             next: {
                 [key: string]: unknown;
             } | null;
+            /** @description Left out unless true: true when the service differs from what runs in nothing but Bayplan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false */
+            ownershipOnly?: boolean;
             /**
              * Format: int64
              * @description How many settings differ between current and next, hidden ones included
@@ -9639,6 +9660,11 @@ export interface components {
             imagesPinned: number;
             /** @description Networks the stack owns */
             networks: components["schemas"]["StackReviewCountsBody"];
+            /**
+             * Format: int64
+             * @description Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review
+             */
+            ownershipOnly: number;
             /** @description Secrets Bayplan makes from the stack's files; a changed file counts as changed */
             secrets: components["schemas"]["StackReviewCountsBody"];
             /** @description Services */

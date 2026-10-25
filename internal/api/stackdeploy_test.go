@@ -2046,10 +2046,14 @@ func adoptedLegacy(t *testing.T, f *envFix, e envBody, admin *roleCaller) (stack
 	// One service as docker stack deploy leaves it, on the stack's default network, with no secret or config to find.
 	replicas := uint64(2)
 	spec := swarm.ServiceSpec{
-		Annotations: swarm.Annotations{Name: "legacy_app", Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy"}},
+		Annotations: swarm.Annotations{Name: "legacy_app", Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelSwarmImage: "nginx:1.27"}},
 		TaskTemplate: swarm.TaskSpec{
-			ContainerSpec: &swarm.ContainerSpec{Image: "nginx:1.27@" + dockertest.FakeDigestOf("docker.io/library/nginx:1.27"), Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy"}},
-			Networks:      []swarm.NetworkAttachmentConfig{{Target: "net-legacy-default", Aliases: []string{"app"}}},
+			ContainerSpec: &swarm.ContainerSpec{
+				Image:      "nginx:1.27@" + dockertest.FakeDigestOf("docker.io/library/nginx:1.27"),
+				Labels:     map[string]string{stacks.LabelSwarmNamespace: "legacy"},
+				Privileges: &swarm.Privileges{},
+			},
+			Networks: []swarm.NetworkAttachmentConfig{{Target: "net-legacy-default", Aliases: []string{"app"}}},
 		},
 		Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &replicas}},
 	}
@@ -2098,6 +2102,39 @@ func TestDeployEndClearsThePendingAdoption(t *testing.T) {
 	if !adoptionPending(t, f, e.ID, st.ID) {
 		t.Fatal("a stack just adopted is not pending")
 	}
+	detail := func() *StackAdoptionAnswer {
+		return answerOf[struct {
+			Adoption *StackAdoptionAnswer `json:"adoption"`
+		}](t, admin.do(http.MethodGet, "stacks/"+st.ID, "")).Adoption
+	}
+	if a := detail(); a == nil || !a.Pending || a.AdoptedFrom != "legacy" {
+		t.Fatalf("adoption of the stack = %+v, want pending, adopted from legacy", a)
+	}
+
+	// The first review names what taking ownership does: one service, ownership labels only, none changed.
+	rec := admin.do(http.MethodPost, "stacks/"+st.ID+"/review", `{}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("review: %d %s", rec.Code, rec.Body)
+	}
+	rv := answerOf[struct {
+		Problems []struct{ Code string } `json:"problems"`
+		Summary  struct {
+			Services      struct{ Changed int } `json:"services"`
+			OwnershipOnly int                   `json:"ownershipOnly"`
+		} `json:"summary"`
+		Services []struct {
+			Short         string `json:"short"`
+			OwnershipOnly bool   `json:"ownershipOnly"`
+		} `json:"services"`
+		Adoption *struct {
+			Pending       bool `json:"pending"`
+			OwnershipOnly int  `json:"ownershipOnly"`
+		} `json:"adoption"`
+	}](t, rec)
+	if len(rv.Problems) != 0 || rv.Summary.OwnershipOnly != 1 || rv.Summary.Services.Changed != 0 ||
+		len(rv.Services) != 1 || !rv.Services[0].OwnershipOnly || rv.Adoption == nil || !rv.Adoption.Pending || rv.Adoption.OwnershipOnly != 1 {
+		t.Fatalf("review = %+v, want no problem and the one service ownership-only", rv)
+	}
 
 	// A deploy that stops before it has labelled every service ends failed: here at the networks, for an external
 	// network that does not exist.
@@ -2118,4 +2155,13 @@ func TestDeployEndClearsThePendingAdoption(t *testing.T) {
 	if adoptionPending(t, f, e.ID, st.ID) {
 		t.Fatal("a good first deploy left the adoption pending")
 	}
+	if a := detail(); a == nil || a.Pending {
+		t.Fatalf("adoption of the stack after the deploy = %+v, want it present and not pending", a)
+	}
+}
+
+// StackAdoptionAnswer is the adoption part of a stack's detail.
+type StackAdoptionAnswer struct {
+	Pending     bool   `json:"pending"`
+	AdoptedFrom string `json:"adoptedFrom"`
 }
