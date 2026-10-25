@@ -289,8 +289,8 @@ export function rangeFor(
 // actionLabel is the human text of an action key. The raw key stays in the
 // expanded row and in exports. An unknown key shows as itself. A stack deploy that was a roll back reads
 // as one, with the revision it restored, from the entry's details (the stack's name, the mode and
-// restoredFrom the deploy recorded); one that was a restore of drift reads as that; any other entry reads as
-// its key.
+// restoredFrom the deploy recorded); one that was a restore of drift reads as that; an accept of live state into the draft names the stack; any
+// other entry reads as its key.
 export function actionLabel(key: string, t: Translate, details?: Record<string, string>): string {
   if (key === "stack.deployed" && details?.mode === "restore") {
     return t("audit.actions.stack.deployed_restore", { name: details.stack ?? "" });
@@ -300,6 +300,9 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     return details.restoredFrom
       ? t("audit.actions.stack.deployed_rollback", { name, revision: details.restoredFrom })
       : t("audit.actions.stack.deployed_rollback_anon", { name });
+  }
+  if (key === "stack.drift_accepted" && details?.stack) {
+    return t("audit.actions.stack.drift_accepted_named", { name: details.stack });
   }
   return KNOWN_ACTIONS.includes(key) ? t(`audit.actions.${key}`) : key;
 }

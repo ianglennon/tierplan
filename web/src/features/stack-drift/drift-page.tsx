@@ -223,18 +223,24 @@ export function DriftPage({ envId, stackId }: DriftPageProps) {
         <Loading />
       )}
       {data && (state === "drifted" || state === "none") ? (
-        <EditorFooter>
-          <p className="me-auto min-w-0 text-sm text-muted-foreground">
+        <>
+          {/* Under 768px the revision is a caption above the footer, so the footer keeps its two buttons. */}
+          <p className="text-sm text-muted-foreground md:hidden">
             {t("stackRestore.revision", { seq: data.revision })}
           </p>
-          <AcceptLiveAction envId={envId} stackId={stackId} drifted={state === "drifted"} />
-          <RestoreAction
-            envId={envId}
-            stackId={stackId}
-            drifted={state === "drifted"}
-            variant="default"
-          />
-        </EditorFooter>
+          <EditorFooter>
+            <p className="me-auto min-w-0 text-sm text-muted-foreground max-md:hidden">
+              {t("stackRestore.revision", { seq: data.revision })}
+            </p>
+            <AcceptLiveAction envId={envId} stackId={stackId} drifted={state === "drifted"} />
+            <RestoreAction
+              envId={envId}
+              stackId={stackId}
+              drifted={state === "drifted"}
+              variant="default"
+            />
+          </EditorFooter>
+        </>
       ) : null}
     </div>
   );

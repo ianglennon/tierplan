@@ -246,7 +246,8 @@
         "removed": "Stack removed",
         "value_revealed": "Stack secret value revealed",
         "adopted": "Stack adopted",
-        "drift_accepted": "Accepted live state into the draft"
+        "drift_accepted": "Accepted live state into the draft",
+        "drift_accepted_named": "Accepted live state into the draft of {{name}}"
       }
     },
     "coalesced": {

@@ -4,12 +4,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { GitPullRequestArrow } from "lucide-react";
+import { useState } from "react";
 
 import { AcceptLiveError, useAcceptLive } from "@/api/stack-drift";
 import { draftQuery, stackQuery } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { ReplaceDraftDialog } from "@/features/stack-drift/replace-draft-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError, toastSuccess } from "@/lib/toast";
@@ -21,9 +23,18 @@ interface AcceptLiveActionProps {
   drifted: boolean;
 }
 
+// The draft a person is asked about before it is replaced: who saved it, when, and the version the request will carry.
+interface SavedDraft {
+  version: number;
+  savedBy: string;
+  savedAt: string;
+}
+
 // AcceptLiveAction is "Accept live into draft" (D-23): it turns what runs into the stack's next draft and opens the
 // Editor on it. It changes the draft and nothing else: no engine is written to and nothing is deployed, so the person
-// reviews the draft and deploys it like any change. It needs Operator, waits while another stack operation holds the
+// reviews the draft and deploys it like any change. A saved draft with changes is shared work that the rebuild
+// replaces, so it is only replaced after a confirm that names who saved it; a stack with none rebuilds at once. It
+// needs Operator, waits while another stack operation holds the
 // environment and has nothing to keep without drift; the reason is shown in each case and the server refuses the same
 // things again.
 export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionProps) {
@@ -35,19 +46,37 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
   const envName = useEnvName(envId);
   const accept = useAcceptLive(envId, stackId);
   const name = stack.data?.name ?? stackId;
+  const [confirming, setConfirming] = useState<SavedDraft | null>(null);
 
-  async function run() {
+  // rebuild asks the server to replace the draft, which it does only if the draft is still at version.
+  async function rebuild(version: number) {
     if (accept.isPending) return;
     try {
-      // The version of the draft as it is now: the server refuses the rebuild if the draft moves after this read.
-      const draft = await queryClient.fetchQuery({ ...draftQuery(envId, stackId), staleTime: 0 });
-      await accept.mutateAsync({ draftVersion: draft.version });
+      await accept.mutateAsync({ draftVersion: version });
+      setConfirming(null);
       toastSuccess(t("stackAcceptLive.toast.rebuilt", { name }));
       void navigate({
         to: "/env/$envId/stacks/$stackId/editor",
         params: { envId, stackId },
         search: { pane: "files" },
       });
+    } catch (e) {
+      setConfirming(null);
+      toastError(refusal(e instanceof AcceptLiveError ? e : new AcceptLiveError(0), t, envName));
+    }
+  }
+
+  async function run() {
+    if (accept.isPending) return;
+    try {
+      // The draft as it is now: what the dialog names and the version the request carries are the same read, so the
+      // server refuses the rebuild if the draft moves after it.
+      const draft = await queryClient.fetchQuery({ ...draftQuery(envId, stackId), staleTime: 0 });
+      if (stack.data?.hasDraft && draft.isDraft) {
+        setConfirming({ version: draft.version, savedBy: draft.savedBy, savedAt: draft.savedAt });
+        return;
+      }
+      await rebuild(draft.version);
     } catch (e) {
       toastError(refusal(e instanceof AcceptLiveError ? e : new AcceptLiveError(0), t, envName));
     }
@@ -72,16 +101,28 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
     );
   }
   return (
-    <Button
-      type="button"
-      variant="outline"
-      className="max-md:h-11"
-      disabled={accept.isPending}
-      onClick={() => void run()}
-    >
-      <GitPullRequestArrow aria-hidden="true" />
-      {label}
-    </Button>
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        className="max-md:h-11"
+        disabled={accept.isPending}
+        onClick={() => void run()}
+      >
+        <GitPullRequestArrow aria-hidden="true" />
+        {label}
+      </Button>
+      <ReplaceDraftDialog
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirming(null);
+        }}
+        savedBy={confirming?.savedBy ?? ""}
+        savedAt={confirming?.savedAt ?? ""}
+        pending={accept.isPending}
+        onReplace={() => confirming && void rebuild(confirming.version)}
+      />
+    </>
   );
 }
 
