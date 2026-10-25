@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/convert"
 	"github.com/ianglennon/bayplan/internal/vault"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -448,5 +450,89 @@ func TestAdoptCheckRedactsForAViewer(t *testing.T) {
 	}
 	if hidden.Fingerprint != shown.Fingerprint || len(hidden.Gaps) != len(shown.Gaps) {
 		t.Errorf("a viewer's check differs in more than its values: %d gaps against %d", len(hidden.Gaps), len(shown.Gaps))
+	}
+}
+
+// TestHostAccessListsForAnAdmin: HostAccess lists every host-access setting of a definition, for whoever asks, with
+// its service and its kind. It judges nothing and needs no caller (D-17).
+func TestHostAccessListsForAnAdmin(t *testing.T) {
+	t.Parallel()
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(`services:
+  web:
+    image: nginx:1.27
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+  db:
+    image: postgres:16
+`)}}}
+
+	got, err := stackops.Deps{}.HostAccess(copy, convert.Plan{})
+	if err != nil {
+		t.Fatalf("HostAccess: %v", err)
+	}
+
+	var texts []string
+	for _, e := range got.Entries {
+		texts = append(texts, e.Text)
+	}
+	for _, want := range []string{"a bind mount of /var/run/docker.sock in web", "privileged: true in web"} {
+		if !slices.Contains(texts, want) {
+			t.Errorf("entries = %q, want %q among them", texts, want)
+		}
+	}
+	if len(texts) != 2 {
+		t.Errorf("entries = %q, want the two settings of web and none of db", texts)
+	}
+	if want := []string{stackops.KindBindMounts, stackops.KindPrivileges}; !slices.Equal(got.Kinds, want) {
+		t.Errorf("kinds = %v, want %v", got.Kinds, want)
+	}
+	if got.Refused || len(got.Problems) != 0 {
+		t.Errorf("HostAccess refused %+v: it decides nothing", got)
+	}
+
+	none, err := stackops.Deps{}.HostAccess(stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte("services:\n  db:\n    image: postgres:16\n")}}}, convert.Plan{})
+	if err != nil || len(none.Entries) != 0 || len(none.Kinds) != 0 {
+		t.Errorf("a definition with no host access listed %+v (%v)", none, err)
+	}
+}
+
+// TestAdoptCheckObjectsAndFlags: the check names how each network, volume, secret and config is treated, and carries
+// the Portainer and orphan-ID flags and the host-access settings of the stack.
+func TestAdoptCheckObjectsAndFlags(t *testing.T) {
+	t.Parallel()
+	rig := objectsRigWith(t, 0, func(spec *swarm.ServiceSpec) {
+		spec.Labels["io.portainer.accesscontrol.teams"] = "ops"
+		spec.Labels[stacks.LabelStackID] = "stack-made-before"
+		spec.TaskTemplate.ContainerSpec.Mounts = append(spec.TaskTemplate.ContainerSpec.Mounts,
+			mount.Mount{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"})
+	})
+
+	res, err := rig.checkOf(t, stacks.TargetSwarm, true)
+	if err != nil {
+		t.Fatalf("AdoptCheck: %v", err)
+	}
+
+	var objects []string
+	for _, o := range res.Objects {
+		objects = append(objects, o.Kind+" "+o.Name+" "+o.Treatment)
+	}
+	for _, want := range []string{"network shop_back owned", "network shared external", "volume shop_data owned", "secret shop_pw external", "config shop_conf external"} {
+		if !slices.Contains(objects, want) {
+			t.Errorf("objects = %v, want %q among them", objects, want)
+		}
+	}
+	if !res.Portainer || !res.Orphan {
+		t.Errorf("Portainer = %v, Orphan = %v, want both: the service carries Portainer's label and another stack's ID", res.Portainer, res.Orphan)
+	}
+	if !slices.Contains(res.Policy.Kinds, stackops.KindBindMounts) {
+		t.Errorf("policy kinds = %v, want bind mounts for the Docker socket", res.Policy.Kinds)
+	}
+	var texts []string
+	for _, e := range res.Policy.Entries {
+		texts = append(texts, e.Text)
+	}
+	if want := "a bind mount of /var/run/docker.sock in web"; !slices.Contains(texts, want) {
+		t.Errorf("policy entries = %q, want %q", texts, want)
 	}
 }

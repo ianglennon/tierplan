@@ -60,6 +60,12 @@ const checkBody = (over: Record<string, unknown> = {}) => ({
   gaps: [],
   gapCount: 0,
   ownershipOnly: [],
+  objects: [],
+  counts: { networks: 0, volumes: 0, secrets: 0, configs: 0 },
+  policy: { kinds: [], entries: [] },
+  portainer: false,
+  orphan: false,
+  notes: [],
   ...over,
 });
 
@@ -485,5 +491,159 @@ describe("the check and Adopt", () => {
       { fingerprint: "fp-1" },
       { fingerprint: "fp-2" },
     ]);
+  });
+});
+
+const obj = (kind: string, name: string, treatment: string) => ({ kind, name, treatment });
+
+describe("the ownership card: how the pieces are treated", () => {
+  it("counts each kind first, then lists every piece with its treatment", async () => {
+    checkAnswer = {
+      status: 200,
+      body: checkBody({
+        objects: [
+          obj("network", "legacy_default", "owned"),
+          obj("network", "shared", "external"),
+          obj("volume", "legacy_data", "owned"),
+          obj("secret", "legacy_pw", "external"),
+          obj("config", "legacy_conf", "external"),
+        ],
+        counts: { networks: 2, volumes: 1, secrets: 1, configs: 1 },
+      }),
+    };
+    mount();
+    await settled();
+
+    const card = (
+      await screen.findByRole("heading", { name: "How the pieces are treated" })
+    ).closest("section") as HTMLElement;
+    expect(within(card).getByText("2 networks, 1 volume, 1 secret, 1 config")).toBeTruthy();
+    const table = within(card).getByRole("table");
+    for (const h of ["Kind", "Name", "Treatment"]) {
+      expect(within(table).getByRole("columnheader", { name: h })).toBeTruthy();
+    }
+    const row = (name: string) => within(table).getByText(name).closest("tr") as HTMLElement;
+    expect(within(row("legacy_default")).getByText("Owned by the stack")).toBeTruthy();
+    expect(within(row("legacy_data")).getByText("Owned by the stack")).toBeTruthy();
+    expect(within(row("shared")).getByText("External. Bayplan doesn't change it.")).toBeTruthy();
+    for (const name of ["legacy_pw", "legacy_conf"]) {
+      expect(within(row(name)).getByText("External. Bayplan doesn't change it.")).toBeTruthy();
+      expect(
+        within(row(name)).getByText("Not stack-owned. Move it to a stack file to rotate it."),
+      ).toBeTruthy();
+    }
+    expect(within(row("legacy_default")).queryByText(/Not stack-owned/)).toBeNull();
+  });
+
+  it("counts zero and one in the singular and the plural", async () => {
+    checkAnswer = {
+      status: 200,
+      body: checkBody({
+        objects: [obj("volume", "legacy_data", "owned")],
+        counts: { networks: 0, volumes: 1, secrets: 0, configs: 0 },
+      }),
+    };
+    mount();
+    await settled();
+
+    expect(await screen.findByText("0 networks, 1 volume, 0 secrets, 0 configs")).toBeTruthy();
+  });
+
+  it("wraps a long name instead of widening the card", async () => {
+    const long = `legacy_${"a-very-long-volume-name-".repeat(8)}end`;
+    checkAnswer = {
+      status: 200,
+      body: checkBody({
+        objects: [obj("volume", long, "owned")],
+        counts: { networks: 0, volumes: 1, secrets: 0, configs: 0 },
+      }),
+    };
+    mount();
+    await settled();
+
+    expect((await screen.findByText(long)).className).toContain("break-all");
+  });
+
+  it("is a skeleton while the check runs", async () => {
+    checkHeld = new Promise(() => undefined);
+    mount();
+
+    const card = (
+      await screen.findByRole("heading", { name: "How the pieces are treated" })
+    ).closest("section") as HTMLElement;
+    expect(within(card).queryByRole("table")).toBeNull();
+    expect(card.querySelector("[data-slot=skeleton]")).toBeTruthy();
+  });
+});
+
+describe("the policy hits", () => {
+  const dockerSock = "a bind mount of /var/run/docker.sock in web";
+  const privileged = "privileged: true in web";
+
+  it("flag the settings that need an Admin to deploy, and never block Adopt", async () => {
+    checkAnswer = {
+      status: 200,
+      body: checkBody({
+        policy: {
+          kinds: ["bind mounts", "extra privileges"],
+          entries: [{ text: dockerSock }, { text: privileged }],
+        },
+      }),
+    };
+    mount();
+    await settled();
+
+    const title = await screen.findByText("Deploying this stack needs Admin");
+    const alert = title.closest("[data-slot=alert]") as HTMLElement;
+    expect(alert.getAttribute("role")).toBe("status");
+    expect(
+      within(alert).getByText(
+        `It uses settings that need Admin: ${dockerSock}, ${privileged}. Adopting is fine, but later deploys need an Admin.`,
+      ),
+    ).toBeTruthy();
+    await waitFor(() => expect(adoptButton().getAttribute("aria-disabled")).toBeNull());
+  });
+
+  it("are absent when the stack uses no host access", async () => {
+    mount();
+    await settled();
+
+    expect(screen.queryByText("Deploying this stack needs Admin")).toBeNull();
+  });
+});
+
+describe("the alerts", () => {
+  it("come in order: orphan note, Portainer advice, policy hits, environment values", async () => {
+    checkAnswer = {
+      status: 200,
+      body: checkBody({
+        orphan: true,
+        portainer: true,
+        policy: { kinds: ["bind mounts"], entries: [{ text: "privileged: true in web" }] },
+      }),
+    };
+    mount();
+    await settled();
+
+    const titles = [
+      "Created by Bayplan (another instance or a lost record)",
+      "This stack looks like it was created by Portainer",
+      "Deploying this stack needs Admin",
+      "Environment values are copied in as they are",
+    ];
+    const nodes = await Promise.all(titles.map((t) => screen.findByText(t)));
+    for (let i = 1; i < nodes.length; i += 1) {
+      const before = nodes[i - 1] as HTMLElement;
+      const after = nodes[i] as HTMLElement;
+      expect(
+        before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${titles[i - 1]} comes before ${titles[i]}`,
+      ).toBeTruthy();
+    }
+    const checkTitle = screen.getByRole("heading", { name: "What happens on the first deploy" });
+    const last = nodes[3] as HTMLElement;
+    expect(
+      last.compareDocumentPosition(checkTitle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });

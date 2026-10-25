@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/moby/moby/api/types/mount"
+
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -507,5 +509,68 @@ func TestAdoptCheckRoute(t *testing.T) {
 	}
 	if rec := viewer.do(http.MethodPost, adoptCheckPath("ghost"), ""); rec.Code != http.StatusNotFound || problemType(t, rec) != "unmanaged_stack_not_found" {
 		t.Errorf("check of a name nothing carries: %d %s, want 404 unmanaged_stack_not_found", rec.Code, rec.Body)
+	}
+}
+
+// TestAdoptCheckBodyCarriesObjectsAndFlags: the check names how each piece of the stack is treated with the counts of
+// each kind, the settings that need an Admin to deploy (listed for the Admin who asks too), and the Portainer and
+// orphan-ID flags.
+func TestAdoptCheckBodyCarriesObjectsAndFlags(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	svc := foreignSecretService("legacy", "app", 2, 2, map[string]string{
+		"io.portainer.accesscontrol.teams": "ops", "bayplan.stack.id": "made-before",
+	})
+	cs := svc.Spec.TaskTemplate.ContainerSpec
+	cs.Mounts = append(cs.Mounts, mount.Mount{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"})
+	reconfigureSwarm(t, f, e, svc)
+
+	rec := admin.do(http.MethodPost, adoptCheckPath("legacy"), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	var got struct {
+		Objects []struct{ Kind, Name, Treatment string } `json:"objects"`
+		Counts  struct{ Networks, Volumes, Secrets, Configs int }
+		Policy  struct {
+			Kinds   []string
+			Entries []struct{ Text string }
+		}
+		Portainer bool
+		Orphan    bool
+		Notes     []struct{ Service, Code, Message string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body, err)
+	}
+	if !got.Portainer || !got.Orphan {
+		t.Errorf("portainer = %v, orphan = %v, want both: the service carries Portainer's label and another stack's ID", got.Portainer, got.Orphan)
+	}
+	if !slices.Contains(got.Policy.Kinds, "bind mounts") {
+		t.Errorf("policy kinds = %v, want bind mounts for the Docker socket, whoever asks", got.Policy.Kinds)
+	}
+	var texts []string
+	for _, en := range got.Policy.Entries {
+		texts = append(texts, en.Text)
+	}
+	if want := "a bind mount of /var/run/docker.sock in app"; !slices.Contains(texts, want) {
+		t.Errorf("policy entries = %q, want %q", texts, want)
+	}
+	counted := got.Counts.Networks + got.Counts.Volumes + got.Counts.Secrets + got.Counts.Configs
+	if len(got.Objects) == 0 || counted != len(got.Objects) {
+		t.Errorf("objects = %+v with counts %+v, want the counts to add up to the objects", got.Objects, got.Counts)
+	}
+	for _, o := range got.Objects {
+		if o.Treatment != "owned" && o.Treatment != "external" {
+			t.Errorf("object %+v has no treatment", o)
+		}
+		if (o.Kind == "secret" || o.Kind == "config") && o.Treatment != "external" {
+			t.Errorf("object %+v: an existing secret or config is always external", o)
+		}
+	}
+	if got.Notes == nil {
+		t.Errorf("notes is absent, want a list")
 	}
 }
