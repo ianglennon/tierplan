@@ -522,6 +522,91 @@ describe("StackOverview of a stack with a draft and no deployment", () => {
   });
 });
 
+describe("AdoptedBanner on the Overview of an adopted stack", () => {
+  beforeEach(() => {
+    detail = {
+      ...detail,
+      source: "adopted",
+      servicesRunning: 3,
+      servicesTotal: 3,
+      adoption: { pending: true, adoptedFrom: "tracer" },
+    };
+  });
+
+  it("says the stack is adopted but not yet deployed, how many services the first deploy recreates and where to go", async () => {
+    mount();
+
+    const title = await screen.findByText("tracer is adopted but not yet deployed by Bayplan");
+    const banner = title.closest('[data-slot="adopted-banner"]') as HTMLElement;
+    expect(
+      within(banner).getByText(
+        "The first deploy adds Bayplan's ownership labels and recreates 3 services (brief restart). Review shows exactly what changes.",
+      ),
+    ).toBeTruthy();
+    expect(
+      (await within(banner).findByRole("link", { name: "Review and deploy" })).getAttribute("href"),
+    ).toBe("/env/e1/stacks/s1/review");
+    expect(within(banner).getByRole("link", { name: "Open history" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/history",
+    );
+  });
+
+  it("counts one service in the singular", async () => {
+    detail = { ...detail, servicesTotal: 1, servicesRunning: 1 };
+    mount();
+
+    expect(
+      await screen.findByText(
+        "The first deploy adds Bayplan's ownership labels and recreates 1 service (brief restart). Review shows exactly what changes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("does not guess a count when the engine could not be read", async () => {
+    detail = { ...detail, servicesTotal: undefined, servicesRunning: undefined };
+    mount();
+
+    expect(
+      await screen.findByText(
+        "The first deploy adds Bayplan's ownership labels and recreates its services (brief restart). Review shows exactly what changes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("offers a Viewer the history to read and no way to deploy", async () => {
+    role = "viewer";
+    mount();
+
+    expect(await screen.findByRole("link", { name: "Open history" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Review and deploy" })).toBeNull();
+  });
+
+  it("is gone once the first deploy has ended good", async () => {
+    detail = { ...detail, adoption: { pending: false, adoptedFrom: "tracer" } };
+    mount();
+
+    await screen.findByRole("region", { name: "Services" });
+    expect(screen.queryByText(/is adopted but not yet deployed by Bayplan/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open history" })).toBeNull();
+  });
+
+  it("is never on a stack that was not adopted", async () => {
+    detail = { ...detail, source: "inline", adoption: undefined };
+    mount();
+
+    await screen.findByRole("region", { name: "Services" });
+    expect(screen.queryByText(/is adopted but not yet deployed by Bayplan/)).toBeNull();
+  });
+
+  it("draws a name with markup in it as text", async () => {
+    detail = { ...detail, name: "<b>shop</b>" };
+    mount();
+
+    const title = await screen.findByText("<b>shop</b> is adopted but not yet deployed by Bayplan");
+    expect(title.querySelector("b")).toBeNull();
+  });
+});
+
 describe("DeployBanner", () => {
   it("names the operation, counts the services done and opens the console", async () => {
     render(
