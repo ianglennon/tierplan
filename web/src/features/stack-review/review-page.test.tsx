@@ -1232,6 +1232,141 @@ describe("in roll back mode", () => {
   });
 });
 
+// A restore of the deployed revision (plan 08-23, STK-14, D-23): the deployed revision with its stored digests against
+// what runs, so that the changes are the drift.
+describe("in restore mode", () => {
+  const restoreReview = (over: Record<string, unknown> = {}) =>
+    reviewBody({
+      revision: 3,
+      deployedSeq: 3,
+      images: [
+        {
+          service: "web",
+          image: "nginx:1.27",
+          digest: D2,
+          current: D2,
+          state: "pinned",
+          note: "revision",
+        },
+      ],
+      pins: { s1_web: `nginx:1.27@${D2}` },
+      ...over,
+    });
+  const restoreButton = () => screen.getByRole("button", { name: /^(Restore stack|Starting…)$/ });
+
+  beforeEach(() => {
+    review = () => Response.json(restoreReview());
+  });
+
+  it("is titled Restore, says which revision it deploys again and asks the server for the deployed one", async () => {
+    mount({ mode: "restore" });
+    expect(await screen.findByRole("heading", { name: "Restore web" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "This deploys revision #3 again, with its pinned images, to put back what was changed outside the stack.",
+      ),
+    ).toBeTruthy();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/review")).toHaveLength(1);
+    expect(posts("/review")[0]?.body).toEqual({ mode: "restore" });
+  });
+
+  it("has Back to drift, which returns to the drift page, and Restore stack in place of Deploy stack", async () => {
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    const back = screen.getByRole("link", { name: "Back to drift" });
+    expect(back.getAttribute("href")).toBe(`/env/${ENV}/stacks/${STACK}/drift`);
+    expect(restoreButton().getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deploy stack" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Roll back stack" })).toBeNull();
+  });
+
+  it("reads Pinned (revision #n) for the images and leaves out the draft notice and the Reverts drift section", async () => {
+    draftSaved = true;
+    mount({ mode: "restore" });
+    expect(await screen.findByText("Pinned (revision #3)")).toBeTruthy();
+    expect(screen.queryByText(/Your saved draft stays as it is/)).toBeNull();
+    expect(screen.queryByText(/reverts/i)).toBeNull();
+  });
+
+  it("restores the deployed revision it reviewed, once, and opens the job", async () => {
+    const { onDeployed } = mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    fireEvent.click(restoreButton());
+    expect(posts("/rollback")).toHaveLength(1);
+    expect(posts("/rollback")[0]?.body).toEqual({ mode: "restore", revision: 3 });
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("restores nothing until the person presses Restore stack", async () => {
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/rollback")).toHaveLength(0);
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
+    rollback = () => problem(409, "deployed_changed");
+    const { onDeployed } = mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "The stack was deployed again since you opened this review. Review it again.",
+      ),
+    ).toBeTruthy();
+    expect(onDeployed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(posts("/review")).toHaveLength(2));
+  });
+
+  it("says the deployed revision needs Admin when the server refuses its host access", async () => {
+    rollback = () => problem(403, "privileged_compose");
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "The deployed revision uses host access, which needs Admin. Ask an administrator to restore it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says another operation is running when the server refuses it for the lock", async () => {
+    rollback = () => problem(409, "operation_locked");
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "Another stack operation started on Prod just now. Try again when it finishes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says there is no drift to restore when running already matches, and holds Restore stack back", async () => {
+    review = () => Response.json(restoreReview({ services: [], summary: reviewBody().summary }));
+    mount({ mode: "restore" });
+    expect(
+      await screen.findByText("Running already matches revision #3. There's nothing to restore."),
+    ).toBeTruthy();
+    expect(restoreButton().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("No drift to restore.").length).toBeGreaterThan(0);
+  });
+
+  it("says a stack with nothing deployed has nothing to restore", async () => {
+    review = () => problem(409, "no_deployed_revision");
+    mount({ mode: "restore" });
+    expect(
+      await screen.findByText(
+        "This stack has not been deployed yet, so there's nothing to restore.",
+      ),
+    ).toBeTruthy();
+  });
+});
+
 // The first review of an adopted stack (plan 08-16, D-16): the services that differ in nothing but Bayplan's
 // ownership labels are told apart from real changes, and the restart is announced before the summary.
 

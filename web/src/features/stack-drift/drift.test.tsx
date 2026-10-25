@@ -641,3 +641,100 @@ describe("the Overview's drift alert", () => {
     expect(document.activeElement).toBe(link);
   });
 });
+
+// Redeploy to restore (plan 08-23, STK-14, D-23): the one way drift is put right, and only from a person's click through
+// the review.
+describe("Redeploy to restore", () => {
+  const LOCK = {
+    stackId: "s2",
+    stackName: "other",
+    jobId: "j7",
+    kind: "deploy",
+    startedAt: "2026-10-19T12:00:00Z",
+    startedBy: "ada",
+  };
+
+  it("is the page's accent action, beside the revision, and opens the review in restore mode", async () => {
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const link = await screen.findByRole("link", { name: "Redeploy to restore" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/stacks/s1/review?mode=restore`);
+    const footer = link.closest('[data-slot="editor-footer"]') as HTMLElement;
+    expect(within(footer).getByText("Revision #4")).toBeTruthy();
+  });
+
+  it("is an outline action on the Overview's alert and opens the same review", async () => {
+    mount(<StackOverview envId={ENV} stackId="s1" />);
+
+    const title = await screen.findByText("tracer has drifted from revision #4");
+    const box = title.closest('[data-slot="drift-alert"]') as HTMLElement;
+    const link = within(box).getByRole("link", { name: "Redeploy to restore…" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/stacks/s1/review?mode=restore`);
+  });
+
+  it("restores nothing by itself: no request but the reads is sent", async () => {
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+    await screen.findByRole("link", { name: "Redeploy to restore" });
+    await waitFor(() => expect(driftCalls.some((c) => c.fresh)).toBe(true));
+
+    const writes = vi
+      .mocked(fetch)
+      .mock.calls.filter(([req]) => (req as Request).method !== "GET")
+      .map(([req]) => `${(req as Request).method} ${new URL((req as Request).url).pathname}`);
+    expect(writes).toEqual([]);
+  });
+
+  it("needs Operator: a Viewer sees it held back with the reason, and it opens nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (req: Request) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+        if (path === "/api/environments") {
+          return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+        }
+        if (path === `/api/env/${ENV}/stacks/s1`) return Response.json(detail);
+        if (path === `/api/env/${ENV}/stacks/s1/drift`) return Response.json(drift());
+        return Response.json({}, { status: 404 });
+      }),
+    );
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const button = await screen.findByRole("button", { name: "Redeploy to restore" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs Operator").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: "Redeploy to restore" })).toBeNull();
+  });
+
+  it("is held back with the lock's reason while another operation runs on the environment", async () => {
+    detail = { ...detail, lock: LOCK };
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const button = await screen.findByRole("button", { name: "Redeploy to restore" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("Another stack operation is running on Prod. Try again when it finishes.")
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("is held back with No drift to restore. when what runs matches the revision", async () => {
+    cached = drift({ state: "none", count: 0, services: [] });
+    fresh = drift({ state: "none", count: 0, services: [] });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const button = await screen.findByRole("button", { name: "Redeploy to restore" });
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("No drift to restore.").length).toBeGreaterThan(0);
+  });
+
+  it("is not offered for a stack never deployed", async () => {
+    cached = { state: "not_deployed", revision: 0, checkedAt: "2026-10-19T12:00:00Z", count: 0 };
+    fresh = cached;
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    await screen.findByText(/Not deployed yet|hasn't been deployed|not been deployed/i);
+    expect(screen.queryByRole("link", { name: "Redeploy to restore" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Redeploy to restore" })).toBeNull();
+  });
+});
