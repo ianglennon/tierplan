@@ -4147,6 +4147,67 @@
         ],
         "type": "object"
       },
+      "GeneratedComposeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "externalConfigs": {
+            "description": "Configs the file references as external. Bayplan reads their names, never their contents",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "externalSecrets": {
+            "description": "Secrets the file references as external. Bayplan reads their names, never their values",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "notes": {
+            "description": "What the rebuild could not say plainly, by service then code",
+            "items": {
+              "$ref": "#/components/schemas/GeneratedNoteBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "yaml": {
+            "description": "The compose file rebuilt from the running services. For a caller without secrets.reveal every environment value, command, health check command and log option reads \u003chidden\u003e",
+            "type": "string"
+          }
+        },
+        "required": [
+          "yaml",
+          "notes",
+          "externalSecrets",
+          "externalConfigs"
+        ],
+        "type": "object"
+      },
+      "GeneratedNoteBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable name for the kind of note: service_name_prefix, network_not_overlay, image_unpinned or cpus_inexact",
+            "type": "string"
+          },
+          "message": {
+            "description": "The note as a sentence",
+            "type": "string"
+          },
+          "service": {
+            "description": "The compose service the note is about; empty when it concerns the whole file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "service",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "GrantBody": {
         "additionalProperties": false,
         "properties": {
@@ -25201,6 +25262,68 @@
           }
         },
         "summary": "A stack Bayplan did not make",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/unmanaged-stacks/{name}/compose": {
+      "get": {
+        "description": "The compose file rebuilt from the running services of a swarm stack Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing secrets and configs are external, by name: their values are never read. Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. The services pass through the same mask as the service detail: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads \u003chidden\u003e. A stack whose services cannot be written as a compose file that passes the check, or that runs on a standalone host, is 422 rebuild_failed with the reason. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "getGeneratedCompose",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm namespace or the Compose project that names the stack",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The swarm namespace or the Compose project that names the stack",
+              "maxLength": 255,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeneratedComposeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The compose file Bayplan would use if it adopted the stack",
         "tags": [
           "stacks"
         ]

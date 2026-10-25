@@ -27,7 +27,7 @@ func TestDeployPathsTakeTheirProjectFromTheCheck(t *testing.T) {
 	const allowed = "resources.go"
 	fset := token.NewFileSet()
 	var parsed int
-	for _, dir := range []string{".", "../api"} {
+	for _, dir := range []string{".", "../api", "../stacks/rebuild"} {
 		paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
 		if err != nil {
 			t.Fatal(err)

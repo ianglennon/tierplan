@@ -2416,6 +2416,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/unmanaged-stacks/{name}/compose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The compose file Bayplan would use if it adopted the stack
+         * @description The compose file rebuilt from the running services of a swarm stack Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing secrets and configs are external, by name: their values are never read. Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. The services pass through the same mask as the service detail: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. A stack whose services cannot be written as a compose file that passes the check, or that runs on a standalone host, is 422 rebuild_failed with the reason. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getGeneratedCompose"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/unmanaged-stacks/{name}/resources": {
         parameters: {
             query?: never;
@@ -5606,6 +5626,30 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        GeneratedComposeBody: {
+            /**
+             * Format: int64
+             * @description Configs the file references as external. Bayplan reads their names, never their contents
+             */
+            externalConfigs: number;
+            /**
+             * Format: int64
+             * @description Secrets the file references as external. Bayplan reads their names, never their values
+             */
+            externalSecrets: number;
+            /** @description What the rebuild could not say plainly, by service then code */
+            notes: components["schemas"]["GeneratedNoteBody"][] | null;
+            /** @description The compose file rebuilt from the running services. For a caller without secrets.reveal every environment value, command, health check command and log option reads <hidden> */
+            yaml: string;
+        };
+        GeneratedNoteBody: {
+            /** @description A stable name for the kind of note: service_name_prefix, network_not_overlay, image_unpinned or cpus_inexact */
+            code: string;
+            /** @description The note as a sentence */
+            message: string;
+            /** @description The compose service the note is about; empty when it concerns the whole file */
+            service: string;
         };
         GrantBody: {
             /**
@@ -15561,6 +15605,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnmanagedStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGeneratedCompose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratedComposeBody"];
                 };
             };
             /** @description Error */

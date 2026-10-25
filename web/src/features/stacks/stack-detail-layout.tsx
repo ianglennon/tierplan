@@ -390,6 +390,12 @@ const UNMANAGED_TABS = [
     exact: true,
   },
   {
+    id: "compose",
+    to: "/env/$envId/unmanaged-stacks/$name/compose",
+    labelKey: "stackGenerated.tab",
+    exact: false,
+  },
+  {
     id: "resources",
     to: "/env/$envId/unmanaged-stacks/$name/resources",
     labelKey: "stackResources.tab",

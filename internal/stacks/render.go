@@ -53,7 +53,7 @@ func Render(in RenderInput) ([]byte, error) {
 		if services := mappingValue(doc.Content[0], "services"); services != nil && services.Kind == yaml.MappingNode {
 			for i := 0; i+1 < len(services.Content); i += 2 {
 				pinImage(services.Content[i+1], in.Loaded.Project.Name, services.Content[i].Value, in.Pins)
-				shortenPorts(services.Content[i+1])
+				ShortenPorts(services.Content[i+1])
 			}
 		}
 	}
@@ -124,11 +124,11 @@ func maskNode(n *yaml.Node, m Masker) {
 	}
 }
 
-// shortenPorts writes the ports of a service the way a person writes them, "9090:80", when the
+// ShortenPorts writes the ports of a service the way a person writes them, "9090:80", when the
 // long form compose-go marshals says nothing the short form cannot: the ingress mode and the
 // tcp protocol are what the short form means by default. A port with another mode, a name or an
 // application protocol keeps its long form, so nothing the file says is lost.
-func shortenPorts(svc *yaml.Node) {
+func ShortenPorts(svc *yaml.Node) {
 	if svc.Kind != yaml.MappingNode {
 		return
 	}

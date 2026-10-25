@@ -15,7 +15,8 @@ import { editorText } from "@/test-editor";
 
 const ENV = "e1";
 const PATH = `/api/env/${ENV}/unmanaged-stacks/legacy/compose`;
-const YAML = "services:\n  app:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: <hidden>\n";
+const YAML =
+  "services:\n  app:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: <hidden>\n";
 
 type Answer = {
   yaml: string;
@@ -94,6 +95,8 @@ describe("the Generated compose tab", () => {
       ),
     ).toBeTruthy();
     cleanup();
+    // The first answer is in the cache under the same key.
+    client.clear();
 
     answer = () => ok();
     mount();
@@ -166,7 +169,9 @@ describe("a stack that cannot be rebuilt", () => {
     answer = () => ok();
     fireEvent.click(screen.getByRole("button", { name: "Retry rebuild" }));
 
-    expect(await screen.findByRole("textbox", { name: "Generated compose, read only" })).toBeTruthy();
+    expect(
+      await screen.findByRole("textbox", { name: "Generated compose, read only" }),
+    ).toBeTruthy();
     expect(composeRequests).toBe(2);
   });
 });

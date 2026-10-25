@@ -1,0 +1,696 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+
+package rebuild
+
+import (
+	"cmp"
+	"fmt"
+	"maps"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/swarm"
+
+	"github.com/ianglennon/bayplan/internal/stacks"
+)
+
+// SwarmService is one service of the stack as the engine holds it. Name is the swarm name (<namespace>_web) and
+// Spec the service's spec with its network targets already turned from IDs into network names.
+type SwarmService struct {
+	ID, Name string
+	Spec     swarm.ServiceSpec
+}
+
+// NetworkInfo is a network a service attaches, or any network of the swarm: what the file needs to write it.
+type NetworkInfo struct {
+	ID, Name, Driver string
+	Attachable       bool
+	Internal         bool
+	Labels, Options  map[string]string
+	IPAMDriver       string
+	Pools            []Pool
+}
+
+// Pool is one IPAM address pool of a network.
+type Pool struct{ Subnet, Gateway, IPRange string }
+
+// ObjectInfo is a secret or a config of the swarm: its ID and its name, never its content.
+type ObjectInfo struct{ ID, Name string }
+
+// SwarmInput is what the swarm direction needs. Namespace is the stack's com.docker.stack.namespace; Networks the
+// networks the services attach (a name no entry describes is written as an external network); Secrets and
+// Configs the objects the services reference, by ID, for a reference that carries no name.
+type SwarmInput struct {
+	Namespace        string
+	Services         []SwarmService
+	Networks         []NetworkInfo
+	Secrets, Configs []ObjectInfo
+}
+
+// Swarm rebuilds the compose project of a swarm stack from its services' specs, the reverse of convert.Convert:
+// converting the result gives the specs back, apart from Bayplan's own labels. Services come out in name order
+// and so does everything else, so the same input always gives the same file.
+func Swarm(in SwarmInput) (Result, error) {
+	b := newBuilder(in)
+	services := slices.Clone(in.Services)
+	slices.SortFunc(services, func(x, y SwarmService) int { return cmp.Compare(x.Name, y.Name) })
+	b.prepareFiles(services)
+
+	project := &types.Project{Name: in.Namespace, Services: types.Services{}}
+	for _, svc := range services {
+		short, cfg, err := b.service(svc)
+		if err != nil {
+			return Result{}, err
+		}
+		project.Services[short] = cfg
+	}
+	if len(b.networks) > 0 {
+		project.Networks = b.networks
+	}
+	if len(b.volumes) > 0 {
+		project.Volumes = b.volumes
+	}
+	if len(b.secrets) > 0 {
+		project.Secrets = b.secrets
+	}
+	if len(b.configs) > 0 {
+		project.Configs = b.configs
+	}
+	yml, err := Marshal(project)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Project: project, YAML: yml, Pins: b.pins, Notes: b.sortedNotes(), Objects: b.sortedObjects()}, nil
+}
+
+// keys hands out the keys of one kind of top-level entry: one for each engine name, no two the same.
+type keys struct{ byName, byKey map[string]string }
+
+func newKeys() *keys { return &keys{byName: map[string]string{}, byKey: map[string]string{}} }
+
+// reserve claims key for name, whatever the name's own wishes are.
+func (k *keys) reserve(key, name string) {
+	k.byName[name], k.byKey[key] = key, name
+}
+
+// try gives name the key if it is a valid one that nothing else has.
+func (k *keys) try(name, key string) bool {
+	if _, done := k.byName[name]; done {
+		return true
+	}
+	key = safeKey(key)
+	if key == "" {
+		return false
+	}
+	if _, taken := k.byKey[key]; taken {
+		return false
+	}
+	k.reserve(key, name)
+	return true
+}
+
+// assign is the key of name: the first candidate nothing has, else the name made safe with a number.
+func (k *keys) assign(name string, candidates ...string) string {
+	for _, c := range candidates {
+		if k.try(name, c) {
+			return k.byName[name]
+		}
+	}
+	base := safeKey(name)
+	if base == "" {
+		base = "item"
+	}
+	for i := 2; ; i++ {
+		key := base + "-" + strconv.Itoa(i)
+		if k.try(name, key) {
+			return key
+		}
+	}
+}
+
+// safeKey makes a name a key of a top-level entry: letters, digits, dot, dash and underscore. A name with
+// anything else keeps what it can.
+func safeKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return strings.Trim(b.String(), "._-")
+}
+
+// builder is one rebuild.
+type builder struct {
+	in  SwarmInput
+	ns  string
+	net map[string]NetworkInfo
+
+	netKeys, volKeys, secretKeys, configKeys *keys
+	networks                                 types.Networks
+	volumes                                  types.Volumes
+	secrets                                  types.Secrets
+	configs                                  types.Configs
+
+	pins    map[string]string
+	notes   []Note
+	objects map[string]Object
+}
+
+func newBuilder(in SwarmInput) *builder {
+	b := &builder{
+		in: in, ns: in.Namespace, net: map[string]NetworkInfo{},
+		netKeys: newKeys(), volKeys: newKeys(), secretKeys: newKeys(), configKeys: newKeys(),
+		networks: types.Networks{}, volumes: types.Volumes{}, secrets: types.Secrets{}, configs: types.Configs{},
+		pins: map[string]string{}, objects: map[string]Object{},
+	}
+	for _, n := range in.Networks {
+		b.net[n.Name] = n
+	}
+	// The key default is the stack's own default network, which a file uses without declaring.
+	b.netKeys.reserve(defaultKey, b.ns+"_"+defaultKey)
+	return b
+}
+
+// defaultKey is the key of the network a service joins when it names none.
+const defaultKey = "default"
+
+// strip is name without the namespace prefix, and whether it had one.
+func (b *builder) strip(name string) (string, bool) {
+	prefix := b.ns + "_"
+	if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
+		return name[len(prefix):], true
+	}
+	return name, false
+}
+
+func (b *builder) note(n Note) { b.notes = append(b.notes, n) }
+
+func (b *builder) object(kind, name, treatment string) {
+	b.objects[kind+"\x00"+name] = Object{Kind: kind, Name: name, Treatment: treatment}
+}
+
+func (b *builder) sortedNotes() []Note {
+	out := slices.Clone(b.notes)
+	slices.SortStableFunc(out, func(x, y Note) int {
+		return cmp.Or(cmp.Compare(x.Service, y.Service), cmp.Compare(x.Code, y.Code), cmp.Compare(x.Message, y.Message))
+	})
+	return out
+}
+
+func (b *builder) sortedObjects() []Object {
+	out := make([]Object, 0, len(b.objects))
+	for _, o := range b.objects {
+		out = append(out, o)
+	}
+	slices.SortFunc(out, func(x, y Object) int {
+		return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name))
+	})
+	return out
+}
+
+// ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of Bayplan's.
+func ownLabel(key string) bool {
+	return key == stacks.LabelSwarmNamespace || key == stacks.LabelSwarmImage || strings.HasPrefix(key, "bayplan.")
+}
+
+// userLabels are the labels a person put on an object, without the stack's own.
+func userLabels(in map[string]string) types.Labels {
+	var out types.Labels
+	for k, v := range in {
+		if ownLabel(k) {
+			continue
+		}
+		if out == nil {
+			out = types.Labels{}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// prepareFiles gives every secret and config its key before any service is written, so the key a reference uses
+// can be the name of the file it mounts as (db_password) when nothing else has it.
+func (b *builder) prepareFiles(services []SwarmService) {
+	for _, svc := range services {
+		cs := svc.Spec.TaskTemplate.ContainerSpec
+		if cs == nil {
+			continue
+		}
+		for _, r := range cs.Secrets {
+			if name := b.secretName(r); name != "" && r.File != nil {
+				b.secretKeys.try(name, r.File.Name)
+			}
+		}
+		for _, r := range cs.Configs {
+			if name := b.configName(r); name != "" && r.File != nil && r.Runtime == nil {
+				b.configKeys.try(name, r.File.Name)
+			}
+		}
+	}
+}
+
+func (b *builder) secretName(r *swarm.SecretReference) string {
+	if r == nil {
+		return ""
+	}
+	if r.SecretName != "" {
+		return r.SecretName
+	}
+	for _, o := range b.in.Secrets {
+		if o.ID == r.SecretID {
+			return o.Name
+		}
+	}
+	return ""
+}
+
+func (b *builder) configName(r *swarm.ConfigReference) string {
+	if r == nil {
+		return ""
+	}
+	if r.ConfigName != "" {
+		return r.ConfigName
+	}
+	for _, o := range b.in.Configs {
+		if o.ID == r.ConfigID {
+			return o.Name
+		}
+	}
+	return ""
+}
+
+// withoutDigest is an image reference without the @sha256:... that pins it.
+func withoutDigest(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i > 0 {
+		return ref[:i]
+	}
+	return ref
+}
+
+// hasDigest says whether an image reference is pinned: it carries a digest, or it is an image ID.
+func hasDigest(ref string) bool {
+	return strings.Contains(ref, "@") || strings.HasPrefix(ref, "sha256:")
+}
+
+// service rebuilds one service. It returns the service's name in the file.
+func (b *builder) service(svc SwarmService) (string, types.ServiceConfig, error) {
+	spec := svc.Spec
+	cs := spec.TaskTemplate.ContainerSpec
+	if cs == nil {
+		return "", types.ServiceConfig{}, fmt.Errorf("rebuild: the service %s has no container spec, so it is not a container service", svc.Name)
+	}
+	short, prefixed := b.strip(svc.Name)
+	if !prefixed {
+		b.note(notePrefix(b.ns, short, svc.Name))
+	}
+
+	out := types.ServiceConfig{Name: short}
+	out.Image = cmp.Or(spec.Labels[stacks.LabelSwarmImage], withoutDigest(cs.Image))
+	if cs.Image != "" {
+		b.pins[svc.Name] = cs.Image
+		if !hasDigest(cs.Image) {
+			b.note(noteUnpinned(short, cs.Image))
+		}
+	}
+	out.Entrypoint = types.ShellCommand(slices.Clone(cs.Command))
+	out.Command = types.ShellCommand(slices.Clone(cs.Args))
+	out.Environment = environment(cs.Env)
+	out.Labels = userLabels(cs.Labels)
+
+	d, err := b.deploy(spec)
+	if err != nil {
+		return "", types.ServiceConfig{}, fmt.Errorf("rebuild: service %s: %w", svc.Name, err)
+	}
+	out.Deploy = d
+	out.Ports = ports(spec.EndpointSpec)
+	out.Networks = b.serviceNetworks(short, spec.TaskTemplate.Networks)
+	out.Volumes = b.serviceMounts(cs.Mounts)
+	out.HealthCheck = healthcheck(cs.Healthcheck)
+	if ld := spec.TaskTemplate.LogDriver; ld != nil {
+		out.Logging = &types.LoggingConfig{Driver: ld.Name, Options: types.Options(maps.Clone(ld.Options))}
+	}
+	out.Secrets = b.secretRefs(cs.Secrets)
+	out.Configs = b.configRefs(cs.Configs)
+	return short, out, nil
+}
+
+// environment turns KEY=value entries into the file's map. An entry with no = names a variable with no value, which
+// sets nothing in a container and which convert leaves out of a service as well, so it is left out here: a file
+// that named it would fail the check ("has no value and no default").
+func environment(env []string) types.MappingWithEquals {
+	var out types.MappingWithEquals
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if out == nil {
+			out = types.MappingWithEquals{}
+		}
+		out[k] = &v
+	}
+	return out
+}
+
+// deploy rebuilds the deploy block: the mode and replicas and the labels of the service.
+func (b *builder) deploy(spec swarm.ServiceSpec) (*types.DeployConfig, error) {
+	d := &types.DeployConfig{Labels: userLabels(spec.Labels)}
+	mode, replicas, err := serviceMode(spec.Mode)
+	if err != nil {
+		return nil, err
+	}
+	d.Mode, d.Replicas = mode, replicas
+	if ep := spec.EndpointSpec; ep != nil && ep.Mode == swarm.ResolutionModeDNSRR {
+		d.EndpointMode = string(ep.Mode)
+	}
+	if isZero(*d) {
+		return nil, nil
+	}
+	return d, nil
+}
+
+func isZero(d types.DeployConfig) bool {
+	return d.Mode == "" && d.Replicas == nil && len(d.Labels) == 0 && d.UpdateConfig == nil && d.RollbackConfig == nil &&
+		d.Resources.Limits == nil && d.Resources.Reservations == nil && d.RestartPolicy == nil &&
+		len(d.Placement.Constraints) == 0 && len(d.Placement.Preferences) == 0 && d.Placement.MaxReplicas == 0 &&
+		d.EndpointMode == ""
+}
+
+// serviceMode is deploy.mode and deploy.replicas. A replicated service of one task is the default and says
+// nothing (it mirrors the replicas rule of stacks.NormalizeSpec).
+func serviceMode(m swarm.ServiceMode) (string, *int, error) {
+	switch {
+	case m.Replicated != nil:
+		if m.Replicated.Replicas == nil || *m.Replicated.Replicas == 1 {
+			return "", nil, nil
+		}
+		n := int(*m.Replicated.Replicas) //nolint:gosec // a replica count that does not fit an int is not a count anyone set
+		return "", &n, nil
+	case m.Global != nil:
+		return "global", nil, nil
+	case m.ReplicatedJob != nil:
+		count := cmp.Or(m.ReplicatedJob.MaxConcurrent, m.ReplicatedJob.TotalCompletions)
+		var n *int
+		if count != nil {
+			v := int(*count) //nolint:gosec // as above
+			n = &v
+		}
+		return "replicated-job", n, nil
+	case m.GlobalJob != nil:
+		return "global-job", nil, nil
+	}
+	return "", nil, nil
+}
+
+// ports rebuilds the published ports. The tcp protocol and the ingress mode are what the short form means, and
+// Marshal writes it that way.
+func ports(ep *swarm.EndpointSpec) []types.ServicePortConfig {
+	if ep == nil || len(ep.Ports) == 0 {
+		return nil
+	}
+	out := make([]types.ServicePortConfig, 0, len(ep.Ports))
+	for _, p := range ep.Ports {
+		pc := types.ServicePortConfig{Name: p.Name, Target: p.TargetPort, Mode: string(cmp.Or(p.PublishMode, swarm.PortConfigPublishModeIngress))}
+		if p.PublishedPort != 0 {
+			pc.Published = strconv.FormatUint(uint64(p.PublishedPort), 10)
+		}
+		if proto := string(p.Protocol); proto != "" {
+			pc.Protocol = proto
+		} else {
+			pc.Protocol = "tcp"
+		}
+		out = append(out, pc)
+	}
+	return out
+}
+
+// networkKeyOf is the key a network has in the file, declaring it on the way.
+func (b *builder) networkKey(name string) string {
+	if key, ok := b.netKeys.byName[name]; ok {
+		return key
+	}
+	info, known := b.net[name]
+	owned := known && info.Labels[stacks.LabelSwarmNamespace] == b.ns
+	rest, prefixed := b.strip(name)
+	if owned {
+		candidates := []string{name}
+		if prefixed {
+			candidates = []string{rest, name}
+		}
+		key := b.netKeys.assign(name, candidates...)
+		b.declareOwnedNetwork(key, name, info)
+		return key
+	}
+	candidates := []string{name}
+	if prefixed {
+		candidates = append(candidates, rest)
+	}
+	key := b.netKeys.assign(name, candidates...)
+	b.networks[key] = types.NetworkConfig{Name: name, External: true}
+	b.object(KindNetwork, name, TreatmentExternal)
+	return key
+}
+
+// defaultNetworkName is the name of the stack's own default network.
+func (b *builder) defaultNetworkName() string { return b.ns + "_" + defaultKey }
+
+// declareOwnedNetwork writes a network the stack owns: under its existing name, with what the engine holds. A
+// network that is not an overlay network cannot be created by a stack, so it is written external with a note.
+func (b *builder) declareOwnedNetwork(key, name string, info NetworkInfo) {
+	if info.Driver != "" && info.Driver != "overlay" {
+		b.networks[key] = types.NetworkConfig{Name: name, External: true}
+		b.object(KindNetwork, name, TreatmentExternal)
+		b.note(noteNotOverlay(name, info.Driver))
+		return
+	}
+	b.object(KindNetwork, name, TreatmentOwned)
+	cfg := types.NetworkConfig{
+		Attachable: info.Attachable, Internal: info.Internal,
+		Labels: userLabels(info.Labels),
+	}
+	if name != b.ns+"_"+key {
+		cfg.Name = name
+	}
+	if key == defaultKey && name == b.defaultNetworkName() && plainDefault(info) {
+		return
+	}
+	cfg.DriverOpts = types.Options(networkOptions(info.Options))
+	if info.IPAMDriver != "" && info.IPAMDriver != "default" {
+		cfg.Ipam.Driver = info.IPAMDriver
+	}
+	for _, p := range info.Pools {
+		cfg.Ipam.Config = append(cfg.Ipam.Config, &types.IPAMPool{Subnet: p.Subnet, Gateway: p.Gateway, IPRange: p.IPRange})
+	}
+	b.networks[key] = cfg
+}
+
+// serviceNetworks rebuilds a service's attachments. A service that joins only the stack's default network says
+// nothing, as a hand-written file does.
+func (b *builder) serviceNetworks(short string, atts []swarm.NetworkAttachmentConfig) map[string]*types.ServiceNetworkConfig {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := map[string]*types.ServiceNetworkConfig{}
+	for _, att := range atts {
+		key := b.networkKey(att.Target)
+		var cfg *types.ServiceNetworkConfig
+		var aliases []string
+		for _, a := range att.Aliases {
+			// convert adds the service's own name as an alias on every user-defined network.
+			if a != short {
+				aliases = append(aliases, a)
+			}
+		}
+		if len(aliases) > 0 || len(att.DriverOpts) > 0 {
+			cfg = &types.ServiceNetworkConfig{Aliases: aliases, DriverOpts: types.Options(maps.Clone(att.DriverOpts))}
+		}
+		out[key] = cfg
+	}
+	if cfg, only := out[defaultKey]; only && len(out) == 1 && cfg == nil && b.implicitDefault() {
+		return nil
+	}
+	return out
+}
+
+// implicitDefault says whether the default network is written nowhere in the file.
+func (b *builder) implicitDefault() bool {
+	_, declared := b.networks[defaultKey]
+	return !declared
+}
+
+// volumeKey is the key of the named volume a mount uses, declaring it on the way. A volume the stack's labels are
+// on is the stack's own; any other is external (D-18).
+func (b *builder) volumeKey(m mount.Mount) string {
+	name := m.Source
+	owned := m.VolumeOptions != nil && m.VolumeOptions.Labels[stacks.LabelSwarmNamespace] == b.ns
+	if key, ok := b.volKeys.byName[name]; ok {
+		if owned && bool(b.volumes[key].External) {
+			b.volumes[key] = b.ownedVolume(key, name, m.VolumeOptions)
+			b.object(KindVolume, name, TreatmentOwned)
+		}
+		return key
+	}
+	rest, prefixed := b.strip(name)
+	if owned {
+		candidates := []string{name}
+		if prefixed {
+			candidates = []string{rest, name}
+		}
+		key := b.volKeys.assign(name, candidates...)
+		b.volumes[key] = b.ownedVolume(key, name, m.VolumeOptions)
+		b.object(KindVolume, name, TreatmentOwned)
+		return key
+	}
+	key := b.volKeys.assign(name, name, rest)
+	b.volumes[key] = types.VolumeConfig{Name: name, External: true}
+	b.object(KindVolume, name, TreatmentExternal)
+	return key
+}
+
+func (b *builder) ownedVolume(key, name string, vo *mount.VolumeOptions) types.VolumeConfig {
+	cfg := types.VolumeConfig{Labels: userLabels(vo.Labels)}
+	if name != b.ns+"_"+key {
+		cfg.Name = name
+	}
+	if dc := vo.DriverConfig; dc != nil {
+		cfg.Driver = dc.Name
+		cfg.DriverOpts = types.Options(maps.Clone(dc.Options))
+	}
+	return cfg
+}
+
+// serviceMounts rebuilds a service's mounts, in the order the service lists them.
+func (b *builder) serviceMounts(mounts []mount.Mount) []types.ServiceVolumeConfig {
+	if len(mounts) == 0 {
+		return nil
+	}
+	out := make([]types.ServiceVolumeConfig, 0, len(mounts))
+	for _, m := range mounts {
+		v := types.ServiceVolumeConfig{Type: string(m.Type), Target: m.Target, ReadOnly: m.ReadOnly, Consistency: string(m.Consistency)}
+		switch m.Type {
+		case mount.TypeVolume:
+			if m.Source != "" {
+				v.Source = b.volumeKey(m)
+			}
+			if vo := m.VolumeOptions; vo != nil && (vo.NoCopy || vo.Subpath != "") {
+				v.Volume = &types.ServiceVolumeVolume{NoCopy: vo.NoCopy, Subpath: vo.Subpath}
+			}
+		case mount.TypeBind:
+			v.Source = m.Source
+			if bo := m.BindOptions; bo != nil && bo.Propagation != "" {
+				v.Bind = &types.ServiceVolumeBind{Propagation: string(bo.Propagation)}
+			}
+		default:
+			v.Source = m.Source
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// healthcheck rebuilds a health check. The test NONE is a disabled one.
+func healthcheck(hc *container.HealthConfig) *types.HealthCheckConfig {
+	if hc == nil {
+		return nil
+	}
+	if len(hc.Test) == 1 && hc.Test[0] == "NONE" {
+		return &types.HealthCheckConfig{Disable: true}
+	}
+	out := &types.HealthCheckConfig{Test: types.HealthCheckTest(slices.Clone(hc.Test))}
+	out.Timeout = duration(hc.Timeout)
+	out.Interval = duration(hc.Interval)
+	out.StartPeriod = duration(hc.StartPeriod)
+	out.StartInterval = duration(hc.StartInterval)
+	if hc.Retries > 0 {
+		n := uint64(hc.Retries)
+		out.Retries = &n
+	}
+	return out
+}
+
+// duration is a compose duration for a non-zero one, nil for zero.
+func duration(d time.Duration) *types.Duration {
+	if d == 0 {
+		return nil
+	}
+	v := types.Duration(d)
+	return &v
+}
+
+// secretRefs rebuilds a service's secrets as references to external top-level secrets, named as the swarm names
+// them (D-13). Only the name is ever read; the value is not Bayplan's to know.
+func (b *builder) secretRefs(refs []*swarm.SecretReference) []types.ServiceSecretConfig {
+	var out []types.ServiceSecretConfig
+	for _, r := range refs {
+		name := b.secretName(r)
+		if name == "" {
+			continue
+		}
+		key := b.secretKeys.assign(name, b.stripped(name), name)
+		b.secrets[key] = types.SecretConfig{Name: name, External: true}
+		b.object(KindSecret, name, TreatmentExternal)
+		ref := types.ServiceSecretConfig{Source: key}
+		if f := r.File; f != nil {
+			ref.Target, ref.UID, ref.GID, ref.Mode = fileReference(key, f.Name, f.UID, f.GID, f.Mode)
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+// configRefs does the same for configs. A reference that only lets the credential spec read a config (a runtime
+// reference) is not a file of the service; the credential spec names it.
+func (b *builder) configRefs(refs []*swarm.ConfigReference) []types.ServiceConfigObjConfig {
+	var out []types.ServiceConfigObjConfig
+	for _, r := range refs {
+		name := b.configName(r)
+		if name == "" || r.Runtime != nil {
+			continue
+		}
+		key := b.configKeys.assign(name, b.stripped(name), name)
+		b.configs[key] = types.ConfigObjConfig{Name: name, External: true}
+		b.object(KindConfig, name, TreatmentExternal)
+		ref := types.ServiceConfigObjConfig{Source: key}
+		if f := r.File; f != nil {
+			ref.Target, ref.UID, ref.GID, ref.Mode = fileReference(key, f.Name, f.UID, f.GID, f.Mode)
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+// stripped is the name without the namespace prefix, or the name when it has none.
+func (b *builder) stripped(name string) string {
+	rest, _ := b.strip(name)
+	return rest
+}
+
+// fileReference is the target, ownership and mode of a secret or config reference, each left out when it is
+// what convert gives a reference that says nothing: the target is the key, ownership root and the mode 0444.
+func fileReference(key, name, uid, gid string, mode os.FileMode) (target, outUID, outGID string, outMode *types.FileMode) {
+	if name != key {
+		target = name
+	}
+	if uid != "" && uid != "0" {
+		outUID = uid
+	}
+	if gid != "" && gid != "0" {
+		outGID = gid
+	}
+	if mode != 0o444 {
+		m := types.FileMode(mode)
+		outMode = &m
+	}
+	return target, outUID, outGID, outMode
+}

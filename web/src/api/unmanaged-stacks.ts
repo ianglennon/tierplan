@@ -112,3 +112,47 @@ export function unmanagedStackResourcesQuery(
     },
   });
 }
+
+export type GeneratedCompose = components["schemas"]["GeneratedComposeBody"];
+
+// GeneratedComposeError is a rebuild the server refused or could not make. reason is the server's own sentence
+// (the masked detail of a 422 rebuild_failed), empty when the answer had none.
+export class GeneratedComposeError extends UnmanagedLoadError {
+  readonly reason: string;
+  constructor(status: number, type: string | undefined, reason: string) {
+    super(status, type);
+    this.name = "GeneratedComposeError";
+    this.reason = reason;
+  }
+}
+
+// The query key of an unmanaged stack's generated compose. It extends the stack's key, so a refresh of the stack
+// refreshes it.
+export function generatedComposeKey(envId: string, name: string) {
+  return [...unmanagedStackKey(envId, name), "compose"] as const;
+}
+
+// The compose file Bayplan would start from if it adopted the stack, rebuilt from the running services. It is read
+// when the tab opens and again on a request, not on a timer: a rebuild reads the whole stack. The server masks it
+// for a reader without secrets.reveal, so the answer is safe to keep in the cache.
+export function generatedComposeQuery(envId: string, name: string) {
+  return queryOptions({
+    queryKey: generatedComposeKey(envId, name),
+    queryFn: async (): Promise<GeneratedCompose> => {
+      const res = await api.GET("/api/env/{envId}/unmanaged-stacks/{name}/compose", {
+        params: { path: { envId, name } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        const detail = (res.error as { detail?: unknown } | undefined)?.detail;
+        throw new GeneratedComposeError(
+          problem.status,
+          problem.type,
+          typeof detail === "string" ? detail : "",
+        );
+      }
+      return res.data;
+    },
+    retry: false,
+  });
+}

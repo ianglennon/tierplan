@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -15,8 +16,10 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // The read-only page of a stack Bayplan did not make (plan 08-09, STK-12, D-09, D-10). The stack is a name on
@@ -26,6 +29,10 @@ import (
 // problemUnmanagedNotFound is the type of the 404 for a name no labelled service or container carries, or one
 // a stack of Bayplan's holds now.
 const problemUnmanagedNotFound = "unmanaged_stack_not_found"
+
+// problemRebuildFailed is the type of the 422 for a stack whose running services cannot be written as a compose
+// file that passes the check every stack passes.
+const problemRebuildFailed = "rebuild_failed"
 
 // UnmanagedStackPathInput is the path of an unmanaged stack route: the environment and the stack's name, as the
 // router encoded it.
@@ -62,6 +69,27 @@ type UnmanagedStackOutput struct {
 	Body         UnmanagedStackBody
 }
 
+// GeneratedNoteBody is something a person should know about the rebuilt file.
+type GeneratedNoteBody struct {
+	Service string `json:"service" doc:"The compose service the note is about; empty when it concerns the whole file"`
+	Code    string `json:"code" doc:"A stable name for the kind of note: service_name_prefix, network_not_overlay, image_unpinned or cpus_inexact"`
+	Message string `json:"message" doc:"The note as a sentence"`
+}
+
+// GeneratedComposeBody is the compose file Bayplan would start from if the stack were adopted (plan 08-11).
+type GeneratedComposeBody struct {
+	YAML            string              `json:"yaml" doc:"The compose file rebuilt from the running services. For a caller without secrets.reveal every environment value, command, health check command and log option reads <hidden>"`
+	Notes           []GeneratedNoteBody `json:"notes" doc:"What the rebuild could not say plainly, by service then code"`
+	ExternalSecrets int                 `json:"externalSecrets" minimum:"0" doc:"Secrets the file references as external. Bayplan reads their names, never their values"`
+	ExternalConfigs int                 `json:"externalConfigs" minimum:"0" doc:"Configs the file references as external. Bayplan reads their names, never their contents"`
+}
+
+// GeneratedComposeOutput wraps GeneratedComposeBody for huma.
+type GeneratedComposeOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         GeneratedComposeBody
+}
+
 // maxUnmanagedName is the longest name the routes take, as the path parameter's maxLength says.
 const maxUnmanagedName = 255
 
@@ -79,6 +107,21 @@ func registerUnmanagedStacks(r *httpx.Router, d StacksDeps, logs *stackLogMount)
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *UnmanagedStackPathInput) (*UnmanagedStackOutput, error) {
 			return getUnmanagedStack(ctx, d, in)
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getGeneratedCompose", Method: http.MethodGet, Path: "/api/env/{envId}/unmanaged-stacks/{name}/compose",
+		Summary: "The compose file Bayplan would use if it adopted the stack",
+		Description: "The compose file rebuilt from the running services of a swarm stack Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. " +
+			"Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing secrets and configs are external, by name: their values are never read. " +
+			"Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. " +
+			"The services pass through the same mask as the service detail: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. " +
+			"A stack whose services cannot be written as a compose file that passes the check, or that runs on a standalone host, is 422 rebuild_failed with the reason. " +
+			"A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *UnmanagedStackPathInput) (*GeneratedComposeOutput, error) {
+			return getGeneratedCompose(ctx, d, in)
 		})
 
 	httpx.Register(r, huma.Operation{
@@ -206,4 +249,38 @@ func getUnmanagedStack(ctx context.Context, d StacksDeps, in *UnmanagedStackPath
 		body.FoundBy.Label = stacks.LabelSwarmNamespace
 	}
 	return &UnmanagedStackOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+func getGeneratedCompose(ctx context.Context, d StacksDeps, in *UnmanagedStackPathInput) (*GeneratedComposeOutput, error) {
+	f, err := d.findUnmanaged(ctx, in.EnvID, in.Name)
+	if err != nil {
+		return nil, err
+	}
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	res, err := d.ops().RebuildLive(ctx, in.EnvID, f.stack, stackops.RebuildOptions{Reveal: redact.CanReveal(ctx, d.Checker, p, in.EnvID)})
+	var failed *stackops.RebuildError
+	switch {
+	case errors.As(err, &failed):
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, failed.Reason)
+	case errors.Is(err, stackops.ErrRebuildTarget):
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, "Rebuilding a stack that runs on a standalone host isn't available yet.")
+	case err != nil:
+		return nil, snapshotProblem(d.Log, in.EnvID, err)
+	}
+	body := GeneratedComposeBody{YAML: string(res.YAML), Notes: make([]GeneratedNoteBody, 0, len(res.Notes))}
+	for _, n := range res.Notes {
+		body.Notes = append(body.Notes, GeneratedNoteBody{Service: n.Service, Code: n.Code, Message: n.Message})
+	}
+	for _, o := range res.Objects {
+		switch {
+		case o.Kind == rebuild.KindSecret && o.Treatment == rebuild.TreatmentExternal:
+			body.ExternalSecrets++
+		case o.Kind == rebuild.KindConfig && o.Treatment == rebuild.TreatmentExternal:
+			body.ExternalConfigs++
+		}
+	}
+	return &GeneratedComposeOutput{CacheControl: "no-store", Body: body}, nil
 }
