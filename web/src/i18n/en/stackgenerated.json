@@ -13,6 +13,9 @@
     "secretsCount_other": "{{count, number}} secrets",
     "configsCount_one": "{{count, number}} config",
     "configsCount_other": "{{count, number}} configs",
+    "notes": {
+      "title": "Notes"
+    },
     "error": {
       "title": "Can't generate the compose file",
       "body": "Bayplan couldn't rebuild {{name}}: {{reason}}",

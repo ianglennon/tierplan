@@ -129,6 +129,16 @@ export function GeneratedCompose({ envId, name }: GeneratedComposeProps) {
           minHeight="400px"
         />
       ) : null}
+      {data?.notes && data.notes.length > 0 ? (
+        <section className="flex flex-col gap-1">
+          <h4 className="text-sm font-medium">{t("stackGenerated.notes.title")}</h4>
+          <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
+            {data.notes.map((note) => (
+              <li key={`${note.service}:${note.code}:${note.message}`}>{note.message}</li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {data && data.externalSecrets + data.externalConfigs > 0 ? (
         <p className="text-sm text-muted-foreground">
           {t("stackGenerated.externals", {

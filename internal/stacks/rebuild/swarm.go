@@ -101,6 +101,9 @@ func (k *keys) reserve(key, name string) {
 	k.byName[name], k.byKey[key] = key, name
 }
 
+// hold keeps key from being given to any name, until bind gives it to one.
+func (k *keys) hold(key string) { k.byKey[key] = "" }
+
 // try gives name the key if it is a valid one that nothing else has.
 func (k *keys) try(name, key string) bool {
 	if _, done := k.byName[name]; done {
@@ -178,8 +181,9 @@ func newBuilder(in SwarmInput) *builder {
 	for _, n := range in.Networks {
 		b.net[n.Name] = n
 	}
-	// The key default is the stack's own default network, which a file uses without declaring.
-	b.netKeys.reserve(defaultKey, b.ns+"_"+defaultKey)
+	// The key default is the stack's own default network, which a file uses without declaring: no other network
+	// gets it.
+	b.netKeys.hold(defaultKey)
 	return b
 }
 
@@ -582,6 +586,18 @@ func (b *builder) networkKey(name string) string {
 	info, known := b.net[name]
 	owned := known && info.Labels[stacks.LabelSwarmNamespace] == b.ns
 	rest, prefixed := b.strip(name)
+	if name == b.defaultNetworkName() {
+		// The stack's default network is the key default. One the engine does not describe is the plain network
+		// convert makes.
+		b.netKeys.byName[name] = defaultKey
+		if known && !owned {
+			b.networks[defaultKey] = types.NetworkConfig{Name: name, External: true}
+			b.object(KindNetwork, name, TreatmentExternal)
+			return defaultKey
+		}
+		b.declareOwnedNetwork(defaultKey, name, info)
+		return defaultKey
+	}
 	if owned {
 		candidates := []string{name}
 		if prefixed {
