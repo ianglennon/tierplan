@@ -21,8 +21,8 @@ type StackDriftServiceBody struct {
 	Name          string         `json:"name" doc:"The swarm service name"`
 	Short         string         `json:"short" doc:"The service's name in the compose file"`
 	Change        string         `json:"change" enum:"changed,missing,extra" doc:"changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have"`
-	Current       map[string]any `json:"current" nullable:"true" doc:"What runs now, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for a missing service"`
-	Next          map[string]any `json:"next" nullable:"true" doc:"What the revision deployed, masked the same way. Null for an extra service"`
+	Current       map[string]any `json:"current" nullable:"true" doc:"What the revision deployed, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service"`
+	Next          map[string]any `json:"next" nullable:"true" doc:"What runs now, masked the same way. Null for a missing service"`
 	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden. The values are never sent"`
 	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
 }
@@ -180,7 +180,9 @@ func driftBody(res stackops.DriftResult, info stackops.DeployedRevision, hasInfo
 	services := make([]StackDriftServiceBody, len(bodies))
 	for i, b := range bodies {
 		services[i] = StackDriftServiceBody{
-			Name: b.Name, Short: b.Short, Change: res.Services[i].Change, Current: b.Current, Next: b.Next,
+			// The review reads the running service as current and the deploy as next; drift reads from the deployed
+			// revision to what runs now.
+			Name: b.Name, Short: b.Short, Change: res.Services[i].Change, Current: b.Next, Next: b.Current,
 			HiddenChanges: b.HiddenChanges, Settings: b.Settings,
 		}
 	}
@@ -204,4 +206,3 @@ func driftSummaryOf(d StacksDeps, st stackops.Stack, deployedSeq int64) *StackDr
 	}
 	return &StackDriftSummaryBody{State: res.State, Revision: res.Revision, CheckedAt: rfc3339(res.CheckedAt), Count: res.Count}
 }
-

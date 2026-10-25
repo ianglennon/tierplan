@@ -12723,7 +12723,7 @@
           },
           "current": {
             "additionalProperties": {},
-            "description": "What runs now, masked: a value derived from a secret of the stack is \u003chidden\u003e, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for a missing service",
+            "description": "What the revision deployed, masked: a value derived from a secret of the stack is \u003chidden\u003e, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service",
             "type": [
               "object",
               "null"
@@ -12745,7 +12745,7 @@
           },
           "next": {
             "additionalProperties": {},
-            "description": "What the revision deployed, masked the same way. Null for an extra service",
+            "description": "What runs now, masked the same way. Null for a missing service",
             "type": [
               "object",
               "null"

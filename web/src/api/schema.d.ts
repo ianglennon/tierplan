@@ -9125,7 +9125,7 @@ export interface components {
              * @enum {string}
              */
             change: "changed" | "missing" | "extra";
-            /** @description What runs now, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for a missing service */
+            /** @description What the revision deployed, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service */
             current: {
                 [key: string]: unknown;
             } | null;
@@ -9133,7 +9133,7 @@ export interface components {
             hiddenChanges: string[] | null;
             /** @description The swarm service name */
             name: string;
-            /** @description What the revision deployed, masked the same way. Null for an extra service */
+            /** @description What runs now, masked the same way. Null for a missing service */
             next: {
                 [key: string]: unknown;
             } | null;

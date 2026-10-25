@@ -149,8 +149,14 @@ func TestStackDriftRoute(t *testing.T) {
 	if !slices.Contains(svc.HiddenChanges, "TaskTemplate.ContainerSpec.Env[API_KEY]") {
 		t.Errorf("hidden changes = %v, want the secret variable listed by its path", svc.HiddenChanges)
 	}
-	if !strings.Contains(rec.Body.String(), `"Replicas":3`) && !strings.Contains(rec.Body.String(), `"Replicas": 3`) {
-		t.Errorf("the replica count is not shown: %s", rec.Body)
+	// The service reads from what the revision deployed to what runs now.
+	replicas := func(spec map[string]any) any {
+		mode, _ := spec["Mode"].(map[string]any)
+		rep, _ := mode["Replicated"].(map[string]any)
+		return rep["Replicas"]
+	}
+	if replicas(svc.Current) != float64(1) || replicas(svc.Next) != float64(3) {
+		t.Errorf("replicas = %v then %v, want the deployed 1 as current and the running 3 as next", replicas(svc.Current), replicas(svc.Next))
 	}
 
 	// An Admin may reveal secrets and sees what runs now and what was deployed.
