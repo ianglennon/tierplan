@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -343,5 +344,64 @@ func TestAdoptStandaloneProject(t *testing.T) {
 	svcs := viewer.do(http.MethodGet, "stacks/"+st.ID+"/services", "")
 	if svcs.Code != http.StatusOK || !strings.Contains(svcs.Body.String(), `"web"`) || !strings.Contains(svcs.Body.String(), `"db"`) {
 		t.Errorf("services: %d %s, want web and db", svcs.Code, svcs.Body)
+	}
+}
+
+// TestAdoptIsRefusedWhileAnotherOperationRuns: only one stack operation at a time runs on an environment, and the
+// refusal names the holder, with its stack's ID so the page can open it.
+func TestAdoptIsRefusedWhileAnotherOperationRuns(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil, foreignSecretService("legacy", "app", 1, 1, nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha := newStack(t, admin, "alpha")
+	jobID := startStuckDeploy(t, f, operator, alpha)
+	fp := fingerprintOf(t, admin, "legacy")
+
+	rec := admin.do(http.MethodPost, adoptPath("legacy"), adoptBody(fp))
+
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Fatalf("adopt during a deploy: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	var named []string
+	for _, er := range problemOf(t, rec).Errors {
+		named = append(named, er.Location+"="+er.Message)
+	}
+	for _, want := range []string{"stack=alpha", "job=" + jobID, "stackId=" + alpha.ID} {
+		if !slices.Contains(named, want) {
+			t.Errorf("errors = %v, want %s", named, want)
+		}
+	}
+	if list := admin.do(http.MethodGet, "stacks", ""); strings.Contains(list.Body.String(), `"name":"legacy","target":"swarm","source":"adopted"`) {
+		t.Errorf("a refused adoption stored a stack: %s", list.Body)
+	}
+}
+
+// TestAdoptedStackHistoryHoldsRevisionOne: the History of a freshly adopted stack is the one revision it started
+// with: adopted from the namespace, good, pinned to what runs, and the one the stack stands at.
+func TestAdoptedStackHistoryHoldsRevisionOne(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 1, 1, nil), foreignSecretService("legacy", "db", 1, 1, nil))
+	rec := admin.do(http.MethodPost, adoptPath("legacy"), adoptBody(fingerprintOf(t, admin, "legacy")))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("adopt: %d %s", rec.Code, rec.Body)
+	}
+	st := answerOf[stackAnswer](t, rec)
+
+	rec = viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revisions: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[stackRevisionsAnswer](t, rec)
+	if len(got.Items) != 1 {
+		t.Fatalf("revisions = %+v, want the one", got.Items)
+	}
+	r := got.Items[0]
+	if r.Seq != 1 || r.Origin != "adopted" || r.Outcome != "good" || !r.Deployed || r.Pinned != 2 || r.AdoptedFrom != "legacy" || r.CreatedBy != "envadmin-1" {
+		t.Errorf("revision = %+v, want #1, adopted from legacy by envadmin-1, good, deployed, 2 images pinned", r)
 	}
 }

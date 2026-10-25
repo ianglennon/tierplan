@@ -295,6 +295,28 @@ describe("the revision table", () => {
     expect(adopted.getByText("from legacy-proj")).toBeTruthy();
   });
 
+  it("lists a freshly adopted stack as one row: Adopted from the project, Good, the images it pinned, and Deployed", async () => {
+    revisions = [
+      revision(1, {
+        origin: "adopted",
+        adoptedFrom: "legacy",
+        pinned: 2,
+        outcome: "good",
+        deployed: true,
+      }),
+    ];
+    mount();
+
+    await table();
+    const row = within(rowOf(1));
+    expect(row.getByText("Adopted")).toBeTruthy();
+    expect(row.getByText("from legacy")).toBeTruthy();
+    expect(row.getByText("Good")).toBeTruthy();
+    expect(row.getByText("2 images pinned")).toBeTruthy();
+    expect(row.getByText("Deployed")).toBeTruthy();
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+  });
+
   it("shows Good, Failed with its reason, and In progress", async () => {
     revisions = [
       revision(3, { outcome: "pending" }),

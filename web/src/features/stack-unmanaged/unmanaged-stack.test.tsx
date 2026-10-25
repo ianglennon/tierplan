@@ -20,6 +20,13 @@ import { TestRouter } from "@/test-router";
 
 // The read-only page of a stack Bayplan did not make (plan 08-09, STK-12, D-09, D-10, D-11, D-19).
 
+const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
+vi.mock("@/lib/toast", () => ({
+  toastSuccess: toasts.success,
+  toastError: toasts.error,
+  toastInfo: toasts.info,
+}));
+
 const ENV = "e1";
 
 type Service = {
@@ -55,6 +62,7 @@ const service = (short: string, over: Partial<Service> = {}): Service => ({
   ...over,
 });
 
+let role: "viewer" | "operator" | "admin";
 let body: Record<string, unknown>;
 let resources: Record<string, unknown>;
 let notFound: { managedStackId?: string } | null;
@@ -66,6 +74,8 @@ let client: QueryClient;
 let served = "legacy";
 
 beforeEach(() => {
+  role = "viewer";
+  toasts.info.mockReset();
   body = {
     name: "legacy",
     target: "swarm",
@@ -137,7 +147,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
-      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "viewer" } }));
+      if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: role } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
@@ -218,7 +228,7 @@ describe("the Unmanaged stack page: header and notes", () => {
     ).toBeTruthy();
   });
 
-  it("offers no Editor or History tab and no Deploy, Stop, Start, Remove or Adopt action", async () => {
+  it("offers no Editor or History tab and no Deploy, Stop, Start or Remove action", async () => {
     mount();
     await screen.findByRole("heading", { name: "legacy", level: 2 });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
@@ -227,10 +237,44 @@ describe("the Unmanaged stack page: header and notes", () => {
       "Resources",
       "Logs",
     ]);
-    for (const name of [/deploy/i, /stop/i, /start/i, /remove/i, /edit/i, /adopt/i]) {
+    for (const name of [/deploy/i, /stop/i, /start/i, /remove/i, /edit/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
       expect(screen.queryByRole("link", { name })).toBeNull();
     }
+  });
+
+  it("offers an Env Admin Adopt stack as a link to the Adopt page, with the line on removing", async () => {
+    role = "admin";
+    mount();
+
+    const adopt = await screen.findByRole("link", { name: "Adopt stack" });
+    expect(adopt.getAttribute("href")).toBe("/env/e1/unmanaged-stacks/legacy/adopt");
+    expect(screen.getByText("To remove it, adopt it first.")).toBeTruthy();
+  });
+
+  it("shows an Operator Adopt stack off with Needs Admin, and opens nothing", async () => {
+    role = "operator";
+    mount();
+
+    const adopt = await screen.findByRole("button", { name: "Adopt stack" });
+    await waitFor(() => expect(adopt.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(adopt);
+
+    expect(toasts.info).toHaveBeenCalledWith("Needs Admin");
+    expect(screen.queryByRole("link", { name: "Adopt stack" })).toBeNull();
+  });
+
+  it("shows Adopt stack off with the reason for Bayplan's own stack, even to an Admin", async () => {
+    role = "admin";
+    body = { ...body, owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." };
+    mount();
+
+    const adopt = await screen.findByRole("button", { name: "Adopt stack" });
+    expect(adopt.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(adopt);
+
+    expect(toasts.info).toHaveBeenCalledWith("This is Bayplan's own stack.");
+    expect(screen.queryByRole("link", { name: "Adopt stack" })).toBeNull();
   });
 
   it("adds the orphan note and the Portainer advice only when they apply", async () => {
@@ -274,8 +318,10 @@ describe("the Unmanaged stack page: unusual names (D-48, D-53)", () => {
     const note = (await screen.findByText("Can't be adopted")).closest("[data-slot=alert]");
     expect(note?.getAttribute("role")).toBe("status");
     expect(within(note as HTMLElement).getByText(reason)).toBeTruthy();
-    // The note is the reason of the server, as given; a Bayplan-owned stack's reason reads the same way.
-    expect(screen.queryByRole("button", { name: /adopt/i })).toBeNull();
+    // The note is the reason of the server, as given; a Bayplan-owned stack's reason reads the same way. Adopt stack
+    // is there but off, and never a link to the Adopt page.
+    expect(screen.queryByRole("link", { name: /adopt/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Adopt stack" }).getAttribute("aria-disabled")).toBe("true");
   });
 });
 

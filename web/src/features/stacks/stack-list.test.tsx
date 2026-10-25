@@ -668,7 +668,7 @@ describe("StackList: columns and pending rows", () => {
 describe("StackList unmanaged stacks", () => {
   const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
-  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, a link to its page and only Open stack", async () => {
+  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, a link to its page and Open stack and Adopt stack… only", async () => {
     stacks = {
       items: [
         stack(),
@@ -690,14 +690,77 @@ describe("StackList unmanaged stacks", () => {
     );
     // A managed row beside it keeps its link and menu.
     expect(within(rowOfName("web")).getByRole("button", { name: /web/ })).toBeTruthy();
-    // The row's menu offers Open stack and nothing that changes the stack: Deploy, Update images, Stop, Start and
-    // Remove are not offered.
+    // The row's menu offers Open stack and Adopt stack… (to an Env Admin) and nothing that changes the stack: Deploy,
+    // Update images, Stop, Start and Remove are not offered.
     fireEvent.pointerDown(within(row).getByRole("button", { name: "Actions for legacy" }), {
       button: 0,
       ctrlKey: false,
     });
     const items = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
-    expect(items).toEqual(["Open stack"]);
+    expect(items).toEqual(["Open stack", "Adopt stack…"]);
+    expect(screen.getByRole("menuitem", { name: "Adopt stack…" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy/adopt",
+    );
+  });
+
+  it("shows an Operator Adopt stack… off with Needs Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [unmanaged("legacy")] };
+    mount();
+    await screen.findByText("legacy");
+    fireEvent.pointerDown(
+      within(rowOfName("legacy")).getByRole("button", { name: "Actions for legacy" }),
+      { button: 0, ctrlKey: false },
+    );
+
+    const adopt = await screen.findByRole("menuitem", { name: "Adopt stack…" });
+    await waitFor(() => expect(adopt.getAttribute("aria-disabled")).toBe("true"));
+    expect(adopt.getAttribute("href")).toBeNull();
+  });
+
+  it("shows Adopt stack… off, with the reason, for a stack that cannot be adopted", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "selfstack",
+          {},
+          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+        ),
+      ],
+    };
+    mount();
+    await screen.findByText("selfstack");
+    fireEvent.pointerDown(
+      within(rowOfName("selfstack")).getByRole("button", { name: "Actions for selfstack" }),
+      { button: 0, ctrlKey: false },
+    );
+
+    const adopt = await screen.findByRole("menuitem", { name: "Adopt stack…" });
+    expect(adopt.getAttribute("aria-disabled")).toBe("true");
+    expect(adopt.getAttribute("href")).toBeNull();
+  });
+
+  it("shows a stack that was adopted with the outline Source badge Adopted", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a1",
+          name: "legacy",
+          source: "adopted",
+          state: "running",
+          servicesRunning: 2,
+          servicesTotal: 2,
+        }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "legacy" });
+
+    const row = rowOfName("legacy");
+    expect(within(row).getByText("Adopted")).toBeTruthy();
+    expect(within(row).queryByText("Unmanaged")).toBeNull();
+    expect(within(row).getByText("Running")).toBeTruthy();
+    expect(within(row).queryByText("Draft")).toBeNull();
   });
 
   it("renders the name of an unmanaged stack with markup in it as text", async () => {
