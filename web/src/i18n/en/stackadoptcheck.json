@@ -11,7 +11,8 @@
       "sub": "You can still adopt. Nothing changes until you deploy.",
       "caption": "Differences in {{name}}",
       "running": "Running now",
-      "after": "After the first deploy"
+      "after": "After the first deploy",
+      "region": "Differences by service"
     },
     "ownershipOnly": {
       "services_one": "{{count}} service will be recreated to take Bayplan ownership labels (brief restart).",

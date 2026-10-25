@@ -16,13 +16,22 @@ interface RoundTripGapsProps {
 export function RoundTripGaps({ services }: RoundTripGapsProps) {
   const t = useT();
   return (
-    <ServiceDiffList
-      services={services}
-      headings={{
-        current: t("stackAdoptCheck.gaps.running"),
-        next: t("stackAdoptCheck.gaps.after"),
-      }}
-      caption={(name) => t("stackAdoptCheck.gaps.caption", { name })}
-    />
+    // A long list scrolls inside its card and not the page, so the sticky footer stays in reach; the region takes
+    // focus so the keyboard can scroll it.
+    <section
+      aria-label={t("stackAdoptCheck.gaps.region")}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
+      tabIndex={0}
+      className="max-h-[min(32rem,60vh)] overflow-y-auto rounded-lg focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <ServiceDiffList
+        services={services}
+        headings={{
+          current: t("stackAdoptCheck.gaps.running"),
+          next: t("stackAdoptCheck.gaps.after"),
+        }}
+        caption={(name) => t("stackAdoptCheck.gaps.caption", { name })}
+      />
+    </section>
   );
 }

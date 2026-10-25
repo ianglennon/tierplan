@@ -46,7 +46,12 @@ export function OwnershipTable({ name, check, checking }: OwnershipTableProps) {
             ].join(", ")}
           </p>
           {objects.length > 0 ? (
-            <div className="rounded-lg ring-1 ring-foreground/10">
+            <section
+              aria-label={t("stackAdoptCheck.ownership.caption", { name })}
+              // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
+              tabIndex={0}
+              className="max-h-[min(32rem,60vh)] overflow-y-auto rounded-lg ring-1 ring-foreground/10 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
               <Table>
                 <caption className="sr-only">
                   {t("stackAdoptCheck.ownership.caption", { name })}
@@ -89,7 +94,7 @@ export function OwnershipTable({ name, check, checking }: OwnershipTableProps) {
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </section>
           ) : null}
         </>
       ) : (

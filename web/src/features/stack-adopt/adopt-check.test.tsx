@@ -326,6 +326,30 @@ describe("the check card: gaps", () => {
     ).toContain("Differences in a");
   });
 
+  it("closes the rows from the fourth differing service on", async () => {
+    checkAnswer = { status: 200, body: withGaps(["a", "b", "c", "d"]) };
+    mount();
+    const card = await settled();
+
+    const triggers = within(card)
+      .getAllByRole("button")
+      .filter((b) => b.hasAttribute("aria-expanded"));
+    expect(triggers).toHaveLength(4);
+    for (const t of triggers) expect(t.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("scrolls a long list inside its card, in a region the keyboard can reach", async () => {
+    const names = Array.from({ length: 40 }, (_, i) => `svc${i}`);
+    checkAnswer = { status: 200, body: withGaps(names) };
+    mount();
+    const card = await settled();
+
+    const region = within(card).getByLabelText("Differences by service");
+    expect(region.getAttribute("tabindex")).toBe("0");
+    expect(region.className).toContain("overflow-y-auto");
+    expect(region.className).toContain("max-h-");
+  });
+
   it("closes the rows for more than three, even for forty services", async () => {
     const names = Array.from({ length: 40 }, (_, i) => `svc${i}`);
     checkAnswer = { status: 200, body: withGaps(names) };
