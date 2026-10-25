@@ -40,6 +40,14 @@ export interface StackRow extends StackItem {
 // and none of the managed row's actions.
 export const isUnmanaged = (s: StackItem) => s.managed === false;
 
+// The sources a managed stack's definition comes from, which the Source cell words: made in Bayplan, taken over from
+// the engine (Adopted, plan 08-13) or read from git. A source the server names that this build has no word for reads
+// as a dash and not as a raw key.
+const MANAGED_SOURCES = ["inline", "adopted", "git"] as const;
+type ManagedSource = (typeof MANAGED_SOURCES)[number];
+const isManagedSource = (source: string): source is ManagedSource =>
+  (MANAGED_SOURCES as readonly string[]).includes(source);
+
 // A managed row is keyed by its ID. An unmanaged one has none, and is known by its environment and name;
 // a label value is never used as an ID.
 export const stackRowKey = (s: StackRow) =>
@@ -354,8 +362,10 @@ export function stackColumns(
           ) : (
             <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
           )
-        ) : (
+        ) : isManagedSource(s.source) ? (
           <Badge variant="outline">{t(`stacks.source.${s.source}`)}</Badge>
+        ) : (
+          <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
         ),
     },
     {

@@ -740,6 +740,16 @@ describe("StackList unmanaged stacks", () => {
     expect(adopt.getAttribute("href")).toBeNull();
   });
 
+  it("reads a source this build has no word for as a dash, never as a raw key", async () => {
+    stacks = { items: [stack({ id: "z1", name: "odd", source: "svn" })] };
+    mount();
+    await screen.findByRole("link", { name: "odd" });
+
+    const row = rowOfName("odd");
+    expect(within(row).queryByText(/stacks\.source/)).toBeNull();
+    expect(within(row).getAllByText("\u2014")).not.toHaveLength(0);
+  });
+
   it("shows a stack that was adopted with the outline Source badge Adopted", async () => {
     stacks = {
       items: [
