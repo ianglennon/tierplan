@@ -5,6 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { Check, Copy } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import type { DriftView } from "@/api/stack-drift";
 import type { StackDetail } from "@/api/stacks";
 import { copyText } from "@/components/copyable-code";
 import { RelativeTime } from "@/components/relative-time";
@@ -16,6 +17,8 @@ import { toastError } from "@/lib/toast";
 
 interface StackDetailsCardProps {
   stack: StackDetail;
+  // What the page knows of the stack's drift, when it asked.
+  drift?: DriftView;
 }
 
 // How long the copy button says it copied.
@@ -72,7 +75,7 @@ function CopyId({ id }: { id: string }) {
 // StackDetailsCard is the Details card of the Overview (UI-SPEC "Stack page"): where the stack is,
 // how it deploys, when it was made and last deployed, whether a draft waits, and its ID. A person
 // and a name are the server's words, drawn as text.
-export function StackDetailsCard({ stack }: StackDetailsCardProps) {
+export function StackDetailsCard({ stack, drift: _drift }: StackDetailsCardProps) {
   const t = useT();
   const envName = useEnvName(stack.envId);
   const by = (user: string) => t("stackOverview.details.by", { user });
