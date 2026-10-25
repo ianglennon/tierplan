@@ -592,3 +592,47 @@ func TestStackRevisionsListNamesTheRetentionLimit(t *testing.T) {
 		t.Fatalf("kept = %d, want the instance setting 7", got)
 	}
 }
+
+// plan 08-25: History's Changes tab marks the settings that differ because somebody changed them outside the stack.
+func TestRevisionChangesMarksDriftedPaths(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "mark")
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	f.deployGood(t, operator, st.ID, liveValuesCompose("nginx:1.28-alpine", "two"))
+
+	type driftedAnswer struct {
+		DriftedPaths map[string][]string `json:"driftedPaths"`
+	}
+	read := func() map[string][]string {
+		t.Helper()
+		rec := viewer.do(http.MethodGet, revisionChangesPath(st.ID, 1), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("changes: %d %s", rec.Code, rec.Body)
+		}
+		got := answerOf[driftedAnswer](t, rec).DriftedPaths
+		if got == nil {
+			t.Fatalf("driftedPaths is missing from %s, want an object even when empty", rec.Body)
+		}
+		return got
+	}
+
+	// What was just deployed has not drifted, and nothing has been checked: nothing is marked.
+	if got := read(); len(got) != 0 {
+		t.Fatalf("driftedPaths = %v, want none before any check", got)
+	}
+
+	// Somebody scales the service outside the stack, and the stack is checked for drift.
+	f.editLiveService(t, e, "mark", "web", scaleTo(3))
+	if rec := viewer.do(http.MethodGet, driftPath(st.ID, true), ""); rec.Code != http.StatusOK {
+		t.Fatalf("drift: %d %s", rec.Code, rec.Body)
+	}
+
+	got := read()
+	if paths := got["mark_web"]; !slices.Equal(paths, []string{"Mode.Replicated.Replicas"}) || len(got) != 1 {
+		t.Errorf("driftedPaths = %v, want mark_web's replicas alone: the image change is the revision's own", got)
+	}
+}

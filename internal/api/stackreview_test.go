@@ -1337,3 +1337,70 @@ func TestReviewRestoreModeJudgesHostAccessForTheCaller(t *testing.T) {
 		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
 	}
 }
+
+// revertsAnswer is the Reverts drift part of a review answer (plan 08-25, D-25).
+type revertsAnswer struct {
+	Summary struct {
+		RevertsDrift int `json:"revertsDrift"`
+	} `json:"summary"`
+	RevertsDrift []struct {
+		Service, Change, Path, Live, Desired string
+		Cause                                *struct{ Action, By string }
+	} `json:"revertsDrift"`
+	RevertsDriftUnavailable bool `json:"revertsDriftUnavailable"`
+}
+
+func revertsOf(t *testing.T, body string) revertsAnswer {
+	t.Helper()
+	var a revertsAnswer
+	if err := json.Unmarshal([]byte(body), &a); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	return a
+}
+
+func TestReviewAnswerListsWhatTheDeployWouldRevertAndNeverBlocksIt(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rvd")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+
+	// Right after a deploy there is nothing to revert, and the answer says so with an empty list, not a missing one.
+	_, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	clean := revertsOf(t, body)
+	if clean.RevertsDrift == nil || len(clean.RevertsDrift) != 0 || clean.Summary.RevertsDrift != 0 || clean.RevertsDriftUnavailable {
+		t.Errorf("a review right after a deploy = %+v, want an empty list and nothing unavailable", clean)
+	}
+
+	// Somebody scales the service outside the stack. The draft is unchanged, so the deploy would scale it back.
+	f.editLiveService(t, e, "rvd", "web", scaleTo(4))
+	_, code, body = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	got := revertsOf(t, body)
+	if len(got.RevertsDrift) != 1 || got.Summary.RevertsDrift != 1 || got.RevertsDriftUnavailable {
+		t.Fatalf("a review of a scaled service = %+v, want the one revert", got)
+	}
+	r := got.RevertsDrift[0]
+	if r.Service != "web" || r.Change != "changed" || r.Path != "Mode.Replicated.Replicas" || r.Live != "4" || r.Desired != "1" || r.Cause != nil {
+		t.Errorf("row = %+v, want web's replicas 4 -> 1 with no cause (nothing in the audit log explains it)", r)
+	}
+
+	// The section is a warning: the deploy of that very review is accepted and puts the value back.
+	rv, _, _ := operator.reviewStack(st.ID, `{}`)
+	version := draftVersion(t, operator, st.ID)
+	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("deploy with a revert in its review = %+v, want it done", job)
+	}
+	_, code, body = operator.reviewStack(st.ID, `{}`)
+	if after := revertsOf(t, body); code != http.StatusOK || len(after.RevertsDrift) != 0 {
+		t.Errorf("review after the deploy = %d %+v, want nothing left to revert", code, after)
+	}
+}

@@ -220,10 +220,11 @@ func getStackRevision(ctx context.Context, d StacksDeps, in *StackRevisionInput)
 
 // StackRevisionChangesBody is what rolling back to a revision would change against what is running.
 type StackRevisionChangesBody struct {
-	DeployedSeq int64                    `json:"deployedSeq" doc:"The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none"`
-	Services    []StackReviewServiceBody `json:"services" doc:"The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>"`
-	Summary     StackReviewCountsBody    `json:"summary" doc:"How many services the roll back would add, change and remove"`
-	Identical   bool                     `json:"identical" doc:"True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision"`
+	DeployedSeq  int64                    `json:"deployedSeq" doc:"The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none"`
+	Services     []StackReviewServiceBody `json:"services" doc:"The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>"`
+	Summary      StackReviewCountsBody    `json:"summary" doc:"How many services the roll back would add, change and remove"`
+	Identical    bool                     `json:"identical" doc:"True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision"`
+	DriftedPaths map[string][]string      `json:"driftedPaths" doc:"For each service of the roll back that the stack's newest drift check found drifted, by swarm service name (the name on a standalone host), the paths of the settings that check found to differ from the deployed revision, so the tab can say a setting differs because it was changed outside the stack and not because of the revision. Empty when the stack has not been checked since its newest deploy, start or stop. No value is sent"`
 }
 
 // StackRevisionChangesOutput wraps StackRevisionChangesBody for huma.
@@ -284,7 +285,7 @@ func getStackRevisionChanges(ctx context.Context, d StacksDeps, lim *streamLimit
 
 	ri := stackops.ReviewInput{
 		EnvID: env.ID, Stack: st, Copy: target.Copy, Mode: stackops.ReviewModeRollback, Target: &target,
-		Pins: repo, Revisions: repo, Caller: stackops.Caller{Principal: p, Actor: p.Name},
+		Pins: repo, Revisions: repo, Caller: stackops.Caller{Principal: p, Actor: p.Name}, SkipReverts: true,
 	}
 	if ri.TargetPins, err = repo.RevisionPins(ctx, target.ID); err != nil {
 		return nil, stackInternal(d, "read the pins of the revision to compare", env.ID, err)
@@ -320,7 +321,21 @@ func getStackRevisionChanges(ctx context.Context, d StacksDeps, lim *streamLimit
 	}
 	return &StackRevisionChangesOutput{CacheControl: "no-store", Body: StackRevisionChangesBody{
 		DeployedSeq: deployedSeq, Services: serviceBodies(services), Summary: countsBody(rv.Summary.Services), Identical: len(rv.Services) == 0,
+		DriftedPaths: driftedPathsOf(d, st, deployedSeq),
 	}}, nil
+}
+
+// driftedPathsOf are the paths the stack's cached drift check found to differ from the deployed revision, by service.
+// It reads only the cache: a check that has not run, or that no longer describes the stack, gives none (D-21).
+func driftedPathsOf(d StacksDeps, st stackops.Stack, deployedSeq int64) map[string][]string {
+	if d.Drift == nil {
+		return map[string][]string{}
+	}
+	cached, ok := d.Drift.Get(st.ID)
+	if !ok || !driftCurrent(cached, st, deployedSeq) {
+		return map[string][]string{}
+	}
+	return stackops.DriftPaths(cached)
 }
 
 // problemRevisionNotDeployable is the code of a revision that no longer loads, converts or has an image stored for

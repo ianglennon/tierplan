@@ -9683,6 +9683,23 @@ export interface components {
             /** @description The Volumes card */
             volumes: components["schemas"]["StackVolumesCardBody"];
         };
+        StackRevertsDriftBody: {
+            /** @description Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Bayplan */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * @description changed: a setting that runs other than the deployed revision has it and that the deploy sets back. created: the deployed revision has the service, it no longer runs and the deploy creates it again. removed: the service runs under the stack and neither the deployed revision nor the deploy declares it, so the deploy removes it
+             * @enum {string}
+             */
+            change: "changed" | "created" | "removed";
+            /** @description For changed, the value the deploy sets, masked the same way; empty when the deploy removes the setting */
+            desired: string;
+            /** @description For changed, the value that runs now as text, masked as the rest of the review; empty when the setting is not there now */
+            live: string;
+            /** @description For changed, the setting's path in the service's settings (the keys joined with a dot, an environment entry as Env[NAME]); empty otherwise */
+            path: string;
+            /** @description The service's name in the compose file */
+            service: string;
+        };
         StackReviewAdoptionBody: {
             /**
              * Format: int64
@@ -9719,6 +9736,10 @@ export interface components {
             };
             /** @description What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy */
             problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The changes made outside the stack that this deploy, update or roll back would put back, apart from the draft's own changes: a setting counts when the deployed revision's value differs from what runs and the draft (or the revision rolled back to) has the deployed revision's value. A service of the revision that no longer runs and that is kept, and a service that runs under the stack that neither declares, are listed too. It never blocks a deploy. Empty for a restore, which is the drift itself, and for a stack with no deployed revision */
+            revertsDrift: components["schemas"]["StackRevertsDriftBody"][] | null;
+            /** @description True when the drift could not be computed, so revertsDrift is empty for want of knowing; the rest of the review is accurate */
+            revertsDriftUnavailable: boolean;
             /**
              * Format: int64
              * @description For mode rollback and restore, the number of the revision the review restores (for restore, the deployed one); 0 for any other mode
@@ -9845,6 +9866,11 @@ export interface components {
              * @description Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review
              */
             ownershipOnly: number;
+            /**
+             * Format: int64
+             * @description How many changes made outside the stack this deploy, update or roll back would put back (revertsDrift in the answer). Zero for a restore, which is the drift itself
+             */
+            revertsDrift: number;
             /** @description Secrets Bayplan makes from the stack's files; a changed file counts as changed */
             secrets: components["schemas"]["StackReviewCountsBody"];
             /** @description Services */
@@ -9858,6 +9884,10 @@ export interface components {
              * @description The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none
              */
             deployedSeq: number;
+            /** @description For each service of the roll back that the stack's newest drift check found drifted, by swarm service name (the name on a standalone host), the paths of the settings that check found to differ from the deployed revision, so the tab can say a setting differs because it was changed outside the stack and not because of the revision. Empty when the stack has not been checked since its newest deploy, start or stop. No value is sent */
+            driftedPaths: {
+                [key: string]: string[] | null;
+            };
             /** @description True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision */
             identical: boolean;
             /** @description The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden> */

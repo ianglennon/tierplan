@@ -150,6 +150,9 @@ type ReviewInput struct {
 	Caller    Caller
 	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
 	Audit *store.Store
+	// SkipReverts leaves the Reverts drift part out and its extra read of the engine: the History tab asks for the
+	// changes of a revision as a roll back review lists them and has no use for the rest.
+	SkipReverts bool
 	// Rebuilt is the definition rebuilt from what runs, which ReviewModeAdopt reviews against what runs. Copy holds
 	// the compose file made from it and Stack the stack as it will be adopted. Nil for any other mode.
 	Rebuilt *rebuild.Result

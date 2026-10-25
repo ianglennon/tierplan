@@ -47,6 +47,17 @@ type StackReviewSummaryBody struct {
 	ImagesPinned  int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
 	ImagesNew     int                   `json:"imagesNew" doc:"Services whose digest the review just looked up"`
 	OwnershipOnly int                   `json:"ownershipOnly" doc:"Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review"`
+	RevertsDrift  int                   `json:"revertsDrift" doc:"How many changes made outside the stack this deploy, update or roll back would put back (revertsDrift in the answer). Zero for a restore, which is the drift itself"`
+}
+
+// StackRevertsDriftBody is one change made outside the stack that a deploy would put back.
+type StackRevertsDriftBody struct {
+	Service string               `json:"service" doc:"The service's name in the compose file"`
+	Change  string               `json:"change" enum:"changed,created,removed" doc:"changed: a setting that runs other than the deployed revision has it and that the deploy sets back. created: the deployed revision has the service, it no longer runs and the deploy creates it again. removed: the service runs under the stack and neither the deployed revision nor the deploy declares it, so the deploy removes it"`
+	Path    string               `json:"path" doc:"For changed, the setting's path in the service's settings (the keys joined with a dot, an environment entry as Env[NAME]); empty otherwise"`
+	Live    string               `json:"live" doc:"For changed, the value that runs now as text, masked as the rest of the review; empty when the setting is not there now"`
+	Desired string               `json:"desired" doc:"For changed, the value the deploy sets, masked the same way; empty when the deploy removes the setting"`
+	Cause   *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Bayplan"`
 }
 
 // StackReviewImageBody is one service's image.
@@ -132,19 +143,21 @@ type StackConcurrentBody struct {
 
 // StackReviewBody is what a deploy of the saved draft would do.
 type StackReviewBody struct {
-	Problems     []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
-	Summary      StackReviewSummaryBody   `json:"summary" doc:"The counts of what would change"`
-	Images       []StackReviewImageBody   `json:"images" doc:"One row for each service with an image, by name"`
-	Services     []StackReviewServiceBody `json:"services" doc:"The services a deploy would add or change, by name, then the ones it would remove"`
-	Objects      []StackReviewObjectBody  `json:"objects" doc:"The other resources: networks, secrets and configs"`
-	DraftVersion int64                    `json:"draftVersion" doc:"The version of the draft the review was made of: send it with the deploy"`
-	Pins         map[string]string        `json:"pins" doc:"The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests"`
-	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
-	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
-	Concurrent   *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
-	Revision     int64                    `json:"revision" doc:"For mode rollback and restore, the number of the revision the review restores (for restore, the deployed one); 0 for any other mode"`
-	Adoption     *StackReviewAdoptionBody `json:"adoption,omitempty" doc:"Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does"`
-	DeployedSeq  int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
+	Problems                []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
+	Summary                 StackReviewSummaryBody   `json:"summary" doc:"The counts of what would change"`
+	Images                  []StackReviewImageBody   `json:"images" doc:"One row for each service with an image, by name"`
+	Services                []StackReviewServiceBody `json:"services" doc:"The services a deploy would add or change, by name, then the ones it would remove"`
+	Objects                 []StackReviewObjectBody  `json:"objects" doc:"The other resources: networks, secrets and configs"`
+	DraftVersion            int64                    `json:"draftVersion" doc:"The version of the draft the review was made of: send it with the deploy"`
+	Pins                    map[string]string        `json:"pins" doc:"The image each service will be deployed with, by swarm service name: send it with the deploy and the deploy uses exactly these digests"`
+	NeedsAdmin              []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
+	YAML                    StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
+	Concurrent              *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
+	Revision                int64                    `json:"revision" doc:"For mode rollback and restore, the number of the revision the review restores (for restore, the deployed one); 0 for any other mode"`
+	Adoption                *StackReviewAdoptionBody `json:"adoption,omitempty" doc:"Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does"`
+	DeployedSeq             int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
+	RevertsDrift            []StackRevertsDriftBody  `json:"revertsDrift" doc:"The changes made outside the stack that this deploy, update or roll back would put back, apart from the draft's own changes: a setting counts when the deployed revision's value differs from what runs and the draft (or the revision rolled back to) has the deployed revision's value. A service of the revision that no longer runs and that is kept, and a service that runs under the stack that neither declares, are listed too. It never blocks a deploy. Empty for a restore, which is the drift itself, and for a stack with no deployed revision"`
+	RevertsDriftUnavailable bool                     `json:"revertsDriftUnavailable" doc:"True when the drift could not be computed, so revertsDrift is empty for want of knowing; the rest of the review is accurate"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -204,7 +217,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	ri := stackops.ReviewInput{
 		EnvID: env.ID, Stack: st, Copy: draft.Copy, DraftVersion: draft.Version,
 		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Revisions: repo,
-		Caller: stackops.Caller{Principal: p, Actor: p.Name},
+		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Audit: d.Store,
 	}
 	restore := in.Body.Mode == stackops.ReviewModeRestore
 	rollback := in.Body.Mode == stackops.ReviewModeRollback || restore
@@ -287,12 +300,19 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 			Services: countsBody(rv.Summary.Services), Networks: countsBody(rv.Summary.Networks), Volumes: countsBody(rv.Summary.Volumes),
 			Secrets: countsBody(rv.Summary.Secrets), Configs: countsBody(rv.Summary.Configs),
 			ImagesPinned: rv.Summary.ImagesPinned, ImagesNew: rv.Summary.ImagesNew, OwnershipOnly: rv.Summary.OwnershipOnly,
+			RevertsDrift: rv.Summary.RevertsDrift,
 		},
 		Images:       make([]StackReviewImageBody, 0, len(rv.Images)),
 		Services:     make([]StackReviewServiceBody, 0, len(rv.Services)),
 		Objects:      make([]StackReviewObjectBody, 0, len(rv.Objects)),
 		DraftVersion: rv.DraftVersion, Pins: rv.Pins, NeedsAdmin: rv.NeedsAdmin,
-		YAML: textDiffBody(rv.YAML),
+		YAML:         textDiffBody(rv.YAML),
+		RevertsDrift: make([]StackRevertsDriftBody, 0, len(rv.RevertsDrift)), RevertsDriftUnavailable: rv.RevertsDriftUnavailable,
+	}
+	for _, r := range rv.RevertsDrift {
+		b.RevertsDrift = append(b.RevertsDrift, StackRevertsDriftBody{
+			Service: r.Service, Change: r.Change, Path: r.Path, Live: r.Live, Desired: r.Desired, Cause: causeBody(r.Cause),
+		})
 	}
 	if c := rv.Concurrent; c != nil {
 		b.Concurrent = &StackConcurrentBody{

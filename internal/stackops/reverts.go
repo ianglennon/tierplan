@@ -246,13 +246,32 @@ func rawStandaloneRows(cmp standaloneComparison, removed []string, pins map[stri
 	return out
 }
 
+// DriftPaths are the paths of the settings that differ from the deployed revision, for each drifted service that has
+// some, by the service's name in the swarm and on a standalone host as a row of a review names it (DriftService.Name).
+// Only paths leave: no value, so nothing the result's masking hid is told. A result that is not drifted has none.
+func DriftPaths(res DriftResult) map[string][]string {
+	out := map[string][]string{}
+	if res.State != DriftDrifted {
+		return out
+	}
+	for _, s := range res.Services {
+		if s.Change != DriftChanged {
+			continue
+		}
+		if paths := changePaths(s.Diff); len(paths) > 0 {
+			out[s.Name] = paths
+		}
+	}
+	return out
+}
+
 // addRevertsDrift sets the Reverts drift part of a review (D-25): the outside changes this deploy puts back. draft
 // is the deploy's side as rows (rawSwarmRows, rawStandaloneRows) and masker hides what the review hides. It reads
 // what drift reads, once more, and never blocks or fails the review: when drift cannot be computed it says so
 // (RevertsDriftUnavailable) and the rest of the review stays (T-08-88). A first deploy has no deployed revision and a
 // restore is the drift itself, so neither has a section.
 func (d Deps) addRevertsDrift(ctx context.Context, in ReviewInput, rv *Review, draft []stacks.ServiceChange, masker stacks.Masker) {
-	if in.Deployed == nil || in.Previous == nil || in.Mode == ReviewModeRestore || in.Mode == ReviewModeAdopt {
+	if in.SkipReverts || in.Deployed == nil || in.Previous == nil || in.Mode == ReviewModeRestore || in.Mode == ReviewModeAdopt {
 		return
 	}
 	unavailable := func(err error) {
