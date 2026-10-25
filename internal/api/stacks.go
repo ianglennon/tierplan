@@ -214,6 +214,8 @@ type StackItem struct {
 	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
 	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
 	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
+	// Drift is the newest drift check of a stack Bayplan manages.
+	Drift *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services"`
 	// Unmanaged is set on a stack found on the engine that Bayplan did not make (D-07).
 	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
 }
@@ -277,9 +279,8 @@ type StackDetail struct {
 	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
 	// Adoption is set on a stack Bayplan adopted.
 	Adoption *StackAdoptionBody `json:"adoption,omitempty" doc:"Left out unless the stack was adopted (source adopted): whether its first deploy is still to come"`
-	// DeployedRevision is the revision the stack stands at, and Drift the newest drift check of it.
-	DeployedRevision int64                  `json:"deployedRevision,omitempty" doc:"Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at"`
-	Drift            *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop: the newest check, as the drift route answers it without the services"`
+	// DeployedRevision is the revision the stack stands at.
+	DeployedRevision int64 `json:"deployedRevision,omitempty" doc:"Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at"`
 }
 
 // StackAdoptionBody is where an adopted stack stands.
@@ -377,7 +378,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 			"Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; " +
 			"they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. " +
 			"discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. " +
-			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, " +
+			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort, " +
 			"with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},

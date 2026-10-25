@@ -56,6 +56,13 @@ func stackEnvTuned(t *testing.T, tune func(*envFix)) (*envFix, envBody) {
 	return f, e
 }
 
+// driftSummaryAnswer is the drift a list or a stack's page says without the services.
+type driftSummaryAnswer struct {
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+	Count    int    `json:"count"`
+}
+
 type stackAnswer struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -72,6 +79,8 @@ type stackAnswer struct {
 	Stopped         bool   `json:"stopped"`
 	DraftSavedAt    string `json:"draftSavedAt"`
 	DraftSavedBy    string `json:"draftSavedBy"`
+	// Drift is the newest drift check, absent until the stack has one.
+	Drift *driftSummaryAnswer `json:"drift"`
 	// Managed is false for a stack found on the engine that Bayplan did not make, which carries Unmanaged.
 	Managed   bool `json:"managed"`
 	Unmanaged *struct {

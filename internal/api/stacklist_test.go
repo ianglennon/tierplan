@@ -33,6 +33,7 @@ type statusCountsAnswer struct {
 	Stopped      int `json:"stopped"`
 	Draft        int `json:"draft"`
 	DeployFailed int `json:"deployFailed"`
+	Drifted      int `json:"drifted"`
 }
 
 // stackListAnswer is the list of one environment's stacks.
@@ -944,5 +945,79 @@ func TestNameRuleIsTheSameForCreateAndAdopt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The drift status of the lists (plan 08-21, STK-14, D-22): the newest check of a stack, as the background worker or a
+// person opening its drift page stored it, shows on the list and is a status the list filters and counts by.
+func TestStackListDriftStatusAndCounts(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	calm := newStack(t, admin, "calm")
+	f.deployGood(t, operator, calm.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	moved := newStack(t, admin, "moved")
+	f.deployGood(t, operator, moved.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	newStack(t, admin, "idle")
+	f.editLiveService(t, e, "moved", "web", scaleTo(3))
+
+	driftOf := func(got stackListAnswer, name string) *driftSummaryAnswer {
+		for _, it := range got.Items {
+			if it.Name == name {
+				return it.Drift
+			}
+		}
+		t.Fatalf("the list has no stack %s: %v", name, stackNames(got.Items))
+		return nil
+	}
+
+	// Nothing has been checked: no stack shows drift, and the chip counts none.
+	got := listWith(t, operator, "")
+	for _, name := range []string{"calm", "moved", "idle"} {
+		if d := driftOf(got, name); d != nil {
+			t.Errorf("%s shows drift %+v before any check", name, d)
+		}
+	}
+	if got.StatusCounts.Drifted != 0 || len(listWith(t, operator, "?status=drifted").Items) != 0 {
+		t.Fatalf("before any check: counts %+v, want no drifted stack", got.StatusCounts)
+	}
+
+	// The checks are stored, whoever made them.
+	for _, id := range []string{calm.ID, moved.ID} {
+		if rec := operator.do(http.MethodGet, driftPath(id, true), ""); rec.Code != http.StatusOK {
+			t.Fatalf("check %s: %d %s", id, rec.Code, rec.Body)
+		}
+	}
+	got = listWith(t, operator, "")
+	if d := driftOf(got, "moved"); d == nil || d.State != "drifted" || d.Revision != 1 || d.Count == 0 {
+		t.Errorf("moved drift = %+v, want drifted at revision 1 with a count", d)
+	}
+	if d := driftOf(got, "calm"); d == nil || d.State != "none" {
+		t.Errorf("calm drift = %+v, want the check that found none", d)
+	}
+	if d := driftOf(got, "idle"); d != nil {
+		t.Errorf("idle shows drift %+v, it was never deployed", d)
+	}
+	if got.StatusCounts.Drifted != 1 || got.UnfilteredTotal != 3 {
+		t.Errorf("counts = %+v, unfiltered %d, want one drifted of three", got.StatusCounts, got.UnfilteredTotal)
+	}
+	only := listWith(t, operator, "?status=drifted")
+	if names := stackNames(only.Items); !slices.Equal(names, []string{"moved"}) || only.StatusCounts.Drifted != 1 || only.Total != 1 {
+		t.Errorf("status=drifted = %v, total %d, counts %+v, want moved alone with the unfiltered count", names, only.Total, only.StatusCounts)
+	}
+	if got := listWith(t, operator, "?status=drifted&q=calm"); len(got.Items) != 0 || got.StatusCounts.Drifted != 1 {
+		t.Errorf("status=drifted&q=calm = %v with counts %+v, want none listed and the count unchanged", stackNames(got.Items), got.StatusCounts)
+	}
+	all := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?status=drifted"))
+	if all.StatusCounts.Drifted != 1 || all.Total != 1 {
+		t.Errorf("all stacks status=drifted: total %d, counts %+v, want the one drifted stack", all.Total, all.StatusCounts)
+	}
+
+	// A new deploy makes the old check stale: the badge goes until the next check.
+	f.deployGood(t, operator, moved.ID, liveValuesCompose("nginx:1.28-alpine", "one"))
+	got = listWith(t, operator, "")
+	if d := driftOf(got, "moved"); d != nil || got.StatusCounts.Drifted != 0 {
+		t.Errorf("after a new deploy moved shows drift %+v, counts %+v, want none until it is checked again", d, got.StatusCounts)
 	}
 }

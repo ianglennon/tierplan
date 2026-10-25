@@ -158,12 +158,9 @@ func deployedStub(info stackops.DeployedRevision, has bool) *stackops.Snapshot {
 	return &stackops.Snapshot{Seq: info.Seq}
 }
 
-// driftCurrent says whether a stored result still describes the stack: it was made against the revision that is
-// deployed, and the stack has not been stopped or started since.
+// driftCurrent says whether a stored result still describes the stack (stackops.DriftCurrent).
 func driftCurrent(res stackops.DriftResult, st stackops.Stack, deployedSeq int64) bool {
-	return res.Revision == deployedSeq &&
-		(res.State == stackops.DriftStopped) == st.Stopped &&
-		(res.State == stackops.DriftNotDeployed) == (deployedSeq == 0)
+	return stackops.DriftCurrent(res, st, deployedSeq)
 }
 
 // driftBody is a result as the route answers it. A caller who may not reveal secrets gets the services with the live

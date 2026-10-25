@@ -98,6 +98,8 @@ type Server struct {
 	session  *auth.Sessions
 	envs     *envs.Service
 	monitor  *envs.Monitor
+	// drift checks the stacks of the monitored environments for drift in the background.
+	drift *stackops.DriftMonitor
 	// snapshots caches the resource lists per environment for a few seconds.
 	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
@@ -730,6 +732,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	statsHub := api.NewStatsHub(aggregator, api.StatsHubOptions{Log: log})
 	registryStore := registry.NewStore(st, vlt, nil)
 	resolver := registry.NewResolver(registryStore)
+	// The stack operation lock and the drift results are shared by the stack routes and the background drift check,
+	// which looks at each stack of a monitored environment on a timer, on the Docker events that name it and when an
+	// operation on it ends, and never while an operation holds the lock (D-22).
+	stackLocks, driftStore := stackops.NewLocks(), stackops.NewDriftStore()
+	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
+		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
+		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Locks: stackLocks,
+		Subscribe: hub.Subscribe, Log: log,
+	})
+	monitor.Watch(driftMonitor.EnvStarted, driftMonitor.EnvStopped)
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
 	registryEgress := registry.NewEgressPolicy(cfg.RegistryBlockCIDRs)
 	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)
@@ -804,7 +816,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackops.NewLocks(), Drift: stackops.NewDriftStore(), RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, Log: log},
+		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
@@ -854,6 +866,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		session:    sessions,
 		envs:       envSvc,
 		monitor:    monitor,
+		drift:      driftMonitor,
 		snapshots:  snapshots,
 		hub:        hub,
 		clusters:   clusters,
@@ -885,11 +898,14 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
+	// The drift check starts before the environments do, so it hears of each of them.
+	driftMonitor.Start(bg)
 	// Monitoring resumes for the environments an admin already added. The
 	// monitors live as long as bg, and Close waits for them.
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		driftMonitor.Stop()
 		jobHub.Close()
 		statsHub.Close()
 		tunnelHub.Close()
@@ -986,6 +1002,8 @@ func (s *Server) Agents() *agents.Service { return s.agents }
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	// Before the database closes: a check in flight reads it.
+	s.drift.Stop()
 	// Before the database closes, so the end of each shell is still audited.
 	s.shells.CloseAll("server_shutdown")
 	// Pulls in flight are cancelled and waited for, so their audit rows are written.

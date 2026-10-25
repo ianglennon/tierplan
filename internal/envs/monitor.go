@@ -157,6 +157,10 @@ func (m *Monitor) watch(started, stopped func(envID string)) {
 	m.watchers = append(m.watchers, watcher{started: started, stopped: stopped})
 }
 
+// Watch is watch for a worker outside this package (the background drift check of stacks). Register it before
+// the first environment starts: an environment that is already monitored is not announced.
+func (m *Monitor) Watch(started, stopped func(envID string)) { m.watch(started, stopped) }
+
 func (m *Monitor) currentWatchers() []watcher {
 	m.mu.Lock()
 	defer m.mu.Unlock()

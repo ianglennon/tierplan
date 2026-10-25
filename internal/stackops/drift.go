@@ -180,6 +180,14 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 	return res, nil
 }
 
+// DriftCurrent says whether a stored result still describes the stack: it was made against the revision that is
+// deployed, and the stack has not been stopped or started since.
+func DriftCurrent(res DriftResult, st Stack, deployedSeq int64) bool {
+	return res.Revision == deployedSeq &&
+		(res.State == DriftStopped) == st.Stopped &&
+		(res.State == DriftNotDeployed) == (deployedSeq == 0)
+}
+
 // driftFingerprint names what the engine held for the stack at a check: the revision and the version of each service
 // the stack owns. A service that is changed by anyone moves its version, so a later check can tell that nothing moved.
 func driftFingerprint(live liveStack, stack Stack, seq int64) string {

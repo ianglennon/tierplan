@@ -30,6 +30,7 @@ const (
 	stackStatusStopped      = "stopped"
 	stackStatusDraft        = "draft"
 	stackStatusDeployFailed = "deploy_failed"
+	stackStatusDrifted      = "drifted"
 
 	stackKindManaged   = "managed"
 	stackKindUnmanaged = "unmanaged"
@@ -47,7 +48,7 @@ const (
 	reasonAgentStack = "This stack runs Bayplan's agent."
 )
 
-var stackStatuses = []string{stackStatusDegraded, stackStatusStopped, stackStatusDraft, stackStatusDeployFailed}
+var stackStatuses = []string{stackStatusDegraded, stackStatusStopped, stackStatusDraft, stackStatusDeployFailed, stackStatusDrifted}
 
 // stateRank is the order the State column sorts in, the priority of UI-SPEC "Color": an operation under
 // way, then stopped, deploy failed, not running, degraded, running, and a stack never deployed last.
@@ -74,12 +75,13 @@ type StackStatusCountsBody struct {
 	Stopped      int `json:"stopped" doc:"Stacks a person stopped"`
 	Draft        int `json:"draft" doc:"Stacks whose draft holds changes that have not been deployed"`
 	DeployFailed int `json:"deployFailed" doc:"Stacks whose newest deploy, update or roll back failed, was cancelled or was interrupted"`
+	Drifted      int `json:"drifted" doc:"Stacks whose newest drift check found that what runs differs from the deployed revision"`
 }
 
 // StackQueryInput is the search, status filter and sort both stack lists take.
 type StackQueryInput struct {
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
-	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
 	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
 	Sort   string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
 	Dir    string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
@@ -154,6 +156,8 @@ func hasStackStatus(it StackItem, status string) bool {
 		return it.HasDraft
 	case stackStatusDeployFailed:
 		return it.State == string(stackops.StateDeployFailed)
+	case stackStatusDrifted:
+		return it.Drift != nil && it.Drift.State == stackops.DriftDrifted
 	}
 	return false
 }
@@ -174,6 +178,9 @@ func stackStatusCounts(rows []stackRow) StackStatusCountsBody {
 		}
 		if hasStackStatus(r.item, stackStatusDeployFailed) {
 			c.DeployFailed++
+		}
+		if hasStackStatus(r.item, stackStatusDrifted) {
+			c.Drifted++
 		}
 	}
 	return c
@@ -322,7 +329,7 @@ func registerAllStacks(r *httpx.Router, d StacksDeps) {
 			"and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read " +
 			"is named in failedEnvironments while the others are answered. env chooses environments by ID. " +
 			"Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. " +
-			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort " +
+			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort " +
 			"run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, " +
 			"with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.",
 		Tags: []string{"stacks"},
@@ -469,6 +476,7 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 		k, hasK := likes[st.ID]
 		g, hasG := done[st.ID]
 		item, services := stackItemWithServices(reads, st, l, hasL, k, hasK, g, hasG, drafts[st.ID].Pending)
+		item.Drift = d.driftOf(ctx, repo, st)
 		r := stackRow{item: item, envID: envID, envName: envName}
 		if hasG {
 			r.deployedAt = g.EndedAt
@@ -484,6 +492,26 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 		out.rows = append(out.rows, unmanagedRow(u, envID, envName))
 	}
 	return out, nil
+}
+
+// driftOf is the newest drift check of a stack as the lists show it: the one in the store that is still about the
+// revision deployed now, nil for none. The revision is read only for a stack that has a check.
+func (d StacksDeps) driftOf(ctx context.Context, repo stackops.Repo, st stackops.Stack) *StackDriftSummaryBody {
+	if d.Drift == nil {
+		return nil
+	}
+	if _, ok := d.Drift.Get(st.ID); !ok {
+		return nil
+	}
+	seq := int64(0)
+	info, has, err := repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil {
+		return nil
+	}
+	if has {
+		seq = info.Seq
+	}
+	return driftSummaryOf(d, st, seq)
 }
 
 // discover finds the stacks of an environment that Bayplan did not make, in the caches the lists use. The
