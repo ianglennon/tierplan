@@ -142,6 +142,19 @@ function typeName(dialog: HTMLElement, name: string) {
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: name } });
 }
 
+// The sentences of the stack-name rule of each target, and of the union that applies before a target is known (D-53).
+const SWARM_SENTENCE =
+  "Use only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters.";
+const STANDALONE_SENTENCE =
+  "Use only lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters.";
+const UNION_SENTENCE =
+  "Use only letters, numbers, dash and underscore, starting with a letter or number.";
+
+// The dialog of an environment's own list knows its target once the environment list has loaded.
+async function ready(dialog: HTMLElement, kind: "Swarm" | "Standalone" = "Swarm") {
+  await waitFor(() => expect(dialog.textContent).toContain(`(${kind})`));
+}
+
 function submit(dialog: HTMLElement) {
   fireEvent.click(within(dialog).getByRole("button", { name: "Create stack" }));
 }
@@ -151,8 +164,9 @@ describe("CreateStackDialog", () => {
     mount();
     const dialog = await open();
     expect(dialog.textContent).toContain("Nothing is deployed until you review and deploy it.");
+    await ready(dialog);
     expect(dialog.textContent).toContain(
-      "Lowercase letters, numbers, dash or underscore. It can't change later.",
+      "Letters, numbers, dash or underscore, up to 61 characters. It can't change later.",
     );
     expect(
       within(dialog).getByRole("radio", { name: "Starter example" }).getAttribute("aria-checked"),
@@ -169,19 +183,29 @@ describe("CreateStackDialog", () => {
     await waitFor(() => expect(dialog.textContent).toContain("On Prod (Swarm)"));
   });
 
-  it.each(["Web", "-web", "my stack", "a.b", "x".repeat(64)])(
-    "refuses the name %j with the rule, and sends nothing",
+  it.each(["Shop.Front", "-web", "my stack", "a/b", "x".repeat(62)])(
+    "refuses the name %j on a swarm with the swarm rule, and sends nothing",
     async (name) => {
       mount();
       const dialog = await open();
+      await ready(dialog);
       typeName(dialog, name);
       submit(dialog);
-      expect(
-        await within(dialog).findByText(
-          "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
-        ),
-      ).toBeTruthy();
+      expect(await within(dialog).findByText(SWARM_SENTENCE)).toBeTruthy();
       expect(posts()).toEqual([]);
+    },
+  );
+
+  it.each(["MyApp", "my_app-2", "x".repeat(61)])(
+    "takes the name %j on a swarm and sends it",
+    async (name) => {
+      mount();
+      const dialog = await open();
+      await ready(dialog);
+      typeName(dialog, name);
+      submit(dialog);
+      await waitFor(() => expect(posts()).toHaveLength(1));
+      expect(posts()[0]?.body).toEqual({ name, start: "example" });
     },
   );
 
@@ -239,13 +263,10 @@ describe("CreateStackDialog", () => {
     answer = () => problem(422, "stack_name_invalid");
     mount();
     const dialog = await open();
+    await ready(dialog);
     typeName(dialog, "web");
     submit(dialog);
-    expect(
-      await within(dialog).findByText(
-        "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
-      ),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText(SWARM_SENTENCE)).toBeTruthy();
   });
 
   it("says it cannot create stacks when the server answers 403", async () => {
@@ -304,15 +325,12 @@ describe("CreateStackDialog: the name check", () => {
   it("does not ask about an empty name or one that breaks the rule", async () => {
     mount();
     const dialog = await open();
+    await ready(dialog);
     const name = within(dialog).getByLabelText("Name");
     fireEvent.blur(name);
     typeName(dialog, "Not Valid");
     fireEvent.blur(name);
-    expect(
-      await within(dialog).findByText(
-        "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
-      ),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText(SWARM_SENTENCE)).toBeTruthy();
     expect(checks).toEqual([]);
   });
 
@@ -385,18 +403,14 @@ describe("CreateStackDialog: the name check", () => {
     checkAnswer = () =>
       Response.json({
         status: "invalid",
-        message:
-          "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
+        message: SWARM_SENTENCE,
       });
     mount();
     const dialog = await open();
+    await ready(dialog);
     typeName(dialog, "web");
     fireEvent.blur(within(dialog).getByLabelText("Name"));
-    expect(
-      await within(dialog).findByText(
-        "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
-      ),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText(SWARM_SENTENCE)).toBeTruthy();
   });
 
   it("checks again on submit, and creates nothing when the name has been taken since", async () => {
@@ -450,10 +464,65 @@ describe("CreateStackDialog: the name check", () => {
     expect(within(alert).getByRole("link", { name: "Open legacy" })).toBeTruthy();
   });
 
-  it("stops the name field at 63 characters", async () => {
+  it("stops the name field at 61 characters on a swarm and 255 on a standalone host", async () => {
     mount();
     const dialog = await open();
-    expect(within(dialog).getByLabelText("Name").getAttribute("maxlength")).toBe("63");
+    await ready(dialog);
+    expect(within(dialog).getByLabelText("Name").getAttribute("maxlength")).toBe("61");
+    cleanup();
+    environments = [{ id: ENV, name: "Prod", envType: "standalone" }];
+    mount();
+    const standalone = await open();
+    await ready(standalone, "Standalone");
+    expect(within(standalone).getByLabelText("Name").getAttribute("maxlength")).toBe("255");
+  });
+});
+
+describe("CreateStackDialog: a standalone host", () => {
+  beforeEach(() => {
+    environments = [{ id: ENV, name: "Prod", envType: "standalone" }];
+  });
+
+  it("says the standalone rule under Name", async () => {
+    mount();
+    const dialog = await open();
+    await ready(dialog, "Standalone");
+    expect(dialog.textContent).toContain(
+      "Lowercase letters, numbers, dash or underscore, up to 255 characters. It can't change later.",
+    );
+  });
+
+  it.each(["Web", "MyApp", "a.b", "-web"])(
+    "refuses the name %j with the standalone rule, and sends nothing",
+    async (name) => {
+      mount();
+      const dialog = await open();
+      await ready(dialog, "Standalone");
+      typeName(dialog, name);
+      submit(dialog);
+      expect(await within(dialog).findByText(STANDALONE_SENTENCE)).toBeTruthy();
+      expect(posts()).toEqual([]);
+    },
+  );
+
+  it("takes shop-front and sends it", async () => {
+    mount();
+    const dialog = await open();
+    await ready(dialog, "Standalone");
+    typeName(dialog, "shop-front");
+    submit(dialog);
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]?.body).toEqual({ name: "shop-front", start: "example" });
+  });
+
+  it("shows the standalone rule when the server calls the name invalid", async () => {
+    answer = () => problem(422, "stack_name_invalid");
+    mount();
+    const dialog = await open();
+    await ready(dialog, "Standalone");
+    typeName(dialog, "web");
+    submit(dialog);
+    expect(await within(dialog).findByText(STANDALONE_SENTENCE)).toBeTruthy();
   });
 });
 
@@ -660,6 +729,43 @@ describe("CreateStackDialog on the All stacks list", () => {
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "A stack named web already exists on Lab.",
     );
+  });
+
+  it("uses the union rule until an environment is chosen, then the rule of its target", async () => {
+    mount("global");
+    const dialog = await open();
+    const name = within(dialog).getByLabelText("Name");
+    expect(name.getAttribute("maxlength")).toBe("255");
+    expect(dialog.textContent).toContain(
+      "Letters, numbers, dash or underscore. It can't change later.",
+    );
+    // No environment yet: a name no target takes is refused, one that some target takes is not.
+    typeName(dialog, "Shop.Front");
+    fireEvent.blur(name);
+    expect(await within(dialog).findByText(UNION_SENTENCE)).toBeTruthy();
+    typeName(dialog, "MyApp");
+    fireEvent.blur(name);
+    await waitFor(() => expect(within(dialog).queryByText(UNION_SENTENCE)).toBeNull());
+    // A standalone host does not take MyApp: the filled name is judged again at once, with that rule.
+    await pick(dialog, "Lab");
+    expect(await within(dialog).findByText(STANDALONE_SENTENCE)).toBeTruthy();
+    expect(name.getAttribute("maxlength")).toBe("255");
+    // A swarm does.
+    await pick(dialog, "Prod");
+    await waitFor(() => expect(within(dialog).queryByText(STANDALONE_SENTENCE)).toBeNull());
+    expect(name.getAttribute("maxlength")).toBe("61");
+    expect(dialog.textContent).toContain("up to 61 characters. It can't change later.");
+    expect(posts()).toEqual([]);
+  });
+
+  it("shows the sentence of the chosen environment's target when the server calls the name invalid", async () => {
+    checkAnswer = () => Response.json({ status: "invalid", message: STANDALONE_SENTENCE });
+    mount("global");
+    const dialog = await open();
+    await pick(dialog, "Lab");
+    typeName(dialog, "web");
+    fireEvent.blur(within(dialog).getByLabelText("Name"));
+    expect(await within(dialog).findByText(STANDALONE_SENTENCE)).toBeTruthy();
   });
 
   it("preselects the environment when the user may create on only one", async () => {
