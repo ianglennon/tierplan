@@ -57,6 +57,12 @@ func corpusRig(t *testing.T, file string, edit func(short string, spec *swarm.Se
 	if err != nil {
 		t.Fatal(err)
 	}
+	return composeRig(t, content, edit)
+}
+
+// composeRig stands the converted compose text on a fake swarm as docker stack deploy would leave it (see corpusRig).
+func composeRig(t *testing.T, content []byte, edit func(short string, spec *swarm.ServiceSpec)) *swarmRig {
+	t.Helper()
 	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
 		Name: "shop", Target: stacks.TargetSwarm,
 		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: content}}},

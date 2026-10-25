@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
@@ -30,6 +31,8 @@ const (
 	problemStackAlreadyManaged = "stack_already_managed"
 	// problemStackNotAdoptable is the type of the 409 for Bayplan's own stack, its agent's and a name the target cannot hold.
 	problemStackNotAdoptable = "stack_not_adoptable"
+	// problemPastedFileInvalid is the type of the 422 for a pasted compose file that does not pass the check at the commit.
+	problemPastedFileInvalid = "pasted_file_invalid"
 
 	// adoptLockKind is the kind of operation the adoption holds the environment's operation lock as.
 	adoptLockKind = "adopt"
@@ -37,7 +40,40 @@ const (
 
 // AdoptStackRequest is the body of the adopt route.
 type AdoptStackRequest struct {
-	Fingerprint string `json:"fingerprint" required:"true" maxLength:"65536" doc:"The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored"`
+	Fingerprint string         `json:"fingerprint" required:"true" maxLength:"65536" doc:"The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored"`
+	Source      string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written"`
+	Compose     string         `json:"compose,omitempty" maxLength:"1048576" doc:"For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB). Never rewritten"`
+	Vars        []DraftVarBody `json:"vars,omitempty" maxItems:"500" doc:"For source paste, the values of the variables the pasted file uses. A secret one is stored sealed, like any secret variable"`
+}
+
+// AdoptCheckRequest is the body of the adopt check route. It may be left out, which is the rebuild.
+type AdoptCheckRequest struct {
+	Source  string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs"`
+	Compose string         `json:"compose,omitempty" maxLength:"1048576" doc:"For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB)"`
+	Vars    []DraftVarBody `json:"vars,omitempty" maxItems:"500" doc:"For source paste, the values of the variables the pasted file uses"`
+}
+
+// AdoptCheckInput is the path and optional body of the adopt check route: a pointer, so that a request with no body
+// is the rebuild.
+type AdoptCheckInput struct {
+	UnmanagedStackPathInput
+	Body *AdoptCheckRequest
+}
+
+// pastedCopyOf is the working copy of a pasted adoption: the compose text as written, as the stack's only file, and
+// the variables sent with it, judged by the rules of a save. It is nil for the rebuild. The text is never trimmed or
+// rewritten. A secret sent as the placeholder has no saved value to keep, so it is refused.
+func pastedCopyOf(source, compose string, vars []DraftVarBody) (*stacks.WorkingCopy, error) {
+	if source != stackops.AdoptSourcePaste {
+		return nil, nil
+	}
+	wc, err := draftCopy(StackDraftSaveRequest{
+		Files: []DraftFileBody{{Path: stacks.ComposeFile, Content: compose}}, Vars: vars,
+	}, stacks.WorkingCopy{})
+	if err != nil {
+		return nil, err
+	}
+	return &wc, nil
 }
 
 // AdoptStackInput is the path and body of the adopt route.
@@ -64,10 +100,12 @@ func registerStackAdopt(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 			"and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. " +
 			"The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. " +
 			"Adopting never fails on the host-access policy: it only records what already runs. " +
+			"With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, " +
+			"stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. " +
 			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).",
-		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated,
+		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *AdoptStackInput) (*StackDetailOutput, error) {
 			return adoptStack(ctx, d, in)
@@ -87,6 +125,10 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
+	}
+	pasted, err := pastedCopyOf(in.Body.Source, in.Body.Compose, in.Body.Vars)
+	if err != nil {
+		return nil, err
 	}
 	repo := d.repo()
 	own, err := repo.Stacks(ctx, env.ID)
@@ -117,6 +159,7 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 	adopted, err := d.ops().AdoptWithOutcome(ctx, repo, stackops.AdoptInput{
 		EnvID: env.ID, Name: in.Name, Target: target, Fingerprint: in.Body.Fingerprint,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Managed: own, Self: d.selfMarks(row.Kind),
+		Source: in.Body.Source, Pasted: pasted,
 	})
 	switch {
 	case err == nil:
@@ -145,7 +188,13 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 func adoptProblem(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, name string, err error) error {
 	var failed *stackops.RebuildError
 	var refused *stackops.NotAdoptableError
+	var badPaste *stackops.PasteError
+	var badVar *stacks.VarError
 	switch {
+	case errors.As(err, &badPaste):
+		return httpx.Problem(http.StatusUnprocessableEntity, problemPastedFileInvalid, badPaste.Reason)
+	case errors.As(err, &badVar):
+		return varRuleProblem(err)
 	case errors.Is(err, stackops.ErrNameTaken):
 		// Also the loser of two adoptions that raced: the winner's stack holds the name now.
 		now, lerr := repo.Stacks(ctx, envID)
@@ -181,7 +230,12 @@ type AdoptCheckBody struct {
 	Policy        AdoptCheckPolicyBody     `json:"policy" doc:"The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for"`
 	Portainer     bool                     `json:"portainer" doc:"True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it"`
 	Orphan        bool                     `json:"orphan" doc:"True when an object of the stack carries the ID of a Bayplan stack this instance does not hold"`
-	Notes         []GeneratedNoteBody      `json:"notes" doc:"What the rebuild could not say plainly, by service then code"`
+	Notes         []GeneratedNoteBody      `json:"notes" doc:"What the rebuild could not say plainly, by service then code. Empty for a pasted file"`
+	Source        string                   `json:"source" enum:"rebuild,paste" doc:"Which definition was checked: the rebuild from what runs, or the pasted file"`
+	Problems      []StackProblemBody       `json:"problems" doc:"For a pasted file, what the check found in it, as the editor's check lists problems. Always empty for the rebuild"`
+	Variables     []StackVariableBody      `json:"variables" doc:"For a pasted file, the variables it uses with the value a deploy would use; a secret one reads <hidden>. Always empty for the rebuild"`
+	Matches       bool                     `json:"matches" doc:"True when a pasted file differs from what runs in nothing but Bayplan's ownership labels. Always false for the rebuild"`
+	Blocked       bool                     `json:"blocked" doc:"True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty"`
 }
 
 // AdoptCheckObjectBody is one network, volume, secret or config of the stack and how adopting treats it (D-13, D-18).
@@ -223,18 +277,20 @@ func registerStackAdoptCheck(r *httpx.Router, d StacksDeps, lim *streamLimiter) 
 		Description: "Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, " +
 			"a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. " +
 			"The fingerprint it answers is the one to send with the adoption. " +
+			"With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; " +
+			"a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. " +
 			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. " +
 			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).",
-		Tags: []string{"stacks"},
+		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, in *UnmanagedStackPathInput) (*AdoptCheckOutput, error) {
+		func(ctx context.Context, in *AdoptCheckInput) (*AdoptCheckOutput, error) {
 			return checkAdoption(ctx, d, lim, in)
 		})
 }
 
-func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *UnmanagedStackPathInput) (*AdoptCheckOutput, error) {
+func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *AdoptCheckInput) (*AdoptCheckOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
@@ -261,8 +317,17 @@ func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Un
 	if err != nil {
 		return nil, stackInternal(d, "adopt check: read the environment", env.ID, err)
 	}
+	var body AdoptCheckRequest
+	if in.Body != nil {
+		body = *in.Body
+	}
+	pasted, err := pastedCopyOf(body.Source, body.Compose, body.Vars)
+	if err != nil {
+		return nil, err
+	}
 	res, err := d.ops().AdoptCheck(ctx, stackops.AdoptInput{
 		EnvID: env.ID, Name: in.Name, Target: target, Caller: stackops.Caller{Principal: p, Actor: p.Name}, Managed: own, Self: d.selfMarks(row.Kind),
+		Source: body.Source, Pasted: pasted,
 	}, redact.CanReveal(ctx, d.Checker, p, env.ID))
 	if err != nil {
 		return nil, adoptProblem(ctx, d, repo, env.ID, in.Name, err)
@@ -280,6 +345,7 @@ func adoptCheckBody(res stackops.AdoptCheckResult) AdoptCheckBody {
 		Objects: make([]AdoptCheckObjectBody, 0, len(res.Objects)), Notes: make([]GeneratedNoteBody, 0, len(res.Notes)),
 		Policy:    AdoptCheckPolicyBody{Kinds: []string{}, Entries: []AdoptCheckPolicyEntry{}},
 		Portainer: res.Portainer, Orphan: res.Orphan,
+		Source: res.Source, Problems: problemBodies(res.Problems), Variables: variableBodies(res.Variables), Matches: res.Matches, Blocked: res.Blocked,
 	}
 	for _, o := range res.Objects {
 		body.Objects = append(body.Objects, AdoptCheckObjectBody{Kind: o.Kind, Name: o.Name, Treatment: o.Treatment})

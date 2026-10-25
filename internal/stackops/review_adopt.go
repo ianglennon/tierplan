@@ -19,6 +19,10 @@ import (
 // (plan 08-14, D-16, D-20). It answers what the first deploy of the adopted stack would change. A difference that is
 // only Bayplan's ownership labels is the change the first deploy makes by itself, so it is marked
 // stacks.ServiceChange.OwnershipOnly and counted apart in Summary.OwnershipOnly; every other difference is a gap.
+//
+// The definition reviewed is ReviewInput.Copy: the rebuild's file, or (plan 08-15, D-12) a pasted file that has already
+// passed stacks.Check. Rebuilt always carries what runs: its Pins are the image each service is converted with (the
+// digest it runs, or for a pasted file the image as written when that is not what runs).
 const ReviewModeAdopt = "adopt"
 
 // AdoptCheckID is the stack ID the adopt check converts with. The stack has none yet; the placeholder is on the

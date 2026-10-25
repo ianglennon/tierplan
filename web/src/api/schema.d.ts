@@ -2427,7 +2427,7 @@ export interface paths {
         put?: never;
         /**
          * Adopt a stack Bayplan did not make
-         * @description Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
+         * @description Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
          */
         post: operations["adoptStack"];
         delete?: never;
@@ -2447,7 +2447,7 @@ export interface paths {
         put?: never;
         /**
          * Check what adopting a stack would change on its first deploy
-         * @description Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).
+         * @description Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).
          */
         post: operations["checkAdoption"];
         delete?: never;
@@ -4104,6 +4104,8 @@ export interface components {
             added: number;
         };
         AdoptCheckBody: {
+            /** @description True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty */
+            blocked: boolean;
             /** @description True when nothing will change on the first deploy except Bayplan's ownership labels */
             clean: boolean;
             /** @description How many objects of each kind there are */
@@ -4117,7 +4119,9 @@ export interface components {
             gapCount: number;
             /** @description The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges */
             gaps: components["schemas"]["StackReviewServiceBody"][] | null;
-            /** @description What the rebuild could not say plainly, by service then code */
+            /** @description True when a pasted file differs from what runs in nothing but Bayplan's ownership labels. Always false for the rebuild */
+            matches: boolean;
+            /** @description What the rebuild could not say plainly, by service then code. Empty for a pasted file */
             notes: components["schemas"]["GeneratedNoteBody"][] | null;
             /** @description The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name */
             objects: components["schemas"]["AdoptCheckObjectBody"][] | null;
@@ -4129,6 +4133,15 @@ export interface components {
             policy: components["schemas"]["AdoptCheckPolicyBody"];
             /** @description True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it */
             portainer: boolean;
+            /** @description For a pasted file, what the check found in it, as the editor's check lists problems. Always empty for the rebuild */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /**
+             * @description Which definition was checked: the rebuild from what runs, or the pasted file
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For a pasted file, the variables it uses with the value a deploy would use; a secret one reads <hidden>. Always empty for the rebuild */
+            variables: components["schemas"]["StackVariableBody"][] | null;
         };
         AdoptCheckCountsBody: {
             /**
@@ -4176,6 +4189,18 @@ export interface components {
             /** @description What the setting is and the service that has it */
             text: string;
         };
+        AdoptCheckRequest: {
+            /** @description For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) */
+            compose?: string;
+            /**
+             * @description rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs
+             * @default rebuild
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For source paste, the values of the variables the pasted file uses */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */
             clusterId: string;
@@ -4183,8 +4208,18 @@ export interface components {
             previousClusterId?: string;
         };
         AdoptStackRequest: {
+            /** @description For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB). Never rewritten */
+            compose?: string;
             /** @description The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored */
             fingerprint: string;
+            /**
+             * @description rebuild: Bayplan writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written
+             * @default rebuild
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For source paste, the values of the variables the pasted file uses. A secret one is stored sealed, like any secret variable */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
         };
         AgentBody: {
             /** @description The agent's version when it last connected or enrolled */
@@ -15788,7 +15823,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AdoptCheckRequest"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {

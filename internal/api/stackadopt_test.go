@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -572,5 +573,123 @@ func TestAdoptCheckBodyCarriesObjectsAndFlags(t *testing.T) {
 	}
 	if got.Notes == nil {
 		t.Errorf("notes is absent, want a list")
+	}
+}
+
+// pastedBody is a check or adopt body that starts from a pasted file.
+func pastedBody(t *testing.T, fields map[string]any) string {
+	t.Helper()
+	fields["source"] = "paste"
+	b, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// TestAdoptPasteRoute: a pasted compose file is checked by a Viewer too, shown with its variables and its differences,
+// refused when it has an error, and adopted exactly as written by an Env Admin, whatever a check said before (T-08-56,
+// T-08-57).
+func TestAdoptPasteRoute(t *testing.T) {
+	t.Parallel()
+	const pasted = "# What Portainer deployed.\nservices:\n  app:\n    image: nginx:${TAG}   # keep\n    environment:\n      TOKEN: ${TOKEN}\n  db:\n    image: nginx:1.27\n"
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 2, 2, nil), foreignSecretService("legacy", "db", 1, 1, nil))
+	vars := []map[string]any{{"name": "TAG", "value": "1.27", "secret": false}, {"name": "TOKEN", "value": "tok-value-9876", "secret": true}}
+	writesBefore := len(f.fake.Writes())
+
+	// A Viewer may check a pasted file; the answer carries the variables and never a secret value.
+	rec := viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted, "vars": vars}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check of a pasted file: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var checked struct {
+		Source    string `json:"source"`
+		Blocked   bool   `json:"blocked"`
+		Matches   bool   `json:"matches"`
+		Variables []struct {
+			Name     string `json:"name"`
+			Secret   bool   `json:"secret"`
+			Required bool   `json:"required"`
+			Value    string `json:"value"`
+		} `json:"variables"`
+		Problems []json.RawMessage `json:"problems"`
+		Gaps     []json.RawMessage `json:"gaps"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &checked); err != nil {
+		t.Fatal(err)
+	}
+	if checked.Source != "paste" || checked.Blocked || len(checked.Variables) != 2 {
+		t.Fatalf("answer = %+v, want a pasted file that is not blocked and uses two variables", checked)
+	}
+	if strings.Contains(rec.Body.String(), "tok-value-9876") {
+		t.Errorf("the check answered a secret value: %s", rec.Body)
+	}
+
+	// An unfilled variable is a problem and blocks; the variable says it is required.
+	rec = viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check without values: %d %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &checked); err != nil || !checked.Blocked || len(checked.Gaps) != 0 {
+		t.Errorf("check without values = %+v, %v, want it blocked with nothing compared", checked, err)
+	}
+	required := 0
+	for _, v := range checked.Variables {
+		if v.Required {
+			required++
+		}
+	}
+	if required != 2 {
+		t.Errorf("%d variables required, want 2: %+v", required, checked.Variables)
+	}
+
+	// An include is refused, not read.
+	rec = viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": "include:\n  - /etc/hostname\nservices:\n  app:\n    image: nginx:1.27\n"}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check of an include: %d %s", rec.Code, rec.Body)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &checked); err != nil || !checked.Blocked || len(checked.Problems) == 0 {
+		t.Errorf("check of an include = %+v, %v, want it blocked with a problem", checked, err)
+	}
+
+	fp := fingerprintOf(t, admin, "legacy")
+	// Needs stacks.create, as the rebuild does.
+	if rec := operator.do(http.MethodPost, adoptPath("legacy"), pastedBody(t, map[string]any{"fingerprint": fp, "compose": pasted, "vars": vars})); rec.Code != http.StatusForbidden {
+		t.Errorf("paste-adopt as an operator: %d %s, want 403", rec.Code, rec.Body)
+	}
+	// The commit checks again: a file with an error is refused whatever the page was told, and nothing is stored.
+	rec = admin.do(http.MethodPost, adoptPath("legacy"), pastedBody(t, map[string]any{"fingerprint": fp, "compose": "include:\n  - /etc/hostname\nservices:\n  app:\n    image: nginx:1.27\n"}))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "pasted_file_invalid" {
+		t.Errorf("paste-adopt of an include: %d %s, want 422 pasted_file_invalid", rec.Code, rec.Body)
+	}
+	rec = admin.do(http.MethodPost, adoptPath("legacy"), pastedBody(t, map[string]any{"fingerprint": fp, "compose": pasted, "vars": []map[string]any{{"name": "TAG", "value": "1.27", "secret": false}, {"name": "TOKEN", "value": "abc", "secret": true}}}))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("paste-adopt with a three-character secret: %d %s, want 422", rec.Code, rec.Body)
+	}
+	if list := admin.do(http.MethodGet, "stacks", ""); strings.Contains(list.Body.String(), `"managed":true`) {
+		t.Errorf("a refused paste stored a stack: %s", list.Body)
+	}
+
+	rec = admin.do(http.MethodPost, adoptPath("legacy"), pastedBody(t, map[string]any{"fingerprint": fp, "compose": pasted, "vars": vars}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("paste-adopt as an admin: %d %s, want 201", rec.Code, rec.Body)
+	}
+	st := answerOf[stackAnswer](t, rec)
+	if st.Source != "adopted" || !st.Managed {
+		t.Errorf("answer = %+v, want a managed adopted stack", st)
+	}
+	draft := answerOf[draftAnswer](t, admin.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+	if len(draft.Files) != 1 || draft.Files[0].Content != pasted {
+		t.Errorf("draft = %+v, want the pasted file exactly as written", draft.Files)
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("adopting sent %d writes to the engine, want none", after-writesBefore)
+	}
+	if strings.Contains(fmt.Sprint(f.stackAudits(t)), "tok-value-9876") {
+		t.Errorf("the audit trail holds the secret value: %+v", f.stackAudits(t))
 	}
 }

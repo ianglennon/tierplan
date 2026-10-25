@@ -154,15 +154,9 @@ func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stack
 	defer release()
 	res := c.res
 
-	body := StackCheckBody{Problems: make([]StackProblemBody, 0, len(res.Problems)), UnusedFiles: res.UnusedFiles}
+	body := StackCheckBody{Problems: problemBodies(res.Problems), UnusedFiles: res.UnusedFiles}
 	if body.UnusedFiles == nil {
 		body.UnusedFiles = []string{}
-	}
-	for _, p := range res.Problems {
-		body.Problems = append(body.Problems, StackProblemBody{
-			Severity: string(p.Severity), Code: p.Code, Message: p.Message, File: p.File,
-			Line: p.Line, Col: p.Col, EndLine: p.EndLine, EndCol: p.EndCol,
-		})
 	}
 	body.Variables = variableBodies(res.Variables)
 	body.SecretFiles = res.SecretFiles
@@ -170,6 +164,18 @@ func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Stack
 		body.SecretFiles = []string{}
 	}
 	return &StackCheckOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// problemBodies turns the problems of a check into their answer. A list is never null.
+func problemBodies(ps stacks.Problems) []StackProblemBody {
+	out := make([]StackProblemBody, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, StackProblemBody{
+			Severity: string(p.Severity), Code: p.Code, Message: p.Message, File: p.File,
+			Line: p.Line, Col: p.Col, EndLine: p.EndLine, EndCol: p.EndCol,
+		})
+	}
+	return out
 }
 
 // variableBodies turns the resolved variables of a check into their answer. A list is never null.

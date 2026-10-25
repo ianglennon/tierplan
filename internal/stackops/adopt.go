@@ -32,6 +32,22 @@ var ErrUnmanagedGone = errors.New("stackops: no stack of that name runs here tha
 // ErrNotAdoptable is the cause of a *NotAdoptableError.
 var ErrNotAdoptable = errors.New("stackops: this stack cannot be adopted")
 
+// The sources an adoption starts from (plan 08-15, D-12). Rebuild is the default and is always available: the
+// definition Bayplan writes from what runs. Paste is the person's own compose file, checked against what runs and
+// kept as written.
+const (
+	AdoptSourceRebuild = "rebuild"
+	AdoptSourcePaste   = "paste"
+)
+
+// PasteError is the refusal of a pasted compose file that does not pass the check, at the commit. Reason is the
+// first problem the check found, masked as every check answer is.
+type PasteError struct{ Reason string }
+
+func (e *PasteError) Error() string {
+	return "stackops: the pasted compose file does not pass the check: " + e.Reason
+}
+
 // NotAdoptableError is a refusal to adopt a stack that is Bayplan's own or its agent's, or whose name its target
 // cannot hold (D-48, D-49, D-53). Found is the stack as discovery read it, whose Owner and NameReason the caller
 // words.
@@ -110,6 +126,10 @@ func (d Deps) AdoptFingerprint(ctx context.Context, envID string, target stacks.
 
 // AdoptInput is what a commit of an adoption needs. Fingerprint is the one the page read (AdoptFingerprint),
 // Managed the stacks Bayplan holds on the environment, and Self says which objects are Bayplan's own.
+//
+// Source is AdoptSourceRebuild (or empty) or AdoptSourcePaste. With paste, Pasted is the compose file and variables the
+// person typed or pasted: untrusted text, loaded only through stacks.Check (T-08-56), stored as written when it
+// passes. The browser sends text, never a verdict: the commit checks the pasted file again (T-08-57).
 type AdoptInput struct {
 	EnvID, Name string
 	Target      stacks.Target
@@ -117,6 +137,68 @@ type AdoptInput struct {
 	Caller      Caller
 	Managed     []Stack
 	Self        SelfMarks
+	Source      string
+	Pasted      *stacks.WorkingCopy
+}
+
+// isPaste reports whether the adoption starts from a pasted file, and refuses a source nobody defined.
+func (in AdoptInput) isPaste() (bool, error) {
+	switch in.Source {
+	case "", AdoptSourceRebuild:
+		return false, nil
+	case AdoptSourcePaste:
+		return true, nil
+	}
+	return false, errors.New("stackops: unknown adopt source " + strconv.Quote(in.Source))
+}
+
+// pastedCopy is the working copy a pasted adoption starts from: never nil files, so an empty paste is checked as the
+// empty file it is.
+func (in AdoptInput) pastedCopy() stacks.WorkingCopy {
+	if in.Pasted == nil {
+		return stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte{}}}}
+	}
+	return *in.Pasted
+}
+
+// checkPasted runs the pasted copy through the one check pipeline every draft goes through (no include, no extends,
+// no file of the server read, at most 1 MiB). A copy that does not load, or has an error, is blocked: nothing is
+// reviewed or stored for it.
+func checkPasted(ctx context.Context, in AdoptInput) (stacks.CheckResult, stacks.WorkingCopy, bool) {
+	copy := in.pastedCopy()
+	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Name, Target: in.Target, Copy: copy})
+	return res, copy, res.Loaded == nil || res.Problems.Errors() > 0
+}
+
+// withPasted is the prepared adoption with the pasted copy as the definition to adopt. The pins are the running
+// digests of the services that run the image the file names; any other service is pinned to its image as written
+// (a service that does not run, or runs another image than the file says, so its difference shows in the review).
+func (p adoptPrepared) withPasted(copy stacks.WorkingCopy, loaded *stacks.Loaded, target stacks.Target) adoptPrepared {
+	pins := make(map[string]string, len(loaded.Project.Services))
+	for key, svc := range loaded.Project.Services {
+		if svc.Image == "" {
+			continue
+		}
+		engine := key
+		if target == stacks.TargetSwarm {
+			engine = p.stack.Name + "_" + key
+		}
+		if live, ok := p.res.Pins[engine]; ok {
+			text := live
+			if i := strings.LastIndex(live, "@"); i > 0 {
+				text = live[:i]
+			}
+			if stacks.SameImageText(text, svc.Image) {
+				pins[engine] = live
+				continue
+			}
+		}
+		pins[engine] = svc.Image
+	}
+	p.copy = copy
+	p.res.Pins = pins
+	p.res.Notes = nil
+	return p
 }
 
 // AdoptCommit adopts the unmanaged stack of that name: it reads what runs and rebuilds the definition from it
@@ -199,6 +281,21 @@ func (d Deps) AdoptWithOutcome(ctx context.Context, repo Repo, in AdoptInput) (A
 	if prep.res.Fingerprint != in.Fingerprint {
 		return Adopted{}, ErrAdoptStale
 	}
+	paste, err := in.isPaste()
+	if err != nil {
+		return Adopted{}, err
+	}
+	if paste {
+		// The pasted text is checked again here, whatever the page was told (T-08-57).
+		res, copy, blocked := checkPasted(ctx, in)
+		if blocked {
+			return Adopted{}, &PasteError{Reason: firstErrorMessage(res.Problems)}
+		}
+		if err := stacks.CheckVars(copy.Vars); err != nil {
+			return Adopted{}, err
+		}
+		prep = prep.withPasted(copy, res.Loaded, in.Target)
+	}
 
 	copy := prep.copy
 	loaded, err := loadRebuilt(ctx, in.Name, in.Target, copy)
@@ -263,7 +360,16 @@ func gapPaths(rows []stacks.ServiceChange) map[string][]string {
 // rebuild could not say plainly, and Policy the host-access settings of the definition, listed for whoever asks and
 // blocking nothing (D-17). Portainer and Orphan say the stack carries Portainer's marks or the ID of a stack Bayplan
 // made once (D-19, D-11).
+//
+// Source says which definition was checked. For a pasted file Problems and Variables are what the check found in it
+// (masked, as every check answer is), Blocked says it has an error so nothing was compared, and Matches says it differs
+// from what runs in nothing but the ownership labels.
 type AdoptCheckResult struct {
+	Source        string
+	Problems      stacks.Problems
+	Variables     []stacks.ResolvedVar
+	Matches       bool
+	Blocked       bool
 	Fingerprint   string
 	Gaps          []stacks.ServiceChange
 	OwnershipOnly []string
@@ -283,9 +389,27 @@ type AdoptCheckResult struct {
 //
 // The refusals are the commit's: ErrNameTaken, ErrUnmanagedGone, *NotAdoptableError and the rebuild's own errors.
 func (d Deps) AdoptCheck(ctx context.Context, in AdoptInput, reveal bool) (AdoptCheckResult, error) {
+	paste, err := in.isPaste()
+	if err != nil {
+		return AdoptCheckResult{}, err
+	}
 	prep, err := d.prepareAdoption(ctx, in)
 	if err != nil {
 		return AdoptCheckResult{}, err
+	}
+	out := AdoptCheckResult{
+		Fingerprint: prep.res.Fingerprint, Source: AdoptSourceRebuild, Objects: prep.res.Objects, Notes: prep.res.Notes,
+		Portainer: prep.found.Portainer, Orphan: prep.found.OrphanID != "",
+	}
+	if paste {
+		res, copy, blocked := checkPasted(ctx, in)
+		out.Source, out.Problems, out.Variables, out.Notes = AdoptSourcePaste, res.Problems, res.Variables, nil
+		if blocked {
+			// Nothing of a file that does not pass the check is compared with what runs.
+			out.Blocked = true
+			return out, nil
+		}
+		prep = prep.withPasted(copy, res.Loaded, in.Target)
 	}
 	rv, plan, err := prep.review(ctx, d)
 	if err != nil {
@@ -295,17 +419,14 @@ func (d Deps) AdoptCheck(ctx context.Context, in AdoptInput, reveal bool) (Adopt
 	if err != nil {
 		return AdoptCheckResult{}, err
 	}
-	out := AdoptCheckResult{
-		Fingerprint: prep.res.Fingerprint, OwnershipOnly: adoptNames(rv.Services),
-		Objects: prep.res.Objects, Notes: prep.res.Notes, Policy: pol,
-		Portainer: prep.found.Portainer, Orphan: prep.found.OrphanID != "",
-	}
+	out.OwnershipOnly, out.Policy = adoptNames(rv.Services), pol
 	for _, c := range rv.Services {
 		if !c.OwnershipOnly {
 			out.Gaps = append(out.Gaps, c)
 		}
 	}
 	out.Clean = len(out.Gaps) == 0
+	out.Matches = paste && out.Clean
 	if !reveal {
 		out.Gaps = RedactChanges(out.Gaps, in.Target)
 	}
@@ -333,4 +454,14 @@ func adoptionRecordOf(found Discovered, res rebuild.Result) stacks.Adoption {
 		slices.Sort(*names)
 	}
 	return a
+}
+
+// firstErrorMessage is the message of the first error among the problems, or a fixed sentence when there is none.
+func firstErrorMessage(ps stacks.Problems) string {
+	for _, p := range ps {
+		if p.Severity == stacks.SeverityError {
+			return p.Message
+		}
+	}
+	return "The compose file could not be loaded."
 }

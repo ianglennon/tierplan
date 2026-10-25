@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"bytes"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -536,3 +537,271 @@ func TestAdoptCheckObjectsAndFlags(t *testing.T) {
 		t.Errorf("policy entries = %q, want %q", texts, want)
 	}
 }
+
+// The paste source (plan 08-15, STK-13, D-12): a person who still has the compose file the stack was deployed from
+// pastes it; it is checked by the one check pipeline, compared with what runs, and adopted as written.
+
+// pastedShop is the file docker stack deploy was given: comments and a key order the rebuild would not write.
+const pastedShop = `# The shop, as deployed in 2023.
+services:
+  web:
+    environment:
+      MODE: prod
+    image: nginx:1.27   # stay on 1.27
+    deploy:
+      replicas: 2
+  worker:
+    image: busybox:1
+`
+
+// pasteCheck runs the adopt check of the stack named shop with a pasted file.
+func (r *swarmRig) pasteCheck(t *testing.T, target stacks.Target, pasted stacks.WorkingCopy, reveal bool) (stackops.AdoptCheckResult, error) {
+	t.Helper()
+	managed, err := adoptRepo(t, r).Stacks(testsupport.Context(t), r.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.deps.AdoptCheck(testsupport.Context(t), stackops.AdoptInput{
+		EnvID: r.envID, Name: "shop", Target: target, Caller: stackops.Caller{Actor: "ada"}, Managed: managed,
+		Source: stackops.AdoptSourcePaste, Pasted: &pasted,
+	}, reveal)
+}
+
+func composeOnly(text string, vars ...stacks.Var) stacks.WorkingCopy {
+	return stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(text)}}, Vars: vars}
+}
+
+// TestAdoptCheckPasteMatches: the file the stack was deployed from, pasted back, differs from what runs in nothing but
+// Bayplan's ownership labels.
+func TestAdoptCheckPasteMatches(t *testing.T) {
+	t.Parallel()
+	t.Run("swarm", func(t *testing.T) {
+		t.Parallel()
+		rig := composeRig(t, []byte(pastedShop), nil)
+
+		res, err := rig.pasteCheck(t, stacks.TargetSwarm, composeOnly(pastedShop), true)
+		if err != nil {
+			t.Fatalf("AdoptCheck with a pasted file: %v", err)
+		}
+
+		if res.Source != stackops.AdoptSourcePaste || !res.Matches || !res.Clean || res.Blocked || len(res.Gaps) != 0 {
+			var names []string
+			for _, g := range res.Gaps {
+				names = append(names, g.Short+" "+g.Change)
+			}
+			t.Fatalf("source %q matches %v clean %v blocked %v gaps %v, want a pasted file that matches", res.Source, res.Matches, res.Clean, res.Blocked, names)
+		}
+		if res.Problems.Errors() != 0 {
+			t.Errorf("problems = %+v, want none", res.Problems)
+		}
+		if res.Fingerprint == "" {
+			t.Errorf("the check answers no fingerprint to adopt with")
+		}
+	})
+
+	t.Run("standalone", func(t *testing.T) {
+		t.Parallel()
+		rig := hostRig(t, stackopstest.Foreign(t, "shop", foreignProject))
+
+		res, err := rig.pasteCheck(t, stacks.TargetStandalone, composeOnly(foreignProject), true)
+		if err != nil {
+			t.Fatalf("AdoptCheck with a pasted file: %v", err)
+		}
+
+		if !res.Matches || res.Blocked {
+			t.Fatalf("matches %v blocked %v gaps %+v problems %+v, want the file the project was made from to match", res.Matches, res.Blocked, res.Gaps, res.Problems)
+		}
+	})
+}
+
+// TestAdoptCheckPasteDiffers: a pasted file with another replica count differs in that one setting, which the first
+// deploy would change. The check still answers (a gap never blocks).
+func TestAdoptCheckPasteDiffers(t *testing.T) {
+	t.Parallel()
+	rig := composeRig(t, []byte(pastedShop), nil)
+
+	res, err := rig.pasteCheck(t, stacks.TargetSwarm, composeOnly(strings.Replace(pastedShop, "replicas: 2", "replicas: 3", 1)), true)
+	if err != nil {
+		t.Fatalf("AdoptCheck with a pasted file: %v", err)
+	}
+
+	if res.Matches || res.Clean || res.Blocked {
+		t.Fatalf("matches %v clean %v blocked %v, want a file that differs and is not blocked", res.Matches, res.Clean, res.Blocked)
+	}
+	if len(res.Gaps) != 1 || res.Gaps[0].Short != "web" || res.Gaps[0].Change != stacks.ChangeChanged {
+		t.Fatalf("gaps = %+v, want web changed and nothing else", res.Gaps)
+	}
+	if want := []string{"worker"}; !slices.Equal(res.OwnershipOnly, want) {
+		t.Errorf("ownership-only = %v, want %v", res.OwnershipOnly, want)
+	}
+}
+
+// TestAdoptCheckPasteRefusesInclude: a pasted file is untrusted. An include of a file of the server is a problem that
+// stops the check; nothing is read, compared or answered of it (T-08-56).
+func TestAdoptCheckPasteRefusesInclude(t *testing.T) {
+	t.Parallel()
+	rig := composeRig(t, []byte(pastedShop), nil)
+	hostname, readErr := os.ReadFile("/etc/hostname")
+
+	res, err := rig.pasteCheck(t, stacks.TargetSwarm, composeOnly("include:\n  - /etc/hostname\nservices:\n  web:\n    image: nginx:1.27\n"), true)
+	if err != nil {
+		t.Fatalf("AdoptCheck with a pasted file: %v", err)
+	}
+
+	if !res.Blocked || res.Problems.Errors() == 0 {
+		t.Fatalf("blocked %v problems %+v, want the include refused", res.Blocked, res.Problems)
+	}
+	if len(res.Gaps) != 0 || res.Matches || res.Clean {
+		t.Errorf("a refused file was compared: gaps %+v matches %v clean %v", res.Gaps, res.Matches, res.Clean)
+	}
+	if text := strings.TrimSpace(string(hostname)); readErr == nil && text != "" {
+		for _, p := range res.Problems {
+			if strings.Contains(p.Message, text) {
+				t.Errorf("a problem carries the content of /etc/hostname: %q", p.Message)
+			}
+		}
+	}
+}
+
+// TestAdoptCheckPasteBlocksWhatDoesNotLoad: an empty paste, a file that is not YAML and a file with an unfilled
+// required variable are each blocked, with the check's own problems and variables for the page to show.
+func TestAdoptCheckPasteBlocksWhatDoesNotLoad(t *testing.T) {
+	t.Parallel()
+	rig := composeRig(t, []byte(pastedShop), nil)
+
+	for name, tc := range map[string]struct {
+		pasted   stacks.WorkingCopy
+		required string
+	}{
+		"empty":    {composeOnly(""), ""},
+		"not yaml": {composeOnly("services: [unclosed"), ""},
+		"required": {composeOnly("services:\n  web:\n    image: nginx:${TAG}\n"), "TAG"},
+	} {
+		res, err := rig.pasteCheck(t, stacks.TargetSwarm, tc.pasted, true)
+		if err != nil {
+			t.Fatalf("%s: AdoptCheck: %v", name, err)
+		}
+		if !res.Blocked || res.Matches || len(res.Gaps) != 0 {
+			t.Errorf("%s: blocked %v matches %v gaps %v, want blocked", name, res.Blocked, res.Matches, res.Gaps)
+		}
+		if tc.required != "" && !slices.ContainsFunc(res.Variables, func(v stacks.ResolvedVar) bool { return v.Name == tc.required && v.Required }) {
+			t.Errorf("%s: variables = %+v, want %s listed as required", name, res.Variables, tc.required)
+		}
+	}
+}
+
+// TestAdoptPasteStoresTheFileAsWritten: adopting a pasted file stores it byte for byte, comments and key order
+// included, as the draft and as revision 1, with its variables (a secret one sealed) and the running digest pinned.
+func TestAdoptPasteStoresTheFileAsWritten(t *testing.T) {
+	t.Parallel()
+	const text = `# Values come from the variables below.
+services:
+  web:
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD}
+    image: nginx:${TAG}   # stay on 1.27
+    deploy:
+      replicas: 2
+  worker:
+    image: busybox:1
+`
+	rig := composeRig(t, []byte(strings.NewReplacer("${DB_PASSWORD}", "pw-value-123", "${TAG}", "1.27").Replace(text)), nil)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+	pasted := composeOnly(text, stacks.Var{Name: "TAG", Value: "1.27"}, stacks.Var{Name: "DB_PASSWORD", Value: "pw-value-123", Secret: true})
+	fp, err := rig.deps.AdoptFingerprint(ctx, rig.envID, stacks.TargetSwarm, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := rig.deps.AdoptCommit(ctx, repo, stackops.AdoptInput{
+		EnvID: rig.envID, Name: "shop", Target: stacks.TargetSwarm, Fingerprint: fp, Caller: stackops.Caller{Actor: "ada"},
+		Source: stackops.AdoptSourcePaste, Pasted: &pasted,
+	})
+	if err != nil {
+		t.Fatalf("AdoptCommit with a pasted file: %v", err)
+	}
+
+	rev, err := repo.Revision(ctx, st.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(rev.Copy.Compose()); got != text {
+		t.Errorf("revision 1 holds\n%s\nwant the file as written\n%s", got, text)
+	}
+	if got := string(draft.Copy.Compose()); got != text {
+		t.Errorf("the draft holds\n%s\nwant the file as written", got)
+	}
+	if rev.Origin != stackops.OriginAdopted || rev.Outcome != stackops.OutcomeGood {
+		t.Errorf("revision 1 = origin %q outcome %q, want adopted and good", rev.Origin, rev.Outcome)
+	}
+	pins, err := repo.RevisionPins(ctx, rev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pins["shop_web"], "nginx:1.27@"+rebuildDigest; got != want {
+		t.Errorf("pin of shop_web = %q, want the digest that runs, %q", got, want)
+	}
+	for _, snap := range []string{draft.ID, rev.ID} {
+		var plain, sealed, tag string
+		row := repo.Store.Read.QueryRowContext(ctx, `SELECT value, value_sealed FROM stack_snapshot_vars WHERE snapshot_id = ? AND name = 'DB_PASSWORD'`, snap)
+		if err := row.Scan(&plain, &sealed); err != nil {
+			t.Fatalf("read the secret variable of %s: %v", snap, err)
+		}
+		if plain != "" || sealed == "" || strings.Contains(sealed, "pw-value-123") {
+			t.Errorf("the secret variable is stored as %q / %q, want it sealed", plain, sealed)
+		}
+		if err := repo.Store.Read.QueryRowContext(ctx, `SELECT value FROM stack_snapshot_vars WHERE snapshot_id = ? AND name = 'TAG'`, snap).Scan(&tag); err != nil || tag != "1.27" {
+			t.Errorf("variable TAG of %s = %q, %v, want 1.27", snap, tag, err)
+		}
+	}
+	if len(draft.Copy.Vars) != 2 {
+		t.Errorf("the draft holds %d variables, want 2", len(draft.Copy.Vars))
+	}
+}
+
+// TestAdoptPasteIsCheckedAgainAtCommit: the commit trusts no verdict of the browser. A pasted file that does not pass
+// is refused, with nothing stored, however the page was told.
+func TestAdoptPasteIsCheckedAgainAtCommit(t *testing.T) {
+	t.Parallel()
+	rig := composeRig(t, []byte(pastedShop), nil)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+	fp, err := rig.deps.AdoptFingerprint(ctx, rig.envID, stacks.TargetSwarm, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, pasted := range map[string]*stacks.WorkingCopy{
+		"include": ptr(composeOnly("include:\n  - /etc/hostname\nservices:\n  web:\n    image: nginx:1.27\n")),
+		"nothing": nil,
+	} {
+		_, err = rig.deps.AdoptCommit(ctx, repo, stackops.AdoptInput{
+			EnvID: rig.envID, Name: "shop", Target: stacks.TargetSwarm, Fingerprint: fp, Caller: stackops.Caller{Actor: "ada"},
+			Source: stackops.AdoptSourcePaste, Pasted: pasted,
+		})
+		var refused *stackops.PasteError
+		if !errors.As(err, &refused) {
+			t.Errorf("%s: AdoptCommit = %v, want a *PasteError", name, err)
+		}
+	}
+	if list, err := repo.Stacks(ctx, rig.envID); err != nil || len(list) != 0 {
+		t.Errorf("a refused paste stored %+v, %v, want nothing", list, err)
+	}
+
+	// A secret variable too short to hide is refused at the commit, as a save refuses it.
+	short := composeOnly(pastedShop, stacks.Var{Name: "TOKEN", Value: "abc", Secret: true})
+	_, err = rig.deps.AdoptCommit(ctx, repo, stackops.AdoptInput{
+		EnvID: rig.envID, Name: "shop", Target: stacks.TargetSwarm, Fingerprint: fp, Caller: stackops.Caller{Actor: "ada"},
+		Source: stackops.AdoptSourcePaste, Pasted: &short,
+	})
+	if !errors.Is(err, stacks.ErrSecretTooShort) {
+		t.Errorf("AdoptCommit with a three-character secret = %v, want ErrSecretTooShort", err)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
