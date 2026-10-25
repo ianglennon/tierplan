@@ -499,7 +499,8 @@ Every stack action writes an audit row, with the stack and who did it and never 
 `stack.draft_saved`, `stack.draft_discarded`, `stack.deployed` (with its mode: deploy, update or rollback; its
 result, revision, job and service count), `stack.stopped`, `stack.started`, `stack.removed` (how many volumes were
 removed and kept, and whether the definition was kept), and `stack.value_revealed` (the kind and name of the
-variable or file shown, never its value). Opening and downloading a stack's logs write `logs.viewed` and
+variable or file shown, never its value), and `stack.adopted` (the stack, its target, the namespace or project it was
+taken from, how many services it has and the revision it started with). Opening and downloading a stack's logs write `logs.viewed` and
 `logs.downloaded` with the stack as the target and none of the lines. See [access.md](access.md) for the audit log itself.
 
 ## Behaviour that is still open

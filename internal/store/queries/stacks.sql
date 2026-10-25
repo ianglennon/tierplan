@@ -5,6 +5,15 @@
 INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);
 
+-- name: InsertAdoptedStack :exec
+-- InsertStack with the adoption record (D-14): the stack of a discovered stack Bayplan took over.
+INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?);
+
+-- name: SetStackAdoption :execrows
+-- Replaces the adoption record of a stack. The caller read the stack by environment and ID first.
+UPDATE stacks SET adoption = ? WHERE id = ?;
+
 -- name: GetStack :one
 -- A stack is always looked up by its environment and ID, so an ID of another environment is not found.
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption

@@ -72,6 +72,10 @@ type Result struct {
 	// NetworkCandidates), by the key StandaloneInput.Choice uses ("network:back"). The caller tries them against
 	// the hash the host holds for the object (D-46).
 	Variants map[string]int
+	// Fingerprint says what the engine held when the stack was read: the digest of each service's ID and version
+	// on a swarm, of each container's ID, config hash and image ID on a host. stackops.RebuildLive sets it from the
+	// very reads the file was made from; the adoption refuses a commit whose fingerprint is not the page's (T-08-46).
+	Fingerprint string
 }
 
 func sortNotes(in []Note) []Note {

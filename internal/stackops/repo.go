@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -83,6 +84,9 @@ type Stack struct {
 	// Discovered is true for a stack found on the engine by its labels that Bayplan does not hold (D-07). It
 	// is never stored: DiscoveredStack makes one, and Ownership reads it.
 	Discovered bool
+	// Adoption is what was recorded when Bayplan took the stack over, the zero value for a stack that was not
+	// adopted (Source.Kind is SourceAdopted exactly for the others).
+	Adoption stacks.Adoption
 }
 
 // DiscoveredStack is the stack of a name found on an environment's engine by its labels. It has no ID and
@@ -123,7 +127,23 @@ func stackOf(row sqlc.Stack) Stack {
 		ID: row.ID, EnvID: row.EnvID, Name: row.Name, Target: stacks.Target(row.Target),
 		Source:    stacks.Source{Kind: stacks.SourceKind(row.SourceKind), Ref: row.SourceRef},
 		CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(), Stopped: row.Stopped != 0,
+		Adoption: adoptionOf(row),
 	}
+}
+
+// adoptionOf reads the adoption record of a stack row. A record that is not valid JSON reads as the zero value
+// and is logged: a stack must stay listable, and ownership then falls back to the exact bayplan.stack.id rule,
+// which is the safe side.
+func adoptionOf(row sqlc.Stack) stacks.Adoption {
+	var a stacks.Adoption
+	if row.Adoption == "" || row.Adoption == "{}" {
+		return a
+	}
+	if err := json.Unmarshal([]byte(row.Adoption), &a); err != nil {
+		slog.Default().Warn("could not read the adoption record of a stack", "stack", row.ID, "error", err)
+		return stacks.Adoption{}
+	}
+	return a
 }
 
 func snapshotOf(row sqlc.StackSnapshot) Snapshot {
@@ -204,6 +224,125 @@ func (r Repo) CreateStack(ctx context.Context, envID, name string, target stacks
 		CreatedBy: actor, CreatedAt: now, Copy: normalise(copy), IsDraft: true,
 	}
 	return st, snap, nil
+}
+
+// AdoptRecord is a discovered stack to be stored as a managed one (plan 08-13, STK-13, D-14). Copy is the
+// definition rebuilt from what runs, Pins the images it runs by service and Rendered the masked rendering of the
+// two, which is what the first review compares a draft with.
+type AdoptRecord struct {
+	EnvID, Name string
+	Target      stacks.Target
+	// SourceRef is the swarm namespace or the Compose project the stack was found as.
+	SourceRef string
+	Actor     string
+	Copy      stacks.WorkingCopy
+	Pins      map[string]string
+	Rendered  []byte
+	Adoption  stacks.Adoption
+}
+
+// Adopt stores a discovered stack in one transaction: the stack (source kind adopted, with the adoption record),
+// its draft at version 1 based on revision 1, and revision 1 itself (origin adopted, outcome good, pinned to
+// the images that run, with its rendering), both holding the same content. The draft and the revision are
+// created at the same instant, so the draft reads as having no changes (DraftSaves). Nothing is sent to an
+// engine. A name the environment already has is ErrNameTaken and nothing is stored, which is also how the
+// second of two adoptions that race ends (UNIQUE env and name).
+func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, error) {
+	stackID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new stack id: %w", err)
+	}
+	draftID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	revID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	pins := rec.Pins
+	if pins == nil {
+		pins = map[string]string{}
+	}
+	rawPins, err := json.Marshal(pins)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode pins: %w", err)
+	}
+	rawAdoption, err := json.Marshal(rec.Adoption)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode the adoption record: %w", err)
+	}
+	now := r.now()
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	err = q.InsertAdoptedStack(ctx, sqlc.InsertAdoptedStackParams{
+		ID: stackID.String(), EnvID: rec.EnvID, Name: rec.Name, Target: string(rec.Target),
+		SourceKind: string(stacks.SourceAdopted), SourceRef: rec.SourceRef, CreatedBy: rec.Actor,
+		CreatedAt: now.UnixNano(), Adoption: string(rawAdoption),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Stack{}, Snapshot{}, ErrNameTaken
+		}
+		return Stack{}, Snapshot{}, fmt.Errorf("insert stack: %w", err)
+	}
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: draftID.String(), StackID: stackID.String(), Kind: KindDraft, BaseSeq: 1, Version: 1, Outcome: OutcomePending,
+		Pins: "{}", CreatedBy: rec.Actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
+	}); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("insert draft: %w", err)
+	}
+	if err := r.writeContent(ctx, q, draftID.String(), rec.Copy); err != nil {
+		return Stack{}, Snapshot{}, err
+	}
+	seq, err := q.NextRevisionSeq(ctx, stackID.String())
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("next revision: %w", err)
+	}
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: revID.String(), StackID: stackID.String(), Kind: KindRevision, Seq: seq, Version: 1, Outcome: OutcomeGood,
+		Rendered: string(rec.Rendered), Pins: string(rawPins), CreatedBy: rec.Actor, CreatedAt: now.UnixNano(), Origin: OriginAdopted,
+	}); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("insert revision: %w", err)
+	}
+	if err := r.writeContent(ctx, q, revID.String(), rec.Copy); err != nil {
+		return Stack{}, Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("commit: %w", err)
+	}
+	st := Stack{
+		ID: stackID.String(), EnvID: rec.EnvID, Name: rec.Name, Target: rec.Target,
+		Source: stacks.Source{Kind: stacks.SourceAdopted, Ref: rec.SourceRef}, CreatedBy: rec.Actor, CreatedAt: now,
+		Adoption: rec.Adoption,
+	}
+	rev := Snapshot{
+		ID: revID.String(), StackID: st.ID, Kind: KindRevision, Seq: seq, Version: 1, Outcome: OutcomeGood,
+		CreatedBy: rec.Actor, CreatedAt: now, Origin: OriginAdopted, Copy: normalise(rec.Copy),
+	}
+	return st, rev, nil
+}
+
+// SetAdoption replaces the adoption record of a stack: the first deploy clears Pending, and the adoption review
+// records its gaps. A stack that is gone is ErrStackNotFound.
+func (r Repo) SetAdoption(ctx context.Context, stackID string, a stacks.Adoption) error {
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encode the adoption record: %w", err)
+	}
+	n, err := r.Store.Q.SetStackAdoption(ctx, sqlc.SetStackAdoptionParams{Adoption: string(raw), ID: stackID})
+	if err != nil {
+		return fmt.Errorf("set the adoption record: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
+	}
+	return nil
 }
 
 // Stack reads one stack of an environment by ID. An ID of another environment is

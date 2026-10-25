@@ -187,6 +187,7 @@ const (
 	ActionStackStarted               = "stack.started"
 	ActionStackRemoved               = "stack.removed"
 	ActionStackValueRevealed         = "stack.value_revealed"
+	ActionStackAdopted               = "stack.adopted"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

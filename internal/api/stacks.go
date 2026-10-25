@@ -196,7 +196,7 @@ type StackItem struct {
 	ID             string `json:"id" doc:"The stack ID"`
 	Name           string `json:"name" doc:"The stack name, also its swarm namespace or compose project"`
 	Target         string `json:"target" enum:"swarm,standalone" doc:"Where the stack deploys: fixed when it was created, from the kind of the environment"`
-	Source         string `json:"source" enum:"inline,adopted,git,unmanaged" doc:"Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)"`
+	Source         string `json:"source" enum:"inline,adopted,git,unmanaged" doc:"Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)"`
 	Managed        bool   `json:"managed" doc:"True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy"`
 	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
@@ -274,7 +274,7 @@ type StackLockBody struct {
 	StackID   string `json:"stackId" doc:"The stack the running operation is on"`
 	StackName string `json:"stackName" doc:"Its name"`
 	JobID     string `json:"jobId" doc:"The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting"`
-	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation is"`
+	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt" doc:"What the operation is"`
 	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
 	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
 }
@@ -289,7 +289,7 @@ type StackRollbackBody struct {
 
 // StackOperationBody is the newest operation on a stack: the one the state comes from.
 type StackOperationBody struct {
-	Kind          string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation was"`
+	Kind          string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt" doc:"What the operation was"`
 	State         string `json:"state" enum:"running,done,failed,cancelled,interrupted" doc:"Where it is. interrupted is a deploy that was running when the server stopped: the swarm may be partly updated"`
 	Code          string `json:"code" doc:"A stable word for how a failed operation failed, such as service_rejected, converge_timeout or interrupted; empty otherwise"`
 	FailedService string `json:"failedService" doc:"The service, network, secret or config a failed operation stopped at; empty otherwise"`
@@ -405,6 +405,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
 	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
+	registerStackAdopt(r, d)
 }
 
 // stackNotFound is the 404 for a stack the environment does not have.
@@ -470,15 +471,18 @@ func stackItemOf(reads *stackReads, st stackops.Stack, latest stackops.DeployRow
 // latest is the newest operation of any kind and like the newest deploy, update or roll back: a stop or a start
 // after a deploy that failed must not hide the failure.
 func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops.DeployRow, hasLatest bool, like stackops.DeployRow, hasLike bool, last stackops.DeployRow, hasLast, hasDraft bool) (StackItem, []stackops.ServiceRow) {
-	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast}
+	// A stack Bayplan adopted runs on the engine from the start, with revision 1 as its good revision (D-14): it
+	// reads as deployed before any deploy of its own.
+	adopted := st.Source.Kind == stacks.SourceAdopted
+	in := stackops.StateInput{Stopped: st.Stopped, Deployed: hasLast || adopted}
 	if hasLatest {
 		in.Latest = &latest
 	}
 	if hasLike {
 		in.LatestDeploy = &like
 	}
-	// A stack that has had no operation has nothing on the engine to read.
-	if hasLatest || hasLast {
+	// A stack that has had no operation has nothing on the engine to read, unless it was adopted.
+	if hasLatest || hasLast || adopted {
 		rows, known := reads.rows(st)
 		in.Services, in.Unknown = rows, !known
 	}

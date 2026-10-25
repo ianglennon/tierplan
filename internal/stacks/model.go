@@ -46,6 +46,30 @@ type Source struct {
 	Ref  string
 }
 
+// Adoption is what Bayplan recorded when it took over a stack that was made elsewhere (D-14, D-18). It is
+// stored with the stack and read by the ownership rule: until the stack's first deploy it says which
+// objects of the engine are the stack's (Pending), and for as long as the stack lives it names the networks
+// and volumes the stack owns, so a later removal cleans up the right ones. The zero value is a stack that was
+// not adopted.
+type Adoption struct {
+	// PriorID is the bayplan.stack.id the stack's objects carried when it was adopted (Bayplan made it once,
+	// for a record this instance does not hold, D-11), empty for none. It widens ownership of the workloads of
+	// this namespace or project while Pending, and is never the stack's own ID.
+	PriorID string `json:"priorId,omitempty"`
+	// Networks and Volumes are the engine names of the networks and volumes the stack owns.
+	Networks []string `json:"networks,omitempty"`
+	Volumes  []string `json:"volumes,omitempty"`
+	// Secrets and Configs are the names of the existing secrets and configs the stack references as external.
+	Secrets []string `json:"secrets,omitempty"`
+	Configs []string `json:"configs,omitempty"`
+	// Pending is true from the adoption until the first deploy of the stack has put Bayplan's labels on what
+	// it runs.
+	Pending bool `json:"pending,omitempty"`
+	// Gaps are the places the rebuilt definition differs from what runs, by kind, found when the stack was
+	// adopted (D-55). The adoption review fills them in.
+	Gaps map[string][]string `json:"gaps,omitempty"`
+}
+
 // ComposeFile is the path of the compose file in a stack's working copy.
 const ComposeFile = "compose.yaml"
 

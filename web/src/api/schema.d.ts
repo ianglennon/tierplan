@@ -2416,6 +2416,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt a stack Bayplan did not make
+         * @description Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
+         */
+        post: operations["adoptStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/unmanaged-stacks/{name}/compose": {
         parameters: {
             query?: never;
@@ -4068,6 +4088,10 @@ export interface components {
             clusterId: string;
             /** @description The cluster ID it was bound to; absent if it had none */
             previousClusterId?: string;
+        };
+        AdoptStackRequest: {
+            /** @description The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored */
+            fingerprint: string;
         };
         AgentBody: {
             /** @description The agent's version when it last connected or enrolled */
@@ -8795,7 +8819,7 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
+             * @description Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
             source: "inline" | "adopted" | "git" | "unmanaged";
@@ -8993,7 +9017,7 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
+             * @description Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
             source: "inline" | "adopted" | "git" | "unmanaged";
@@ -9178,7 +9202,7 @@ export interface components {
              * @description What the operation is
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
             /** @description The stack the running operation is on */
             stackId: string;
             /** @description Its name */
@@ -9260,7 +9284,7 @@ export interface components {
              * @description What the operation was
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
             /** @description When it started, RFC 3339 UTC */
             startedAt: string;
             /** @description Who started it, as a name */
@@ -10164,6 +10188,8 @@ export interface components {
         UnmanagedStackBody: {
             /** @description False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
             adoptable: boolean;
+            /** @description A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted */
+            fingerprint: string;
             /** @description The label the stack was found by */
             foundBy: components["schemas"]["UnmanagedFoundByBody"];
             /** @description The swarm namespace or the Compose project */
@@ -15605,6 +15631,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnmanagedStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    adoptStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptStackRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDetail"];
                 };
             };
             /** @description Error */

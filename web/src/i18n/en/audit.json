@@ -243,7 +243,8 @@
         "stopped": "Stack stopped",
         "started": "Stack started",
         "removed": "Stack removed",
-        "value_revealed": "Stack secret value revealed"
+        "value_revealed": "Stack secret value revealed",
+        "adopted": "Stack adopted"
       }
     },
     "coalesced": {

@@ -61,6 +61,7 @@ type UnmanagedStackBody struct {
 	Owner           string               `json:"owner" enum:",bayplan,agent" doc:"bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other"`
 	Adoptable       bool                 `json:"adoptable" doc:"False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses"`
 	Reason          string               `json:"reason" doc:"Why the stack cannot be adopted; empty when it can"`
+	Fingerprint     string               `json:"fingerprint" doc:"A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted"`
 }
 
 // UnmanagedStackOutput wraps UnmanagedStackBody for huma.
@@ -186,6 +187,16 @@ func unmanagedNotFound(managedID string) error {
 	return m
 }
 
+// selfMarks says which objects of an environment of that kind are Bayplan's own: the container the server runs in,
+// and, for the server's own Docker host only, its swarm namespace.
+func (d StacksDeps) selfMarks(envKind string) stackops.SelfMarks {
+	self := stackops.SelfMarks{ContainerID: d.SelfContainerID}
+	if envKind == envs.KindLocal {
+		self.Namespace = d.SelfNamespace
+	}
+	return self
+}
+
 // foundUnmanaged is a stack found on an environment that Bayplan did not make: the stack to read it as and
 // what the labels say about it.
 type foundUnmanaged struct {
@@ -219,11 +230,7 @@ func (d StacksDeps) findUnmanaged(ctx context.Context, envID, name string) (foun
 	if swarm {
 		target = stacks.TargetSwarm
 	}
-	self := stackops.SelfMarks{ContainerID: d.SelfContainerID}
-	if row.Kind == envs.KindLocal {
-		self.Namespace = d.SelfNamespace
-	}
-	found, ok, err := d.ops().DiscoverNamed(ctx, envID, target, name, self)
+	found, ok, err := d.ops().DiscoverNamed(ctx, envID, target, name, d.selfMarks(row.Kind))
 	if err != nil {
 		return foundUnmanaged{}, snapshotProblem(d.Log, envID, err)
 	}
@@ -247,6 +254,12 @@ func getUnmanagedStack(ctx context.Context, d StacksDeps, in *UnmanagedStackPath
 	}
 	if u.Target == stacks.TargetSwarm {
 		body.FoundBy.Label = stacks.LabelSwarmNamespace
+	}
+	if u.Adoptable() {
+		var err error
+		if body.Fingerprint, err = d.ops().AdoptFingerprint(ctx, in.EnvID, u.Target, u.Name); err != nil {
+			return nil, snapshotProblem(d.Log, in.EnvID, err)
+		}
 	}
 	return &UnmanagedStackOutput{CacheControl: "no-store", Body: body}, nil
 }

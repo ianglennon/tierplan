@@ -271,6 +271,39 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 	return i, err
 }
 
+const insertAdoptedStack = `-- name: InsertAdoptedStack :exec
+INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+`
+
+type InsertAdoptedStackParams struct {
+	ID         string
+	EnvID      string
+	Name       string
+	Target     string
+	SourceKind string
+	SourceRef  string
+	CreatedBy  string
+	CreatedAt  int64
+	Adoption   string
+}
+
+// InsertStack with the adoption record (D-14): the stack of a discovered stack Bayplan took over.
+func (q *Queries) InsertAdoptedStack(ctx context.Context, arg InsertAdoptedStackParams) error {
+	_, err := q.db.ExecContext(ctx, insertAdoptedStack,
+		arg.ID,
+		arg.EnvID,
+		arg.Name,
+		arg.Target,
+		arg.SourceKind,
+		arg.SourceRef,
+		arg.CreatedBy,
+		arg.CreatedAt,
+		arg.Adoption,
+	)
+	return err
+}
+
 const insertSnapshot = `-- name: InsertSnapshot :exec
 INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1075,6 +1108,24 @@ type SetSnapshotRenderedParams struct {
 // The masked rendering of a revision: what the next review compares the draft's rendering with.
 func (q *Queries) SetSnapshotRendered(ctx context.Context, arg SetSnapshotRenderedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotRendered, arg.Rendered, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setStackAdoption = `-- name: SetStackAdoption :execrows
+UPDATE stacks SET adoption = ? WHERE id = ?
+`
+
+type SetStackAdoptionParams struct {
+	Adoption string
+	ID       string
+}
+
+// Replaces the adoption record of a stack. The caller read the stack by environment and ID first.
+func (q *Queries) SetStackAdoption(ctx context.Context, arg SetStackAdoptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackAdoption, arg.Adoption, arg.ID)
 	if err != nil {
 		return 0, err
 	}

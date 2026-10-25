@@ -252,6 +252,20 @@
         ],
         "type": "object"
       },
+      "AdoptStackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "description": "The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored",
+            "maxLength": 65536,
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint"
+        ],
+        "type": "object"
+      },
       "AgentBody": {
         "additionalProperties": false,
         "properties": {
@@ -12031,7 +12045,7 @@
             "type": "integer"
           },
           "source": {
-            "description": "Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
+            "description": "Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
             "enum": [
               "inline",
               "adopted",
@@ -12487,7 +12501,7 @@
             "type": "integer"
           },
           "source": {
-            "description": "Where the stack's definition lives. Only inline exists today for a stack Bayplan manages; unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
+            "description": "Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)",
             "enum": [
               "inline",
               "adopted",
@@ -12937,7 +12951,8 @@
               "rollback",
               "start",
               "stop",
-              "remove"
+              "remove",
+              "adopt"
             ],
             "type": "string"
           },
@@ -13170,7 +13185,8 @@
               "rollback",
               "start",
               "stop",
-              "remove"
+              "remove",
+              "adopt"
             ],
             "type": "string"
           },
@@ -15311,6 +15327,10 @@
             "description": "False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses",
             "type": "boolean"
           },
+          "fingerprint": {
+            "description": "A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted",
+            "type": "string"
+          },
           "foundBy": {
             "$ref": "#/components/schemas/UnmanagedFoundByBody",
             "description": "The label the stack was found by"
@@ -15392,7 +15412,8 @@
           "portainer",
           "owner",
           "adoptable",
-          "reason"
+          "reason",
+          "fingerprint"
         ],
         "type": "object"
       },
@@ -25262,6 +25283,78 @@
           }
         },
         "summary": "A stack Bayplan did not make",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt": {
+      "post": {
+        "description": "Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).",
+        "operationId": "adoptStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm namespace or the Compose project that names the stack",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The swarm namespace or the Compose project that names the stack",
+              "maxLength": 255,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptStackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDetail"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Adopt a stack Bayplan did not make",
         "tags": [
           "stacks"
         ]

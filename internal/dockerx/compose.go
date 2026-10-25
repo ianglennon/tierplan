@@ -418,6 +418,8 @@ type ComposeContainer struct {
 	// Image is the image the container was created from, as the engine lists it: the reference it was
 	// created with (repo:tag@sha256:...), or the image ID once the reference has moved.
 	Image string
+	// ImageID is the ID of the image the container was created from, which a moved tag does not change.
+	ImageID string
 	// State is the engine's state word (running, exited, created ...), Health none, starting, healthy
 	// or unhealthy.
 	State, Health string
@@ -440,7 +442,7 @@ func (c *Client) ComposeContainers(ctx context.Context, project string) ([]Compo
 		}
 		out = append(out, ComposeContainer{
 			ID: r.ID, Name: r.Name, Service: r.Labels[api.ServiceLabel], ConfigHash: r.Labels[api.ConfigHashLabel],
-			Image: r.Image, State: r.State, Health: r.Health, Labels: r.Labels,
+			Image: r.Image, ImageID: r.ImageID, State: r.State, Health: r.Health, Labels: r.Labels,
 		})
 	}
 	return out, nil

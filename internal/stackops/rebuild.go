@@ -84,10 +84,12 @@ func (d Deps) rebuildSwarm(ctx context.Context, envID string, st Stack, o Rebuil
 	}
 	in := rebuild.SwarmInput{Namespace: st.Name}
 	attached := map[string]bool{}
+	var owned []dockerx.ServiceDetail
 	for _, det := range read.services {
 		if !own.owns(det.Stack, det.Labels) {
 			continue
 		}
+		owned = append(owned, det)
 		var spec swarm.ServiceSpec
 		if err := json.Unmarshal(det.Spec, &spec); err != nil {
 			return rebuild.Result{}, fmt.Errorf("stackops: read the spec of service %s: %w", det.Name, err)
@@ -126,6 +128,7 @@ func (d Deps) rebuildSwarm(ctx context.Context, envID string, st Stack, o Rebuil
 	if err := checkRebuilt(ctx, st, res); err != nil {
 		return rebuild.Result{}, err
 	}
+	res.Fingerprint = swarmFingerprint(owned)
 	return res, nil
 }
 
@@ -197,7 +200,7 @@ func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o R
 	if err != nil {
 		return rebuild.Result{}, err
 	}
-	in, err := d.readStandaloneForRebuild(ctx, envID, node, st.Name, o.Reveal)
+	in, fingerprint, err := d.readStandaloneForRebuild(ctx, envID, node, st.Name, o.Reveal)
 	if err != nil {
 		return rebuild.Result{}, err
 	}
@@ -211,6 +214,7 @@ func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o R
 	if err := checkRebuilt(ctx, st, res); err != nil {
 		return rebuild.Result{}, err
 	}
+	res.Fingerprint = fingerprint
 	return res, nil
 }
 
@@ -329,14 +333,17 @@ func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.O
 // readStandaloneForRebuild reads, from the host, the containers of a Compose project with their images, and the
 // networks and volumes that carry the project's label with the detail the file needs of them. Each container's
 // inspect document is made safe before the rebuild sees it: what the image supplies is taken out, as the
-// comparison of a running service takes it out, and a caller who may not reveal gets every value masked.
-func (d Deps) readStandaloneForRebuild(ctx context.Context, envID, node, project string, reveal bool) (rebuild.StandaloneInput, error) {
+// comparison of a running service takes it out, and a caller who may not reveal gets every value masked. The
+// string is the fingerprint of the containers the project held when they were listed.
+func (d Deps) readStandaloneForRebuild(ctx context.Context, envID, node, project string, reveal bool) (rebuild.StandaloneInput, string, error) {
 	in := rebuild.StandaloneInput{Project: project}
+	fingerprint := ""
 	err := d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
 		containers, e := c.ComposeContainers(ctx, project)
 		if e != nil {
 			return e
 		}
+		fingerprint = standaloneFingerprint(containers)
 		reader := &hostReader{host: c, images: map[string]*image.InspectResponse{}}
 		for _, cc := range containers {
 			insp, img, ok, e := reader.read(ctx, cc)
@@ -384,7 +391,7 @@ func (d Deps) readStandaloneForRebuild(ctx context.Context, envID, node, project
 		}
 		return nil
 	})
-	return in, err
+	return in, fingerprint, err
 }
 
 // withoutImageDefaults is a container's inspect document without the environment entries, the command and the
