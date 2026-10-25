@@ -141,7 +141,7 @@ func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, 
 			Project: project.Name, ID: h.IDs[n], ConfigHash: hash, Networks: nets, Volumes: vols, Image: img,
 		})
 		h.Containers = append(h.Containers, dockertest.FakeContainer{
-			ID: h.IDs[n], Names: []string{"/" + project.Name + "-" + n + "-1"}, Image: h.Pins[n], State: "running",
+			ID: h.IDs[n], Names: []string{"/" + project.Name + "-" + n + "-1"}, Image: h.Pins[n], ImageID: img.ID, State: "running",
 			Labels: doc.Config.Labels, Inspect: dockertest.FakeInspect{Document: &doc, ImageID: img.ID},
 		})
 		h.Docs[n] = &doc
@@ -258,7 +258,7 @@ func Foreign(t testing.TB, name, compose string) *Hosted {
 			})
 			doc.Config.Labels["com.docker.compose.depends_on"] = strings.Join(deps, ",")
 			h.Containers = append(h.Containers, dockertest.FakeContainer{
-				ID: id, Names: []string{doc.Name}, Image: resolved.Image, State: "running",
+				ID: id, Names: []string{doc.Name}, Image: resolved.Image, ImageID: img.ID, State: "running",
 				Labels: doc.Config.Labels, Inspect: dockertest.FakeInspect{Document: &doc, ImageID: img.ID},
 			})
 			if i == 0 {

@@ -1221,3 +1221,94 @@ func TestRollbackKeepsAnUnchangedDraftClean(t *testing.T) {
 		t.Error("a roll back made a draft with no changes read as holding some")
 	}
 }
+
+// TestAdoptWritesOneTransaction: the adopted stack, its draft at version 1 and revision 1 are stored together, with
+// the same content, the revision good and pinned and carrying its rendering, and the draft reading as having no
+// changes. A second adoption of the name stores nothing.
+func TestAdoptWritesOneTransaction(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	copy := stacks.WorkingCopy{Files: []stacks.File{compose("services:\n  web:\n    image: nginx:1.27\n")}}
+	rec := stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada", Copy: copy,
+		Pins:     map[string]string{"legacy_web": "nginx:1.27@sha256:" + strings.Repeat("a", 64)},
+		Rendered: []byte("rendered: yes\n"),
+		Adoption: stacks.Adoption{PriorID: "old", Networks: []string{"legacy_back"}, Secrets: []string{"legacy_pw"}, Pending: true},
+	}
+
+	st, rev, err := f.repo.Adopt(ctx, rec)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+
+	if st.Source.Kind != stacks.SourceAdopted || st.Source.Ref != "legacy" || st.CreatedBy != "ada" || st.Target != stacks.TargetSwarm {
+		t.Errorf("stack = %+v, want an adopted swarm stack made by ada, sourced from legacy", st)
+	}
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Source.Kind != stacks.SourceAdopted || !read.Adoption.Pending || read.Adoption.PriorID != "old" ||
+		len(read.Adoption.Networks) != 1 || read.Adoption.Networks[0] != "legacy_back" || read.Adoption.Secrets[0] != "legacy_pw" {
+		t.Errorf("stored adoption = %+v, want the record back", read.Adoption)
+	}
+	if rev.Kind != stackops.KindRevision || rev.Seq != 1 || rev.Origin != stackops.OriginAdopted || rev.Outcome != stackops.OutcomeGood {
+		t.Errorf("revision = %+v, want revision 1 of origin adopted, good", rev)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, 1)
+	if err != nil || string(got.Copy.Compose()) != string(copy.Compose()) {
+		t.Fatalf("Revision 1 = %+v, %v", got, err)
+	}
+	pins, err := f.repo.RevisionPins(ctx, got.ID)
+	if err != nil || pins["legacy_web"] == "" {
+		t.Errorf("pins = %v, %v, want the running digest", pins, err)
+	}
+	if r, err := f.repo.RevisionRendering(ctx, got.ID); err != nil || string(r) != "rendered: yes\n" {
+		t.Errorf("rendering = %q, %v", r, err)
+	}
+	draft, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || !draft.IsDraft || draft.Version != 1 || draft.BaseSeq != 1 || string(draft.Copy.Compose()) != string(copy.Compose()) {
+		t.Errorf("draft = %+v, %v, want version 1 based on revision 1 with the same content", draft, err)
+	}
+	// The draft and the revision are made at one instant, so the draft shows no changes.
+	saves, err := f.repo.DraftSaves(ctx, f.envID)
+	if err != nil || saves[st.ID].Pending {
+		t.Errorf("DraftSaves = %+v, %v, want an adopted draft with no changes", saves[st.ID], err)
+	}
+	if good, ok, err := f.repo.GoodRevisionInfo(ctx, st.ID); err != nil || !ok || good.Seq != 1 {
+		t.Errorf("GoodRevisionInfo = %+v, %v, %v, want revision 1", good, ok, err)
+	}
+
+	if _, _, err := f.repo.Adopt(ctx, rec); !errors.Is(err, stackops.ErrNameTaken) {
+		t.Errorf("a second Adopt = %v, want ErrNameTaken", err)
+	}
+	list, err := f.repo.Stacks(ctx, f.envID)
+	if err != nil || len(list) != 1 {
+		t.Errorf("Stacks = %+v, %v, want the one adopted stack", list, err)
+	}
+}
+
+// TestSetAdoptionReplacesTheRecord: the first deploy clears Pending through it, and a stack that is gone is refused.
+func TestSetAdoptionReplacesTheRecord(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}}, Adoption: stacks.Adoption{Pending: true, Volumes: []string{"legacy_data"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetAdoption(ctx, st.ID, stacks.Adoption{Volumes: []string{"legacy_data"}}); err != nil {
+		t.Fatalf("SetAdoption: %v", err)
+	}
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil || read.Adoption.Pending || len(read.Adoption.Volumes) != 1 {
+		t.Errorf("stored adoption = %+v, %v, want Pending cleared and the volume kept", read.Adoption, err)
+	}
+	if err := f.repo.SetAdoption(ctx, "no-such-stack", stacks.Adoption{}); !errors.Is(err, stackops.ErrStackNotFound) {
+		t.Errorf("SetAdoption of a missing stack = %v, want ErrStackNotFound", err)
+	}
+}

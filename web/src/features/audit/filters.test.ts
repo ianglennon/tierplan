@@ -370,6 +370,15 @@ describe("the secret.rotated and config.rotated actions (06-28)", () => {
   });
 });
 
+describe("the stack.adopted action (08-13)", () => {
+  it("is in the Action filter, scoped to an environment, with its label", () => {
+    expect(KNOWN_ACTIONS).toContain("stack.adopted");
+    expect(ENV_SCOPED_ACTIONS).toContain("stack.adopted");
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    expect(labels.stack?.adopted).toBe("Stack adopted");
+  });
+});
+
 describe("the stack actions (07-01)", () => {
   it("are in the Action filter, scoped to an environment, with their own labels", () => {
     for (const key of [

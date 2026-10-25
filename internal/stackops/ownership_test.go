@@ -88,3 +88,101 @@ func TestOwnershipRefusesAnotherNamespace(t *testing.T) {
 		}
 	}
 }
+
+// adoptedStack is a stack Bayplan took over: it owns the workloads of its namespace until its first deploy has
+// labelled them, and the networks and volumes recorded at adoption for good (plan 08-13, D-11, D-18).
+func adoptedStack(pending bool) stackops.Stack {
+	return stackops.Stack{
+		ID: "stk-1", Name: "legacy", Target: stacks.TargetSwarm,
+		Source: stacks.Source{Kind: stacks.SourceAdopted, Ref: "legacy"},
+		Adoption: stacks.Adoption{
+			PriorID: "stk-old", Networks: []string{"legacy_back"}, Volumes: []string{"legacy_data"},
+			Secrets: []string{"legacy_pw"}, Configs: []string{"legacy_conf"}, Pending: pending,
+		},
+	}
+}
+
+func TestOwnershipAdoptedPending(t *testing.T) {
+	t.Parallel()
+	own := stackops.OwnershipOf(adoptedStack(true))
+
+	plain := map[string]string{stacks.LabelSwarmNamespace: "legacy"}
+	prior := map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-old"}
+	mine := map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-1"}
+	for name, labels := range map[string]map[string]string{"no ID": plain, "the ID recorded at adoption": prior, "its own ID": mine} {
+		if !own.OwnsWorkload(labels) || !own.OwnsService(dockerx.ServiceRow{Stack: "legacy", Labels: labels}) {
+			t.Errorf("an adopted stack that was not deployed yet must own a workload with %s", name)
+		}
+	}
+
+	// Networks and volumes: the names recorded at adoption, whatever their labels say; others only by the exact rule.
+	if !own.OwnsNetwork("legacy_back", plain) || !own.OwnsVolume("legacy_data", nil) {
+		t.Errorf("an adopted stack must own the network and the volume it recorded")
+	}
+	if own.OwnsNetwork("legacy_other", plain) || own.OwnsVolume("legacy_other", prior) {
+		t.Errorf("an adopted stack must not own a network or a volume it did not record, even under its namespace or with the prior ID")
+	}
+	if !own.OwnsNetwork("legacy_new", mine) || !own.OwnsVolume("legacy_new", mine) {
+		t.Errorf("an adopted stack must own an object that carries its namespace and its own ID")
+	}
+	for _, kind := range []string{"network", "volume", "secret", "config"} {
+		name := map[string]string{"network": "legacy_back", "volume": "legacy_data", "secret": "legacy_pw", "config": "legacy_conf"}[kind]
+		if !own.Knows(kind, name) || own.Knows(kind, "other") {
+			t.Errorf("Knows(%s, %s) must be true and Knows(%s, other) false", kind, name, kind)
+		}
+	}
+	if stackops.OwnershipOf(stackops.Stack{ID: "stk-2", Name: "web", Target: stacks.TargetSwarm}).Knows("network", "web_default") {
+		t.Errorf("a stack that was not adopted must know no object")
+	}
+}
+
+func TestOwnershipAdoptedAfterFirstDeploy(t *testing.T) {
+	t.Parallel()
+	own := stackops.OwnershipOf(adoptedStack(false))
+
+	plain := map[string]string{stacks.LabelSwarmNamespace: "legacy"}
+	prior := map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-old"}
+	mine := map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-1"}
+	if !own.OwnsWorkload(mine) {
+		t.Errorf("a deployed adopted stack must own a workload that carries its own ID")
+	}
+	for name, labels := range map[string]map[string]string{"no ID": plain, "the prior ID": prior} {
+		if own.OwnsWorkload(labels) || own.OwnsService(dockerx.ServiceRow{Stack: "legacy", Labels: labels}) {
+			t.Errorf("a deployed adopted stack must not own a workload with %s: the first deploy labelled everything it owns", name)
+		}
+	}
+	// The recorded objects stay the stack's for as long as it lives.
+	if !own.OwnsNetwork("legacy_back", plain) || !own.OwnsVolume("legacy_data", plain) {
+		t.Errorf("a deployed adopted stack must still own the network and the volume it recorded")
+	}
+}
+
+// TestOwnershipNeverTrustsAnotherID: a bayplan.stack.id on an object never links it to a stack by itself (T-08-47).
+func TestOwnershipNeverTrustsAnotherID(t *testing.T) {
+	t.Parallel()
+	for name, pending := range map[string]bool{"pending": true, "deployed": false} {
+		own := stackops.OwnershipOf(adoptedStack(pending))
+		stranger := map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-9"}
+		if own.OwnsWorkload(stranger) || own.OwnsService(dockerx.ServiceRow{Stack: "legacy", Labels: stranger}) ||
+			own.OwnsNetwork("legacy_x", stranger) || own.OwnsVolume("legacy_x", stranger) {
+			t.Errorf("%s: an adopted stack must not own an object that carries another stack's ID", name)
+		}
+		// The ID it carried before is no key to another namespace either.
+		elsewhere := map[string]string{stacks.LabelSwarmNamespace: "other", stacks.LabelStackID: "stk-old"}
+		if own.OwnsWorkload(elsewhere) || own.OwnsService(dockerx.ServiceRow{Stack: "other", Labels: elsewhere}) {
+			t.Errorf("%s: the ID recorded at adoption must not link an object of another namespace", name)
+		}
+	}
+	// An adopted stack with no prior ID and no stored ID of its own owns nothing it merely names.
+	noPrior := adoptedStack(true)
+	noPrior.Adoption.PriorID = ""
+	own := stackops.OwnershipOf(noPrior)
+	if own.OwnsWorkload(map[string]string{stacks.LabelSwarmNamespace: "legacy", stacks.LabelStackID: "stk-old"}) {
+		t.Errorf("with no prior ID recorded, an object carrying an ID that is not the stack's must not be owned")
+	}
+	noID := adoptedStack(true)
+	noID.ID = ""
+	if stackops.OwnershipOf(noID).OwnsWorkload(map[string]string{stacks.LabelSwarmNamespace: "legacy"}) {
+		t.Errorf("a stack with no ID must own nothing")
+	}
+}

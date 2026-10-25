@@ -131,7 +131,17 @@ func objectsSpec() swarm.ServiceSpec {
 
 func objectsRig(t *testing.T) *swarmRig {
 	t.Helper()
+	return objectsRigWith(t, 0, nil)
+}
+
+// objectsRigWith is objectsRig for a service the engine reports at version (0 is its default) and whose spec edit
+// changes after it is made.
+func objectsRigWith(t *testing.T, version uint64, edit func(*swarm.ServiceSpec)) *swarmRig {
+	t.Helper()
 	spec := objectsSpec()
+	if edit != nil {
+		edit(&spec)
+	}
 	ns := map[string]string{stacks.LabelSwarmNamespace: "shop"}
 	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{
@@ -146,7 +156,7 @@ func objectsRig(t *testing.T) *swarmRig {
 		c.Secrets = []dockertest.FakeSecret{{ID: "sec-1", Name: "shop_pw", Labels: ns}}
 		c.Configs = []dockertest.FakeConfigObject{{ID: "cfg-1", Name: "shop_conf", Labels: ns, Data: []byte("conf-content-never-read")}}
 	}, dockertest.FakeService{
-		ID: "svc-shop-web", Name: "shop_web", Mode: "replicated", Running: 2, Desired: 2, Labels: spec.Labels, Spec: &spec,
+		ID: "svc-shop-web", Name: "shop_web", Mode: "replicated", Running: 2, Desired: 2, Labels: spec.Labels, Spec: &spec, Version: version,
 	})
 }
 
