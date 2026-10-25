@@ -1441,6 +1441,7 @@ describe("an adopted stack's first review", () => {
     const item = within(group).getByRole("listitem");
     expect(item.textContent).toContain("api");
     expect(item.textContent).not.toContain("task");
+    fireEvent.click(within(item).getByRole("button"));
     expect(
       within(item).getByText(
         "Compose recreates the container because Bayplan's labels change its configuration hash. No setting you wrote changes.",

@@ -17,7 +17,8 @@
       "labels": "labels",
       "tasks_one": "{{count}} task",
       "tasks_other": "{{count}} tasks",
-      "caption": "Labels on {{service}}"
+      "caption": "Labels on {{service}}",
+      "standaloneNote": "Compose recreates the container because Bayplan's labels change its configuration hash. No setting you wrote changes."
     },
     "summary": {
       "line": "Ownership labels only: {{count}}"

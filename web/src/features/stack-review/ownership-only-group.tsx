@@ -42,8 +42,16 @@ function ServiceName({ name }: { name: string }) {
 }
 
 // OwnershipRow is one service of the group: its name, the muted word "labels" and its task count; it expands to the
-// difference, which is the label rows and nothing else, captioned "Labels on {service}".
-function OwnershipRow({ service }: { service: StackReviewService }) {
+// difference, which is the label rows and nothing else, captioned "Labels on {service}". A container of a standalone
+// host has no label rows to show (Bayplan's labels change its configuration hash, not a setting) and no task count, so
+// its row says what the recreate is for instead of a diff with nothing in it.
+function OwnershipRow({
+  service,
+  context,
+}: {
+  service: StackReviewService;
+  context?: "standalone";
+}) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const tasks = tasksOf(service.current);
@@ -69,12 +77,18 @@ function OwnershipRow({ service }: { service: StackReviewService }) {
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent className="border-t p-3">
-          <SpecDiff
-            name={service.short}
-            current={service.current}
-            next={service.next}
-            caption={t("stackOwnership.group.caption", { service: service.short })}
-          />
+          {context === "standalone" && service.settings === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("stackOwnership.group.standaloneNote")}
+            </p>
+          ) : (
+            <SpecDiff
+              name={service.short}
+              current={service.current}
+              next={service.next}
+              caption={t("stackOwnership.group.caption", { service: service.short })}
+            />
+          )}
         </CollapsibleContent>
       </Collapsible>
     </li>
@@ -114,7 +128,7 @@ export function OwnershipOnlyGroup({ services, context }: OwnershipOnlyGroupProp
             <CardContent>
               <ul className="flex flex-col gap-2 pt-3">
                 {services.map((s) => (
-                  <OwnershipRow key={s.name} service={s} />
+                  <OwnershipRow key={s.name} service={s} context={context} />
                 ))}
               </ul>
             </CardContent>
