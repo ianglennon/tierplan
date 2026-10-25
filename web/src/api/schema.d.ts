@@ -2096,6 +2096,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How what runs compares with the deployed revision
+         * @description Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, Bayplan's own bayplan.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two reads running; a third is 429 check_busy. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackDrift"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/files/reveal": {
         parameters: {
             query?: never;
@@ -8920,10 +8940,17 @@ export interface components {
             createdAt: string;
             /** @description Who created the stack */
             createdBy: string;
+            /**
+             * Format: int64
+             * @description Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at
+             */
+            deployedRevision?: number;
             /** @description When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft */
             draftSavedAt: string;
             /** @description Who saved it, as a name; empty when there is no such draft */
             draftSavedBy: string;
+            /** @description Left out until the stack has been checked for drift since its newest deploy, start or stop: the newest check, as the drift route answers it without the services */
+            drift?: components["schemas"]["StackDriftSummaryBody"];
             /** @description The environment the stack belongs to */
             envId: string;
             /** @description True when the draft holds changes that have not been deployed */
@@ -9066,6 +9093,76 @@ export interface components {
              * @description The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)
              */
             version: number;
+        };
+        StackDriftBody: {
+            /** @description When the stack was read, RFC 3339 UTC */
+            checkedAt: string;
+            /**
+             * Format: int64
+             * @description How many settings differ in all: the settings of each changed service plus one for each missing or extra service
+             */
+            count: number;
+            /** @description When that revision's deploy was started, RFC 3339 UTC; empty for none */
+            deployedAt: string;
+            /** @description Who started it, as a name; empty for none */
+            deployedBy: string;
+            /**
+             * Format: int64
+             * @description The number of the revision compared with, the newest one that deployed; 0 for none
+             */
+            revision: number;
+            /** @description The services that differ, in name order (changed and missing ones, then extra ones) */
+            services: components["schemas"]["StackDriftServiceBody"][] | null;
+            /**
+             * @description none: what runs matches the revision. drifted: it differs. stopped: a person stopped the stack, which is not drift. not_deployed: the stack has no revision that deployed. unknown: the revision cannot be compared (it can no longer be redeployed, or this kind of stack is not checked yet)
+             * @enum {string}
+             */
+            state: "none" | "drifted" | "stopped" | "not_deployed" | "unknown";
+        };
+        StackDriftServiceBody: {
+            /**
+             * @description changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have
+             * @enum {string}
+             */
+            change: "changed" | "missing" | "extra";
+            /** @description What runs now, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for a missing service */
+            current: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Paths of settings whose value changed to or from one that is hidden. The values are never sent */
+            hiddenChanges: string[] | null;
+            /** @description The swarm service name */
+            name: string;
+            /** @description What the revision deployed, masked the same way. Null for an extra service */
+            next: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: int64
+             * @description How many settings differ between current and next, hidden ones included
+             */
+            settings: number;
+            /** @description The service's name in the compose file */
+            short: string;
+        };
+        StackDriftSummaryBody: {
+            /** @description When the stack was read, RFC 3339 UTC */
+            checkedAt: string;
+            /**
+             * Format: int64
+             * @description How many settings differ in all
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description The revision the check compared with
+             */
+            revision: number;
+            /**
+             * @description As the drift route's state
+             * @enum {string}
+             */
+            state: "none" | "drifted" | "stopped" | "not_deployed" | "unknown";
         };
         StackFileDiffBody: {
             /**
@@ -15184,6 +15281,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackDrift: {
+        parameters: {
+            query?: {
+                /** @description True reads the stack again instead of answering the newest check. Callers that ask at the same moment share one read */
+                fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDriftBody"];
+                };
             };
             /** @description Error */
             default: {

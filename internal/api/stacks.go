@@ -133,6 +133,11 @@ type StacksDeps struct {
 	// OnAdoptCheck, when set, is called once an adopt check holds its slot and before it runs. Tests use it to hold
 	// one in flight.
 	OnAdoptCheck func(ctx context.Context)
+	// OnDrift, when set, is called once a read of a stack for drift holds its slot and before it runs. Tests use it
+	// to hold one in flight.
+	OnDrift func(ctx context.Context)
+	// Drift holds the newest drift check of each stack, in memory. Nil means a store of this deps' own.
+	Drift *stackops.DriftStore
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of
@@ -272,6 +277,9 @@ type StackDetail struct {
 	LastOperation *StackOperationBody `json:"lastOperation,omitempty" doc:"Left out for a stack that has had no operation: the newest one, which the state is read from"`
 	// Adoption is set on a stack Bayplan adopted.
 	Adoption *StackAdoptionBody `json:"adoption,omitempty" doc:"Left out unless the stack was adopted (source adopted): whether its first deploy is still to come"`
+	// DeployedRevision is the revision the stack stands at, and Drift the newest drift check of it.
+	DeployedRevision int64                  `json:"deployedRevision,omitempty" doc:"Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at"`
+	Drift            *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop: the newest check, as the drift route answers it without the services"`
 }
 
 // StackAdoptionBody is where an adopted stack stands.
@@ -358,6 +366,9 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	if d.cancels == nil {
 		d.cancels = &deployCancels{by: map[string]string{}}
 	}
+	if d.Drift == nil {
+		d.Drift = stackops.NewDriftStore()
+	}
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStacks", Method: http.MethodGet, Path: "/api/env/{envId}/stacks",
 		Summary: "The stacks of an environment: those Bayplan manages and those it found",
@@ -415,6 +426,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackOverview(r, d)
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
+	registerStackDrift(r, d, newDriftLimiter())
 	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
 	registerStackAdopt(r, d, newAdoptCheckLimiter())
 }
@@ -599,6 +611,14 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	if st.Source.Kind == stacks.SourceAdopted {
 		detail.Adoption = &StackAdoptionBody{Pending: st.Adoption.Pending, AdoptedFrom: st.Source.Ref}
 	}
+	deployed, hasDeployed, err := repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil {
+		return StackDetail{}, err
+	}
+	if hasDeployed {
+		detail.DeployedRevision = deployed.Seq
+	}
+	detail.Drift = driftSummaryOf(d, st, detail.DeployedRevision)
 	return detail, nil
 }
 

@@ -12301,6 +12301,11 @@
             "description": "Who created the stack",
             "type": "string"
           },
+          "deployedRevision": {
+            "description": "Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at",
+            "format": "int64",
+            "type": "integer"
+          },
           "draftSavedAt": {
             "description": "When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft",
             "type": "string"
@@ -12308,6 +12313,10 @@
           "draftSavedBy": {
             "description": "Who saved it, as a name; empty when there is no such draft",
             "type": "string"
+          },
+          "drift": {
+            "$ref": "#/components/schemas/StackDriftSummaryBody",
+            "description": "Left out until the stack has been checked for drift since its newest deploy, start or stop: the newest check, as the drift route answers it without the services"
           },
           "envId": {
             "description": "The environment the stack belongs to",
@@ -12639,6 +12648,164 @@
           "version",
           "files",
           "vars"
+        ],
+        "type": "object"
+      },
+      "StackDriftBody": {
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "description": "When the stack was read, RFC 3339 UTC",
+            "type": "string"
+          },
+          "count": {
+            "description": "How many settings differ in all: the settings of each changed service plus one for each missing or extra service",
+            "format": "int64",
+            "type": "integer"
+          },
+          "deployedAt": {
+            "description": "When that revision's deploy was started, RFC 3339 UTC; empty for none",
+            "type": "string"
+          },
+          "deployedBy": {
+            "description": "Who started it, as a name; empty for none",
+            "type": "string"
+          },
+          "revision": {
+            "description": "The number of the revision compared with, the newest one that deployed; 0 for none",
+            "format": "int64",
+            "type": "integer"
+          },
+          "services": {
+            "description": "The services that differ, in name order (changed and missing ones, then extra ones)",
+            "items": {
+              "$ref": "#/components/schemas/StackDriftServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "state": {
+            "description": "none: what runs matches the revision. drifted: it differs. stopped: a person stopped the stack, which is not drift. not_deployed: the stack has no revision that deployed. unknown: the revision cannot be compared (it can no longer be redeployed, or this kind of stack is not checked yet)",
+            "enum": [
+              "none",
+              "drifted",
+              "stopped",
+              "not_deployed",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "revision",
+          "deployedAt",
+          "deployedBy",
+          "checkedAt",
+          "count",
+          "services"
+        ],
+        "type": "object"
+      },
+      "StackDriftServiceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "description": "changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have",
+            "enum": [
+              "changed",
+              "missing",
+              "extra"
+            ],
+            "type": "string"
+          },
+          "current": {
+            "additionalProperties": {},
+            "description": "What runs now, masked: a value derived from a secret of the stack is \u003chidden\u003e, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for a missing service",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "hiddenChanges": {
+            "description": "Paths of settings whose value changed to or from one that is hidden. The values are never sent",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The swarm service name",
+            "type": "string"
+          },
+          "next": {
+            "additionalProperties": {},
+            "description": "What the revision deployed, masked the same way. Null for an extra service",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "settings": {
+            "description": "How many settings differ between current and next, hidden ones included",
+            "format": "int64",
+            "type": "integer"
+          },
+          "short": {
+            "description": "The service's name in the compose file",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "short",
+          "change",
+          "current",
+          "next",
+          "hiddenChanges",
+          "settings"
+        ],
+        "type": "object"
+      },
+      "StackDriftSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "description": "When the stack was read, RFC 3339 UTC",
+            "type": "string"
+          },
+          "count": {
+            "description": "How many settings differ in all",
+            "format": "int64",
+            "type": "integer"
+          },
+          "revision": {
+            "description": "The revision the check compared with",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "As the drift route's state",
+            "enum": [
+              "none",
+              "drifted",
+              "stopped",
+              "not_deployed",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "revision",
+          "checkedAt",
+          "count"
         ],
         "type": "object"
       },
@@ -24561,6 +24728,77 @@
           }
         },
         "summary": "Save a stack's draft",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/drift": {
+      "get": {
+        "description": "Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, Bayplan's own bayplan.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is \u003chidden\u003e, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two reads running; a third is 429 check_busy. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "getStackDrift",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "True reads the stack again instead of answering the newest check. Callers that ask at the same moment share one read",
+            "explode": false,
+            "in": "query",
+            "name": "fresh",
+            "schema": {
+              "description": "True reads the stack again instead of answering the newest check. Callers that ask at the same moment share one read",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDriftBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "How what runs compares with the deployed revision",
         "tags": [
           "stacks"
         ]
