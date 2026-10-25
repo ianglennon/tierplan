@@ -712,6 +712,16 @@ func (e *composeEvents) finishService(name, action string, final []dockerx.Compo
 		e.prog.r.Finish(idContainer+n, jobs.ItemDone, "", "", map[string]string{"state": row[n]})
 		e.prog.setEnded(idContainer+n, jobs.ItemDone)
 	}
+	// A container the SDK removed on the way (the surplus one of a scale-down) was given its row by its first
+	// event, so the row is ended like the others, reading the word the SDK last gave it. Left running it would
+	// be reported as interrupted when the job ends, and a deploy that worked would read partial.
+	for n, word := range row {
+		id := idContainer + n
+		if stage(word) == 0 && e.prog.has(id) {
+			e.prog.r.Finish(id, jobs.ItemDone, "", "", map[string]string{"state": word})
+			e.prog.setEnded(id, jobs.ItemDone)
+		}
+	}
 	phase, running, total := e.summary(name)
 	e.prog.serviceDone(name, action, phase, running, total)
 }
@@ -753,13 +763,20 @@ func (p *progress) addContainer(id, name, service string) {
 	if p == nil {
 		return
 	}
-	p.mu.Lock()
-	known := slices.ContainsFunc(p.added, func(a addedItem) bool { return a.id == id })
-	p.mu.Unlock()
-	if known {
+	if p.has(id) {
 		return
 	}
 	p.add(jobs.ItemSpec{ID: id, Label: name, Parent: idService + service, Kind: KindContainer}, name, "container")
+}
+
+// has says whether the job has a row with this ID.
+func (p *progress) has(id string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.ContainsFunc(p.added, func(a addedItem) bool { return a.id == id })
 }
 
 // serviceDone ends the row of a service that the SDK brought up: done, with what was done to it, the phase
