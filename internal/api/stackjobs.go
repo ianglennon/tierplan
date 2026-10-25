@@ -26,7 +26,7 @@ type StackJobSummary struct {
 	EnvName    string `json:"envName" doc:"The environment's name when the operation started"`
 	StackID    string `json:"stackId" doc:"The stack the operation is on"`
 	StackName  string `json:"stackName" doc:"The stack's name when the operation started"`
-	Kind       string `json:"kind" enum:"deploy,update,rollback,start,stop,remove" doc:"What the operation is"`
+	Kind       string `json:"kind" enum:"deploy,update,rollback,restore,start,stop,remove" doc:"What the operation is"`
 	State      string `json:"state" enum:"running,done,failed,cancelled" doc:"Where it is. A job that ended with some of its work done and some not reads failed"`
 	StartedAt  string `json:"startedAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`

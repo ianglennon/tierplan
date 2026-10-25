@@ -19,9 +19,9 @@ import (
 
 // StackReviewRequest is the body of POST .../review.
 type StackReviewRequest struct {
-	Mode     string   `json:"mode,omitempty" enum:"deploy,update,rollback" doc:"deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs; rollback reviews restoring the revision named in revision, with the digests it stored, against what is running"`
+	Mode     string   `json:"mode,omitempty" enum:"deploy,update,rollback,restore" doc:"deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs; rollback reviews restoring the revision named in revision, with the digests it stored, against what is running; restore reviews putting back the stack's deployed revision, so what it lists is what changed outside the stack"`
 	Services []string `json:"services,omitempty" maxItems:"200" doc:"For mode update: the services to look up again, by the name in the compose file or by the swarm name"`
-	Revision int64    `json:"revision,omitempty" minimum:"1" doc:"For mode rollback: the number of the revision to restore. Required for it (422 revision_required); a revision the stack does not hold is 404 revision_not_found, one that did not end good 409 revision_not_good"`
+	Revision int64    `json:"revision,omitempty" minimum:"1" doc:"For mode rollback: the number of the revision to restore. Required for it (422 revision_required); a revision the stack does not hold is 404 revision_not_found, one that did not end good 409 revision_not_good. Not read for mode restore, which takes the deployed revision itself"`
 }
 
 // StackReviewInput is the path and body of the review route.
@@ -142,7 +142,7 @@ type StackReviewBody struct {
 	NeedsAdmin   []string                 `json:"needsAdmin" doc:"The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it"`
 	YAML         StackTextDiffBody        `json:"yaml" doc:"The rendered stack of the draft, with the images the review chose, against the rendering stored with the last good deploy, masked, as hunks with 3 lines of context. A stack never deployed is compared with an empty document. This is the one comparison that is with the last deploy and not with what is running"`
 	Concurrent   *StackConcurrentBody     `json:"concurrent,omitempty" doc:"Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent"`
-	Revision     int64                    `json:"revision" doc:"For mode rollback, the number of the revision the review restores; 0 for any other mode"`
+	Revision     int64                    `json:"revision" doc:"For mode rollback and restore, the number of the revision the review restores (for restore, the deployed one); 0 for any other mode"`
 	Adoption     *StackReviewAdoptionBody `json:"adoption,omitempty" doc:"Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does"`
 	DeployedSeq  int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
 }
@@ -155,6 +155,12 @@ type StackReviewOutput struct {
 
 // problemRevisionRequired is the code of a roll back review that names no revision.
 const problemRevisionRequired = "revision_required"
+
+// problemNoDeployedRevision is the code of a restore of a stack that has no deployed revision to put back.
+const problemNoDeployedRevision = "no_deployed_revision"
+
+// noDeployedRevision is the sentence for it.
+const noDeployedRevision = "This stack has not been deployed yet, so there's nothing to restore."
 
 func registerStackReview(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
@@ -172,6 +178,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). " +
 			"The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. " +
 			"On a standalone host the revision is compared with the host's containers by config hash and field diff, as a draft's review is, with each image set to the reference the revision stored; a network or volume a later revision added stays on the host and is not listed. " +
+			"In mode restore the revision is the stack's deployed one, which the review takes itself (409 no_deployed_revision for a stack with none), and the review is the same as a roll back to it: what it lists is what changed outside the stack, revision and deployedSeq are both the deployed revision's number, and nothing is looked up. " +
 			"A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
@@ -199,16 +206,29 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Revisions: repo,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name},
 	}
-	rollback := in.Body.Mode == stackops.ReviewModeRollback
+	restore := in.Body.Mode == stackops.ReviewModeRestore
+	rollback := in.Body.Mode == stackops.ReviewModeRollback || restore
+	good, haveGood, err := repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the running revision", env.ID, err)
+	}
 	if rollback {
 		// A roll back reviews the revision the person chose, not the draft: it is read by (stack, seq) after the
-		// stack by (environment, ID), and only a good one qualifies (D-06, T-08-10, T-08-13).
-		if in.Body.Revision == 0 {
-			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRevisionRequired, "Say which revision to roll back to.")
-		}
-		target, err := restorableRevision(ctx, d, repo, env.ID, st.ID, in.Body.Revision)
-		if err != nil {
-			return nil, err
+		// stack by (environment, ID), and only a good one qualifies (D-06, T-08-10, T-08-13). A restore reviews
+		// the deployed revision, which the stack itself names (D-23).
+		var target stackops.Snapshot
+		if restore {
+			if !haveGood {
+				return nil, httpx.Problem(http.StatusConflict, problemNoDeployedRevision, noDeployedRevision)
+			}
+			target = good
+		} else {
+			if in.Body.Revision == 0 {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRevisionRequired, "Say which revision to roll back to.")
+			}
+			if target, err = restorableRevision(ctx, d, repo, env.ID, st.ID, in.Body.Revision); err != nil {
+				return nil, err
+			}
 		}
 		if ri.TargetPins, err = repo.RevisionPins(ctx, target.ID); err != nil {
 			return nil, stackInternal(d, "read the pins of the revision to restore", env.ID, err)
@@ -218,9 +238,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		}
 		ri.Target, ri.Copy = &target, target.Copy
 	}
-	if good, ok, err := repo.LatestGoodRevision(ctx, st.ID); err != nil {
-		return nil, stackInternal(d, "read the running revision", env.ID, err)
-	} else if ok {
+	if haveGood {
 		ri.Previous = &good.Copy
 		ri.Deployed = &stackops.DeployedRevision{Seq: good.Seq, By: good.CreatedBy, At: good.CreatedAt}
 		ri.BaseSeq = draft.BaseSeq
@@ -255,8 +273,8 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	if ri.Deployed != nil {
 		body.DeployedSeq = ri.Deployed.Seq
 	}
-	if rollback {
-		body.Revision = in.Body.Revision
+	if ri.Target != nil {
+		body.Revision = ri.Target.Seq
 	}
 	return &StackReviewOutput{CacheControl: "no-store", Body: body}, nil
 }

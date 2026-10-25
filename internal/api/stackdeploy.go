@@ -41,6 +41,9 @@ const (
 	deployModeDeploy   = "deploy"
 	deployModeUpdate   = "update"
 	deployModeRollback = "rollback"
+	// deployModeRestore is a roll back to the deployed revision itself, made to put back what changed outside the
+	// stack (D-23). It is the job's mode and the audit row's; the revision and its deploy row are a roll back's.
+	deployModeRestore = "restore"
 
 	problemDraftChanged             = "draft_changed"
 	problemPinsInvalid              = "pins_invalid"
@@ -71,8 +74,9 @@ type StackDeployInput struct {
 // StackRollbackRequest is the optional body of POST .../rollback. Without it (or with no revision) the roll back
 // restores the version that ran well before, as it always has.
 type StackRollbackRequest struct {
-	Revision         int64 `json:"revision,omitempty" minimum:"1" doc:"The revision to restore: any revision of the stack whose deploy ended good, the deployed one included. A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. Left out, the roll back restores the version that ran well before the deployed one"`
-	ExpectedDeployed int64 `json:"expectedDeployed,omitempty" minimum:"1" doc:"The number of the deployed revision (the newest good one) the review was made against. If the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. Left out, the roll back is not checked against it"`
+	Mode             string `json:"mode,omitempty" enum:"rollback,restore" doc:"rollback (the default), or restore to put back what changed outside the stack by deploying the deployed revision again (D-23). A restore needs revision to be the deployed one (409 deployed_changed otherwise, 409 no_deployed_revision for a stack with none) and is recorded as a roll back of it, audited with the mode restore"`
+	Revision         int64  `json:"revision,omitempty" minimum:"1" doc:"The revision to restore: any revision of the stack whose deploy ended good, the deployed one included. A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. Left out, the roll back restores the version that ran well before the deployed one"`
+	ExpectedDeployed int64  `json:"expectedDeployed,omitempty" minimum:"1" doc:"The number of the deployed revision (the newest good one) the review was made against. If the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. Left out, the roll back is not checked against it"`
 }
 
 // StackRollbackInput is the path and the optional body of the roll back route.
@@ -131,8 +135,8 @@ type StackJobOutputLine struct {
 type StackJobBody struct {
 	ID         string               `json:"id" doc:"The job ID"`
 	StackID    string               `json:"stackId" doc:"The stack being deployed"`
-	Mode       string               `json:"mode" enum:"deploy,update,rollback,stop,start,remove" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to a revision that ran well, a stop or a start of the stack, or its removal"`
-	Revision   int64                `json:"revision,omitempty" doc:"Left out unless set: for a roll back, the number of the revision it restores"`
+	Mode       string               `json:"mode" enum:"deploy,update,rollback,restore,stop,start,remove" doc:"What the operation is: a deploy of the draft, an update of images, a roll back to a revision that ran well, a restore of the deployed revision, a stop or a start of the stack, or its removal"`
+	Revision   int64                `json:"revision,omitempty" doc:"Left out unless set: for a roll back or a restore, the number of the revision it restores"`
 	Recorded   int64                `json:"recordedRevision,omitempty" doc:"Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
@@ -224,6 +228,7 @@ func registerStackDeploy(r *httpx.Router, d StacksDeps) {
 			"A stack with no earlier version that ran well is 409 no_previous_version. " +
 			"Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. " +
 			"A stack of a standalone host rolls back the same way, through the Compose SDK: the containers whose configuration differs are recreated from the images the revision stored, networks and volumes a later revision added stay on the host, and the foreign-project check is made before anything is written. " +
+			"With mode restore, the roll back puts the deployed revision back to undo what was changed outside the stack (drift): revision must be the deployed one (409 deployed_changed when it is not, 409 no_deployed_revision when the stack has none, 422 revision_required without it), it is audited as stack.deployed with the mode restore and the job's mode is restore. Everything else is a roll back's, and it is recorded as a revision of origin rollback restoring the deployed one. " +
 			"A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
@@ -630,12 +635,35 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		req = *in.Body
 	}
 	var target stackops.Snapshot
-	if req.Revision > 0 {
+	mode := deployModeRollback
+	switch {
+	case req.Mode == deployModeRestore:
+		// A restore puts the deployed revision back and no other (D-23): the revision is the one the review was
+		// made of, and it is checked again under the lock like any roll back's expectedDeployed.
+		mode = deployModeRestore
+		if req.Revision == 0 {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRevisionRequired, "Say which revision to restore.")
+		}
+		good, found, gerr := repo.GoodRevisionInfo(ctx, st.ID)
+		if gerr != nil {
+			return nil, stackInternal(d, "read the running revision", env.ID, gerr)
+		}
+		if !found {
+			return nil, httpx.Problem(http.StatusConflict, problemNoDeployedRevision, noDeployedRevision)
+		}
+		if good.Seq != req.Revision {
+			return nil, deployedChanged(st.Name, good.Seq)
+		}
+		req.ExpectedDeployed = req.Revision
+		if target, err = restorableRevision(ctx, d, repo, env.ID, st.ID, req.Revision); err != nil {
+			return nil, err
+		}
+	case req.Revision > 0:
 		// The person chose the revision (D-02): any good one, the deployed one included (D-51).
 		if target, err = restorableRevision(ctx, d, repo, env.ID, st.ID, req.Revision); err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		var ok bool
 		target, ok, err = repo.RollbackTarget(ctx, st.ID)
 		if err != nil {
@@ -725,7 +753,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
 	}
 	l := launch{
-		p: p, env: env, st: st, rev: rev, mode: deployModeRollback, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
+		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindRollback, userAgent: in.UserAgent,
 		restores: target.Seq, rendering: rendering, release: release, owned: &jobOwnsLock,
 	}
 	if standalone {

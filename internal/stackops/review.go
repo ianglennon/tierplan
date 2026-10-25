@@ -139,7 +139,7 @@ type ReviewInput struct {
 	Pins PinStore
 	// Target is the revision a roll back restores, with its files and variables opened, and TargetPins the images it
 	// ran (by swarm service name) and TargetRendering the masked rendering it stored, which may be empty. They are read
-	// only for ReviewModeRollback, which reviews Target against what is running instead of the draft.
+	// only for ReviewModeRollback and ReviewModeRestore, which review Target against what is running instead of the draft.
 	Target          *Snapshot
 	TargetPins      map[string]string
 	TargetRendering []byte
@@ -274,7 +274,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	if err = d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
 		return rv, err
 	}
-	if in.Mode == ReviewModeRollback {
+	if in.Mode == ReviewModeRollback || in.Mode == ReviewModeRestore {
 		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
