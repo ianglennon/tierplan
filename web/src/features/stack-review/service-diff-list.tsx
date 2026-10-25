@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/table";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { diffSpecs } from "@/features/spec-editor/diff";
-import { SpecDiff } from "@/features/spec-editor/spec-diff";
+import { DriftedMarker, SpecDiff } from "@/features/spec-editor/spec-diff";
 import { OwnershipOnlyGroup } from "@/features/stack-review/ownership-only-group";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,9 @@ interface ServiceDiffListProps {
   openAll?: number;
   // "standalone" words the Ownership labels only group for containers and not for services.
   context?: "standalone";
+  // The paths of the settings that differ because of drift, by service name (History's Changes tab): each is marked
+  // Drifted. Absent for the review, which has no use for it.
+  driftedPaths?: Record<string, string[] | null> | null;
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -74,7 +77,15 @@ function ImageText({ text }: { text: string }) {
 // HiddenChanges lists the settings whose value changed to or from one that is hidden: the path
 // alone, as "Changed (hidden)". The server decided that they changed before it hid them and never
 // sent the values, so there is nothing else to show (STK-06, T-07-69).
-export function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
+export function HiddenChanges({
+  name,
+  paths,
+  drifted,
+}: {
+  name: string;
+  paths: string[];
+  drifted?: readonly string[];
+}) {
   const t = useT();
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">
@@ -101,6 +112,12 @@ export function HiddenChanges({ name, paths }: { name: string; paths: string[] }
               </TableCell>
               <TableCell className="align-top font-mono text-xs break-all whitespace-normal">
                 {path}
+                {drifted?.includes(path) ? (
+                  <>
+                    {" "}
+                    <DriftedMarker />
+                  </>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
@@ -113,6 +130,7 @@ export function HiddenChanges({ name, paths }: { name: string; paths: string[] }
 interface RowProps extends Pick<ServiceDiffListProps, "headings" | "caption" | "openAll"> {
   service: StackReviewService;
   defaultOpen: boolean;
+  drifted?: readonly string[];
 }
 
 // A change the file did not make: a standalone deploy recreates this service because the one it
@@ -154,7 +172,7 @@ function CarriedRow({ service }: { service: StackReviewService }) {
 // ServiceRow is one service: the change in words with its glyph, the name in mono, how many
 // settings changed and the image change. A changed or added service expands to the field-level
 // difference; a removed one is its summary row and nothing more.
-function ServiceRow({ service, defaultOpen, headings, caption, openAll }: RowProps) {
+function ServiceRow({ service, defaultOpen, headings, caption, openAll, drifted }: RowProps) {
   const t = useT();
   const change = service.change as keyof typeof GLYPH;
   const [open, setOpen] = useState(defaultOpen);
@@ -228,9 +246,12 @@ function ServiceRow({ service, defaultOpen, headings, caption, openAll }: RowPro
               create={service.change === "added"}
               headings={headings}
               caption={caption?.(service.short)}
+              drifted={drifted}
             />
           ) : null}
-          {hidden.length > 0 ? <HiddenChanges name={service.short} paths={hidden} /> : null}
+          {hidden.length > 0 ? (
+            <HiddenChanges name={service.short} paths={hidden} drifted={drifted} />
+          ) : null}
         </CollapsibleContent>
       </Collapsible>
     </li>
@@ -248,6 +269,7 @@ export function ServiceDiffList({
   caption,
   openAll,
   context,
+  driftedPaths,
 }: ServiceDiffListProps) {
   // The services that differ in nothing but Bayplan's ownership labels are their own group above the list
   // (UI-SPEC "Review additions"); a service with a real change as well stays in the list.
@@ -280,6 +302,7 @@ export function ServiceDiffList({
               headings={headings}
               caption={caption}
               openAll={openAll}
+              drifted={driftedPaths?.[s.name] ?? undefined}
             />
           ),
         )}

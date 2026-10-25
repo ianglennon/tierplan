@@ -3,6 +3,7 @@
 
 import { useMemo } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -168,6 +169,10 @@ interface SpecDiffProps {
   // The spec is of a service that does not exist yet: every setting is new, so the table has the
   // columns Setting and Value and no Change or Current.
   create?: boolean;
+  // The paths of the settings that differ because somebody changed them outside the stack (the drift check found
+  // them): each gets the outline Drifted marker beside its label, so it reads as changed outside the stack and not as
+  // part of the revision (UI-SPEC History tab, D-05).
+  drifted?: readonly string[];
 }
 
 // SpecDiff is the field-level difference of two service specs: a native table that lists each
@@ -182,6 +187,7 @@ export function SpecDiff({
   headings,
   caption,
   create = false,
+  drifted,
 }: SpecDiffProps) {
   const t = useT();
   const rows = useMemo(() => diffSpecs(current, next), [current, next]);
@@ -222,7 +228,14 @@ export function SpecDiff({
           </TableRow>
         </TableHeader>
         {sections.map((s) => (
-          <GroupRows key={s.group} group={s.group} rows={s.rows} t={t} create={create} />
+          <GroupRows
+            key={s.group}
+            group={s.group}
+            rows={s.rows}
+            t={t}
+            create={create}
+            drifted={drifted}
+          />
         ))}
       </Table>
     </div>
@@ -234,11 +247,22 @@ interface GroupRowsProps {
   rows: DiffRow[];
   t: Translate;
   create: boolean;
+  drifted?: readonly string[];
+}
+
+// DriftedMarker is the outline badge that says a setting differs because it was changed outside the stack.
+export function DriftedMarker() {
+  const t = useT();
+  return (
+    <Badge variant="outline" data-slot="drifted-marker">
+      {t("stackRevertsDrift.drifted")}
+    </Badge>
+  );
 }
 
 // GroupRows is one group's heading row and the rows under it, in a body of their own so the
 // heading names the rows below it.
-function GroupRows({ group, rows, t, create }: GroupRowsProps) {
+function GroupRows({ group, rows, t, create, drifted }: GroupRowsProps) {
   return (
     <TableBody>
       <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -261,7 +285,10 @@ function GroupRows({ group, rows, t, create }: GroupRowsProps) {
             </TableCell>
           )}
           <TableCell className="align-top whitespace-normal">
-            <div>{settingLabel(t, row.path)}</div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{settingLabel(t, row.path)}</span>
+              {drifted?.includes(row.path) ? <DriftedMarker /> : null}
+            </div>
             <div className="font-mono text-xs break-all text-muted-foreground">{row.path}</div>
           </TableCell>
           {create ? null : <ValueCell text={valueText(t, row, "current")} t={t} />}

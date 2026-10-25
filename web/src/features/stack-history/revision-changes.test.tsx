@@ -131,7 +131,10 @@ describe("settings that differ because of drift", () => {
 
     await screen.findByText("web");
     expect(within(rowOf(IMAGE)).getByText("Drifted")).toBeTruthy();
-    expect(within(rowOf("TaskTemplate.ContainerSpec.Env[MODE]")).queryByText("Drifted")).toBeNull();
+    // The hidden change is not listed as drifted, and the marker appears once.
+    expect(
+      within(screen.getByRole("table", { name: "Hidden changes to web" })).queryByText("Drifted"),
+    ).toBeNull();
     expect(screen.getAllByText("Drifted")).toHaveLength(1);
   });
 

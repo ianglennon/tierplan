@@ -106,7 +106,7 @@ export function RevisionChanges({
       <p className="text-sm text-muted-foreground">
         {t("stackChanges.caption", { seq, deployed })}
       </p>
-      <ServiceDiffList services={data.services ?? []} />
+      <ServiceDiffList services={data.services ?? []} driftedPaths={data.driftedPaths} />
     </>
   );
 }
