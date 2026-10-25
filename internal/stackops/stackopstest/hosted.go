@@ -106,16 +106,31 @@ func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, 
 	}
 	nets, vols := map[string]string{}, map[string]string{}
 	owner := map[string]string{stacks.LabelComposeProject: project.Name, stacks.LabelStackID: stackID}
+	// The SDK stamps the hash of the config it created a network or a volume from, and a later up compares it
+	// (plan 08-17): the objects of a deployed stack carry it too.
+	owned := func(hash string) map[string]string {
+		out := maps.Clone(owner)
+		out[stacks.LabelComposeConfigHash] = hash
+		return out
+	}
 	for key, n := range project.Networks {
 		nets[key] = n.Name
 		if !bool(n.External) {
-			h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "net-" + n.Name, Name: n.Name, Driver: "bridge", Scope: "local", Labels: owner})
+			hash, err := dockerx.ComposeNetworkHash(&n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "net-" + n.Name, Name: n.Name, Driver: "bridge", Scope: "local", Labels: owned(hash)})
 		}
 	}
 	for key, v := range project.Volumes {
 		vols[key] = v.Name
 		if !bool(v.External) {
-			h.Volumes = append(h.Volumes, dockertest.FakeVolume{Name: v.Name, Driver: "local", Labels: owner})
+			hash, err := dockerx.ComposeVolumeHash(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.Volumes = append(h.Volumes, dockertest.FakeVolume{Name: v.Name, Driver: "local", Labels: owned(hash)})
 		}
 	}
 	ids := map[string][]string{}

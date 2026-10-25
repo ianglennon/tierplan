@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -415,5 +416,77 @@ func TestAStandaloneRollbackWithoutAStoredImageFailsTheLookupStepAndRunsNothing(
 	}
 	if states := itemStates(job); states["lookup"] != "failed:pins_invalid" {
 		t.Errorf("items = %v, want the lookup step failed", states)
+	}
+}
+
+// standaloneDeployInput is the input of the adopted project's first deploy, with the images its review chose.
+func (a *adopted) standaloneDeployInput(t *testing.T, rv stackops.Review) stackops.StandaloneDeployInput {
+	t.Helper()
+	st, err := a.repo.Stack(testsupport.Context(t), a.rig.envID, a.stack.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stackops.StandaloneDeployInput{Stack: st, Copy: a.draft.Copy, Reviewed: rv.Pins, Pins: a.repo}
+}
+
+// TestFirstDeployOfAnAdoptedStandaloneStack: the first deploy of an adopted docker compose project is not refused as
+// a foreign project, and hands the SDK the project's network and volume under the names recorded at adoption with the
+// config hashes the host's labels hold, so the SDK recreates the containers for their labels and keeps the network
+// and the volume. Bayplan itself creates, removes and writes nothing but what the SDK does (D-16, D-18, T-08-65).
+func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
+	t.Parallel()
+	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
+	a := adoptRigOn(t, hostRig(t, h), stacks.TargetStandalone)
+	rv := a.review(t)
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want the first review of an adopted project to refuse nothing", rv.Problems)
+	}
+	stand := &upStandIn{}
+	a.rig.deps.Up = stand.up
+	before := len(a.rig.fake.Writes())
+
+	res, job := a.rig.deployStandalone(t, a.standaloneDeployInput(t, rv))
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	if res.Networks != 0 || len(res.CreatedNetworks) != 0 || res.Services != 0 || len(res.RemovedServices) != 0 {
+		t.Errorf("deploy created networks %v and services %d and removed %v, want only the recreate for the labels", res.CreatedNetworks, res.Services, res.RemovedServices)
+	}
+	if res.Updated != 2 {
+		t.Errorf("updated = %d, want both services recreated for the ownership labels", res.Updated)
+	}
+	if got := a.rig.fake.Writes()[before:]; len(got) != 0 {
+		t.Errorf("Bayplan wrote %v, want everything left to the SDK", got)
+	}
+	p := stand.project
+	if p == nil || stand.calls != 1 {
+		t.Fatalf("the SDK stand-in was called %d times", stand.calls)
+	}
+	if len(stand.opts.ForceRecreate) != 0 {
+		t.Errorf("force recreate = %v, want none: the hashes already differ", stand.opts.ForceRecreate)
+	}
+	net, vol := p.Networks["back"], p.Volumes["data"]
+	if net.Name != "shop_back" || vol.Name != "shop_data" || bool(net.External) || bool(vol.External) {
+		t.Fatalf("network %+v volume %+v, want shop_back and shop_data declared as the project's own", net, vol)
+	}
+	netHash, err := dockerx.ComposeNetworkHash(&net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	volHash, err := dockerx.ComposeVolumeHash(vol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := h.Networks[0].Labels[stacks.LabelComposeConfigHash]; netHash != want {
+		t.Errorf("network hash = %s, want the host's %s: the SDK would recreate the network", netHash, want)
+	}
+	if want := h.Volumes[0].Labels[stacks.LabelComposeConfigHash]; volHash != want {
+		t.Errorf("volume hash = %s, want the host's %s: the SDK would ask to recreate the volume", volHash, want)
+	}
+	for name, svc := range p.Services {
+		if svc.CustomLabels[stacks.LabelStackID] != a.stack.ID {
+			t.Errorf("service %s is sent without Bayplan's ID: %v", name, svc.CustomLabels)
+		}
 	}
 }

@@ -496,7 +496,7 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 			return ownedStack{}, false
 		}
 		live, err := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
-		if err == nil && foreignLive(live, in.Stack.ID) {
+		if err == nil && foreignLive(live, OwnershipOf(in.Stack)) {
 			x.fail(ItemCheck, CodeNameClash, "", nil, nil)
 			x.skipRest()
 			return ownedStack{}, false

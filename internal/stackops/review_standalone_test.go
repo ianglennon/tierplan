@@ -13,6 +13,7 @@ import (
 	mobycontainer "github.com/moby/moby/api/types/container"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -385,5 +386,159 @@ func TestStandaloneReviewInUpdateModeMovesOnlyTheChosenService(t *testing.T) {
 	var invalid *stackops.ServicesInvalidError
 	if _, err := rig.deps.Review(testsupport.Context(t), in); !errors.As(err, &invalid) {
 		t.Errorf("review of a swarm name on a standalone host: %v, want ServicesInvalidError", err)
+	}
+}
+
+// foreignAdoptable is a docker compose up project of two services, a network and a volume, as an owner who has not
+// met Bayplan runs it (plan 08-17).
+const foreignAdoptable = `services:
+  web:
+    image: nginx:1.27
+    networks: [back]
+    volumes: [data:/data]
+  db:
+    image: postgres:16
+    networks: [back]
+networks:
+  back: {}
+volumes:
+  data: {}
+`
+
+// networkedHosted is the compose file of a stack made and deployed in Bayplan: a network, a volume and a service.
+const networkedHosted = `services:
+  web:
+    image: nginx:1.27-alpine
+    networks: [back]
+    volumes: [data:/data]
+networks:
+  back: {}
+volumes:
+  data: {}
+`
+
+// objectRows are the kind and name of each network and volume row of a review, with the sentence.
+func objectRows(rv stackops.Review) []string {
+	var out []string
+	for _, o := range rv.Objects {
+		out = append(out, o.Change+" "+o.Kind+" "+o.Name+": "+o.Detail)
+	}
+	return out
+}
+
+// TestReviewAdoptedStandaloneStackShowsOwnershipOnly: the first review of an adopted docker compose project is not
+// refused as a foreign project, lists every container's service as Ownership labels only, counts them apart from
+// Changed, and shows no row for the network or the volume it keeps (D-16, D-18, D-46).
+func TestReviewAdoptedStandaloneStackShowsOwnershipOnly(t *testing.T) {
+	t.Parallel()
+	a := adoptRigOn(t, hostRig(t, stackopstest.Foreign(t, "shop", foreignAdoptable)), stacks.TargetStandalone)
+
+	rv := a.review(t)
+
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want the first review of an adopted project to refuse nothing", rv.Problems)
+	}
+	if rv.Adoption == nil || !rv.Adoption.Pending || rv.Adoption.OwnershipOnly != 2 || rv.Summary.OwnershipOnly != 2 {
+		t.Errorf("adoption = %+v summary ownership-only = %d, want a pending adoption with both services", rv.Adoption, rv.Summary.OwnershipOnly)
+	}
+	if rv.Summary.Services != (stackops.Counts{}) {
+		t.Errorf("summary = %+v, want no changed service: the labels are not a change of the file", rv.Summary.Services)
+	}
+	if len(rv.Services) != 2 {
+		t.Fatalf("services = %v, want web and db", changesOf(rv))
+	}
+	for _, s := range rv.Services {
+		if !s.OwnershipOnly || s.Change != stacks.ChangeChanged {
+			t.Errorf("service %s = %+v, want changed and ownership-only", s.Name, s)
+		}
+	}
+	if len(rv.Objects) != 0 {
+		t.Errorf("objects = %v, want no row for the network and the volume adoption keeps", objectRows(rv))
+	}
+}
+
+// TestAnAdoptedStandaloneReviewKeepsARealChangeInTheList: a service the person edited after adoption is a change
+// of the file, not an ownership-only row, even though every container is recreated for the labels.
+func TestAnAdoptedStandaloneReviewKeepsARealChangeInTheList(t *testing.T) {
+	t.Parallel()
+	a := adoptRigOn(t, hostRig(t, stackopstest.Foreign(t, "shop", foreignAdoptable)), stacks.TargetStandalone)
+	edited := a.draft.Copy
+	edited.Files = slices.Clone(edited.Files)
+	for i, f := range edited.Files {
+		if f.Path == stacks.ComposeFile {
+			edited.Files[i].Content = []byte(strings.Replace(string(f.Content), "    image: nginx:1.27\n", "    image: nginx:1.27\n    environment:\n      MODE: prod\n", 1))
+		}
+	}
+	a.draft.Copy = edited
+
+	rv := a.review(t)
+
+	if rv.Summary.OwnershipOnly != 1 || rv.Summary.Services.Changed != 1 {
+		t.Fatalf("summary = %+v ownership-only %d (services %v), want db ownership-only and web changed", rv.Summary.Services, rv.Summary.OwnershipOnly, changesOf(rv))
+	}
+	for _, s := range rv.Services {
+		if s.OwnershipOnly != (s.Name == "db") {
+			t.Errorf("service %s ownership-only = %v", s.Name, s.OwnershipOnly)
+		}
+	}
+}
+
+// TestStandaloneReviewWarnsOfANetworkRecreate: a stack made and deployed in Bayplan before Phase 8 and never adopted
+// whose file changed a network's settings shows the network row, with the sentence for a network the deploy
+// recreates (D-46, D-56).
+func TestStandaloneReviewWarnsOfANetworkRecreate(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", networkedHosted, nil))
+	edited := strings.Replace(networkedHosted, "  back: {}", "  back:\n    driver_opts:\n      com.docker.network.bridge.name: br-demo", 1)
+
+	rv := rig.reviewOf(t, "demo", edited, nil, nil)
+
+	want := []string{"changed network demo_back: Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it."}
+	if got := objectRows(rv); !slices.Equal(got, want) {
+		t.Errorf("objects = %q, want %q", got, want)
+	}
+	if rv.Summary.Networks.Changed != 1 || rv.Summary.Volumes != (stackops.Counts{}) {
+		t.Errorf("summary networks = %+v volumes = %+v", rv.Summary.Networks, rv.Summary.Volumes)
+	}
+	if len(rv.Services) != 0 {
+		t.Errorf("services = %v, want none: no service's own settings changed", changesOf(rv))
+	}
+}
+
+// TestStandaloneReviewKeepsAVolume: a volume whose labels changed in the file shows the volume row, and the sentence
+// says Bayplan keeps it as it is (D-46, D-56, T-08-65).
+func TestStandaloneReviewKeepsAVolume(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", networkedHosted, nil))
+	edited := strings.Replace(networkedHosted, "  data: {}", "  data:\n    labels:\n      tier: gold", 1)
+
+	rv := rig.reviewOf(t, "demo", edited, nil, nil)
+
+	want := []string{"changed volume demo_data: Its settings differ from the compose file. Bayplan keeps it as it is."}
+	if got := objectRows(rv); !slices.Equal(got, want) {
+		t.Errorf("objects = %q, want %q", got, want)
+	}
+	if rv.Summary.Volumes.Changed != 1 || rv.Summary.Networks != (stackops.Counts{}) {
+		t.Errorf("summary volumes = %+v networks = %+v", rv.Summary.Volumes, rv.Summary.Networks)
+	}
+}
+
+// TestStandaloneReviewNoObjectRowsWhenUnchanged: the same stack reviewed with the file it was deployed from has
+// no network or volume row (D-56), and one whose network the host does not label with a hash says nothing.
+func TestStandaloneReviewNoObjectRowsWhenUnchanged(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, hostStack(t, "demo", networkedHosted, nil))
+
+	if rv := rig.reviewOf(t, "demo", networkedHosted, nil, nil); len(rv.Objects) != 0 || len(rv.Services) != 0 {
+		t.Errorf("objects = %q services = %v, want a review with nothing to do", objectRows(rv), changesOf(rv))
+	}
+
+	h := hostStack(t, "demo", networkedHosted, nil)
+	for i := range h.Networks {
+		delete(h.Networks[i].Labels, stacks.LabelComposeConfigHash)
+	}
+	edited := strings.Replace(networkedHosted, "  back: {}", "  back:\n    driver_opts:\n      com.docker.network.bridge.name: br-demo", 1)
+	if rv := hostRig(t, h).reviewOf(t, "demo", edited, nil, nil); len(rv.Objects) != 0 {
+		t.Errorf("objects = %q, want no row for a network that records no hash", objectRows(rv))
 	}
 }

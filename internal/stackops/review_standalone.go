@@ -51,7 +51,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 	if err != nil {
 		return err
 	}
-	if foreignLive(live, in.Stack.ID) {
+	if foreignLive(live, OwnershipOf(in.Stack)) {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
@@ -116,15 +116,28 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 	if err != nil {
 		return err
 	}
-	for _, c := range cmp.Changes {
-		rv.Services = append(rv.Services, c.Row)
-		bump(&rv.Summary.Services, c.Row.Change)
-	}
-	// What a recreate carries with it follows the changed services; it is not counted as changed.
-	rv.Services = append(rv.Services, cmp.Carried...)
-	for _, name := range diff.Removed {
-		rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
-		rv.Summary.Services.Removed++
+	if own := OwnershipOf(in.Stack); own.Adopted && own.Pending {
+		// The first deploy of an adopted project changes the config hash of every container (Bayplan's labels are
+		// in it), so it recreates them: a service that differs in nothing the person wrote is told apart from a
+		// real change (D-16). A managed stack's review is as it was in Phase 7.
+		classifyOwnershipOnly(cmp, rv)
+		rv.Adoption = &AdoptionReview{Pending: true}
+		for _, name := range diff.Removed {
+			rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
+		}
+		countServices(rv)
+		rv.Adoption.OwnershipOnly = rv.Summary.OwnershipOnly
+	} else {
+		for _, c := range cmp.Changes {
+			rv.Services = append(rv.Services, c.Row)
+			bump(&rv.Summary.Services, c.Row.Change)
+		}
+		// What a recreate carries with it follows the changed services; it is not counted as changed.
+		rv.Services = append(rv.Services, cmp.Carried...)
+		for _, name := range diff.Removed {
+			rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
+			rv.Summary.Services.Removed++
+		}
 	}
 	for _, name := range missingNetworks(project, live.Networks) {
 		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: name})
@@ -134,8 +147,85 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "volume", Name: name})
 		rv.Summary.Volumes.Added++
 	}
+	// A network or a volume the host holds whose settings differ from the file is shown before the deploy (D-46,
+	// D-56). It applies to every standalone stack, those deployed before adoption existed included.
+	for _, o := range changedObjects(project, live) {
+		rv.Objects = append(rv.Objects, o)
+		if o.Kind == "network" {
+			rv.Summary.Networks.Changed++
+		} else {
+			rv.Summary.Volumes.Changed++
+		}
+	}
 	rv.Problems = rv.Problems.Sorted()
 	return nil
+}
+
+// Sentences of a network or a volume whose settings differ from the compose file (D-46, D-56).
+const (
+	detailNetworkRecreated = "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it."
+	detailVolumeKept       = "Its settings differ from the compose file. Bayplan keeps it as it is."
+)
+
+// classifyOwnershipOnly adds the compared services of an adopted project to rv, the ones that differ in nothing but
+// the config hash Bayplan's labels change marked OwnershipOnly (plan 08-14 does the same for the adopt check): a
+// service with containers whose hash differs, with no setting that differs and no hidden change, and that was not
+// forced. What a recreate carries with it is ownership-only when the service that causes it is.
+func classifyOwnershipOnly(cmp standaloneComparison, rv *Review) {
+	gap := map[string]bool{}
+	for _, c := range cmp.Changes {
+		row := c.Row
+		row.OwnershipOnly = !c.Added && !c.Forced && row.Change == stacks.ChangeChanged && row.Settings == 0 && len(row.HiddenChanges) == 0
+		if !row.OwnershipOnly {
+			gap[c.Name] = true
+		}
+		rv.Services = append(rv.Services, row)
+	}
+	for _, c := range cmp.Carried {
+		c.OwnershipOnly = !gap[c.Because]
+		rv.Services = append(rv.Services, c)
+	}
+}
+
+// changedObjects are the networks and the volumes the project owns that the host holds with a
+// com.docker.compose.config-hash label other than the hash of the object as the project declares it now: the pre-flight
+// of what the SDK's up would do. The SDK recreates a network whose hash differs, so the row warns of the containers
+// attached to it that restart; a volume is never recreated by Bayplan, which keeps the data (T-08-65). An object with
+// no label (not made by the SDK) says nothing about its settings and is left out. The rows are in name order,
+// networks first.
+func changedObjects(p *types.Project, live standaloneLive) []ObjectChange {
+	var out []ObjectChange
+	nets := make(map[string]dockerx.NetworkRow, len(live.Networks))
+	for _, n := range live.Networks {
+		nets[n.Name] = n
+	}
+	for _, key := range sortedKeys(p.Networks) {
+		n := p.Networks[key]
+		row, ok := nets[n.Name]
+		if bool(n.External) || n.Name == "" || !ok {
+			continue
+		}
+		have := row.Labels[stacks.LabelComposeConfigHash]
+		if want, err := dockerx.ComposeNetworkHash(&n); have != "" && err == nil && want != have {
+			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: "network", Name: n.Name, Detail: detailNetworkRecreated})
+		}
+	}
+	vols := make(map[string]dockerx.VolumeRow, len(live.Volumes))
+	for _, v := range live.Volumes {
+		vols[v.Name] = v
+	}
+	for _, key := range sortedKeys(p.Volumes) {
+		v := p.Volumes[key]
+		row, ok := vols[v.Name]
+		if bool(v.External) || v.Name == "" || !ok {
+			continue
+		}
+		have := row.Labels[stacks.LabelComposeConfigHash]
+		if want, err := dockerx.ComposeVolumeHash(v); have != "" && err == nil && want != have {
+			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: "volume", Name: v.Name, Detail: detailVolumeKept})
+		}
+	}
+	return out
 }
 
 // prepareProblem is the blocking problem for a project the Compose SDK cannot be given.

@@ -138,3 +138,14 @@ func (o Ownership) Knows(kind, name string) bool {
 	}
 	return false
 }
+
+// foreignNetwork says whether a network found under the stack's name is somebody else's: it is neither the
+// stack's nor one the stack recorded when it was adopted.
+func (o Ownership) foreignNetwork(name string, labels map[string]string) bool {
+	return !o.OwnsNetwork(name, labels) && !o.Knows(rebuild.KindNetwork, name)
+}
+
+// foreignVolume is foreignNetwork for a volume.
+func (o Ownership) foreignVolume(name string, labels map[string]string) bool {
+	return !o.OwnsVolume(name, labels) && !o.Knows(rebuild.KindVolume, name)
+}

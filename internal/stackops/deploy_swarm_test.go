@@ -1421,8 +1421,14 @@ func adoptCorpusStale(t *testing.T, staleID string) *adopted {
 // adoptRig adopts the stack named shop that rig holds.
 func adoptRig(t *testing.T, rig *swarmRig) *adopted {
 	t.Helper()
+	return adoptRigOn(t, rig, stacks.TargetSwarm)
+}
+
+// adoptRigOn adopts the stack named shop that rig holds, a swarm stack or a Compose project of a standalone host.
+func adoptRigOn(t *testing.T, rig *swarmRig, target stacks.Target) *adopted {
+	t.Helper()
 	repo := adoptRepo(t, rig)
-	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	st, err := rig.adopt(t, repo, target, "shop", stackops.SelfMarks{})
 	if err != nil {
 		t.Fatalf("AdoptCommit: %v", err)
 	}
@@ -1442,7 +1448,7 @@ func (a *adopted) review(t *testing.T) stackops.Review {
 		t.Fatal(err)
 	}
 	rv, err := a.rig.deps.Review(ctx, stackops.ReviewInput{
-		EnvID: a.rig.envID, Stack: st, Copy: a.draft.Copy, DraftVersion: a.draft.Version, Pins: a.repo,
+		EnvID: a.rig.envID, Stack: st, Copy: a.draft.Copy, DraftVersion: a.draft.Version, Pins: a.repo, Revisions: a.repo,
 		Caller: stackops.Caller{Principal: a.rig.principal(t, "root", ""), Actor: "root"},
 	})
 	if err != nil {

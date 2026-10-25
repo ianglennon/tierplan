@@ -234,7 +234,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("could not read a standalone host before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
-	if foreignLive(live, in.Stack.ID) {
+	if foreignLive(live, OwnershipOf(in.Stack)) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
@@ -455,21 +455,22 @@ func standaloneAction(diff standaloneDiff, name string) string {
 }
 
 // foreignLive reports whether the host holds a container, network or volume under the stack's Compose
-// project that does not carry the stack's ID: a Compose project of that name that Bayplan does not manage
-// (D-12).
-func foreignLive(live standaloneLive, stackID string) bool {
+// project that the stack does not own: a Compose project of that name that Bayplan does not manage (D-12). An
+// adopted stack owns the containers of its project that carry no ID of its own until its first deploy, and the
+// networks and volumes recorded when it was adopted for good (D-11, D-18), so a project it took over is no clash.
+func foreignLive(live standaloneLive, own Ownership) bool {
 	for _, c := range live.Containers {
-		if c.Labels[stacks.LabelStackID] != stackID {
+		if !own.OwnsWorkload(c.Labels) {
 			return true
 		}
 	}
 	for _, n := range live.Networks {
-		if n.Labels[stacks.LabelStackID] != stackID {
+		if own.foreignNetwork(n.Name, n.Labels) {
 			return true
 		}
 	}
 	for _, v := range live.Volumes {
-		if v.Labels[stacks.LabelStackID] != stackID {
+		if own.foreignVolume(v.Name, v.Labels) {
 			return true
 		}
 	}

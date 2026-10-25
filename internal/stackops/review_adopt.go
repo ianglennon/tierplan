@@ -135,21 +135,9 @@ func (d Deps) reviewAdoptStandalone(ctx context.Context, in ReviewInput, loaded 
 	if err != nil {
 		return err
 	}
-	gap := map[string]bool{}
-	for _, c := range cmp.Changes {
-		row := c.Row
-		row.OwnershipOnly = !c.Added && !c.Forced && row.Change == stacks.ChangeChanged && row.Settings == 0 && len(row.HiddenChanges) == 0
-		if !row.OwnershipOnly {
-			gap[c.Name] = true
-		}
-		rv.Services = append(rv.Services, row)
-	}
 	// What a recreate carries with it follows the service that causes it: a gap when that service is one, and a
 	// recreation for the ownership labels when it is not.
-	for _, c := range cmp.Carried {
-		c.OwnershipOnly = !gap[c.Because]
-		rv.Services = append(rv.Services, c)
-	}
+	classifyOwnershipOnly(cmp, rv)
 	for _, name := range diff.Removed {
 		rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
 	}

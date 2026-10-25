@@ -104,7 +104,7 @@ func (l *lifecycle) standaloneLifecycle(ctx context.Context, mode string) {
 	}
 	// The SDK acts on every container of the Compose project: one that Bayplan does not manage is never
 	// stopped or started by it.
-	if foreignLive(live, in.Stack.ID) {
+	if foreignLive(live, OwnershipOf(in.Stack)) {
 		l.fail(ItemCheck, CodeNameClash, "")
 		return
 	}

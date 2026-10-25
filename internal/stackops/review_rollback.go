@@ -190,7 +190,7 @@ func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *
 	if err != nil {
 		return err
 	}
-	if foreignLive(live, in.Stack.ID) {
+	if foreignLive(live, OwnershipOf(in.Stack)) {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,

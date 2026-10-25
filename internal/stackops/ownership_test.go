@@ -9,6 +9,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -208,5 +209,86 @@ func TestAfterTheFirstDeployANewUnlabelledServiceIsForeign(t *testing.T) {
 	}
 	if rv := a.review(t); !clash(rv) {
 		t.Fatalf("problems = %+v, want a name clash for services with no ID once the adoption is not pending", rv.Problems)
+	}
+}
+
+// TestStandaloneOwnershipByProject: on a standalone host the name is the Compose project, and the same rule
+// applies as on a swarm (plan 08-17, D-16, D-18). A managed stack owns what carries its project and its ID; an
+// adopted one, until its first deploy, also the containers of its project with no ID or the prior one, and always
+// the networks and volumes recorded at adoption. foreignLive, and the name-clash gate that reads the host, ask it.
+func TestStandaloneOwnershipByProject(t *testing.T) {
+	t.Parallel()
+	project := func(id string) map[string]string {
+		l := map[string]string{stacks.LabelComposeProject: "shop"}
+		if id != "" {
+			l[stacks.LabelStackID] = id
+		}
+		return l
+	}
+	managed := stackops.OwnershipOf(stackops.Stack{ID: "stk-1", Name: "shop", Target: stacks.TargetStandalone})
+	if !managed.OwnsWorkload(project("stk-1")) || managed.OwnsWorkload(project("")) || managed.OwnsWorkload(project("stk-2")) {
+		t.Errorf("a managed standalone stack must own the containers of its project that carry its ID, and no other")
+	}
+	if managed.OwnsWorkload(map[string]string{stacks.LabelSwarmNamespace: "shop", stacks.LabelStackID: "stk-1"}) {
+		t.Errorf("a standalone stack is named by the Compose project: a swarm namespace label is not its name")
+	}
+
+	adopted := func(pending bool) stackops.Stack {
+		return stackops.Stack{
+			ID: "stk-1", Name: "shop", Target: stacks.TargetStandalone,
+			Source:   stacks.Source{Kind: stacks.SourceAdopted, Ref: "shop"},
+			Adoption: stacks.Adoption{PriorID: "stk-old", Networks: []string{"shop_back"}, Volumes: []string{"shop_data"}, Pending: pending},
+		}
+	}
+	pending := stackops.OwnershipOf(adopted(true))
+	for name, labels := range map[string]map[string]string{"no ID": project(""), "the prior ID": project("stk-old"), "its own ID": project("stk-1")} {
+		if !pending.OwnsWorkload(labels) {
+			t.Errorf("an adopted standalone stack that was not deployed yet must own a container with %s", name)
+		}
+	}
+	if pending.OwnsWorkload(project("stk-2")) {
+		t.Errorf("an ID of another stack never links a container to this one")
+	}
+	if !pending.OwnsNetwork("shop_back", project("")) || !pending.OwnsVolume("shop_data", nil) || pending.OwnsNetwork("shop_other", project("")) {
+		t.Errorf("an adopted standalone stack must own the network and the volume it recorded, and no other without its ID")
+	}
+	deployed := stackops.OwnershipOf(adopted(false))
+	if deployed.OwnsWorkload(project("")) || !deployed.OwnsWorkload(project("stk-1")) || !deployed.OwnsNetwork("shop_back", project("")) {
+		t.Errorf("a deployed adopted standalone stack must own its labelled containers, not an unlabelled one, and still its recorded network")
+	}
+}
+
+// TestStandaloneNameClashGateUsesTheOwnershipOfTheStack: the check that reads the host (ForeignStackOf) answers
+// from the stack's ownership. A project docker compose made is no clash for the stack that adopted it until the
+// first deploy has labelled it; a volume nobody recorded still is one (T-08-66).
+func TestStandaloneNameClashGateUsesTheOwnershipOfTheStack(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, stackopstest.Foreign(t, "shop", foreignAdoptable))
+	repo := adoptRepo(t, rig)
+	st, err := rig.adopt(t, repo, stacks.TargetStandalone, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+	ctx := testsupport.Context(t)
+	st, err = repo.Stack(ctx, rig.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if foreign, err := rig.deps.ForeignStackOf(ctx, rig.envID, st); err != nil || foreign {
+		t.Fatalf("ForeignStackOf(adopted, pending) = %v, %v, want the project it took over to be its own", foreign, err)
+	}
+	if foreign, err := rig.deps.ForeignStack(ctx, rig.envID, stacks.TargetStandalone, "shop", st.ID); err != nil || !foreign {
+		t.Fatalf("ForeignStack(by ID) = %v, %v, want the unlabelled containers to count when only the ID is compared", foreign, err)
+	}
+	if err := repo.ClearAdoptionPending(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	st, err = repo.Stack(ctx, rig.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign, err := rig.deps.ForeignStackOf(ctx, rig.envID, st); err != nil || !foreign {
+		t.Fatalf("ForeignStackOf(adopted, deployed) = %v, %v, want an unlabelled container to be a clash once the first deploy is done", foreign, err)
 	}
 }
