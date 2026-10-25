@@ -48,9 +48,12 @@ environment you may read, grouped by environment, with search, status chips and 
 the Admin role on the environment (`stacks.create`).
 
 **Create stack** asks for a name and a starting point (the starter example, an empty file, or a compose file you
-upload). The name is lowercase letters, numbers, dash or underscore, starts with a letter or number, is at most
-63 characters, and **can't change later**: it is the swarm namespace or the Compose project name on the host.
-Bayplan checks it as you type.
+upload). The name starts with a letter or number and **can't change later**: it is the swarm namespace or the
+Compose project name on the host. On a swarm it is letters (either case), numbers, dash or underscore, at most 61
+characters (a swarm refuses a dot in a service or network name, and 61 leaves room for a service name). On a
+standalone host it is lowercase letters, numbers, dash or underscore, at most 255 characters. It is the same rule
+that decides whether a stack made elsewhere can be adopted. Bayplan checks it as you type, against the environment
+you create the stack on.
 
 A stack whose name a stack on that environment already has, that Bayplan does not manage, is refused: *a stack
 named X already exists on this environment, not managed by Bayplan*. Bayplan never silently takes over a stack
@@ -477,7 +480,7 @@ stack**.
 
 | What | Limit |
 |------|-------|
-| Stack name | `^[a-z0-9][a-z0-9_-]{0,62}$`, fixed for life |
+| Stack name | swarm `^[A-Za-z0-9][A-Za-z0-9_-]{0,60}$`, standalone `^[a-z0-9][a-z0-9_-]{0,254}$`, fixed for life |
 | Files | 50 per stack, 1 MiB each, 8 MiB in all; a path of at most 255 characters, a name in it at most 100 |
 | Secret file | 500 KB on a swarm, 1,000 KB on a standalone host (config: 1 MB, 1,000 KB) |
 | Secret variable | at least 4 characters |
