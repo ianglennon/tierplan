@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Rocket } from "lucide-react";
 
+import { useDrift } from "@/api/stack-drift";
 import { stackQuery } from "@/api/stacks";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +17,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DriftAlert } from "@/features/stack-drift/drift-alert";
 import { AdoptedBanner } from "@/features/stacks/adopted-banner";
 import { StackDetailsCard } from "@/features/stacks/stack-details-card";
 import { StackServicesCard } from "@/features/stacks/stack-services-card";
@@ -69,6 +71,8 @@ function NotDeployed({ envId, stackId, name }: StackOverviewProps & { name: stri
 // Details card never waits for Docker: it is the stack's own record. Every value renders as text.
 export function StackOverview({ envId, stackId }: StackOverviewProps) {
   const { data } = useQuery(stackQuery(envId, stackId));
+  // The stack is checked against its deployed revision once, when the Overview opens (D-22).
+  const drift = useDrift(envId, stackId);
   if (!data) {
     return (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" aria-hidden="true">
@@ -81,6 +85,7 @@ export function StackOverview({ envId, stackId }: StackOverviewProps) {
     <div className="flex flex-col gap-6">
       {/* The page's deploy alerts sit above the tabs, so this is the first thing the Overview itself says. */}
       <AdoptedBanner stack={data} />
+      <DriftAlert envId={envId} stackId={stackId} name={data.name} drift={drift.data} />
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
         {data.state === "not_deployed" ? (
           <NotDeployed envId={envId} stackId={stackId} name={data.name} />

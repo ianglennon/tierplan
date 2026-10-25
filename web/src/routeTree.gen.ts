@@ -95,6 +95,7 @@ import { Route as AppEnvEnvIdServicesServiceIdStatsRouteImport } from './routes/
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
 import { Route as AppEnvEnvIdServicesServiceIdEditRouteImport } from './routes/_app/env/$envId/services_.$serviceId_.edit'
 import { Route as AppEnvEnvIdStacksStackIdIndexRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.index'
+import { Route as AppEnvEnvIdStacksStackIdDriftRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.drift'
 import { Route as AppEnvEnvIdStacksStackIdEditorRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.editor'
 import { Route as AppEnvEnvIdStacksStackIdHistoryRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.history'
 import { Route as AppEnvEnvIdStacksStackIdLogsRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.logs'
@@ -588,6 +589,12 @@ const AppEnvEnvIdStacksStackIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
   } as any)
+const AppEnvEnvIdStacksStackIdDriftRoute =
+  AppEnvEnvIdStacksStackIdDriftRouteImport.update({
+    id: '/drift',
+    path: '/drift',
+    getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
+  } as any)
 const AppEnvEnvIdStacksStackIdEditorRoute =
   AppEnvEnvIdStacksStackIdEditorRouteImport.update({
     id: '/editor',
@@ -745,6 +752,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/stacks/$stackId/history': typeof AppEnvEnvIdStacksStackIdHistoryRoute
   '/env/$envId/stacks/$stackId/logs': typeof AppEnvEnvIdStacksStackIdLogsRoute
@@ -831,6 +839,7 @@ export interface FileRoutesByTo {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/stacks/$stackId/history': typeof AppEnvEnvIdStacksStackIdHistoryRoute
   '/env/$envId/stacks/$stackId/logs': typeof AppEnvEnvIdStacksStackIdLogsRoute
@@ -933,6 +942,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/_app/env/$envId/services_/$serviceId_/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/_app/env/$envId/stacks_/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/_app/env/$envId/stacks_/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/_app/env/$envId/stacks_/$stackId/history': typeof AppEnvEnvIdStacksStackIdHistoryRoute
   '/_app/env/$envId/stacks_/$stackId/logs': typeof AppEnvEnvIdStacksStackIdLogsRoute
@@ -1035,6 +1045,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/drift'
     | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/stacks/$stackId/history'
     | '/env/$envId/stacks/$stackId/logs'
@@ -1121,6 +1132,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/drift'
     | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/stacks/$stackId/history'
     | '/env/$envId/stacks/$stackId/logs'
@@ -1222,6 +1234,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/$serviceId/stats'
     | '/_app/env/$envId/services_/$serviceId/tasks'
     | '/_app/env/$envId/services_/$serviceId_/edit'
+    | '/_app/env/$envId/stacks_/$stackId/drift'
     | '/_app/env/$envId/stacks_/$stackId/editor'
     | '/_app/env/$envId/stacks_/$stackId/history'
     | '/_app/env/$envId/stacks_/$stackId/logs'
@@ -1861,6 +1874,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdStacksStackIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
     }
+    '/_app/env/$envId/stacks_/$stackId/drift': {
+      id: '/_app/env/$envId/stacks_/$stackId/drift'
+      path: '/drift'
+      fullPath: '/env/$envId/stacks/$stackId/drift'
+      preLoaderRoute: typeof AppEnvEnvIdStacksStackIdDriftRouteImport
+      parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
+    }
     '/_app/env/$envId/stacks_/$stackId/editor': {
       id: '/_app/env/$envId/stacks_/$stackId/editor'
       path: '/editor'
@@ -2181,6 +2201,7 @@ const AppEnvEnvIdServicesServiceIdRouteWithChildren =
   )
 
 interface AppEnvEnvIdStacksStackIdRouteChildren {
+  AppEnvEnvIdStacksStackIdDriftRoute: typeof AppEnvEnvIdStacksStackIdDriftRoute
   AppEnvEnvIdStacksStackIdEditorRoute: typeof AppEnvEnvIdStacksStackIdEditorRoute
   AppEnvEnvIdStacksStackIdHistoryRoute: typeof AppEnvEnvIdStacksStackIdHistoryRoute
   AppEnvEnvIdStacksStackIdLogsRoute: typeof AppEnvEnvIdStacksStackIdLogsRoute
@@ -2192,6 +2213,7 @@ interface AppEnvEnvIdStacksStackIdRouteChildren {
 
 const AppEnvEnvIdStacksStackIdRouteChildren: AppEnvEnvIdStacksStackIdRouteChildren =
   {
+    AppEnvEnvIdStacksStackIdDriftRoute: AppEnvEnvIdStacksStackIdDriftRoute,
     AppEnvEnvIdStacksStackIdEditorRoute: AppEnvEnvIdStacksStackIdEditorRoute,
     AppEnvEnvIdStacksStackIdHistoryRoute: AppEnvEnvIdStacksStackIdHistoryRoute,
     AppEnvEnvIdStacksStackIdLogsRoute: AppEnvEnvIdStacksStackIdLogsRoute,

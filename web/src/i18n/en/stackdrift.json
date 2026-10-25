@@ -1,0 +1,70 @@
+{
+  "stackDrift": {
+    "tab": "Drift",
+    "alert": {
+      "title": "{{name}} has drifted from revision #{{revision}}",
+      "body_one": "{{count}} setting differs from what was deployed.",
+      "body_other": "{{count}} settings differ from what was deployed.",
+      "view": "View drift"
+    },
+    "details": {
+      "deployedRevision": "Deployed revision",
+      "drift": "Drift",
+      "never": "Never",
+      "checking": "Checking…",
+      "none": "None",
+      "differences_one": "{{count}} difference",
+      "differences_other": "{{count}} differences",
+      "failed": "Couldn't check",
+      "stopped": "Stopped stacks don't drift.",
+      "notDeployed": "Not deployed yet"
+    },
+    "page": {
+      "title": "Drift in {{name}}",
+      "body": "What's running on {{env}} compared with revision #{{revision}}, deployed",
+      "checked": "Checked",
+      "checkedAnnounce": "Checked {{time}}",
+      "checkAgain": "Check again",
+      "checkingButton": "Checking…",
+      "intro": "Bayplan never fixes drift on its own. Restore puts the deployed revision back; Accept live keeps what's running as your next draft.",
+      "loading": "Checking for drift…",
+      "stopped": {
+        "title": "Stopped stacks don't drift.",
+        "body": "{{name}} was stopped on purpose, so its services are scaled down. Start it to check it again."
+      },
+      "empty": {
+        "title": "No drift",
+        "body": "What's running matches revision #{{revision}}."
+      },
+      "error": {
+        "title": "Couldn't check {{name}} for drift.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry check"
+      },
+      "unknown": {
+        "title": "Couldn't compare {{name}} with revision #{{revision}}.",
+        "body": "The revision can no longer be redeployed as it stands, so there is nothing to compare with."
+      }
+    },
+    "summary": {
+      "caption": "Summary of drift",
+      "kind": "Kind",
+      "services": "Services",
+      "containers": "Containers",
+      "changed": "Changed",
+      "missing": "Missing",
+      "extra": "Extra"
+    },
+    "list": {
+      "label": "Services that drifted",
+      "changed": "Changed",
+      "missing": "Missing",
+      "extra": "Extra",
+      "settings_one": "{{count}} setting differs",
+      "settings_other": "{{count}} settings differ",
+      "caption": "Drift in {{service}}",
+      "deployed": "Deployed",
+      "running": "Running now"
+    }
+  }
+}

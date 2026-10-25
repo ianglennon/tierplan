@@ -55,6 +55,7 @@ import stackadoptpaste from "./en/stackadoptpaste.json";
 import stackchanges from "./en/stackchanges.json";
 import stackconverge from "./en/stackconverge.json";
 import stackdeploy from "./en/stackdeploy.json";
+import stackdrift from "./en/stackdrift.json";
 import stackeditor from "./en/stackeditor.json";
 import stackgenerated from "./en/stackgenerated.json";
 import stackhistory from "./en/stackhistory.json";
@@ -95,7 +96,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRetention, stackReview, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRetention, stackReview, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -153,6 +154,7 @@ export const resources = {
     stackChanges: stackchanges,
     stackConverge: stackconverge,
     stackDeploy: stackdeploy,
+    stackDrift: stackdrift,
     stackEditor: stackeditor,
     stackHistory: stackhistory,
     stackGenerated: stackgenerated,
