@@ -1,0 +1,32 @@
+# The Compose project of plan 08-28: what a person has running on a standalone host before they adopt it into
+# Bayplan. The test starts it with the real `docker compose up -d`, never with Bayplan, so the containers, the
+# network and the volume carry exactly the labels and hashes Compose gives them. {{IMAGE}} is where the test
+# puts the image it pushed to the host's registry.
+#   db   keeps its data in the named volume `data` (the test writes a marker file there)
+#   web  starts after db (depends_on), publishes a port and sits on the user network `back`, as db does
+services:
+  db:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    volumes:
+      - data:/data
+    networks:
+      - back
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    depends_on:
+      db:
+        condition: service_started
+    ports:
+      - "18080:80"
+    networks:
+      - back
+
+networks:
+  back: {}
+
+volumes:
+  data: {}
