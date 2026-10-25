@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -102,6 +102,43 @@ describe("the Generated compose tab", () => {
     mount();
     await screen.findByRole("textbox", { name: "Generated compose, read only" });
     expect(screen.queryByText(/referenced as external/)).toBeNull();
+  });
+
+  it("lists the notes of the rebuild under the file, and no Notes heading when there are none", async () => {
+    answer = () =>
+      ok({
+        notes: [
+          {
+            service: "app",
+            code: "image_unpinned",
+            message:
+              "app runs nginx:1.27, which has no digest, so it is pinned to the reference as it is.",
+          },
+          {
+            service: "",
+            code: "network_not_overlay",
+            message:
+              "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. Bayplan doesn't create it.",
+          },
+        ],
+      });
+    mount();
+    const box = await screen.findByRole("textbox", { name: "Generated compose, read only" });
+    const notes = screen.getByRole("heading", { name: "Notes" }).closest("section") as HTMLElement;
+    const items = within(notes).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual([
+      "app runs nginx:1.27, which has no digest, so it is pinned to the reference as it is.",
+      "The network legacy_lan uses the macvlan driver, not overlay, so the file uses it as an external network. Bayplan doesn't create it.",
+    ]);
+    // The notes come after the file.
+    expect(box.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup();
+    client.clear();
+
+    answer = () => ok();
+    mount();
+    await screen.findByRole("textbox", { name: "Generated compose, read only" });
+    expect(screen.queryByRole("heading", { name: "Notes" })).toBeNull();
   });
 
   it("copies the text through the clipboard", async () => {

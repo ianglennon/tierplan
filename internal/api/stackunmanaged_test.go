@@ -568,3 +568,35 @@ func TestGeneratedComposeOfAStackThatIsGoneOrManagedIs404(t *testing.T) {
 		}
 	}
 }
+
+// TestGeneratedComposeCountsExternals: the preview says how many secrets and configs the file references as external
+// (D-13), and lists the notes the rebuild made, in service then code order.
+func TestGeneratedComposeCountsExternals(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	svc := foreignSecretService("legacy", "app", 1, 1, nil)
+	other := foreignSecretService("legacy", "worker", 1, 1, nil)
+	// A second service that uses the same secret and config counts them once.
+	reconfigureSwarm(t, f, e, svc, other)
+
+	rec := viewer.do(http.MethodGet, unmanagedPath("legacy", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[generatedAnswer](t, rec)
+	if got.ExternalSecrets != 1 || got.ExternalConfigs != 1 {
+		t.Errorf("externals = %d secrets, %d configs, want each counted once", got.ExternalSecrets, got.ExternalConfigs)
+	}
+	var codes []string
+	for _, n := range got.Notes {
+		codes = append(codes, n.Service+":"+n.Code)
+		if n.Message == "" {
+			t.Errorf("the note %s:%s has no sentence", n.Service, n.Code)
+		}
+	}
+	if want := []string{"app:image_unpinned", "worker:image_unpinned"}; !slices.Equal(codes, want) {
+		t.Errorf("notes = %v, want %v", codes, want)
+	}
+}
