@@ -170,6 +170,33 @@ describe("the Generated compose tab", () => {
     expect(screen.queryByRole("heading", { name: "Notes" })).toBeNull();
   });
 
+  it("words the notes of a docker compose project by their code, one line each, with the server's sentence for a code it doesn't know", async () => {
+    answer = () =>
+      ok({
+        notes: [
+          { service: "api", code: "image_local", message: "the server's own wording" },
+          {
+            service: "shop_data",
+            code: "object_external_hash",
+            message: "the server's own wording",
+          },
+          { service: "", code: "a_new_code", message: "A sentence from a newer server." },
+        ],
+      });
+    mount("shop");
+    await screen.findByRole("textbox", { name: "Generated compose, read only" });
+    const notes = screen.getByRole("heading", { name: "Notes" }).closest("section") as HTMLElement;
+    expect(
+      within(notes)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([
+      "api runs an image built on this host. It is pinned to its image ID; Bayplan can't look it up in a registry.",
+      "shop_data is kept external: Bayplan couldn't match its settings, so a deploy leaves it as it is.",
+      "A sentence from a newer server.",
+    ]);
+  });
+
   it("copies the text through the clipboard", async () => {
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

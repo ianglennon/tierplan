@@ -675,3 +675,44 @@ func TestGeneratedComposeStandalone(t *testing.T) {
 		t.Errorf("the engine received %d writes while rebuilding, want none", after-writesBefore)
 	}
 }
+
+// TestGeneratedComposeStandaloneNotes: the preview of a docker compose project says where it could not write the
+// original exactly, by service or object then code (plan 08-12, D-14, D-46): an image built on the host is
+// pinned to its image ID, and a volume whose settings the host's hash does not confirm is kept external.
+func TestGeneratedComposeStandaloneNotes(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	h := stackopstest.Foreign(t, "shop", "services:\n  web:\n    image: nginx:1.27\n    volumes: [data:/data]\n  api:\n    image: shop-api\nvolumes:\n  data: {}\n")
+	for i := range h.Images {
+		if h.Images[i].RepoTags[0] == "shop-api" {
+			h.Images[i].RepoDigests = nil
+		}
+	}
+	for i := range h.Volumes {
+		h.Volumes[i].Labels["com.docker.compose.config-hash"] = strings.Repeat("0", 64)
+	}
+	standOnHost(f, h)
+
+	rec := viewer.do(http.MethodGet, unmanagedPath("shop", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[generatedAnswer](t, rec)
+	type note struct{ service, code, message string }
+	var notes []note
+	for _, n := range got.Notes {
+		notes = append(notes, note{n.Service, n.Code, n.Message})
+	}
+	want := []note{
+		{"api", "image_local", "api runs an image built on this host. It is pinned to its image ID; Bayplan can't look it up in a registry."},
+		{"shop_data", "object_external_hash", "shop_data is kept external: Bayplan couldn't match its settings, so a deploy leaves it as it is."},
+	}
+	if !slices.Equal(notes, want) {
+		t.Errorf("notes = %+v, want %+v", notes, want)
+	}
+	if !strings.Contains(got.YAML, "external: true") {
+		t.Errorf("yaml does not reference the volume as external:\n%s", got.YAML)
+	}
+}
