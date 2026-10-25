@@ -176,11 +176,12 @@ func TestStandaloneRebuildsServices(t *testing.T) {
 	if web.Restart != "unless-stopped" {
 		t.Errorf("web restart = %q, want unless-stopped", web.Restart)
 	}
-	if got := p.Services["cache"].GetScale(); got != 2 {
+	cache, db := p.Services["cache"], p.Services["db"]
+	if got := cache.GetScale(); got != 2 {
 		t.Errorf("cache scale = %d, want 2, the number of containers", got)
 	}
-	if got := p.Services["web"].GetScale(); got != 1 {
-		t.Errorf("web scale = %d, want 1", got)
+	if got := db.GetScale(); got != 1 {
+		t.Errorf("db scale = %d, want 1", got)
 	}
 	if n, ok := p.Networks["back"]; !ok || bool(n.External) {
 		t.Errorf("network back = %+v, want a network the project owns", n)

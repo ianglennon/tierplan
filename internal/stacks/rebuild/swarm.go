@@ -34,6 +34,7 @@ type NetworkInfo struct {
 	ID, Name, Driver string
 	Attachable       bool
 	Internal         bool
+	IPv6             bool
 	Labels, Options  map[string]string
 	IPAMDriver       string
 	Pools            []Pool
@@ -205,24 +206,9 @@ func (b *builder) object(kind, name, treatment string) {
 	b.objects[kind+"\x00"+name] = Object{Kind: kind, Name: name, Treatment: treatment}
 }
 
-func (b *builder) sortedNotes() []Note {
-	out := slices.Clone(b.notes)
-	slices.SortStableFunc(out, func(x, y Note) int {
-		return cmp.Or(cmp.Compare(x.Service, y.Service), cmp.Compare(x.Code, y.Code), cmp.Compare(x.Message, y.Message))
-	})
-	return out
-}
+func (b *builder) sortedNotes() []Note { return sortNotes(b.notes) }
 
-func (b *builder) sortedObjects() []Object {
-	out := make([]Object, 0, len(b.objects))
-	for _, o := range b.objects {
-		out = append(out, o)
-	}
-	slices.SortFunc(out, func(x, y Object) int {
-		return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name))
-	})
-	return out
-}
+func (b *builder) sortedObjects() []Object { return sortObjects(b.objects) }
 
 // ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of Bayplan's.
 func ownLabel(key string) bool {

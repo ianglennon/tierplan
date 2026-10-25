@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -33,21 +35,44 @@ type RebuildError struct{ Reason string }
 
 func (e *RebuildError) Error() string { return "stackops: rebuild: " + e.Reason }
 
-// ErrRebuildTarget is a rebuild of a stack the engine direction does not support yet.
-var ErrRebuildTarget = errors.New("stackops: rebuilding a stack that runs on a standalone host is not supported here")
+// ErrRebuildTarget is a rebuild of a stack whose target has no rebuilder.
+var ErrRebuildTarget = errors.New("stackops: rebuilding a stack for this target is not supported")
 
-// RebuildLive rebuilds the compose file of a stack from the services that run it (D-12). It reads the engine once,
-// through a manager (the services of the namespace, every network, and the names of the secrets and configs), and
-// writes nothing: the content of a secret or a config is never read (D-13). The services the stack's ownership
-// owns are the ones rebuilt, and each spec passes through redact.MaskServiceSpec first, so a caller without
-// secrets.reveal gets <hidden> where the engine holds an environment value, a command or a log option.
+// RebuildLive rebuilds the compose file of a stack from what runs it (D-12). It reads the engine and writes
+// nothing. A swarm stack is rebuilt from its services, read once through a manager (the services of the
+// namespace, every network, and the names of the secrets and configs): the content of a secret or a config is
+// never read (D-13). A standalone project is rebuilt from its containers and images, read from the host, and
+// from its networks and volumes. Whatever the target, a caller without secrets.reveal gets <hidden> where the
+// engine holds an environment value, a command, a health check command or a log option, because the specs and
+// the inspect documents are masked before the file is made (D-47).
 //
 // The rebuilt file has to pass stacks.Check, the check every stack passes before it is deployed; one that does not
 // is a *RebuildError naming the first problem.
 func (d Deps) RebuildLive(ctx context.Context, envID string, st Stack, o RebuildOptions) (rebuild.Result, error) {
-	if st.Target != stacks.TargetSwarm {
-		return rebuild.Result{}, ErrRebuildTarget
+	switch st.Target {
+	case stacks.TargetSwarm:
+		return d.rebuildSwarm(ctx, envID, st, o)
+	case stacks.TargetStandalone:
+		return d.rebuildStandalone(ctx, envID, st, o)
 	}
+	return rebuild.Result{}, ErrRebuildTarget
+}
+
+// checkRebuilt is the check every stack passes, held against a rebuilt file: the first error is the rebuild's.
+func checkRebuilt(ctx context.Context, st Stack, res rebuild.Result) error {
+	check := stacks.Check(ctx, stacks.CheckInput{
+		Name: st.Name, Target: st.Target,
+		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}},
+	})
+	for _, p := range check.Problems {
+		if p.Severity == stacks.SeverityError {
+			return &RebuildError{Reason: p.Message}
+		}
+	}
+	return nil
+}
+
+func (d Deps) rebuildSwarm(ctx context.Context, envID string, st Stack, o RebuildOptions) (rebuild.Result, error) {
 	read, err := d.readSwarmForRebuild(ctx, envID, st)
 	if err != nil {
 		return rebuild.Result{}, err
@@ -98,14 +123,8 @@ func (d Deps) RebuildLive(ctx context.Context, envID string, st Stack, o Rebuild
 	if err != nil {
 		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
 	}
-	check := stacks.Check(ctx, stacks.CheckInput{
-		Name: st.Name, Target: stacks.TargetSwarm,
-		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}},
-	})
-	for _, p := range check.Problems {
-		if p.Severity == stacks.SeverityError {
-			return rebuild.Result{}, &RebuildError{Reason: p.Message}
-		}
+	if err := checkRebuilt(ctx, st, res); err != nil {
+		return rebuild.Result{}, err
 	}
 	return res, nil
 }
@@ -161,7 +180,7 @@ func (d Deps) readSwarmForRebuild(ctx context.Context, envID string, st Stack) (
 func networkInfo(row dockerx.NetworkRow, det dockerx.NetworkDetail) rebuild.NetworkInfo {
 	info := rebuild.NetworkInfo{
 		ID: row.ID, Name: row.Name, Driver: row.Driver, Attachable: row.Attachable, Internal: row.Internal,
-		Labels: row.Labels,
+		IPv6: row.IPv6, Labels: row.Labels,
 	}
 	if det.ID != "" {
 		info.Options = det.Options
@@ -170,4 +189,123 @@ func networkInfo(row dockerx.NetworkRow, det dockerx.NetworkDetail) rebuild.Netw
 		}
 	}
 	return info
+}
+
+// rebuildStandalone rebuilds the compose file of a docker compose up project from its containers (D-12).
+func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o RebuildOptions) (rebuild.Result, error) {
+	node, err := d.StandaloneNode(ctx, envID)
+	if err != nil {
+		return rebuild.Result{}, err
+	}
+	in, err := d.readStandaloneForRebuild(ctx, envID, node, st.Name, o.Reveal)
+	if err != nil {
+		return rebuild.Result{}, err
+	}
+	if len(in.Containers) == 0 {
+		return rebuild.Result{}, &RebuildError{Reason: "no container of " + st.Name + " is on the host"}
+	}
+	res, err := rebuild.Standalone(in)
+	if err != nil {
+		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
+	}
+	if err := checkRebuilt(ctx, st, res); err != nil {
+		return rebuild.Result{}, err
+	}
+	return res, nil
+}
+
+// readStandaloneForRebuild reads, from the host, the containers of a Compose project with their images, and the
+// networks and volumes that carry the project's label with the detail the file needs of them. Each container's
+// inspect document is made safe before the rebuild sees it: what the image supplies is taken out, as the
+// comparison of a running service takes it out, and a caller who may not reveal gets every value masked.
+func (d Deps) readStandaloneForRebuild(ctx context.Context, envID, node, project string, reveal bool) (rebuild.StandaloneInput, error) {
+	in := rebuild.StandaloneInput{Project: project}
+	err := d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+		containers, e := c.ComposeContainers(ctx, project)
+		if e != nil {
+			return e
+		}
+		reader := &hostReader{host: c, images: map[string]*image.InspectResponse{}}
+		for _, cc := range containers {
+			insp, img, ok, e := reader.read(ctx, cc)
+			if e != nil {
+				return e
+			}
+			if insp.ID == "" || insp.Config == nil {
+				continue // the container is gone, or is not one a service made
+			}
+			if !ok {
+				img = image.InspectResponse{}
+			}
+			insp = withoutImageDefaults(insp, img)
+			if !reveal {
+				if insp, e = maskedInspect(insp); e != nil {
+					return e
+				}
+			}
+			in.Containers = append(in.Containers, rebuild.StandaloneContainer{Inspect: insp, Image: img})
+		}
+		nets, e := c.NetworksWithLabel(ctx, stacks.LabelComposeProject, project)
+		if e != nil {
+			return e
+		}
+		for _, n := range nets {
+			det, _, e := c.NetworkDetail(ctx, n.ID, false)
+			if e != nil {
+				return e
+			}
+			in.Networks = append(in.Networks, networkInfo(n, det))
+		}
+		vols, e := c.VolumesWithLabel(ctx, stacks.LabelComposeProject, project)
+		if e != nil {
+			return e
+		}
+		for _, v := range vols {
+			if v.Anonymous {
+				continue
+			}
+			det, _, e := c.VolumeDetail(ctx, v.Name)
+			if e != nil {
+				return e
+			}
+			in.Volumes = append(in.Volumes, rebuild.VolumeInfo{Name: v.Name, Driver: det.Driver, Labels: det.Labels, Options: det.Options})
+		}
+		return nil
+	})
+	return in, err
+}
+
+// withoutImageDefaults is a container's inspect document without the environment entries, the command and the
+// entrypoint its image supplies. The comparison of a running service takes the same out, so the rebuild is the
+// same, and a masked document does not show the image's own settings as hidden values.
+func withoutImageDefaults(insp container.InspectResponse, img image.InspectResponse) container.InspectResponse {
+	def := stacks.ImageDefaultsOf(img)
+	cfg := *insp.Config
+	cfg.Env = slices.DeleteFunc(slices.Clone(cfg.Env), func(e string) bool { return slices.Contains(def.Env, e) })
+	if slices.Equal(cfg.Cmd, def.Cmd) {
+		cfg.Cmd = nil
+	}
+	if slices.Equal(cfg.Entrypoint, def.Entrypoint) {
+		cfg.Entrypoint = nil
+	}
+	insp.Config = &cfg
+	return insp
+}
+
+// maskedInspect is a container's inspect document with every value a caller without secrets.reveal may not read
+// replaced, by the same code that masks the Inspect tab.
+func maskedInspect(insp container.InspectResponse) (container.InspectResponse, error) {
+	raw, err := json.Marshal(insp)
+	if err != nil {
+		return insp, fmt.Errorf("stackops: encode the inspect document of container %s: %w", insp.Name, err)
+	}
+	masked, _, err := redact.MaskContainerInspect(raw, false)
+	if err != nil {
+		return insp, fmt.Errorf("stackops: mask the inspect document of container %s: %w", insp.Name, err)
+	}
+	var out container.InspectResponse
+	if err := json.Unmarshal(masked, &out); err != nil {
+		return insp, fmt.Errorf("stackops: read the masked inspect document of container %s: %w", insp.Name, err)
+	}
+	return out, nil
 }

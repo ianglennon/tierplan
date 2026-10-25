@@ -25,6 +25,8 @@ import (
 //     (a label key com.example.$$k loads as written, with both signs), so a key is left as it is;
 //   - the ports are written in the short form where it says everything the long one does;
 //   - the top-level name is dropped, because the stack's name is Bayplan's, not the file's;
+//   - a depends_on that asks for nothing but the start of its services is a plain list, and one that asks for more
+//     says only what it asks for (the condition, and restart when it is true);
 //   - a list of networks that carry nothing is a plain list, a secret or a config reference that carries only its
 //     name is that name, a memory size is written with its unit, and the keys of a service come in the order
 //     people write them (image first, deploy last) instead of compose-go's field order.
@@ -45,6 +47,7 @@ func Marshal(p *types.Project) ([]byte, error) {
 				svc := services.Content[i+1]
 				stacks.ShortenPorts(svc)
 				plainLists(svc)
+				plainDependsOn(svc)
 				memorySizes(svc)
 				shortVolumes(svc)
 				tidyDurations(svc)
@@ -181,6 +184,47 @@ func memorySizes(svc *yaml.Node) {
 			}
 		}
 	}
+	// The container settings of a standalone service that are a number of bytes.
+	for _, key := range []string{"mem_limit", "mem_reservation", "memswap_limit", "shm_size"} {
+		sizeOf(svc, key)
+	}
+}
+
+// plainDependsOn writes depends_on the short way. compose-go writes every dependency as a mapping with
+// "required: true", which is the default, so a dependency on the start of a service is its name, and one with a
+// condition says only the condition.
+func plainDependsOn(svc *yaml.Node) {
+	deps := mappingValue(svc, "depends_on")
+	if deps == nil || deps.Kind != yaml.MappingNode {
+		return
+	}
+	simple := true
+	for i := 0; i+1 < len(deps.Content); i += 2 {
+		dep := deps.Content[i+1]
+		if dep.Kind != yaml.MappingNode {
+			simple = false
+			continue
+		}
+		for j := 0; j+1 < len(dep.Content); j += 2 {
+			key, val := dep.Content[j].Value, dep.Content[j+1].Value
+			if key == "required" && val == "true" {
+				dep.Content = append(dep.Content[:j], dep.Content[j+2:]...)
+				j -= 2
+				continue
+			}
+			if !(key == "condition" && val == "service_started") {
+				simple = false
+			}
+		}
+	}
+	if !simple {
+		return
+	}
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for i := 0; i < len(deps.Content); i += 2 {
+		seq.Content = append(seq.Content, deps.Content[i])
+	}
+	replaceValue(svc, "depends_on", seq)
 }
 
 // shortVolumes writes a mount as source:target[:ro] when that says everything the long form does: a named volume

@@ -19,6 +19,13 @@ const (
 	// NoteCPUsInexact: a processor limit or reservation is exact to nine decimals in the swarm spec but compose
 	// holds it as a 32-bit float, so the file carries the nearest value it can.
 	NoteCPUsInexact = "cpus_inexact"
+	// NoteImageLocal: a service of a standalone project runs an image no registry has (it was built on the host),
+	// so it is pinned to its image ID. For this note and NoteObjectExternalHash, Service names the service or
+	// the object the note is about, which the page puts into its sentence.
+	NoteImageLocal = "image_local"
+	// NoteObjectExternalHash: a network or volume of a standalone project has settings Bayplan could not write
+	// so that the Compose SDK holds the object to be unchanged, so the file uses it as an external object.
+	NoteObjectExternalHash = "object_external_hash"
 )
 
 func notePrefix(namespace, service, name string) Note {
@@ -46,5 +53,19 @@ func noteCPUs(where string, nano int64) Note {
 	return Note{
 		Code:    NoteCPUsInexact,
 		Message: fmt.Sprintf("The processor %s is %d billionths of a CPU, which a compose file can't hold exactly. The file has the nearest value.", where, nano),
+	}
+}
+
+func noteImageLocal(service string) Note {
+	return Note{
+		Service: service, Code: NoteImageLocal,
+		Message: fmt.Sprintf("%s runs an image built on this host. It is pinned to its image ID; Bayplan can't look it up in a registry.", service),
+	}
+}
+
+func noteObjectExternal(name string) Note {
+	return Note{
+		Service: name, Code: NoteObjectExternalHash,
+		Message: fmt.Sprintf("%s is kept external: Bayplan couldn't match its settings, so a deploy leaves it as it is.", name),
 	}
 }

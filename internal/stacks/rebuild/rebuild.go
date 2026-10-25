@@ -15,6 +15,9 @@
 package rebuild
 
 import (
+	"cmp"
+	"slices"
+
 	"github.com/compose-spec/compose-go/v2/types"
 )
 
@@ -45,9 +48,11 @@ type Note struct {
 }
 
 // Object is one network, volume, secret or config of the stack and how the rebuilt file treats it. Name is the
-// name the engine has for it.
+// name the engine has for it. Key is the key the file declares it under (a standalone rebuild sets it for a
+// network and a volume; it is also the key of Result.Variants and StandaloneInput.Choice).
 type Object struct {
 	Kind, Name, Treatment string
+	Key                   string
 }
 
 // Result is a rebuilt stack.
@@ -63,4 +68,27 @@ type Result struct {
 	Notes []Note
 	// Objects are the networks, volumes, secrets and configs the stack uses, in kind then name order.
 	Objects []Object
+	// Variants is how many renderings an owned network or volume of a standalone rebuild has (see
+	// NetworkCandidates), by the key StandaloneInput.Choice uses ("network:back"). The caller tries them against
+	// the hash the host holds for the object (D-46).
+	Variants map[string]int
+}
+
+func sortNotes(in []Note) []Note {
+	out := slices.Clone(in)
+	slices.SortStableFunc(out, func(x, y Note) int {
+		return cmp.Or(cmp.Compare(x.Service, y.Service), cmp.Compare(x.Code, y.Code), cmp.Compare(x.Message, y.Message))
+	})
+	return out
+}
+
+func sortObjects(in map[string]Object) []Object {
+	out := make([]Object, 0, len(in))
+	for _, o := range in {
+		out = append(out, o)
+	}
+	slices.SortFunc(out, func(x, y Object) int {
+		return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name))
+	})
+	return out
 }

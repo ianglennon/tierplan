@@ -112,11 +112,11 @@ func registerUnmanagedStacks(r *httpx.Router, d StacksDeps, logs *stackLogMount)
 	httpx.Register(r, huma.Operation{
 		OperationID: "getGeneratedCompose", Method: http.MethodGet, Path: "/api/env/{envId}/unmanaged-stacks/{name}/compose",
 		Summary: "The compose file Bayplan would use if it adopted the stack",
-		Description: "The compose file rebuilt from the running services of a swarm stack Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. " +
-			"Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing secrets and configs are external, by name: their values are never read. " +
+		Description: "The compose file rebuilt from the running services of a swarm stack, or from the containers of a docker compose project, that Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. " +
+			"Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing swarm secrets and configs are external, by name: their values are never read. " +
 			"Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. " +
-			"The services pass through the same mask as the service detail: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. " +
-			"A stack whose services cannot be written as a compose file that passes the check, or that runs on a standalone host, is 422 rebuild_failed with the reason. " +
+			"The services pass through the same mask as the service detail and the container inspect: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. " +
+			"A stack whose services cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason. " +
 			"A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
@@ -266,7 +266,7 @@ func getGeneratedCompose(ctx context.Context, d StacksDeps, in *UnmanagedStackPa
 	case errors.As(err, &failed):
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, failed.Reason)
 	case errors.Is(err, stackops.ErrRebuildTarget):
-		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, "Rebuilding a stack that runs on a standalone host isn't available yet.")
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, "Bayplan can't rebuild this kind of stack.")
 	case err != nil:
 		return nil, snapshotProblem(d.Log, in.EnvID, err)
 	}
