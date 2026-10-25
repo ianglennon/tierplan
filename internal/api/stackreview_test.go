@@ -1254,3 +1254,86 @@ func TestReviewRollbackModeJudgesHostAccessOnTheChosenRevision(t *testing.T) {
 		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
 	}
 }
+
+// Reviewing a restore of the deployed revision (plan 08-23, STK-14, D-23).
+
+func TestReviewRestoreModeIsTheDriftAndAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rr")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	// Somebody outside Bayplan scaled the service; the registry's tag has moved on since the deploy.
+	f.editLiveService(t, e, "rr", "web", scaleTo(4))
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("c", 64))
+	lookups, writes := len(f.fake.DistributionRefs()), len(f.fake.Writes())
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"restore"}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	var extra struct {
+		Revision    int64 `json:"revision"`
+		DeployedSeq int64 `json:"deployedSeq"`
+	}
+	if err := json.Unmarshal([]byte(body), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra.Revision != 2 || extra.DeployedSeq != 2 {
+		t.Errorf("revision %d, deployedSeq %d, want the deployed revision, 2, for both", extra.Revision, extra.DeployedSeq)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Change != "changed" || rv.Services[0].Short != "web" {
+		t.Errorf("services = %+v, want the one scaled service, changed: that is the drift", rv.Services)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "pinned" || rv.Images[0].Note != "revision" {
+		t.Errorf("images = %+v, want the one image pinned to what the revision stored", rv.Images)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a restore review asks no registry", lookups, n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRestoreModeRefusesAStackWithNothingDeployed(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rn")
+	writes := len(f.fake.Writes())
+
+	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", `{"mode":"restore"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_deployed_revision" {
+		t.Errorf("restore review of a stack never deployed: %d %s, want 409 no_deployed_revision", rec.Code, rec.Body)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRestoreModeJudgesHostAccessForTheCaller(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "re")
+	f.deployGood(t, admin, st.ID, hostAccessCompose)
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"restore"}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	if len(rv.NeedsAdmin) == 0 {
+		t.Errorf("needsAdmin = %v, want the host access the deployed revision uses, which an operator may not deploy", rv.NeedsAdmin)
+	}
+	if rv, code, body := admin.reviewStack(st.ID, `{"mode":"restore"}`); code != http.StatusOK || len(rv.NeedsAdmin) != 0 {
+		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
+	}
+}

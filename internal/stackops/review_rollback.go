@@ -20,6 +20,10 @@ import (
 // stored, against what is running (D-02).
 const ReviewModeRollback = "rollback"
 
+// ReviewModeRestore reviews putting back the deployed revision (D-23): the same review as a roll back, of the
+// stack's own deployed revision, so that what it lists is what changed outside the stack.
+const ReviewModeRestore = "restore"
+
 // CodeRevisionNotDeployable is the code of the blocking problem for a revision that cannot be redeployed as it
 // stands: it no longer loads, converts or has an image stored for each service.
 const CodeRevisionNotDeployable = "revision_not_deployable"

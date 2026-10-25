@@ -226,3 +226,69 @@ func TestStandaloneRollbackReviewRefusesAnUndeployableRevision(t *testing.T) {
 		t.Errorf("review = images %+v services %v, want nothing beside the problem", rv.Images, changesOf(rv))
 	}
 }
+
+// The review of a restore (plan 08-23, STK-14, D-23): the deployed revision with its stored digests against what runs, so
+// that what it lists is the drift.
+
+func TestRestoreReviewIsTheDrift(t *testing.T) {
+	t.Parallel()
+	rig := newDriftRig(t)
+	// Somebody scaled web on the swarm; the revision deployed 2 replicas.
+	rig.editLive(t, "web", replicasOf(3))
+	// The tag has moved on the registry since: a restore must not follow it.
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("b", 64))
+	lookups, writes := len(rig.fake.DistributionRefs()), len(rig.fake.Writes())
+
+	deployed := rig.store.rev
+	in := rig.reviewInput(t, rig.st.Name, driftCompose, nil)
+	in.Stack = rig.st
+	in.Mode, in.Target, in.TargetPins, in.Copy = stackops.ReviewModeRestore, &deployed, rig.store.pins, deployed.Copy
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Short != "web" || rv.Services[0].Change != "changed" {
+		t.Fatalf("services = %+v, want web alone, changed: that is the drift", rv.Services)
+	}
+	if cur, next := string(rv.Services[0].Current), string(rv.Services[0].Next); !strings.Contains(cur, `"Replicas":3`) || !strings.Contains(next, `"Replicas":2`) {
+		t.Errorf("web current = %s next = %s, want its replicas going from 3 back to 2", cur, next)
+	}
+	if rv.Summary.Services.Changed != 1 || rv.Summary.Services.Added != 0 || rv.Summary.Services.Removed != 0 {
+		t.Errorf("summary = %+v, want the one change", rv.Summary.Services)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a restore review asks no registry", lookups, n)
+	}
+	if n := len(rig.fake.Writes()); n != writes {
+		t.Errorf("a review wrote %v", rig.fake.Writes()[writes:])
+	}
+	for _, row := range rv.Images {
+		if row.State != stackops.ImagePinned || row.Note != "revision" {
+			t.Errorf("image row = %+v, want it pinned to the digest the revision stored", row)
+		}
+	}
+	if rv.Concurrent != nil {
+		t.Errorf("concurrent = %+v, a restore review has none", rv.Concurrent)
+	}
+}
+
+func TestRestoreReviewOfWhatIsDeployedFindsNothingToDo(t *testing.T) {
+	t.Parallel()
+	rig := newDriftRig(t)
+	deployed := rig.store.rev
+	in := rig.reviewInput(t, rig.st.Name, driftCompose, nil)
+	in.Stack = rig.st
+	in.Mode, in.Target, in.TargetPins, in.Copy = stackops.ReviewModeRestore, &deployed, rig.store.pins, deployed.Copy
+
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if len(rv.Services) != 0 || len(rv.Objects) != 0 || len(rv.Problems) != 0 {
+		t.Errorf("review = services %+v objects %v problems %+v, want no drift to restore", rv.Services, objectsOf(rv), rv.Problems)
+	}
+}

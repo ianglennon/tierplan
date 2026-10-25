@@ -2218,3 +2218,152 @@ func TestStackDeployAsksForADriftRecheckWhenTheOperationEnds(t *testing.T) {
 		t.Errorf("after the stop: %+v, want this stack with the lock already free", got)
 	}
 }
+
+// Restoring the deployed revision (plan 08-23, STK-14, D-23): the roll back route in mode restore.
+
+func TestRestoreRedeploysTheDeployedRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rs")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	pin128 := f.revisions(t, st.ID)[1].Pins
+	// Somebody outside Bayplan scaled the service, and the tag has moved on the registry since the deploy.
+	f.editLiveService(t, e, "rs", "web", scaleTo(4))
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("b", 64))
+	lookups, updates := len(f.fake.DistributionRefs()), len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":2}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body)
+	}
+	started := answerOf[rollbackStarted](t, rec)
+	if started.Revision != 3 {
+		t.Errorf("revision = %d, want 3: the restore is a revision of its own", started.Revision)
+	}
+	if job := f.awaitDeploy(t, started.JobID); job.State != "done" {
+		t.Fatalf("restore job = %+v, want it done", job)
+	}
+
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a restore asks no registry", lookups, n)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin128), &pins); err != nil {
+		t.Fatal(err)
+	}
+	last := ups[len(ups)-1].Spec
+	if image := last.TaskTemplate.ContainerSpec.Image; image != pins["rs_web"] {
+		t.Errorf("image = %q, want exactly what the deployed revision ran, %q", image, pins["rs_web"])
+	}
+	if last.Mode.Replicated == nil || last.Mode.Replicated.Replicas == nil || *last.Mode.Replicated.Replicas != 1 {
+		t.Errorf("replicas = %+v, want the deployed 1 put back", last.Mode.Replicated)
+	}
+
+	revs := f.revisions(t, st.ID)
+	if len(revs) != 3 || revs[2].Outcome != "good" || revs[2].Pins != pin128 {
+		t.Errorf("revisions = %+v, want a good revision 3 with the deployed revision's pins", revs)
+	}
+	if origin, from := f.revisionOrigin(t, st.ID, 3); origin != "rollback" || from != 2 {
+		t.Errorf("revision 3 = %q restored from %d, want rollback of 2", origin, from)
+	}
+	job := answerOf[struct {
+		Mode             string `json:"mode"`
+		Revision         int64  `json:"revision"`
+		RecordedRevision int64  `json:"recordedRevision"`
+	}](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/deploys/"+started.JobID, ""))
+	if job.Mode != "restore" || job.Revision != 2 || job.RecordedRevision != 3 {
+		t.Errorf("job = %+v, want a restore of 2 recorded as 3", job)
+	}
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.deployed" {
+			row = &r
+		}
+	}
+	if row == nil || row.Details["mode"] != "restore" || row.Details["revision"] != "3" || row.Details["restoredFrom"] != "2" || row.Result != "success" {
+		t.Errorf("stack.deployed = %+v, want a successful restore recorded as revision 3, restoring 2", row)
+	}
+}
+
+func TestRestoreRefusesAnotherRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "ra")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	revisions, writes := len(f.revisions(t, st.ID)), len(f.fake.Writes())
+
+	// Revision 1 is not the deployed one: a restore puts the deployed revision back and no other.
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "deployed_changed" {
+		t.Errorf("restore of revision 1: %d %s, want 409 deployed_changed", rec.Code, rec.Body)
+	}
+	rec = operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore"}`)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "revision_required" {
+		t.Errorf("restore with no revision: %d %s, want 422 revision_required", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused restore stores none", revisions, n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a refused restore writes nothing", writes, n)
+	}
+}
+
+func TestRestoreOfAStackNeverDeployedIsRefused(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rz")
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_deployed_revision" {
+		t.Errorf("restore of a stack never deployed: %d %s, want 409 no_deployed_revision", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, st.ID)); n != 0 {
+		t.Errorf("revisions = %d, a refused restore stores none", n)
+	}
+}
+
+func TestRestoreIsRefusedForHostAccessBelowAdminAndWhileAnotherOperationRuns(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	esc, other, busy := newStack(t, admin, "esc"), newStack(t, admin, "alpha"), newStack(t, admin, "beta")
+	f.deployGood(t, admin, esc.ID, hostAccessCompose)
+	f.deployGood(t, operator, other.ID, composeWeb127)
+	revisions := len(f.revisions(t, esc.ID))
+
+	if rec := viewer.do(http.MethodPost, rollbackPath(other.ID), `{"mode":"restore","revision":1}`); rec.Code != http.StatusForbidden {
+		t.Errorf("a viewer's restore: %d %s, want 403", rec.Code, rec.Body)
+	}
+	rec := operator.do(http.MethodPost, rollbackPath(esc.ID), `{"mode":"restore","revision":1}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" {
+		t.Errorf("an operator's restore of host access: %d %s, want 403 privileged_compose", rec.Code, rec.Body)
+	}
+	if n := len(f.revisions(t, esc.ID)); n != revisions {
+		t.Errorf("revisions went from %d to %d, a refused restore stores none", revisions, n)
+	}
+
+	jobID := startStuckDeploy(t, f, operator, busy)
+	rec = operator.do(http.MethodPost, rollbackPath(other.ID), `{"mode":"restore","revision":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Errorf("a restore during another operation: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	if rec := operator.do(http.MethodPost, cancelPath(busy.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, jobID)
+}
