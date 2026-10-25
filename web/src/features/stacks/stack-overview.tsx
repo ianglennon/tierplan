@@ -32,7 +32,7 @@ interface StackOverviewProps {
 // NotDeployed stands in the place of the Services table for a stack that has a definition and nothing
 // running: it points at the editor, which every role that reads stacks may open, and at the review,
 // which a user who may deploy goes on to.
-function NotDeployed({ envId, stackId, name }: StackOverviewProps & { name: string }) {
+export function NotDeployed({ envId, stackId, name }: StackOverviewProps & { name: string }) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", envId);
   return (

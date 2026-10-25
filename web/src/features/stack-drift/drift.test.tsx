@@ -529,6 +529,12 @@ describe("the Overview's drift alert", () => {
     link.focus();
     expect(document.activeElement).toBe(link);
     const freshKey = [...driftKey(ENV, "s1"), "fresh"];
+    // The check the Overview made when it opened has come back, so it cannot overwrite what is set next.
+    await waitFor(() => {
+      const state = client.getQueryState(freshKey);
+      expect(state?.fetchStatus).toBe("idle");
+      expect(state?.status).toBe("success");
+    });
 
     act(() => client.setQueryData(freshKey, drift()));
     expect(await screen.findByText("tracer has drifted from revision #4")).toBeTruthy();
