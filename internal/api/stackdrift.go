@@ -5,10 +5,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -108,6 +111,96 @@ func registerStackDrift(r *httpx.Router, d StacksDeps, lim *streamLimiter) {
 		func(ctx context.Context, in *StackDriftInput) (*StackDriftOutput, error) {
 			return getStackDrift(ctx, d, lim, in)
 		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "acceptStackDrift", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/drift/accept",
+		Summary: "Accept what runs into the stack's draft",
+		Description: "Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). " +
+			"The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. " +
+			"The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. " +
+			"draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. " +
+			"While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision. " +
+			"A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. " +
+			"Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.",
+		Tags: []string{"stacks"}, MaxBodyBytes: 1 << 10,
+	}, rbac.Requirement{Perm: rbac.PermStacksUpdate, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackDriftAcceptInput) (*StackDriftAcceptOutput, error) {
+			return acceptStackDrift(ctx, d, in)
+		})
+}
+
+// StackDriftAcceptInput is the path and body of the accept route.
+type StackDriftAcceptInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		DraftVersion int64 `json:"draftVersion" minimum:"0" doc:"The version of the draft the person saw, 0 for a stack that has none. A draft that has moved since is 409 draft_conflict"`
+	}
+}
+
+// StackDriftAcceptBody says what an accept did.
+type StackDriftAcceptBody struct {
+	Version  int64  `json:"version" doc:"The draft's version now"`
+	SavedBy  string `json:"savedBy" doc:"Who saved the draft last, which is the caller"`
+	SavedAt  string `json:"savedAt" doc:"When, RFC 3339 UTC"`
+	Revision int64  `json:"revision" doc:"The number of the deployed revision the draft starts from"`
+	Services int    `json:"services" doc:"How many services the draft was rebuilt from"`
+}
+
+// StackDriftAcceptOutput wraps StackDriftAcceptBody for huma.
+type StackDriftAcceptOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackDriftAcceptBody
+}
+
+func acceptStackDrift(ctx context.Context, d StacksDeps, in *StackDriftAcceptInput) (*StackDriftAcceptOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	if h, ok := d.Locks.Held(env.ID); ok {
+		return nil, operationLocked(env.Name, h)
+	}
+	res, err := d.ops().AcceptLive(ctx, repo, stackops.AcceptLiveInput{
+		EnvID: env.ID, Stack: st, DraftVersion: in.Body.DraftVersion, Caller: stackops.Caller{Principal: p, Actor: p.Name},
+	})
+	var conflict *stackops.DraftConflictError
+	var failed *stackops.RebuildError
+	switch {
+	case err == nil:
+	case errors.As(err, &conflict):
+		return nil, draftConflict(conflict)
+	case errors.Is(err, stackops.ErrNoDeployedRevision):
+		return nil, httpx.Problem(http.StatusConflict, problemNoDeployedRevision, noDeployedRevision)
+	case errors.As(err, &failed):
+		return nil, rebuildNotAccepted(failed.Reason)
+	case errors.Is(err, stackops.ErrRebuildTarget):
+		return nil, rebuildNotAccepted("Bayplan can't rebuild this kind of stack")
+	default:
+		return nil, targetProblem(d, env.ID, err)
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDriftAccepted, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "revision": itoa(res.Revision), "version": itoa(res.Draft.Version), "services": itoa(int64(res.Services)),
+	})
+	return &StackDriftAcceptOutput{CacheControl: "no-store", Body: StackDriftAcceptBody{
+		Version: res.Draft.Version, SavedBy: res.Draft.CreatedBy, SavedAt: rfc3339(res.Draft.CreatedAt),
+		Revision: res.Revision, Services: res.Services,
+	}}, nil
+}
+
+// rebuildNotAccepted is the 422 for a rebuild that failed: the draft was not changed. The reason is a sentence
+// that holds no value the caller may not read (the rebuild is masked by the same code as the Generated compose tab).
+func rebuildNotAccepted(reason string) error {
+	return &huma.ErrorModel{
+		Type: problemRebuildFailed, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: "Couldn't rebuild the draft from what's running: " + strings.TrimRight(reason, ". ") + ". Your draft wasn't changed.",
+		Errors: []*huma.ErrorDetail{{Location: "reason", Message: reason}},
+	}
 }
 
 func getStackDrift(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackDriftInput) (*StackDriftOutput, error) {

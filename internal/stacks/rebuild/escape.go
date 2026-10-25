@@ -30,7 +30,11 @@ import (
 //   - a list of networks that carry nothing is a plain list, a secret or a config reference that carries only its
 //     name is that name, a memory size is written with its unit, and the keys of a service come in the order
 //     people write them (image first, deploy last) instead of compose-go's field order.
-func Marshal(p *types.Project) ([]byte, error) {
+func Marshal(p *types.Project) ([]byte, error) { return marshal(p, nil) }
+
+// marshal is Marshal with the substitutions of a rebuild on a base (see Base) put in the tree after the dollar
+// signs are doubled, so the text they carry (${NAME}) is written as it is.
+func marshal(p *types.Project, subs *substitutions) ([]byte, error) {
 	raw, err := p.MarshalYAML()
 	if err != nil {
 		return nil, fmt.Errorf("rebuild: marshal: %w", err)
@@ -56,6 +60,7 @@ func Marshal(p *types.Project) ([]byte, error) {
 		}
 	}
 	escapeDollars(&doc)
+	subs.apply(&doc)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)

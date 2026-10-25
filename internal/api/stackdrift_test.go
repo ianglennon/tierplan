@@ -471,3 +471,130 @@ func TestStackDriftCarriesTheCause(t *testing.T) {
 		t.Errorf("the stack's page = %+v, want the scale in its drift summary", detail.Drift)
 	}
 }
+
+// The accept route (plan 08-24, STK-14, D-23, D-54): what runs becomes the stack's next draft, on top of the deployed
+// revision, by an Operator, with nothing sent to an engine.
+
+const acceptPath = "/drift/accept"
+
+func acceptURL(stackID string) string { return "stacks/" + stackID + acceptPath }
+
+const acceptCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      API_KEY: ${API_KEY}\n      MODE: prod\n    deploy:\n      replicas: 1\n"
+
+const acceptVars = `[{"name":"API_KEY","value":"key-live-abcd","secret":true}]`
+
+func TestAcceptLiveRoute(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "accepted")
+	v := saveCompose(t, operator, st.ID, acceptCompose, acceptVars)
+	if job := f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)).JobID); job.State != "done" {
+		t.Fatalf("deploy = %+v, want it done", job)
+	}
+	// Somebody scales the service outside Bayplan.
+	f.editLiveService(t, e, "accepted", "web", scaleTo(3))
+	seen := draftVersion(t, operator, st.ID)
+	writes := len(f.fake.Writes())
+
+	// A Viewer may read the stack, not change its draft.
+	if rec := viewer.do(http.MethodPost, acceptURL(st.ID), `{"draftVersion":`+itoaT(seen)+`}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("accept as a viewer: %d %s, want 403", rec.Code, rec.Body)
+	}
+	// A draft that moved since the person looked is not overwritten.
+	if rec := operator.do(http.MethodPost, acceptURL(st.ID), `{"draftVersion":`+itoaT(seen+3)+`}`); rec.Code != http.StatusConflict || problemType(t, rec) != "draft_conflict" {
+		t.Fatalf("accept on a stale version: %d %s, want 409 draft_conflict", rec.Code, rec.Body)
+	}
+	if got := draftVersion(t, operator, st.ID); got != seen {
+		t.Fatalf("draft version = %d after a refused accept, want %d", got, seen)
+	}
+
+	rec := operator.do(http.MethodPost, acceptURL(st.ID), `{"draftVersion":`+itoaT(seen)+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("accept as an operator: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q", cc)
+	}
+	got := answerOf[struct {
+		Version  int64  `json:"version"`
+		SavedBy  string `json:"savedBy"`
+		Revision int64  `json:"revision"`
+		Services int    `json:"services"`
+	}](t, rec)
+	if got.Version != seen+1 || got.SavedBy != "operator-1" || got.Revision != 1 || got.Services != 1 {
+		t.Errorf("answer = %+v, want version %d saved by operator-1 from revision 1 with 1 service", got, seen+1)
+	}
+
+	// The draft is the deployed revision's files and variables with the compose file rebuilt from what runs, and the
+	// secret variable's value is not in it.
+	draft := answerOf[draftAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+	if draft.Version != got.Version || len(draft.Files) != 1 {
+		t.Fatalf("draft = %+v", draft)
+	}
+	text := draft.Files[0].Content
+	for _, want := range []string{"replicas: 3", "API_KEY: ${API_KEY}", "MODE: prod", "image: nginx:1.27-alpine"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the draft lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "key-live-abcd") {
+		t.Errorf("the secret variable's value is in the compose file:\n%s", text)
+	}
+	if len(draft.Vars) != 1 || draft.Vars[0].Name != "API_KEY" || !draft.Vars[0].Secret {
+		t.Errorf("vars = %+v, want the revision's secret API_KEY", draft.Vars)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d: accepting live must not change an engine", writes, n)
+	}
+
+	var row *auditRowFull
+	for _, r := range f.stackAudits(t) {
+		if r.Action == "stack.drift_accepted" {
+			row = &r
+		}
+	}
+	if row == nil || row.TargetID != st.ID || row.Result != "success" || row.Details["stack"] != "accepted" ||
+		row.Details["revision"] != "1" || row.Details["version"] != itoaT(got.Version) || row.Details["services"] != "1" {
+		t.Errorf("stack.drift_accepted = %+v, want the stack, revision 1, the new version and 1 service", row)
+	}
+	if row != nil {
+		for k, v := range row.Details {
+			if strings.Contains(v, "key-live-abcd") || strings.Contains(k, "secret") {
+				t.Errorf("the audit detail %s=%q carries a secret", k, v)
+			}
+		}
+	}
+}
+
+func TestAcceptLiveRouteIsRefusedWhileAnOperationRunsAndWithoutADeployedRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha, beta := newStack(t, admin, "alpha"), newStack(t, admin, "beta")
+
+	// A stack never deployed has nothing to take as the base.
+	rec := operator.do(http.MethodPost, acceptURL(alpha.ID), `{"draftVersion":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_deployed_revision" {
+		t.Fatalf("accept with no deployed revision: %d %s, want 409 no_deployed_revision", rec.Code, rec.Body)
+	}
+
+	jobID := startStuckDeploy(t, f, operator, beta)
+	writes := len(f.fake.Writes())
+	rec = operator.do(http.MethodPost, acceptURL(alpha.ID), `{"draftVersion":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Fatalf("accept during another operation: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d", writes, n)
+	}
+	if rec := operator.do(http.MethodPost, cancelPath(beta.ID, jobID), ""); rec.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, jobID)
+}

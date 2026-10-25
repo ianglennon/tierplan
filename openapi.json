@@ -12651,6 +12651,57 @@
         ],
         "type": "object"
       },
+      "StackDriftAcceptBody": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "description": "The number of the deployed revision the draft starts from",
+            "format": "int64",
+            "type": "integer"
+          },
+          "savedAt": {
+            "description": "When, RFC 3339 UTC",
+            "type": "string"
+          },
+          "savedBy": {
+            "description": "Who saved the draft last, which is the caller",
+            "type": "string"
+          },
+          "services": {
+            "description": "How many services the draft was rebuilt from",
+            "format": "int64",
+            "type": "integer"
+          },
+          "version": {
+            "description": "The draft's version now",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "savedBy",
+          "savedAt",
+          "revision",
+          "services"
+        ],
+        "type": "object"
+      },
+      "StackDriftAcceptInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "draftVersion": {
+            "description": "The version of the draft the person saw, 0 for a stack that has none. A draft that has moved since is 409 draft_conflict",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draftVersion"
+        ],
+        "type": "object"
+      },
       "StackDriftBody": {
         "additionalProperties": false,
         "properties": {
@@ -24888,6 +24939,77 @@
           }
         },
         "summary": "How what runs compares with the deployed revision",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/drift/accept": {
+      "post": {
+        "description": "Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision. A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.",
+        "operationId": "acceptStackDrift",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackDriftAcceptInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackDriftAcceptBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Accept what runs into the stack's draft",
         "tags": [
           "stacks"
         ]

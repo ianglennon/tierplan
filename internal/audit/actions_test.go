@@ -330,6 +330,9 @@ func TestEveryPhase7ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // how many services it has and the number of the revision it started with (plan 08-13, STK-13).
 var phase8DetailKeys = map[string][]string{
 	audit.ActionStackAdopted: {"stack", "target", "source", "services", "revision"},
+	// Accepting what runs into the draft records the stack, the revision the draft starts from, the version of the
+	// draft it saved and how many services it was rebuilt from (plan 08-24, STK-14, D-23).
+	audit.ActionStackDriftAccepted: {"stack", "revision", "version", "services"},
 }
 
 func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -353,7 +356,8 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		t.Fatalf("verify = %+v", got)
 	}
 	for key, constant := range map[string]string{
-		"stack.adopted": audit.ActionStackAdopted,
+		"stack.adopted":        audit.ActionStackAdopted,
+		"stack.drift_accepted": audit.ActionStackDriftAccepted,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

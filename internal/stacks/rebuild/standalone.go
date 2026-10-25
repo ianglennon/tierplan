@@ -43,13 +43,16 @@ type StandaloneContainer struct {
 // read: a network or volume that carries the project's label is the project's and is declared under its
 // existing name, every other one a container uses is external (D-18). Choice says which rendering of an owned
 // object to write, by "network:{key}" or "volume:{key}": the index into NetworkCandidates or VolumeCandidates,
-// -1 for the object as an external one, absent for the first.
+// -1 for the object as an external one, absent for the first. Base, when set, is the definition the project already
+// has, which the rebuild is made on top of (see Base): the declaration it holds of an owned network or volume is
+// the first rendering of that object.
 type StandaloneInput struct {
 	Project    string
 	Containers []StandaloneContainer
 	Networks   []NetworkInfo
 	Volumes    []VolumeInfo
 	Choice     map[string]int
+	Base       *Base
 }
 
 // Standalone rebuilds the compose project of a docker compose up project from its containers (D-12). Each
@@ -92,6 +95,7 @@ type standaloneBuild struct {
 	notes    []Note
 	objects  map[string]Object
 	variants map[string]int
+	subs     substitutions
 }
 
 func (b *standaloneBuild) object(kind, name, treatment, key string) {
@@ -123,9 +127,13 @@ func (b *standaloneBuild) build() (Result, error) {
 	if err := b.declare(project); err != nil {
 		return Result{}, err
 	}
-	yml, err := Marshal(project)
+	yml, err := marshal(project, &b.subs)
 	if err != nil {
 		return Result{}, err
+	}
+	for name, svc := range project.Services {
+		b.subs.unfold(&svc)
+		project.Services[name] = svc
 	}
 	return Result{
 		Project: project, YAML: yml, Pins: b.pins, Notes: sortNotes(b.notes), Objects: sortObjects(b.objects),
@@ -282,6 +290,8 @@ func (b *standaloneBuild) service(g standaloneGroup, known map[string]bool, rc s
 
 	text, pin, local := standaloneImage(first.Inspect.Config.Image, first.Image)
 	svc.Image = text
+	b.in.Base.keepImage(g.name, &svc, &b.subs)
+	b.in.Base.hideSecrets(&svc, &b.subs)
 	if text != "" {
 		b.pins[g.name] = pin
 		switch {
@@ -399,6 +409,9 @@ func (b *standaloneBuild) declare(project *types.Project) error {
 	for _, name := range owned {
 		info, key := b.netOwned[name], b.netKey[name]
 		cands := NetworkCandidates(info, b.in.Project, key)
+		if declared, ok := b.in.Base.ownedNetwork(key); ok {
+			cands = withFirst(cands, declared)
+		}
 		choice, err := b.choose("network:"+key, len(cands))
 		if err != nil {
 			return err
@@ -421,6 +434,9 @@ func (b *standaloneBuild) declare(project *types.Project) error {
 	for _, name := range slices.Sorted(maps.Keys(b.volOwned)) {
 		info, key := b.volOwned[name], b.volKey[name]
 		cands := VolumeCandidates(info, b.in.Project, key)
+		if declared, ok := b.in.Base.ownedVolume(key); ok {
+			cands = withFirst(cands, declared)
+		}
 		choice, err := b.choose("volume:"+key, len(cands))
 		if err != nil {
 			return err
@@ -505,4 +521,18 @@ func (b *standaloneBuild) dropImplicitDefault(project *types.Project) {
 // isPlainNetwork reports whether a declared network is the one compose makes when nothing is declared.
 func isPlainNetwork(cfg types.NetworkConfig) bool {
 	return reflect.DeepEqual(cfg, types.NetworkConfig{})
+}
+
+// withFirst puts the declaration the base holds ahead of the renderings of an object. The caller tries them in
+// order against the hash the host holds, so the base's own text is kept whenever it is the one the object was made
+// from; a rendering equal to it is not listed twice.
+func withFirst[T any](cands []T, declared T) []T {
+	out := make([]T, 0, len(cands)+1)
+	out = append(out, declared)
+	for _, c := range cands {
+		if !reflect.DeepEqual(c, declared) {
+			out = append(out, c)
+		}
+	}
+	return out
 }

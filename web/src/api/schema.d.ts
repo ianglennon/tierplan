@@ -2116,6 +2116,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/drift/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept what runs into the stack's draft
+         * @description Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision. A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.
+         */
+        post: operations["acceptStackDrift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/files/reveal": {
         parameters: {
             query?: never;
@@ -9094,6 +9114,34 @@ export interface components {
              */
             version: number;
         };
+        StackDriftAcceptBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision the draft starts from
+             */
+            revision: number;
+            /** @description When, RFC 3339 UTC */
+            savedAt: string;
+            /** @description Who saved the draft last, which is the caller */
+            savedBy: string;
+            /**
+             * Format: int64
+             * @description How many services the draft was rebuilt from
+             */
+            services: number;
+            /**
+             * Format: int64
+             * @description The draft's version now
+             */
+            version: number;
+        };
+        StackDriftAcceptInputBody: {
+            /**
+             * Format: int64
+             * @description The version of the draft the person saw, 0 for a stack that has none. A draft that has moved since is 409 draft_conflict
+             */
+            draftVersion: number;
+        };
         StackDriftBody: {
             /** @description The cause to name for the stack: the newest action of Bayplan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known */
             cause?: components["schemas"]["StackDriftCauseBody"];
@@ -15363,6 +15411,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDriftBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acceptStackDrift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackDriftAcceptInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDriftAcceptBody"];
                 };
             };
             /** @description Error */

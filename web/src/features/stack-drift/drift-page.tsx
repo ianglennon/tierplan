@@ -20,6 +20,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { AcceptLiveAction } from "@/features/stack-drift/accept-live-action";
 import { DriftServiceList } from "@/features/stack-drift/drift-service-list";
 import { DriftSummary } from "@/features/stack-drift/drift-summary";
 import { RestoreAction } from "@/features/stack-drift/restore-action";
@@ -226,6 +227,7 @@ export function DriftPage({ envId, stackId }: DriftPageProps) {
           <p className="me-auto min-w-0 text-sm text-muted-foreground">
             {t("stackRestore.revision", { seq: data.revision })}
           </p>
+          <AcceptLiveAction envId={envId} stackId={stackId} drifted={state === "drifted"} />
           <RestoreAction
             envId={envId}
             stackId={stackId}

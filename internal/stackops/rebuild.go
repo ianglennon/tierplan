@@ -26,6 +26,25 @@ type RebuildOptions struct {
 	// command, a health check command, a log option (secrets.reveal). Without it the specs are masked before the
 	// file is made, so nothing the caller may not read is ever in it (D-47).
 	Reveal bool
+	// Base, when set, is the definition the stack already has, which the rebuild is made on top of (D-54): the
+	// stack's own secrets and configs stay files, an image keeps the text it was written with, and a value that
+	// is a secret variable's is written as the variable. Adoption has none and writes what runs as literals (D-15).
+	Base *rebuild.Base
+	// Beside is the rest of the stack's working copy: the files and variables the rebuilt compose.yaml is checked
+	// beside, so a variable it refers to or a file it names is found as it will be at a deploy. Empty for none.
+	Beside stacks.WorkingCopy
+}
+
+// composeBeside is a working copy of the rebuilt compose.yaml with the files and variables of beside.
+func composeBeside(beside stacks.WorkingCopy, compose []byte) stacks.WorkingCopy {
+	files := make([]stacks.File, 0, len(beside.Files)+1)
+	files = append(files, stacks.File{Path: stacks.ComposeFile, Content: compose})
+	for _, f := range beside.Files {
+		if f.Path != stacks.ComposeFile {
+			files = append(files, f)
+		}
+	}
+	return stacks.WorkingCopy{Files: files, Vars: beside.Vars}
 }
 
 // RebuildError is a rebuild that came out as a file that cannot be used: the services could not be written as
@@ -59,10 +78,9 @@ func (d Deps) RebuildLive(ctx context.Context, envID string, st Stack, o Rebuild
 }
 
 // checkRebuilt is the check every stack passes, held against a rebuilt file: the first error is the rebuild's.
-func checkRebuilt(ctx context.Context, st Stack, res rebuild.Result) error {
+func checkRebuilt(ctx context.Context, st Stack, res rebuild.Result, beside stacks.WorkingCopy) error {
 	check := stacks.Check(ctx, stacks.CheckInput{
-		Name: st.Name, Target: st.Target,
-		Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}},
+		Name: st.Name, Target: st.Target, Copy: composeBeside(beside, res.YAML),
 	})
 	for _, p := range check.Problems {
 		if p.Severity == stacks.SeverityError {
@@ -82,7 +100,7 @@ func (d Deps) rebuildSwarm(ctx context.Context, envID string, st Stack, o Rebuil
 	for _, n := range read.networks {
 		idName[n.ID] = n.Name
 	}
-	in := rebuild.SwarmInput{Namespace: st.Name}
+	in := rebuild.SwarmInput{Namespace: st.Name, Base: o.Base}
 	attached := map[string]bool{}
 	var owned []dockerx.ServiceDetail
 	for _, det := range read.services {
@@ -115,17 +133,17 @@ func (d Deps) rebuildSwarm(ctx context.Context, envID string, st Stack, o Rebuil
 		}
 	}
 	for _, s := range read.secrets {
-		in.Secrets = append(in.Secrets, rebuild.ObjectInfo{ID: s.ID, Name: s.Name})
+		in.Secrets = append(in.Secrets, rebuild.ObjectInfo{ID: s.ID, Name: s.Name, Labels: s.Labels})
 	}
 	for _, c := range read.configs {
-		in.Configs = append(in.Configs, rebuild.ObjectInfo{ID: c.ID, Name: c.Name})
+		in.Configs = append(in.Configs, rebuild.ObjectInfo{ID: c.ID, Name: c.Name, Labels: c.Labels})
 	}
 
 	res, err := rebuild.Swarm(in)
 	if err != nil {
 		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
 	}
-	if err := checkRebuilt(ctx, st, res); err != nil {
+	if err := checkRebuilt(ctx, st, res, o.Beside); err != nil {
 		return rebuild.Result{}, err
 	}
 	res.Fingerprint = swarmFingerprint(owned)
@@ -207,11 +225,12 @@ func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o R
 	if len(in.Containers) == 0 {
 		return rebuild.Result{}, &RebuildError{Reason: "no container of " + st.Name + " is on the host"}
 	}
-	res, err := d.rebuildMatchingHashes(ctx, st, in)
+	in.Base = o.Base
+	res, err := d.rebuildMatchingHashes(ctx, st, in, o.Beside)
 	if err != nil {
 		return rebuild.Result{}, err
 	}
-	if err := checkRebuilt(ctx, st, res); err != nil {
+	if err := checkRebuilt(ctx, st, res, o.Beside); err != nil {
 		return rebuild.Result{}, err
 	}
 	res.Fingerprint = fingerprint
@@ -226,7 +245,7 @@ func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o R
 // deploy loads and prepares it, and the SDK's own hash of the object is compared with the label; the first
 // rendering that is equal is kept. When none is, the object is written external, with a note, and the SDK never
 // touches it. An object with no label is left alone by the SDK whatever it is declared as, and keeps the first.
-func (d Deps) rebuildMatchingHashes(ctx context.Context, st Stack, in rebuild.StandaloneInput) (rebuild.Result, error) {
+func (d Deps) rebuildMatchingHashes(ctx context.Context, st Stack, in rebuild.StandaloneInput, beside stacks.WorkingCopy) (rebuild.Result, error) {
 	in.Choice = map[string]int{}
 	res, err := rebuild.Standalone(in)
 	if err != nil {
@@ -249,7 +268,7 @@ func (d Deps) rebuildMatchingHashes(ctx context.Context, st Stack, in rebuild.St
 			if err != nil {
 				return rebuild.Result{}, &RebuildError{Reason: err.Error()}
 			}
-			got, err := hashOfObject(ctx, st, trial, o)
+			got, err := hashOfObject(ctx, st, trial, o, beside)
 			if err != nil {
 				return rebuild.Result{}, err
 			}
@@ -296,8 +315,8 @@ func hashLabel(in rebuild.StandaloneInput, o rebuild.Object) string {
 // (stacks.PrepareStandalone), so the name the SDK gives the object, and whatever else preparation sets, is what is
 // hashed. Bayplan's own labels on the object are custom labels and are not in the hash. A loaded project that does
 // not hold the object (the default network a file leaves implicit is always held) is a rebuild that cannot be used.
-func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.Object) (string, error) {
-	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}}
+func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.Object, beside stacks.WorkingCopy) (string, error) {
+	copy := composeBeside(beside, res.YAML)
 	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: copy})
 	if err != nil {
 		var refused *stacks.NotDeployableError

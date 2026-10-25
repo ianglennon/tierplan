@@ -4,12 +4,14 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
+import type { ProblemField } from "@/api/problem";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
 import { revisionsKey } from "@/api/stack-history";
 import {
   DeployRequestError,
+  draftKey,
   invalidateStacks,
   isStackGone,
   type StackDeployed,
@@ -22,6 +24,7 @@ export type StackDrift = components["schemas"]["StackDriftBody"];
 export type StackDriftService = components["schemas"]["StackDriftServiceBody"];
 export type StackDriftSummary = components["schemas"]["StackDriftSummaryBody"];
 export type StackDriftCause = components["schemas"]["StackDriftCauseBody"];
+export type StackDriftAccepted = components["schemas"]["StackDriftAcceptBody"];
 
 // The query key of a stack's drift. It extends the stack's key, so whatever refreshes the stack's page refreshes its
 // drift too. The key of a fresh check extends it again, so a check made on purpose and the newest one the server
@@ -129,6 +132,60 @@ export function useRestoreStack(envId: string, stackId: string) {
       void queryClient.invalidateQueries({ queryKey: driftKey(envId, stackId) });
       void queryClient.invalidateQueries({ queryKey: revisionsKey(envId, stackId) });
       void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
+  });
+}
+
+// AcceptLiveError is an accept the server refused or that got no answer. The status is 0 when the server could not be
+// reached; the type is the problem type it named (draft_conflict, operation_locked, no_deployed_revision,
+// rebuild_failed); the fields carry the reason of a failed rebuild and who saved a draft that moved.
+export class AcceptLiveError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ProblemField[];
+  constructor(status: number, type?: string, fields: ProblemField[] = []) {
+    super(`POST drift/accept failed (${status})`);
+    this.name = "AcceptLiveError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+  }
+}
+
+export interface AcceptLiveInput {
+  // The version of the draft the person saw, 0 for a stack with no saved draft. The server refuses a draft that moved.
+  draftVersion: number;
+}
+
+// useAcceptLive rebuilds the stack's draft from what runs (D-23): the deployed revision's files and variables with a
+// compose.yaml made from the engine on top of that revision (D-54). It changes only the draft: nothing is sent to an
+// engine and nothing is deployed. It is never retried: a rebuild whose answer was lost may have saved the draft, and
+// the editor, which reads the draft once it opens, shows what is saved. The draft, the stack and its drift are read
+// again whatever the answer.
+export function useAcceptLive(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDriftAccepted, AcceptLiveError, AcceptLiveInput>({
+    mutationFn: async ({ draftVersion }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/drift/accept", {
+          params: { path: { envId, stackId } },
+          body: { draftVersion },
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new AcceptLiveError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof AcceptLiveError ? e : new AcceptLiveError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: draftKey(envId, stackId) });
+      void queryClient.invalidateQueries({ queryKey: driftKey(envId, stackId) });
     },
   });
 }

@@ -43,17 +43,23 @@ type NetworkInfo struct {
 // Pool is one IPAM address pool of a network.
 type Pool struct{ Subnet, Gateway, IPRange string }
 
-// ObjectInfo is a secret or a config of the swarm: its ID and its name, never its content.
-type ObjectInfo struct{ ID, Name string }
+// ObjectInfo is a secret or a config of the swarm: its ID and its name, never its content. Labels are its labels,
+// which tell a secret or a config the stack made from one of its files (bayplan.stack.object) from one it only uses.
+type ObjectInfo struct {
+	ID, Name string
+	Labels   map[string]string
+}
 
 // SwarmInput is what the swarm direction needs. Namespace is the stack's com.docker.stack.namespace; Networks the
 // networks the services attach (a name no entry describes is written as an external network); Secrets and
-// Configs the objects the services reference, by ID, for a reference that carries no name.
+// Configs the objects the services reference, by ID, for a reference that carries no name. Base, when set, is the
+// definition the stack already has, which the rebuild is made on top of (see Base).
 type SwarmInput struct {
 	Namespace        string
 	Services         []SwarmService
 	Networks         []NetworkInfo
 	Secrets, Configs []ObjectInfo
+	Base             *Base
 }
 
 // Swarm rebuilds the compose project of a swarm stack from its services' specs, the reverse of convert.Convert:
@@ -85,9 +91,13 @@ func Swarm(in SwarmInput) (Result, error) {
 	if len(b.configs) > 0 {
 		project.Configs = b.configs
 	}
-	yml, err := Marshal(project)
+	yml, err := marshal(project, &b.subs)
 	if err != nil {
 		return Result{}, err
+	}
+	for name, svc := range project.Services {
+		b.subs.unfold(&svc)
+		project.Services[name] = svc
 	}
 	return Result{Project: project, YAML: yml, Pins: b.pins, Notes: b.sortedNotes(), Objects: b.sortedObjects()}, nil
 }
@@ -170,6 +180,7 @@ type builder struct {
 	pins    map[string]string
 	notes   []Note
 	objects map[string]Object
+	subs    substitutions
 }
 
 func newBuilder(in SwarmInput) *builder {
@@ -240,12 +251,16 @@ func (b *builder) prepareFiles(services []SwarmService) {
 			continue
 		}
 		for _, r := range cs.Secrets {
-			if name := b.secretName(r); name != "" && r.File != nil && safeKey(r.File.Name) == r.File.Name {
+			if name := b.secretName(r); name != "" && b.baseKey(b.in.Secrets, name) != "" {
+				b.secretKeys.try(name, b.baseKey(b.in.Secrets, name))
+			} else if name != "" && r.File != nil && safeKey(r.File.Name) == r.File.Name {
 				b.secretKeys.try(name, r.File.Name)
 			}
 		}
 		for _, r := range cs.Configs {
-			if name := b.configName(r); name != "" && r.File != nil && r.Runtime == nil && safeKey(r.File.Name) == r.File.Name {
+			if name := b.configName(r); name != "" && b.baseKey(b.in.Configs, name) != "" {
+				b.configKeys.try(name, b.baseKey(b.in.Configs, name))
+			} else if name != "" && r.File != nil && r.Runtime == nil && safeKey(r.File.Name) == r.File.Name {
 				b.configKeys.try(name, r.File.Name)
 			}
 		}
@@ -318,6 +333,8 @@ func (b *builder) service(svc SwarmService) (string, types.ServiceConfig, error)
 	out.Entrypoint = types.ShellCommand(slices.Clone(cs.Command))
 	out.Command = types.ShellCommand(slices.Clone(cs.Args))
 	out.Environment = environment(cs.Env)
+	b.in.Base.keepImage(short, &out, &b.subs)
+	b.in.Base.hideSecrets(&out, &b.subs)
 	out.Labels = userLabels(cs.Labels)
 
 	d, err := b.deploy(short, spec)
@@ -616,6 +633,14 @@ func (b *builder) declareOwnedNetwork(key, name string, info NetworkInfo) {
 		return
 	}
 	b.object(KindNetwork, name, TreatmentOwned)
+	if declared, ok := b.in.Base.ownedNetwork(key); ok {
+		b.networks[key] = declared
+		return
+	}
+	if b.in.Base != nil && key == defaultKey && name == b.defaultNetworkName() {
+		// The deployed revision's file declares no default network: it is the plain one every stack has.
+		return
+	}
 	cfg := types.NetworkConfig{
 		Attachable: info.Attachable, Internal: info.Internal,
 		Labels: userLabels(info.Labels),
@@ -700,6 +725,9 @@ func (b *builder) volumeKey(m mount.Mount) string {
 }
 
 func (b *builder) ownedVolume(key, name string, vo *mount.VolumeOptions) types.VolumeConfig {
+	if declared, ok := b.in.Base.ownedVolume(key); ok {
+		return declared
+	}
 	cfg := types.VolumeConfig{Labels: userLabels(vo.Labels)}
 	if name != b.ns+"_"+key {
 		cfg.Name = name
@@ -789,8 +817,14 @@ func (b *builder) secretRefs(refs []*swarm.SecretReference) []types.ServiceSecre
 			continue
 		}
 		key := b.secretKeys.assign(name, b.stripped(name), name)
-		b.secrets[key] = types.SecretConfig{Name: name, External: true}
-		b.object(KindSecret, name, TreatmentExternal)
+		if declared, ok := b.in.Base.ownedSecret(key); ok && b.baseKey(b.in.Secrets, name) == key {
+			// A secret the stack made from one of its files stays that file (D-54).
+			b.secrets[key] = declared
+			b.object(KindSecret, name, TreatmentOwned)
+		} else {
+			b.secrets[key] = types.SecretConfig{Name: name, External: true}
+			b.object(KindSecret, name, TreatmentExternal)
+		}
 		ref := types.ServiceSecretConfig{Source: key}
 		if f := r.File; f != nil {
 			ref.Target, ref.UID, ref.GID, ref.Mode = fileReference(key, f.Name, f.UID, f.GID, f.Mode)
@@ -822,6 +856,11 @@ func (b *builder) configRefs(refs []*swarm.ConfigReference) []types.ServiceConfi
 // declareConfig writes an external top-level config under the key it has, and returns the key.
 func (b *builder) declareConfig(name string) string {
 	key := b.configKeys.assign(name, b.stripped(name), name)
+	if declared, ok := b.in.Base.ownedConfig(key); ok && b.baseKey(b.in.Configs, name) == key {
+		b.configs[key] = declared
+		b.object(KindConfig, name, TreatmentOwned)
+		return key
+	}
 	b.configs[key] = types.ConfigObjConfig{Name: name, External: true}
 	b.object(KindConfig, name, TreatmentExternal)
 	return key
@@ -954,4 +993,18 @@ func cpusOf(nano int64) (types.NanoCPUs, bool) {
 	}
 	back.Mul(back, big.NewRat(1_000_000_000, 1))
 	return types.NanoCPUs(f), back.IsInt() && back.Num().Int64() == nano
+}
+
+// baseKey is the key a secret or config that the stack made from one of its files has in the base's file, "" for
+// any other object and when there is no base. The object says it in its bayplan.stack.object label.
+func (b *builder) baseKey(rows []ObjectInfo, name string) string {
+	if b.in.Base == nil {
+		return ""
+	}
+	for _, o := range rows {
+		if o.Name == name {
+			return o.Labels[stacks.LabelObject]
+		}
+	}
+	return ""
 }

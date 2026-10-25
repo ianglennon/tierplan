@@ -245,7 +245,8 @@
         "started": "Stack started",
         "removed": "Stack removed",
         "value_revealed": "Stack secret value revealed",
-        "adopted": "Stack adopted"
+        "adopted": "Stack adopted",
+        "drift_accepted": "Accepted live state into the draft"
       }
     },
     "coalesced": {
