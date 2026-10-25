@@ -345,6 +345,21 @@ func (r Repo) SetAdoption(ctx context.Context, stackID string, a stacks.Adoption
 	return nil
 }
 
+// ClearAdoptionPending ends the pending window of an adopted stack: the first good deploy has put Bayplan's labels on
+// what it runs, so its workloads are owned by its ID alone from now on (D-16). The rest of the record is kept. It is
+// one statement, so a deploy that ends while the record is read elsewhere loses nothing. A stack that is gone is
+// ErrStackNotFound.
+func (r Repo) ClearAdoptionPending(ctx context.Context, stackID string) error {
+	n, err := r.Store.Q.ClearStackAdoptionPending(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("clear the pending adoption: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
+	}
+	return nil
+}
+
 // Stack reads one stack of an environment by ID. An ID of another environment is
 // ErrStackNotFound, the same as an ID that does not exist.
 func (r Repo) Stack(ctx context.Context, envID, stackID string) (Stack, error) {

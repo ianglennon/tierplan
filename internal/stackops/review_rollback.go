@@ -72,7 +72,7 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	if err != nil {
 		return err
 	}
-	if clash(in.Stack.ID, in.Stack.Name, live.Networks, live.Services, live.Objects) {
+	if own := OwnershipOf(in.Stack); clash(own, live.Networks, live.Services, live.Objects) {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,

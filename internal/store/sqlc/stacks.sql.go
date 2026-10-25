@@ -9,6 +9,20 @@ import (
 	"context"
 )
 
+const clearStackAdoptionPending = `-- name: ClearStackAdoptionPending :execrows
+UPDATE stacks SET adoption = json_remove(adoption, '$.pending') WHERE id = ?
+`
+
+// Ends the pending window of an adopted stack (the first good deploy, D-16) and keeps the rest of the record. The
+// flag is omitted from the record when false, so removing it is clearing it.
+func (q *Queries) ClearStackAdoptionPending(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearStackAdoptionPending, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countPrunableRevisions = `-- name: CountPrunableRevisions :one
 SELECT CAST(COUNT(*) AS INTEGER) AS revisions, CAST(COUNT(DISTINCT s.stack_id) AS INTEGER) AS stacks
 FROM stack_snapshots s

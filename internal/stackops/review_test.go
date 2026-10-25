@@ -912,3 +912,64 @@ func TestReviewInUpdateModeMarksOnlyTheRowWhoseRegistryIsDownAndBlocksOnlyForIt(
 		}
 	}
 }
+
+// TestReviewAdoptedSwarmStackShowsOwnershipOnly: the first review of an adopted stack that docker stack deploy made
+// is not refused as a name clash, shows every service as differing only in Bayplan's labels, counts them apart from
+// the changed ones and leaves the stack's networks and secrets alone (D-16, D-20, ROADMAP SC3).
+func TestReviewAdoptedSwarmStackShowsOwnershipOnly(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+
+	rv := a.review(t)
+
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want an adopted stack not refused as a name clash", rv.Problems)
+	}
+	var names []string
+	for _, c := range rv.Services {
+		if !c.OwnershipOnly {
+			t.Errorf("service %s is %s with its own change, want ownership labels only", c.Short, c.Change)
+		}
+		names = append(names, c.Short)
+	}
+	if want := []string{"api", "bare", "legacy"}; !slices.Equal(names, want) {
+		t.Errorf("services = %v, want %v", names, want)
+	}
+	if rv.Summary.OwnershipOnly != 3 || rv.Summary.Services != (stackops.Counts{}) {
+		t.Errorf("summary = %+v, want 3 ownership-only and none changed", rv.Summary)
+	}
+	if rv.Adoption == nil || !rv.Adoption.Pending || rv.Adoption.OwnershipOnly != 3 {
+		t.Errorf("adoption = %+v, want pending with 3 services", rv.Adoption)
+	}
+	for _, o := range rv.Objects {
+		if o.Change != stackops.ChangeExternal {
+			t.Errorf("object %s %s %s: want the existing networks and secrets neither added nor changed", o.Change, o.Kind, o.Name)
+		}
+	}
+	for _, name := range []string{"db_password.h1", "tls_key.h1"} {
+		if !slices.Contains(objectsOf(rv), "external secret "+name) {
+			t.Errorf("objects = %v, want %s listed as external", objectsOf(rv), name)
+		}
+	}
+	if w := a.rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("a review wrote %v", w)
+	}
+}
+
+// TestReviewOfAnAdoptedStackKeepsARealChangeInTheList: a service with a real change as well as the labels is a
+// normal changed row, counted as changed, and the others stay ownership-only.
+func TestReviewOfAnAdoptedStackKeepsARealChangeInTheList(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+	compose := strings.Replace(string(a.draft.Copy.Compose()), "replicas: 4", "replicas: 5", 1)
+	if compose == string(a.draft.Copy.Compose()) {
+		t.Fatal("the rebuilt file has no replicas: 4 to change")
+	}
+	a.draft.Copy = stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, Vars: a.draft.Copy.Vars}
+
+	rv := a.review(t)
+
+	if rv.Summary.Services.Changed != 1 || rv.Summary.OwnershipOnly != 2 {
+		t.Errorf("summary = %+v, want one changed service and two ownership-only", rv.Summary)
+	}
+}

@@ -53,15 +53,27 @@ func withoutBayplanLabels(labels map[string]string) map[string]string {
 // namespace labels and none of Bayplan's. edit changes each service's spec before it is stood up.
 func corpusRig(t *testing.T, file string, edit func(short string, spec *swarm.ServiceSpec)) *swarmRig {
 	t.Helper()
+	return corpusRigTuned(t, file, edit, nil)
+}
+
+// corpusRigTuned is corpusRig with a last say on the fake's configuration.
+func corpusRigTuned(t *testing.T, file string, edit func(short string, spec *swarm.ServiceSpec), tune func(*dockertest.FakeConfig)) *swarmRig {
+	t.Helper()
 	content, err := os.ReadFile(filepath.Join("..", "stacks", "convert", "testdata", "compose", file)) //nolint:gosec // a fixed corpus path
 	if err != nil {
 		t.Fatal(err)
 	}
-	return composeRig(t, content, edit)
+	return composeRigTuned(t, content, edit, tune)
 }
 
 // composeRig stands the converted compose text on a fake swarm as docker stack deploy would leave it (see corpusRig).
 func composeRig(t *testing.T, content []byte, edit func(short string, spec *swarm.ServiceSpec)) *swarmRig {
+	t.Helper()
+	return composeRigTuned(t, content, edit, nil)
+}
+
+// composeRigTuned is composeRig with a last say on the fake's configuration, after the stack's objects are in it.
+func composeRigTuned(t *testing.T, content []byte, edit func(short string, spec *swarm.ServiceSpec), tune func(*dockertest.FakeConfig)) *swarmRig {
 	t.Helper()
 	loaded, err := stacks.Load(context.Background(), stacks.LoadInput{
 		Name: "shop", Target: stacks.TargetSwarm,
@@ -110,6 +122,9 @@ func composeRig(t *testing.T, content []byte, edit func(short string, spec *swar
 		}
 		for _, s := range []string{"app_config", "nginx_conf"} {
 			c.Configs = append(c.Configs, dockertest.FakeConfigObject{ID: "cid_" + s, Name: s + ".h2", Labels: ns, Data: []byte("never-read")})
+		}
+		if tune != nil {
+			tune(c)
 		}
 	}, services...)
 }

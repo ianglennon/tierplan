@@ -1377,3 +1377,207 @@ func TestDeploySwarmFailsClosedWhenThePolicyCannotBeApplied(t *testing.T) {
 		t.Errorf("check = %q", got)
 	}
 }
+
+// adopted is a corpus stack docker stack deploy made, adopted into the rig's store: the stack as stored (pending its
+// first deploy), its draft and the repo that holds them (plan 08-16, D-16).
+type adopted struct {
+	rig   *swarmRig
+	repo  stackops.Repo
+	stack stackops.Stack
+	draft stackops.Snapshot
+}
+
+// adoptCorpus stands the corpus file deploy.yaml on a fake swarm as the CLI left it, with the services edited by
+// edit (nil for none), and adopts it.
+func adoptCorpus(t *testing.T, edit func(short string, spec *swarm.ServiceSpec)) *adopted {
+	t.Helper()
+	return adoptRig(t, corpusRig(t, "deploy.yaml", edit))
+}
+
+// adoptCorpusStale is adoptCorpus for a stack Bayplan made once for a record this instance does not hold: its
+// services and their containers, and its networks, carry the bayplan.stack.id staleID (D-11).
+func adoptCorpusStale(t *testing.T, staleID string) *adopted {
+	t.Helper()
+	edit := func(_ string, spec *swarm.ServiceSpec) {
+		spec.Labels = maps.Clone(spec.Labels)
+		spec.Labels[stacks.LabelStackID] = staleID
+		cs := *spec.TaskTemplate.ContainerSpec
+		cs.Labels = maps.Clone(cs.Labels)
+		if cs.Labels == nil {
+			cs.Labels = map[string]string{}
+		}
+		cs.Labels[stacks.LabelStackID] = staleID
+		spec.TaskTemplate.ContainerSpec = &cs
+	}
+	tune := func(c *dockertest.FakeConfig) {
+		for i := range c.Networks {
+			c.Networks[i].Labels = maps.Clone(c.Networks[i].Labels)
+			c.Networks[i].Labels[stacks.LabelStackID] = staleID
+		}
+	}
+	return adoptRig(t, corpusRigTuned(t, "deploy.yaml", edit, tune))
+}
+
+// adoptRig adopts the stack named shop that rig holds.
+func adoptRig(t *testing.T, rig *swarmRig) *adopted {
+	t.Helper()
+	repo := adoptRepo(t, rig)
+	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+	draft, err := repo.Draft(testsupport.Context(t), st.ID)
+	if err != nil {
+		t.Fatalf("Draft: %v", err)
+	}
+	return &adopted{rig: rig, repo: repo, stack: st, draft: draft}
+}
+
+// review reviews the adopted stack's draft as an instance admin does, with the stack as the store holds it now.
+func (a *adopted) review(t *testing.T) stackops.Review {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	st, err := a.repo.Stack(ctx, a.rig.envID, a.stack.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rv, err := a.rig.deps.Review(ctx, stackops.ReviewInput{
+		EnvID: a.rig.envID, Stack: st, Copy: a.draft.Copy, DraftVersion: a.draft.Version, Pins: a.repo,
+		Caller: stackops.Caller{Principal: a.rig.principal(t, "root", ""), Actor: "root"},
+	})
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	return rv
+}
+
+// deployInput is the input of the adopted stack's first deploy, with the images its review chose.
+func (a *adopted) deployInput(t *testing.T, rv stackops.Review) stackops.SwarmDeployInput {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	st, err := a.repo.Stack(ctx, a.rig.envID, a.stack.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: a.draft.Copy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{}
+	for _, v := range a.draft.Copy.Vars {
+		vars[v.Name] = v.Value
+	}
+	return stackops.SwarmDeployInput{
+		Stack: st, Project: loaded.Project, Files: stacks.NewFileSet(a.draft.Copy.Files), Vars: vars, Copy: a.draft.Copy,
+		Pins: a.repo, Reviewed: rv.Pins,
+	}
+}
+
+// writesNamed filters the writes the fake saw to those whose request line contains any of the words.
+func writesNamed(fake *dockertest.Fake, words ...string) []string {
+	var out []string
+	for _, w := range fake.Writes() {
+		for _, word := range words {
+			if strings.Contains(w, word) {
+				out = append(out, w)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// TestFirstDeployOfAnAdoptedSwarmStack: the first deploy sends one service update per service carrying Bayplan's
+// ID, and creates, removes or conflicts with no network, secret or config that was there at adoption (T-08-61).
+func TestFirstDeployOfAnAdoptedSwarmStack(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+	rv := a.review(t)
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want the first review of an adopted stack to refuse nothing", rv.Problems)
+	}
+	before := len(a.rig.fake.Writes())
+
+	res, job := a.rig.deploy(t, a.deployInput(t, rv))
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+
+	if res.Networks != 0 || len(res.CreatedObjects) != 0 || len(res.RemovedServices) != 0 || len(res.RemovedObjects) != 0 || res.Services != 0 {
+		t.Errorf("deploy created networks %v objects %v services %d and removed services %v objects %v, want nothing but updates",
+			res.CreatedNetworks, res.CreatedObjects, res.Services, res.RemovedServices, res.RemovedObjects)
+	}
+	if res.Updated != 3 {
+		t.Errorf("updated = %d, want one update per service (3)", res.Updated)
+	}
+	writes := a.rig.fake.Writes()[before:]
+	if got := writesNamed(a.rig.fake, "/networks", "/secrets", "/configs"); len(got) != 0 {
+		t.Errorf("the deploy wrote %v to networks, secrets or configs", got)
+	}
+	updates := 0
+	for _, w := range writes {
+		if strings.Contains(w, "/services/") && strings.Contains(w, "/update") {
+			updates++
+		}
+		if strings.Contains(w, "DELETE") {
+			t.Errorf("the deploy removed something: %s", w)
+		}
+	}
+	if updates != 3 {
+		t.Errorf("service updates = %d (%v), want 3", updates, writes)
+	}
+	for _, u := range a.rig.fake.ServiceUpdates() {
+		spec := u.Spec
+		if spec.Labels[stacks.LabelStackID] != a.stack.ID || spec.TaskTemplate.ContainerSpec.Labels[stacks.LabelStackID] != a.stack.ID {
+			t.Errorf("service %s was updated without Bayplan's ID on the service and its containers: %v", spec.Name, spec.Labels)
+		}
+	}
+
+	// The deploy is the whole of the difference: a second review lists no change, before and after the record of the
+	// adoption is cleared (the API clears it when the deploy ends good).
+	if still := a.review(t); len(still.Services) != 0 || still.Adoption == nil || still.Adoption.OwnershipOnly != 0 {
+		t.Errorf("review of the deployed stack while the adoption is pending = services %+v adoption %+v, want no service", still.Services, still.Adoption)
+	}
+	if err := a.repo.ClearAdoptionPending(testsupport.Context(t), a.stack.ID); err != nil {
+		t.Fatal(err)
+	}
+	again := a.review(t)
+	var changed []string
+	for _, o := range again.Objects {
+		if o.Change != stackops.ChangeExternal {
+			changed = append(changed, o.Change+" "+o.Kind+" "+o.Name)
+		}
+	}
+	if len(again.Services) != 0 || len(changed) != 0 || len(again.Problems) != 0 || again.Adoption != nil {
+		t.Errorf("review after the first deploy = services %+v objects %v problems %+v adoption %+v, want no change", again.Services, changed, again.Problems, again.Adoption)
+	}
+}
+
+// TestFirstDeployRelabelsAStaleID: a service that carried a stale bayplan.stack.id at adoption gets the new
+// stack's ID, and its network, which keeps the stale label, is neither a conflict nor touched (D-11).
+func TestFirstDeployRelabelsAStaleID(t *testing.T) {
+	t.Parallel()
+	const stale = "stale-id"
+	a := adoptCorpusStale(t, stale)
+	rv := a.review(t)
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want a stale ID to be no name clash", rv.Problems)
+	}
+
+	res, _ := a.rig.deploy(t, a.deployInput(t, rv))
+	if !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	if res.Code == stackops.CodeNetworkConflict || res.Networks != 0 {
+		t.Errorf("deploy = %+v, want the stale-labelled networks left as they are", res)
+	}
+	for _, u := range a.rig.fake.ServiceUpdates() {
+		spec := u.Spec
+		if spec.Labels[stacks.LabelStackID] != a.stack.ID {
+			t.Errorf("service %s carries ID %q after the deploy, want %q", spec.Name, spec.Labels[stacks.LabelStackID], a.stack.ID)
+		}
+	}
+	if got := writesNamed(a.rig.fake, "/networks"); len(got) != 0 {
+		t.Errorf("the deploy wrote to networks: %v", got)
+	}
+}

@@ -239,6 +239,16 @@ type Review struct {
 	YAML TextDiff
 	// Concurrent is set when the last good revision is newer than the one the draft started from.
 	Concurrent *Concurrent
+	// Adoption is set while the stack is adopted and has not been deployed yet: the first deploy takes ownership by
+	// adding Bayplan's labels to every service (D-16).
+	Adoption *AdoptionReview
+}
+
+// AdoptionReview is what the first deploy of an adopted stack does that is not in the file: Pending says it is that
+// deploy, and OwnershipOnly counts the services it recreates for the ownership labels alone (they restart briefly).
+type AdoptionReview struct {
+	Pending       bool
+	OwnershipOnly int
 }
 
 // Review reads what a deploy of the saved draft would do. A stack of a standalone host is reviewed by
@@ -315,7 +325,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	if err != nil {
 		return rv, err
 	}
-	if clash(in.Stack.ID, in.Stack.Name, live.Networks, live.Services, live.Objects) {
+	if own := OwnershipOf(in.Stack); clash(own, live.Networks, live.Services, live.Objects) {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
@@ -395,8 +405,15 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		return rv, err
 	}
 	rv.Services = stacks.DiffServices(desired, running, masker)
-	for _, c := range rv.Services {
-		bump(&rv.Summary.Services, c.Change)
+	if own := OwnershipOf(in.Stack); own.Adopted && own.Pending {
+		// The first deploy of an adopted stack puts Bayplan's labels on every service, which recreates it: a service
+		// that differs in nothing else is told apart from a real change (D-16).
+		stacks.MarkOwnershipOnly(rv.Services, desired, running)
+		rv.Adoption = &AdoptionReview{Pending: true}
+	}
+	countServices(&rv)
+	if rv.Adoption != nil {
+		rv.Adoption.OwnershipOnly = rv.Summary.OwnershipOnly
 	}
 
 	var problems stacks.Problems
@@ -530,7 +547,8 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 // service of the namespace that Bayplan does not own is left out; the name-clash check refuses
 // the stack for it.
 func liveSpecs(live liveStack, stack Stack) (map[string]swarm.ServiceSpec, error) {
-	return liveSpecsOwned(live, func(s dockerx.ServiceDetail) bool { return s.Labels[stacks.LabelStackID] == stack.ID })
+	own := OwnershipOf(stack)
+	return liveSpecsOwned(live, func(s dockerx.ServiceDetail) bool { return own.OwnsWorkload(s.Labels) })
 }
 
 // liveSpecsOwned is liveSpecs for the services owns says are the stack's: an adopted stack that has not been
@@ -625,6 +643,7 @@ func imageRows(items []pinItem, pinned PinOutcome, current map[string]string, up
 // resourceChanges lists the networks, secrets and configs a deploy would add, change or remove,
 // and the problems that stop a deploy for them: an external object that does not exist.
 func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent, live liveStack) ([]ObjectChange, stacks.Problems) {
+	own := OwnershipOf(stack)
 	var out []ObjectChange
 	var problems stacks.Problems
 
@@ -641,7 +660,7 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 		switch {
 		case !ok:
 			out = append(out, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: n.Name})
-		case row.Labels[stacks.LabelStackID] == stack.ID && networkDiffers(n, row):
+		case own.OwnsNetwork(row.Name, row.Labels) && networkDiffers(n, row):
 			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: "network", Name: n.Name, Detail: detailNetwork})
 		}
 	}

@@ -1312,3 +1312,41 @@ func TestSetAdoptionReplacesTheRecord(t *testing.T) {
 		t.Errorf("SetAdoption of a missing stack = %v, want ErrStackNotFound", err)
 	}
 }
+
+// TestClearAdoptionPending: the first good deploy ends the pending window and keeps the rest of the record, a stack
+// that was not adopted is left as it is, and a stack that is gone is refused (D-16).
+func TestClearAdoptionPending(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}},
+		Adoption: stacks.Adoption{
+			Pending: true, PriorID: "stk-old", Networks: []string{"legacy_back"}, Volumes: []string{"legacy_data"},
+			Secrets: []string{"legacy_pw"}, Gaps: map[string][]string{"legacy_web": {"Env"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.repo.ClearAdoptionPending(ctx, st.ID); err != nil {
+		t.Fatalf("ClearAdoptionPending: %v", err)
+	}
+
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := read.Adoption
+	if a.Pending || a.PriorID != "stk-old" || len(a.Networks) != 1 || len(a.Volumes) != 1 || len(a.Secrets) != 1 || len(a.Gaps["legacy_web"]) != 1 {
+		t.Errorf("stored adoption = %+v, want Pending cleared and every other field kept", a)
+	}
+	if err := f.repo.ClearAdoptionPending(ctx, st.ID); err != nil {
+		t.Errorf("ClearAdoptionPending again = %v, want it to be harmless", err)
+	}
+	if err := f.repo.ClearAdoptionPending(ctx, "no-such-stack"); !errors.Is(err, stackops.ErrStackNotFound) {
+		t.Errorf("ClearAdoptionPending of a missing stack = %v, want ErrStackNotFound", err)
+	}
+}

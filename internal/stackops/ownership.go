@@ -112,6 +112,13 @@ func (o Ownership) OwnsVolume(name string, labels map[string]string) bool {
 	return o.ownsExactly(labels[o.labelKey()], labels) || (o.Adopted && o.StackID != "" && slices.Contains(o.Volumes, name))
 }
 
+// OwnsObject says whether a swarm secret or config is the stack's, from its labels: it states the stack's namespace
+// and carries the stack's own ID. It is the label rule alone: a secret or config an adopted stack only references
+// is Knows, never owned, so the deploy cannot remove it (T-08-62).
+func (o Ownership) OwnsObject(labels map[string]string) bool {
+	return o.ownsExactly(labels[o.labelKey()], labels)
+}
+
 // Knows says whether an adopted stack recorded the object when it was adopted: a network or a volume it owns, or a
 // secret or a config it references as external. Such an object is the stack's own business and never foreign to
 // it, whatever labels it carries. kind is one of rebuild.KindNetwork, KindVolume, KindSecret and KindConfig.

@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // stepError is a failure of one step of a swarm deploy: the deploy code to end the item with, the
@@ -49,6 +50,7 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 // options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
 // the call with a *stepError; the networks created before it stay in created.
 func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress) (created []string, err error) {
+	own := OwnershipOf(stack)
 	for _, n := range plans {
 		if n.External {
 			found, swarmScope := externalNetwork(live, n.Name)
@@ -61,7 +63,7 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 			continue
 		}
 		if row, ok := findNetwork(live, n.Name); ok {
-			if row.Labels[stacks.LabelStackID] != stack.ID {
+			if !own.OwnsNetwork(row.Name, row.Labels) && !own.Knows(rebuild.KindNetwork, row.Name) {
 				return created, &stepError{code: CodeNetworkConflict, name: n.Name, err: errors.New("the network belongs to another owner")}
 			}
 			continue
@@ -135,8 +137,9 @@ func networkSpec(n convert.NetworkPlan) dockerx.NetworkCreateSpec {
 // never touched. The caller runs it only after every declared service was created or updated. The
 // first failure ends the call with a *stepError; removed names the services removed before it.
 func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, declared map[string]bool, live []dockerx.ServiceDetail, prog *progress) (removed []string, err error) {
+	own := OwnershipOf(stack)
 	for _, s := range live {
-		if declared[s.Name] || s.Labels[stacks.LabelSwarmNamespace] != stack.Name || s.Labels[stacks.LabelStackID] != stack.ID {
+		if declared[s.Name] || !own.OwnsWorkload(s.Labels) {
 			continue
 		}
 		if ctx.Err() != nil {

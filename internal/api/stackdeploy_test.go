@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -2035,5 +2036,86 @@ func TestDeployedRevisionOutlastsTheWindowAfterFailures(t *testing.T) {
 	rows = f.revisions(t, st.ID)
 	if got := seqsOfRows(rows); !slices.Equal(got, []int64{1, 3, 4, 5, 6, 7}) || rows[0].Outcome != "good" {
 		t.Fatalf("revisions = %+v, want the deployed #1 kept and #2 pruned", rows)
+	}
+}
+
+// adoptedLegacy adopts the stack legacy that docker stack deploy left on the fake swarm, as an environment admin, and
+// answers the stack and the version of its draft.
+func adoptedLegacy(t *testing.T, f *envFix, e envBody, admin *roleCaller) (stackAnswer, int64) {
+	t.Helper()
+	// One service as docker stack deploy leaves it, on the stack's default network, with no secret or config to find.
+	replicas := uint64(2)
+	spec := swarm.ServiceSpec{
+		Annotations: swarm.Annotations{Name: "legacy_app", Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy"}},
+		TaskTemplate: swarm.TaskSpec{
+			ContainerSpec: &swarm.ContainerSpec{Image: "nginx:1.27@" + dockertest.FakeDigestOf("docker.io/library/nginx:1.27"), Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy"}},
+			Networks:      []swarm.NetworkAttachmentConfig{{Target: "net-legacy-default", Aliases: []string{"app"}}},
+		},
+		Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &replicas}},
+	}
+	svc := foreignSwarmService("legacy", "app", 2, 2, nil)
+	svc.Spec = &spec
+	cfg := swarmManagerEngine(svc)
+	cfg.TasksFollowWrites = true
+	cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{
+		ID: "net-legacy-default", Name: "legacy_default", Driver: "overlay", Scope: "swarm",
+		Labels: map[string]string{stacks.LabelSwarmNamespace: "legacy"},
+	})
+	f.fake.Reconfigure(cfg)
+	if err := f.clusters.Refresh(testsupport.Context(t), e.ID); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	rec := admin.do(http.MethodPost, adoptPath("legacy"), adoptBody(fingerprintOf(t, admin, "legacy")))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("adopt: %d %s", rec.Code, rec.Body)
+	}
+	st := answerOf[stackAnswer](t, rec)
+	draft := admin.do(http.MethodGet, "stacks/"+st.ID+"/draft", "")
+	if draft.Code != http.StatusOK {
+		t.Fatalf("draft: %d %s", draft.Code, draft.Body)
+	}
+	return st, answerOf[draftAnswer](t, draft).Version
+}
+
+// adoptionPending reads whether the stack's adoption is still pending from the store.
+func adoptionPending(t *testing.T, f *envFix, envID, stackID string) bool {
+	t.Helper()
+	st, err := (stackops.Repo{Store: f.st, Vault: f.v}).Stack(testsupport.Context(t), envID, stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Adoption.Pending
+}
+
+// TestDeployEndClearsThePendingAdoption: the first deploy of an adopted stack ends the pending window when it ends
+// good, and only then; a deploy that stops leaves the adoption pending, since not every service carries Bayplan's
+// labels yet (D-16).
+func TestDeployEndClearsThePendingAdoption(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st, _ := adoptedLegacy(t, f, e, admin)
+	if !adoptionPending(t, f, e.ID, st.ID) {
+		t.Fatal("a stack just adopted is not pending")
+	}
+
+	// A deploy that stops before it has labelled every service ends failed: here at the networks, for an external
+	// network that does not exist.
+	draft := answerOf[draftAnswer](t, admin.do(http.MethodGet, "stacks/"+st.ID+"/draft", ""))
+	rebuilt := draft.Files[0].Content
+	broken := rebuilt + "\nnetworks:\n  ghost:\n    external: true\n"
+	broken = strings.Replace(broken, "    image: nginx:1.27", "    networks: [default, ghost]\n    image: nginx:1.27", 1)
+	jobID := f.deployDraft(t, admin, st.ID, broken)
+	if job := f.awaitDeploy(t, jobID); job.State == "done" {
+		t.Fatalf("job = %+v, want it stopped", job)
+	}
+	if !adoptionPending(t, f, e.ID, st.ID) {
+		t.Fatal("a deploy that failed ended the pending adoption")
+	}
+
+	// The file as it was adopted, deployed, ends good.
+	f.deployGood(t, admin, st.ID, rebuilt)
+	if adoptionPending(t, f, e.ID, st.ID) {
+		t.Fatal("a good first deploy left the adoption pending")
 	}
 }

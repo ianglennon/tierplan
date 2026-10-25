@@ -14,6 +14,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?);
 -- Replaces the adoption record of a stack. The caller read the stack by environment and ID first.
 UPDATE stacks SET adoption = ? WHERE id = ?;
 
+-- name: ClearStackAdoptionPending :execrows
+-- Ends the pending window of an adopted stack (the first good deploy, D-16) and keeps the rest of the record. The
+-- flag is omitted from the record when false, so removing it is clearing it.
+UPDATE stacks SET adoption = json_remove(adoption, '$.pending') WHERE id = ?;
+
 -- name: GetStack :one
 -- A stack is always looked up by its environment and ID, so an ID of another environment is not found.
 SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption

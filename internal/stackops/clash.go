@@ -33,14 +33,28 @@ func (d Deps) ForeignStack(ctx context.Context, envID string, target stacks.Targ
 	if stackID == "" {
 		stackID = noStack
 	}
-	if target == stacks.TargetStandalone {
-		return d.foreignProject(ctx, envID, name, stackID)
+	return d.foreignUnder(ctx, envID, Ownership{StackID: stackID, Name: name, Target: target})
+}
+
+// ForeignStackOf is ForeignStack for a stack Bayplan holds, judged by the stack's own ownership rule (D-16): an
+// adopted stack that has not been deployed yet owns the workloads that carry no ID of its own, and the networks,
+// secrets and configs it recorded when it was adopted, so its first deploy is no name clash. A swarm only; a
+// standalone host still compares the stack's ID (plan 08-17).
+func (d Deps) ForeignStackOf(ctx context.Context, envID string, st Stack) (bool, error) {
+	return d.foreignUnder(ctx, envID, OwnershipOf(st))
+}
+
+// foreignUnder reads the environment for objects of the stack's name that own does not own.
+func (d Deps) foreignUnder(ctx context.Context, envID string, own Ownership) (bool, error) {
+	if own.Target == stacks.TargetStandalone {
+		return d.foreignProject(ctx, envID, own.Name, own.StackID)
 	}
-	live, err := d.readLive(ctx, envID, name, liveWant{})
+	live, err := d.readLive(ctx, envID, own.Name, liveWant{})
 	if err != nil {
 		return false, err
 	}
-	return clash(stackID, name, live.Networks, live.Services, live.Objects), nil
+	own.Target = stacks.TargetSwarm
+	return clash(own, live.Networks, live.Services, live.Objects), nil
 }
 
 // foreignProject reads the one engine of a standalone environment for a Compose project of this

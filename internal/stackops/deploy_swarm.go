@@ -18,6 +18,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // The items of a swarm deploy job, in order.
@@ -318,7 +319,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
 	existingNets, allNets, existingSvcs, live := owned.Networks, owned.AllNetworks, owned.Services, owned.Objects
-	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
+	if own := OwnershipOf(in.Stack); clash(own, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
 	// The whole picture of what is about to happen goes into the job now: the networks and objects
@@ -637,19 +638,23 @@ func (d Deps) authFor(ctx context.Context, envID, image string) (string, error) 
 // clash reports whether the swarm holds an object under this stack's namespace that another
 // stack, or none of Bayplan's, owns: a stack of that name that Bayplan does not manage (D-12).
 // objects are the secrets and configs the deploy read; only those under the namespace count.
-func clash(stackID, stackName string, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
+//
+// What is foreign is decided by the Ownership predicate (plan 08-16, D-16): a network or service the stack owns is
+// not, and neither is a network, secret or config an adopted stack recorded when it was adopted, whatever
+// bayplan.stack.id it carries. A managed stack is judged by its own ID alone, as before.
+func clash(own Ownership, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
 	for _, n := range nets {
-		if n.Labels[stacks.LabelStackID] != stackID {
+		if !own.OwnsNetwork(n.Name, n.Labels) && !own.Knows(rebuild.KindNetwork, n.Name) {
 			return true
 		}
 	}
 	for _, s := range svcs {
-		if s.Labels[stacks.LabelStackID] != stackID {
+		if !own.OwnsWorkload(s.Labels) {
 			return true
 		}
 	}
 	for _, o := range objects {
-		if o.Labels[stacks.LabelSwarmNamespace] == stackName && o.Labels[stacks.LabelStackID] != stackID {
+		if o.Labels[stacks.LabelSwarmNamespace] == own.Name && !own.OwnsObject(o.Labels) && !own.Knows(string(o.Kind), o.Name) {
 			return true
 		}
 	}

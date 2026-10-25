@@ -433,7 +433,7 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if pol.Refused {
 		return nil, policyProblem(pol)
 	}
-	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
 	}
@@ -541,7 +541,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	if pol.Refused {
 		return nil, policyProblem(pol)
 	}
-	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
 	}
@@ -679,7 +679,7 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if pol.Refused {
 		return nil, policyProblem(pol)
 	}
-	foreign, err := d.ops().ForeignStack(ctx, env.ID, st.Target, st.Name, st.ID)
+	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
 	}
@@ -943,6 +943,13 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		// A deploy brings every service up as the file says, so a stack a person stopped is running again.
 		if err := repo.SetStopped(wctx, st.ID, false); err != nil {
 			d.Log.Warn("could not record that a deployed stack is running", "stack", st.ID, "error", err)
+		}
+		// The first good deploy of an adopted stack has put Bayplan's labels on every service: the adoption is no
+		// longer pending, and the workloads are owned by the stack's ID alone from now on (D-16).
+		if st.Adoption.Pending {
+			if err := repo.ClearAdoptionPending(wctx, st.ID); err != nil {
+				d.Log.Warn("could not end the pending adoption of a deployed stack", "stack", st.ID, "error", err)
+			}
 		}
 		// The revision is the newest good one now, so its pins are the images it ran with.
 		pins, perr := repo.GoodPins(wctx, st.ID)

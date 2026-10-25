@@ -4,11 +4,13 @@
 package stackops_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Ownership (plan 08-09, STK-12, D-09): one rule says what is a stack's, for a stack Bayplan holds and for
@@ -184,5 +186,27 @@ func TestOwnershipNeverTrustsAnotherID(t *testing.T) {
 	noID.ID = ""
 	if stackops.OwnershipOf(noID).OwnsWorkload(map[string]string{stacks.LabelSwarmNamespace: "legacy"}) {
 		t.Errorf("a stack with no ID must own nothing")
+	}
+}
+
+// TestAfterTheFirstDeployANewUnlabelledServiceIsForeign: a workload with no bayplan.stack.id is the adopted stack's
+// only while the adoption is pending. Once the first good deploy has cleared it, a service somebody adds to the
+// namespace without the stack's ID is a name clash, not something to take over (T-08-60). The services here are the
+// ones the CLI left, unlabelled, which is what such a service looks like to the stack.
+func TestAfterTheFirstDeployANewUnlabelledServiceIsForeign(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+	clash := func(rv stackops.Review) bool {
+		return slices.ContainsFunc(rv.Problems, func(p stacks.Problem) bool { return p.Code == stackops.CodeNameClash })
+	}
+
+	if rv := a.review(t); clash(rv) {
+		t.Fatalf("problems = %+v, want the services of a pending adoption to be the stack's", rv.Problems)
+	}
+	if err := a.repo.ClearAdoptionPending(testsupport.Context(t), a.stack.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rv := a.review(t); !clash(rv) {
+		t.Fatalf("problems = %+v, want a name clash for services with no ID once the adoption is not pending", rv.Problems)
 	}
 }
