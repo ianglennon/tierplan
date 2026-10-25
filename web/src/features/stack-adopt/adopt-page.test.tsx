@@ -45,6 +45,21 @@ let adoptHeld: Promise<void> | null;
 let client: QueryClient;
 const onAdopted = vi.fn();
 
+// checkBody is a settled check of a clean stack; a test changes only the fingerprint, which is the part this page reads.
+const checkBody = (fingerprint: string) => ({
+  fingerprint,
+  clean: true,
+  gaps: [],
+  gapCount: 0,
+  ownershipOnly: [],
+  objects: [],
+  counts: { networks: 0, volumes: 0, secrets: 0, configs: 0 },
+  policy: { kinds: [], entries: [] },
+  portainer: false,
+  orphan: false,
+  notes: [],
+});
+
 const problem = (
   status: number,
   type: string,
@@ -76,7 +91,7 @@ beforeEach(() => {
   readHeld = null;
   checkAnswer = {
     status: 200,
-    body: { fingerprint: "fp-1", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+    body: checkBody("fp-1"),
   };
   adoptAnswer = { status: 201, body: { id: "s9", name: "legacy", envId: ENV } };
   adoptHeld = null;
@@ -240,7 +255,7 @@ describe("the Adopt page: adopting", () => {
     // The page's own read carries another fingerprint: only the check's counts.
     checkAnswer = {
       status: 200,
-      body: { fingerprint: "fp-check", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+      body: checkBody("fp-check"),
     };
     mount();
 
@@ -343,7 +358,7 @@ describe("the Adopt page: what it says when the server refuses", () => {
     const before = checks().length;
     checkAnswer = {
       status: 200,
-      body: { fingerprint: "fp-2", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+      body: checkBody("fp-2"),
     };
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
 

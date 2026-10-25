@@ -4106,6 +4106,8 @@ export interface components {
         AdoptCheckBody: {
             /** @description True when nothing will change on the first deploy except Bayplan's ownership labels */
             clean: boolean;
+            /** @description How many objects of each kind there are */
+            counts: components["schemas"]["AdoptCheckCountsBody"];
             /** @description The state of the engine the check was made of. Adopt sends it back; when what runs has changed since, the adoption is refused 409 adopt_stale */
             fingerprint: string;
             /**
@@ -4115,8 +4117,64 @@ export interface components {
             gapCount: number;
             /** @description The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges */
             gaps: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description What the rebuild could not say plainly, by service then code */
+            notes: components["schemas"]["GeneratedNoteBody"][] | null;
+            /** @description The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name */
+            objects: components["schemas"]["AdoptCheckObjectBody"][] | null;
+            /** @description True when an object of the stack carries the ID of a Bayplan stack this instance does not hold */
+            orphan: boolean;
             /** @description The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else */
             ownershipOnly: string[] | null;
+            /** @description The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for */
+            policy: components["schemas"]["AdoptCheckPolicyBody"];
+            /** @description True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it */
+            portainer: boolean;
+        };
+        AdoptCheckCountsBody: {
+            /**
+             * Format: int64
+             * @description Configs the stack references
+             */
+            configs: number;
+            /**
+             * Format: int64
+             * @description Networks, owned and external
+             */
+            networks: number;
+            /**
+             * Format: int64
+             * @description Secrets the stack references
+             */
+            secrets: number;
+            /**
+             * Format: int64
+             * @description Volumes, owned and external
+             */
+            volumes: number;
+        };
+        AdoptCheckObjectBody: {
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            kind: "network" | "volume" | "secret" | "config";
+            /** @description Its name on the engine */
+            name: string;
+            /**
+             * @description owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Bayplan never changes it (any other network or volume, and every existing secret and config)
+             * @enum {string}
+             */
+            treatment: "owned" | "external";
+        };
+        AdoptCheckPolicyBody: {
+            /** @description Each setting, as a phrase with its service, such as a bind mount of /var/run/docker.sock in web */
+            entries: components["schemas"]["AdoptCheckPolicyEntry"][] | null;
+            /** @description The kinds of host access, such as bind mounts or extra privileges, in a fixed order */
+            kinds: string[] | null;
+        };
+        AdoptCheckPolicyEntry: {
+            /** @description What the setting is and the service that has it */
+            text: string;
         };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */

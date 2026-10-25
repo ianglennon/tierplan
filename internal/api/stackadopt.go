@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // Adopting a stack Bayplan did not make (plan 08-13, STK-13, D-14). Nothing is sent to an engine: the server
@@ -175,6 +176,38 @@ type AdoptCheckBody struct {
 	Gaps          []StackReviewServiceBody `json:"gaps" doc:"The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges"`
 	GapCount      int                      `json:"gapCount" doc:"How many services are in gaps"`
 	OwnershipOnly []string                 `json:"ownershipOnly" doc:"The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else"`
+	Objects       []AdoptCheckObjectBody   `json:"objects" doc:"The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name"`
+	Counts        AdoptCheckCountsBody     `json:"counts" doc:"How many objects of each kind there are"`
+	Policy        AdoptCheckPolicyBody     `json:"policy" doc:"The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for"`
+	Portainer     bool                     `json:"portainer" doc:"True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it"`
+	Orphan        bool                     `json:"orphan" doc:"True when an object of the stack carries the ID of a Bayplan stack this instance does not hold"`
+	Notes         []GeneratedNoteBody      `json:"notes" doc:"What the rebuild could not say plainly, by service then code"`
+}
+
+// AdoptCheckObjectBody is one network, volume, secret or config of the stack and how adopting treats it (D-13, D-18).
+type AdoptCheckObjectBody struct {
+	Kind      string `json:"kind" enum:"network,volume,secret,config" doc:"What it is"`
+	Name      string `json:"name" doc:"Its name on the engine"`
+	Treatment string `json:"treatment" enum:"owned,external" doc:"owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Bayplan never changes it (any other network or volume, and every existing secret and config)"`
+}
+
+// AdoptCheckCountsBody is how many objects of each kind a stack has.
+type AdoptCheckCountsBody struct {
+	Networks int `json:"networks" doc:"Networks, owned and external"`
+	Volumes  int `json:"volumes" doc:"Volumes, owned and external"`
+	Secrets  int `json:"secrets" doc:"Secrets the stack references"`
+	Configs  int `json:"configs" doc:"Configs the stack references"`
+}
+
+// AdoptCheckPolicyBody is the host access a stack uses.
+type AdoptCheckPolicyBody struct {
+	Kinds   []string                `json:"kinds" doc:"The kinds of host access, such as bind mounts or extra privileges, in a fixed order"`
+	Entries []AdoptCheckPolicyEntry `json:"entries" doc:"Each setting, as a phrase with its service, such as a bind mount of /var/run/docker.sock in web"`
+}
+
+// AdoptCheckPolicyEntry is one host-access setting.
+type AdoptCheckPolicyEntry struct {
+	Text string `json:"text" doc:"What the setting is and the service that has it"`
 }
 
 // AdoptCheckOutput wraps AdoptCheckBody for huma.
@@ -242,7 +275,31 @@ func adoptCheckBody(res stackops.AdoptCheckResult) AdoptCheckBody {
 	if only == nil {
 		only = []string{}
 	}
-	return AdoptCheckBody{
+	body := AdoptCheckBody{
 		Fingerprint: res.Fingerprint, Clean: res.Clean, Gaps: serviceBodies(res.Gaps), GapCount: len(res.Gaps), OwnershipOnly: only,
+		Objects: make([]AdoptCheckObjectBody, 0, len(res.Objects)), Notes: make([]GeneratedNoteBody, 0, len(res.Notes)),
+		Policy:    AdoptCheckPolicyBody{Kinds: []string{}, Entries: []AdoptCheckPolicyEntry{}},
+		Portainer: res.Portainer, Orphan: res.Orphan,
 	}
+	for _, o := range res.Objects {
+		body.Objects = append(body.Objects, AdoptCheckObjectBody{Kind: o.Kind, Name: o.Name, Treatment: o.Treatment})
+		switch o.Kind {
+		case rebuild.KindNetwork:
+			body.Counts.Networks++
+		case rebuild.KindVolume:
+			body.Counts.Volumes++
+		case rebuild.KindSecret:
+			body.Counts.Secrets++
+		case rebuild.KindConfig:
+			body.Counts.Configs++
+		}
+	}
+	for _, n := range res.Notes {
+		body.Notes = append(body.Notes, GeneratedNoteBody{Service: n.Service, Code: n.Code, Message: n.Message})
+	}
+	body.Policy.Kinds = append(body.Policy.Kinds, res.Policy.Kinds...)
+	for _, e := range res.Policy.Entries {
+		body.Policy.Entries = append(body.Policy.Entries, AdoptCheckPolicyEntry{Text: e.Text})
+	}
+	return body
 }

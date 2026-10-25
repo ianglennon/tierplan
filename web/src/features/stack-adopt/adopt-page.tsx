@@ -26,6 +26,8 @@ import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { AdoptCheckCard } from "@/features/stack-adopt/adopt-check-card";
 import { EnvValuesNotice } from "@/features/stack-adopt/env-values-notice";
+import { OwnershipTable } from "@/features/stack-adopt/ownership-table";
+import { PolicyHits } from "@/features/stack-adopt/policy-hits";
 import {
   NotAdoptableNote,
   OrphanIdNote,
@@ -256,12 +258,13 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
       {data ? (
         <>
           {!data.adoptable && data.reason ? <NotAdoptableNote reason={data.reason} /> : null}
-          {data.orphan ? <OrphanIdNote /> : null}
-          {data.portainer ? <PortainerAdvice /> : null}
+          {data.orphan || check.data?.orphan ? <OrphanIdNote /> : null}
+          {data.portainer || check.data?.portainer ? <PortainerAdvice /> : null}
         </>
       ) : query.isError ? null : (
         <Skeleton className="h-16 w-full" aria-hidden="true" />
       )}
+      <PolicyHits entries={(check.data?.policy.entries ?? []).map((e) => e.text)} />
       <EnvValuesNotice />
 
       <AdoptCheckCard
@@ -272,6 +275,7 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
         error={checkFailure}
         onRetry={checkAgain}
       />
+      <OwnershipTable name={name} check={check.data} checking={checking} />
 
       {refusal || checkRefusal ? (
         <Refusal

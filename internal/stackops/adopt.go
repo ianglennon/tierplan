@@ -270,6 +270,9 @@ type AdoptCheckResult struct {
 	Clean         bool
 	Objects       []rebuild.Object
 	Notes         []rebuild.Note
+	Policy        PolicyResult
+	Portainer     bool
+	Orphan        bool
 }
 
 // AdoptCheck reads the unmanaged stack of in.Name, rebuilds its definition and reviews it against what runs in adopt
@@ -284,13 +287,18 @@ func (d Deps) AdoptCheck(ctx context.Context, in AdoptInput, reveal bool) (Adopt
 	if err != nil {
 		return AdoptCheckResult{}, err
 	}
-	rv, _, err := prep.review(ctx, d)
+	rv, plan, err := prep.review(ctx, d)
+	if err != nil {
+		return AdoptCheckResult{}, err
+	}
+	pol, err := d.HostAccess(prep.copy, plan)
 	if err != nil {
 		return AdoptCheckResult{}, err
 	}
 	out := AdoptCheckResult{
 		Fingerprint: prep.res.Fingerprint, OwnershipOnly: adoptNames(rv.Services),
-		Objects: prep.res.Objects, Notes: prep.res.Notes,
+		Objects: prep.res.Objects, Notes: prep.res.Notes, Policy: pol,
+		Portainer: prep.found.Portainer, Orphan: prep.found.OrphanID != "",
 	}
 	for _, c := range rv.Services {
 		if !c.OwnershipOnly {

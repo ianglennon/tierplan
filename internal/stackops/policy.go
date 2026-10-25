@@ -143,6 +143,67 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 	return res, nil
 }
 
+// HostAccess lists every host-access setting of a definition with its service and its kind, for whoever asks: it runs
+// the role-free rules Policy judges a caller by (compose.CheckResolved over the file and swarmspec.Check over each
+// converted service), but with no principal and no role, so an env Admin sees the same list as anybody. It decides
+// nothing (D-17): Refused is false and Problems empty, and the entries are for a page to say what a later deploy needs
+// an Admin for. plan is the converted swarm stack, or the empty plan for a standalone host. Every text goes through
+// the masker of the working copy.
+func (d Deps) HostAccess(copy stacks.WorkingCopy, plan convert.Plan) (PolicyResult, error) {
+	src := copy.Compose()
+	m := stacks.NewMasker(copy.Vars, copy.Files)
+	var res PolicyResult
+	kinds := map[string]bool{}
+	list := func(text, file string, line int) {
+		res.Entries = append(res.Entries, PolicyEntry{Text: m.Mask(text), File: file, Line: line})
+	}
+	findings, err := compose.CheckResolved(src, tableLookup(copy.Vars))
+	if err != nil {
+		list("a compose file that can't be read for the policy check", stacks.ComposeFile, 1)
+		kinds[KindUnresolvedValue] = true
+		findings = nil
+	}
+	flagged := map[string]bool{}
+	for _, f := range findings {
+		text := describeFinding(f)
+		if f.Service != "" {
+			text += " in " + f.Service
+		}
+		list(text, stacks.ComposeFile, f.Line)
+		kinds[kindOf(f.Rule)] = true
+		flagged[f.Service] = true
+	}
+
+	ix, _ := stacks.NewPositionIndex(src)
+	networks := make(map[string]string, len(plan.Networks))
+	for _, n := range plan.Networks {
+		networks[n.Name] = n.Driver
+	}
+	resolve := func(target string) (string, string, bool) {
+		driver, ok := networks[target]
+		return target, driver, ok
+	}
+	for _, sp := range plan.Services {
+		for _, f := range swarmspec.Check(sp.Spec, resolve) {
+			kinds[kindOf(f.Rule)] = true
+			if flagged[sp.Short] {
+				continue
+			}
+			line := 1
+			if pos, ok := ix.Lookup("services." + sp.Short); ok {
+				line = pos.Line
+			}
+			list(describeSpecFinding(f)+" in "+sp.Short, stacks.ComposeFile, line)
+		}
+	}
+	for _, k := range kindOrder {
+		if kinds[k] {
+			res.Kinds = append(res.Kinds, k)
+		}
+	}
+	return res, nil
+}
+
 // add records one refused setting as an entry and a blocking problem, masked.
 func (r *PolicyResult) add(m stacks.Masker, text, key string, line, col int) {
 	text = m.Mask(text)
