@@ -25206,6 +25206,68 @@
         ]
       }
     },
+    "/api/env/{envId}/unmanaged-stacks/{name}/resources": {
+      "get": {
+        "description": "The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "listUnmanagedStackResources",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm namespace or the Compose project that names the stack",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The swarm namespace or the Compose project that names the stack",
+              "maxLength": 255,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackResourcesBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "What an unmanaged stack uses, and what adopting it would own",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
     "/api/env/{envId}/update-agents": {
       "post": {
         "description": "Starts an update for each connected agent older than this server: one for a swarm, one per agent for standalone hosts. Agents whose host owner refused self-update, agents that are up to date and agents already updating are skipped, so started can be 0. 404 environment_not_found; 409 agent_offline when the environment has agents and none is connected, or no_manager_connected for a swarm without a connected manager. Needs environments.configure on the environment (env Admin or instance admin). Audited like an update of one agent.",

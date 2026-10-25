@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
@@ -405,5 +407,42 @@ func TestUnmanagedLogsRefuseACallerWithoutStacksReadAndAStackThatIsGoneOrManaged
 		if w := downloadAt(t, f.envFix, f.unmanagedPath(name, "/logs/download", ""), f.user.cookie); w.code() != http.StatusNotFound {
 			t.Errorf("download of %s: status = %d, want 404", name, w.code())
 		}
+	}
+}
+
+func TestUnmanagedLogDownloadOfAStandaloneProjectMergesItsContainers(t *testing.T) {
+	t.Parallel()
+	legacy := func(_ string) []dockertest.FakeContainer {
+		c := func(id, service string, number int) dockertest.FakeContainer {
+			return dockertest.FakeContainer{
+				ID: id, Names: []string{"/legacy-" + service + "-" + strconv.Itoa(number)}, Image: "img", State: "running", Created: 100,
+				Labels: map[string]string{
+					"com.docker.compose.project": "legacy", "com.docker.compose.service": service,
+					"com.docker.compose.container-number": strconv.Itoa(number),
+				},
+			}
+		}
+		return []dockertest.FakeContainer{c("cweb1", "web", 1), c("cweb2", "web", 2), c("cdb1", "db", 1)}
+	}
+	f := newSoloFix(t, legacy, nil)
+	f.seed()
+
+	w := downloadAt(t, f.envFix, "/api/env/"+f.env.ID+"/"+unmanagedPath("legacy", "/logs/download"), f.user.cookie)
+
+	if w.code() != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.code(), w.body.String())
+	}
+	stamp := func(ms int) string {
+		return soloT0.Add(time.Duration(ms) * time.Millisecond).Format("2006-01-02T15:04:05.000000000Z")
+	}
+	want := strings.Join([]string{
+		"web-1 " + stamp(10) + " web1 a",
+		"db-1 " + stamp(20) + " db a",
+		"web-2 " + stamp(30) + " web2 a",
+		"db-1 " + stamp(40) + " db b",
+		"web-1 " + stamp(60) + " web1 b",
+	}, "\n") + "\n"
+	if got := w.body.String(); got != want {
+		t.Errorf("body =\n%s\nwant\n%s", got, want)
 	}
 }

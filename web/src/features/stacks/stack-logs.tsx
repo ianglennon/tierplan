@@ -8,6 +8,7 @@ import { useMemo } from "react";
 import {
   isStackGone,
   type StackResources,
+  type StackService,
   type StackServices,
   stackQuery,
   stackResourcesQuery,
@@ -23,7 +24,7 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LogViewParams } from "@/features/logs/log-prefs";
-import { isEndedTaskState } from "@/features/logs/log-source";
+import { isEndedTaskState, type LogSource } from "@/features/logs/log-source";
 import { LogViewer } from "@/features/logs/log-viewer";
 import {
   type FilterOptions,
@@ -34,7 +35,7 @@ import { ServiceChips, ServiceFilter } from "@/features/stacks/service-filter";
 import { useT } from "@/i18n/use-t";
 
 // A list from the address: comma separated, empty parts dropped.
-const listOf = (v: string | undefined): string[] =>
+export const listOf = (v: string | undefined): string[] =>
   v
     ? v
         .split(",")
@@ -45,7 +46,7 @@ const listOf = (v: string | undefined): string[] =>
 // swarmOptions are the tasks and nodes a swarm stack's log can be narrowed to: the stack's tasks as
 // the Resources tab reads them, of every service, and the nodes they run on with how many have not
 // ended.
-function swarmOptions(resources: StackResources | undefined): FilterOptions {
+export function swarmOptions(resources: StackResources | undefined): FilterOptions {
   const items = resources?.tasks?.items;
   if (!items) return NO_FILTER_OPTIONS;
   const tasks = items.map(({ task, service }) => ({
@@ -68,7 +69,7 @@ function swarmOptions(resources: StackResources | undefined): FilterOptions {
 
 // containerOptions are the containers a standalone stack's log can be narrowed to, by name, as the
 // stack's services list them.
-function containerOptions(services: StackServices | undefined): FilterOptions {
+export function containerOptions(services: StackServices | undefined): FilterOptions {
   if (!services) return NO_FILTER_OPTIONS;
   const tasks = (services.items ?? []).flatMap((service) =>
     (service.containers ?? []).map((c, i) => ({
@@ -108,7 +109,7 @@ function NotRunning({ name, stopped }: { name: string; stopped: boolean }) {
 
 // Unreadable stands in the place of the log when the stack itself cannot be read: it is gone, or the
 // read failed (the window of a pop-out has no page around it to say so).
-function Unreadable({ gone, retry }: { gone: boolean; retry: () => void }) {
+export function Unreadable({ gone, retry }: { gone: boolean; retry: () => void }) {
   const t = useT();
   return (
     <div
@@ -183,6 +184,51 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
   if (state === "stopped" || state === "not_deployed") {
     return <NotRunning name={name} stopped={state === "stopped"} />;
   }
+  return (
+    <StackLogView
+      envId={envId}
+      source={{ kind: "stack", id: stackId, target }}
+      name={name}
+      services={services.data?.items ?? []}
+      options={options}
+      serviceNames={serviceNames}
+      params={params}
+      onParamsChange={onParamsChange}
+      popout={popout}
+    />
+  );
+}
+
+interface StackLogViewProps {
+  envId: string;
+  // The stack's log: a stack of Bayplan's by its ID, or one it did not make by its name.
+  source: Extract<LogSource, { kind: "stack" }>;
+  name: string;
+  // The stack's services, by name, for the Services filter.
+  services: readonly StackService[];
+  // The tasks, nodes or containers the log can be narrowed to.
+  options: FilterOptions;
+  // The services by name colour the prefixes the same way on every visit.
+  serviceNames: string[];
+  params: LogViewParams;
+  onParamsChange: (params: LogViewParams) => void;
+  popout?: boolean;
+}
+
+// StackLogView is the viewer of a stack's merged log with its filter bar: the services, and the tasks and nodes of a
+// swarm or the containers of a host. It is shared by the Logs tab of a stack Bayplan manages and of one it found.
+export function StackLogView({
+  envId,
+  source,
+  name,
+  services,
+  options,
+  serviceNames,
+  params,
+  onParamsChange,
+  popout,
+}: StackLogViewProps) {
+  const swarm = source.target === "swarm";
   const change = (patch: Partial<LogViewParams>) => {
     const next: LogViewParams = { ...params, ...patch };
     for (const k of Object.keys(next) as Array<keyof LogViewParams>) {
@@ -208,7 +254,7 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
       onStoppedChange={(on) => change({ stopped: on || undefined })}
       leading={
         <ServiceFilter
-          services={services.data?.items ?? []}
+          services={services}
           chosen={chosenServices}
           onChange={(names) => change({ service: join(names) })}
         />
@@ -224,7 +270,7 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
   return (
     <LogViewer
       envId={envId}
-      source={{ kind: "stack", id: stackId, target }}
+      source={source}
       name={name}
       serviceNames={serviceNames}
       filterBar={filterBar}

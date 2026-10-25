@@ -53,12 +53,13 @@ func (c stackContainer) live() bool {
 	return false
 }
 
-// containersOf reads the containers the stack owns from a host's list: those of its Compose
-// project that carry its ID, one-off containers left out.
+// containersOf reads the containers the stack owns from a host's list, by Ownership: those of its Compose
+// project that carry its ID (every one of the project for a stack found by its labels), one-off containers left out.
 func containersOf(st stackops.Stack, all []dockerx.ContainerRow) []stackContainer {
+	own := stackops.OwnershipOf(st)
 	var out []stackContainer
 	for _, c := range all {
-		if c.Labels[stacks.LabelComposeProject] != st.Name || c.Labels[stacks.LabelStackID] != st.ID {
+		if !own.OwnsWorkload(c.Labels) {
 			continue
 		}
 		if strings.EqualFold(c.Labels[labelComposeOneOff], "true") {

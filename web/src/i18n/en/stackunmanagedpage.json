@@ -32,6 +32,9 @@
     "services": {
       "empty": "No service of this stack is running."
     },
+    "resources": {
+      "caption": "Labelled objects would be owned by the stack after adopting. The others stay external."
+    },
     "gone": {
       "heading": "This stack is gone",
       "body": "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",

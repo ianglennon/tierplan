@@ -388,6 +388,18 @@ const UNMANAGED_TABS = [
     labelKey: "stacks.detail.tabs.overview",
     exact: true,
   },
+  {
+    id: "resources",
+    to: "/env/$envId/unmanaged-stacks/$name/resources",
+    labelKey: "stackResources.tab",
+    exact: false,
+  },
+  {
+    id: "logs",
+    to: "/env/$envId/unmanaged-stacks/$name/logs",
+    labelKey: "stackLogs.tab",
+    exact: false,
+  },
 ] as const;
 
 // UnmanagedDetailLayout is the frame of an unmanaged stack's page (UI-SPEC "Unmanaged stack page"): the

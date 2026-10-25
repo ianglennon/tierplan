@@ -2416,6 +2416,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/unmanaged-stacks/{name}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What an unmanaged stack uses, and what adopting it would own
+         * @description The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listUnmanagedStackResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/update-agents": {
         parameters: {
             query?: never;
@@ -15541,6 +15561,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnmanagedStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUnmanagedStackResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackResourcesBody"];
                 };
             };
             /** @description Error */

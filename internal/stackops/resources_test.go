@@ -571,7 +571,9 @@ func TestResourcesOfAStandaloneStackListTheVolumesOfItsProjectOnTheHost(t *testi
 // The Resources of a stack Bayplan did not make (plan 08-09, STK-12, D-13, D-18): the same cards over what its
 // labels and its services find, with the ownership badges previewing what adopting would own.
 
-func legacyNS(ns string) map[string]string { return map[string]string{"com.docker.stack.namespace": ns} }
+func legacyNS(ns string) map[string]string {
+	return map[string]string{"com.docker.stack.namespace": ns}
+}
 
 func TestResourcesOfADiscoveredSwarmStackPreviewWhatAdoptingWouldOwn(t *testing.T) {
 	t.Parallel()

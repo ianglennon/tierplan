@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { fromLocalInput, type ShowRange, toLocalInput } from "@/features/logs/log-prefs";
+import { logRoute } from "@/features/logs/log-source";
 import { type StreamTarget, sourceOf } from "@/features/logs/log-stream";
 import { useT } from "@/i18n/use-t";
 import { apiUrl } from "@/lib/base-path";
@@ -49,9 +50,8 @@ export function downloadUrl(
   // A service's or a stack's file always starts each line with its task and the UTC time.
   if (src.kind === "container" && timestamps) q.set("timestamps", "1");
   const query = q.toString();
-  const what = { container: "containers", service: "services", stack: "stacks" }[src.kind];
   return apiUrl(
-    `/api/env/${encodeURIComponent(target.envId)}/${what}/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
+    `/api/env/${encodeURIComponent(target.envId)}/${logRoute(src)}/${encodeURIComponent(src.id)}/logs/download${query ? `?${query}` : ""}`,
   );
 }
 

@@ -4,13 +4,14 @@
 import { api } from "@/api/client";
 import type { EventSourceLike } from "@/features/dashboard/events";
 import type { LogLineData } from "@/features/logs/log-buffer";
-import type {
-  LogSource,
-  ServiceLogFilter,
-  ServiceLogTask,
-  ServiceMarkerEvent,
-  ServiceNodeEvent,
-  StackCapEvent,
+import {
+  type LogSource,
+  logRoute,
+  type ServiceLogFilter,
+  type ServiceLogTask,
+  type ServiceMarkerEvent,
+  type ServiceNodeEvent,
+  type StackCapEvent,
 } from "@/features/logs/log-source";
 import { apiUrl } from "@/lib/base-path";
 
@@ -156,9 +157,8 @@ export function logStreamUrl(
     if (o.service?.containers?.length) q.set("containers", o.service.containers.join(","));
     if (o.service?.stopped) q.set("stopped", "1");
   }
-  const what = { container: "containers", service: "services", stack: "stacks" }[src.kind];
   return apiUrl(
-    `/api/env/${encodeURIComponent(o.envId)}/${what}/${encodeURIComponent(src.id)}/logs/stream?${q}`,
+    `/api/env/${encodeURIComponent(o.envId)}/${logRoute(src)}/${encodeURIComponent(src.id)}/logs/stream?${q}`,
   );
 }
 
@@ -246,6 +246,13 @@ async function probeLog(o: LogStreamOptions): Promise<number> {
     if (src.kind === "service") {
       const res = await api.GET("/api/env/{envId}/services/{serviceId}/tasks", {
         params: { path: { envId: o.envId, serviceId: src.id } },
+      });
+      return res.response.status;
+    }
+    if (src.kind === "stack" && src.unmanaged) {
+      // The unmanaged stack's own route needs the same permission as its log.
+      const res = await api.GET("/api/env/{envId}/unmanaged-stacks/{name}", {
+        params: { path: { envId: o.envId, name: src.id } },
       });
       return res.response.status;
     }

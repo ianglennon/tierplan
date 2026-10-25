@@ -10,6 +10,7 @@ import {
   type StackResourceContainer,
   type StackResourceNetwork,
   type StackResourceObject,
+  type StackResources as StackResourcesData,
   type StackResourceTask,
   type StackResourceVolume,
   stackQuery,
@@ -60,6 +61,8 @@ interface CardShellProps {
   empty: string;
   onRetry: () => void;
   retrying: boolean;
+  // True on the page of a stack Bayplan did not make, where a card with nothing in it is left out.
+  hideWhenEmpty?: boolean;
   // A line under the table of a card that has been read, as the volumes' nodes that were not reporting.
   after?: ReactNode;
   children: ReactNode;
@@ -77,11 +80,13 @@ function CardShell({
   empty,
   onRetry,
   retrying,
+  hideWhenEmpty,
   after,
   children,
 }: CardShellProps) {
   const t = useT();
   const noun = t(`stackResources.kind.${kind}`);
+  if (hideWhenEmpty && loaded && !failed && count === 0) return null;
   return (
     <SettingsCard title={t(`stackResources.titles.${kind}`)}>
       {!loaded && !failed ? (
@@ -482,7 +487,6 @@ function ObjectsTable({ envId, rows }: { envId: string; rows: readonly StackReso
 // and failure, so one read that fails never hides the others. A swarm reads again every 5 s while the page
 // is visible. Every name is Docker's own text, drawn as text.
 export function StackResources({ envId, stackId }: StackResourcesProps) {
-  const t = useT();
   const stack = useQuery(stackQuery(envId, stackId)).data;
   const query = useQuery(
     stackResourcesQuery(envId, stackId, {
@@ -490,11 +494,53 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
       busy: stack?.lastOperation?.state === "running",
     }),
   );
-  const data = query.data;
-  const swarm = (stack?.target ?? "swarm") === "swarm";
-  // Nothing runs on a stack that is stopped or was never deployed, and the empty line says so.
-  const idle = stack?.state === "stopped" || stack?.state === "not_deployed";
-  const retry = () => void query.refetch();
+  return (
+    <StackResourcesView
+      envId={envId}
+      data={query.data}
+      isError={query.isError}
+      isFetching={query.isFetching}
+      onRetry={() => void query.refetch()}
+      swarm={(stack?.target ?? "swarm") === "swarm"}
+      // Nothing runs on a stack that is stopped or was never deployed, and the empty line says so.
+      idle={stack?.state === "stopped" || stack?.state === "not_deployed"}
+    />
+  );
+}
+
+interface StackResourcesViewProps {
+  envId: string;
+  // The cards; undefined until the first read answers.
+  data: StackResourcesData | undefined;
+  // True when the whole read failed; isFetching while one is under way.
+  isError: boolean;
+  isFetching: boolean;
+  onRetry: () => void;
+  swarm: boolean;
+  // True for a stack with nothing running, whose empty cards say so.
+  idle: boolean;
+  // True on the page of a stack Bayplan did not make: the ownership badges preview what adopting would own, the
+  // Networks and Volumes cards say so, and a card with nothing in it is left out.
+  preview?: boolean;
+}
+
+// StackResourcesView draws the cards of a Resources tab from one answer. It is the tab of a stack Bayplan manages
+// and of one it found by its labels alike: only the preview changes what it draws.
+export function StackResourcesView({
+  envId,
+  data,
+  isError,
+  isFetching,
+  onRetry,
+  swarm,
+  idle,
+  preview,
+}: StackResourcesViewProps) {
+  const t = useT();
+  const retry = onRetry;
+  const query = { isError, isFetching };
+  // The caption of the Networks and Volumes cards of an unmanaged stack: what adopting would own.
+  const previewNote = preview ? t("stackUnmanagedPage.resources.caption") : undefined;
 
   // A card is loaded when the answer has it without an error; it failed when the whole read failed or its
   // own part of the answer carries an error.
@@ -516,6 +562,7 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
           empty={idle ? t("stackResources.empty.nothingRunning") : t("stackResources.empty.tasks")}
           onRetry={retry}
           retrying={query.isFetching}
+          hideWhenEmpty={preview}
         >
           <TasksTable envId={envId} rows={tasks?.items ?? []} />
         </CardShell>
@@ -530,6 +577,7 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
           }
           onRetry={retry}
           retrying={query.isFetching}
+          hideWhenEmpty={preview}
         >
           <ContainersTable envId={envId} rows={containers?.items ?? []} />
         </CardShell>
@@ -539,9 +587,11 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
         loaded={loadedOf(data?.networks.error)}
         failed={failedOf(data?.networks.error)}
         count={data?.networks.items?.length ?? 0}
+        note={previewNote}
         empty={t("stackResources.empty.networks")}
         onRetry={retry}
         retrying={query.isFetching}
+        hideWhenEmpty={preview}
       >
         <NetworksTable envId={envId} rows={data?.networks.items ?? []} />
       </CardShell>
@@ -550,9 +600,11 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
         loaded={loadedOf(volumes?.error)}
         failed={failedOf(volumes?.error)}
         count={volumes?.items?.length ?? 0}
+        note={previewNote}
         empty={t("stackResources.empty.volumes")}
         onRetry={retry}
         retrying={query.isFetching}
+        hideWhenEmpty={preview}
         after={
           (volumes?.notReporting ?? []).length > 0 ? (
             <p className="text-sm text-status-warning-text">
@@ -574,6 +626,7 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
         empty={t("stackResources.empty.secrets")}
         onRetry={retry}
         retrying={query.isFetching}
+        hideWhenEmpty={preview}
       >
         <ObjectsTable envId={envId} rows={data?.secrets?.items ?? []} />
       </CardShell>
@@ -585,6 +638,7 @@ export function StackResources({ envId, stackId }: StackResourcesProps) {
         empty={t("stackResources.empty.configs")}
         onRetry={retry}
         retrying={query.isFetching}
+        hideWhenEmpty={preview}
       >
         <ObjectsTable envId={envId} rows={data?.configs?.items ?? []} />
       </CardShell>

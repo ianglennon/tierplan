@@ -2,12 +2,17 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { downloadUrl } from "@/features/logs/download-popover";
+import { stackSource, unmanagedStackSource } from "@/features/logs/log-source";
+import { UnmanagedLogs } from "@/features/stack-unmanaged/unmanaged-logs";
 import { UnmanagedOverview } from "@/features/stack-unmanaged/unmanaged-overview";
+import { UnmanagedResources } from "@/features/stack-unmanaged/unmanaged-resources";
 import { StackDetailLayout } from "@/features/stacks/stack-detail-layout";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -51,6 +56,7 @@ const service = (short: string, over: Partial<Service> = {}): Service => ({
 });
 
 let body: Record<string, unknown>;
+let resources: Record<string, unknown>;
 let notFound: { managedStackId?: string } | null;
 let client: QueryClient;
 
@@ -71,6 +77,50 @@ beforeEach(() => {
     owner: "",
     adoptable: true,
     reason: "",
+  };
+  resources = {
+    tasks: { items: [], error: "" },
+    networks: {
+      items: [
+        { id: "n1", name: "legacy_default", driver: "overlay", scope: "swarm", ownership: "stack" },
+        { id: "n2", name: "shared", driver: "overlay", scope: "swarm", ownership: "external" },
+      ],
+      error: "",
+    },
+    volumes: {
+      items: [
+        {
+          name: "legacy_data",
+          driver: "local",
+          node: "mgr-1",
+          nodeId: "node-1",
+          ownership: "stack",
+        },
+        {
+          name: "shared-vol",
+          driver: "local",
+          node: "mgr-1",
+          nodeId: "node-1",
+          ownership: "external",
+        },
+      ],
+      error: "",
+      notReporting: [],
+    },
+    secrets: {
+      items: [
+        {
+          id: "sec1",
+          name: "legacy_pw",
+          fullName: "legacy_pw",
+          hash: "",
+          usedBy: [],
+          ownership: "external",
+        },
+      ],
+      error: "",
+    },
+    configs: { items: [], error: "" },
   };
   notFound = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -99,6 +149,9 @@ beforeEach(() => {
           );
         }
         return Response.json(body);
+      }
+      if (path === `/api/env/${ENV}/unmanaged-stacks/legacy/resources`) {
+        return Response.json(resources);
       }
       return Response.json({}, { status: 404 });
     }),
@@ -157,7 +210,11 @@ describe("the Unmanaged stack page: header and notes", () => {
   it("offers no Editor or History tab and no Deploy, Stop, Start, Remove or Adopt action", async () => {
     mount();
     await screen.findByRole("heading", { name: "legacy", level: 2 });
-    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["Overview"]);
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Resources",
+      "Logs",
+    ]);
     for (const name of [/deploy/i, /stop/i, /start/i, /remove/i, /edit/i, /adopt/i]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
       expect(screen.queryByRole("link", { name })).toBeNull();
@@ -216,5 +273,136 @@ describe("the Unmanaged stack page: Overview", () => {
     expect(within(details).getByText("Unmanaged")).toBeTruthy();
     expect(within(details).getByText("Label com.docker.stack.namespace = legacy")).toBeTruthy();
     expect(within(details).getByText("2 services")).toBeTruthy();
+  });
+});
+
+describe("the Unmanaged stack page: Resources", () => {
+  function mountResources() {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <UnmanagedResources envId={ENV} name="legacy" />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  const cardOf = async (title: string) =>
+    (await screen.findByRole("heading", { name: title })).closest(
+      "[data-slot=card]",
+    ) as HTMLElement;
+
+  it("previews what adopting would own: labelled networks and volumes read Stack, the others External", async () => {
+    mountResources();
+    const networks = await cardOf("Networks");
+    await within(networks).findByText("legacy_default");
+    const net = (name: string) => within(networks).getByText(name).closest("tr") as HTMLElement;
+    expect(within(net("legacy_default")).getByText("Stack")).toBeTruthy();
+    expect(within(net("shared")).getByText("External")).toBeTruthy();
+    const volumes = await cardOf("Volumes");
+    await within(volumes).findByText("legacy_data");
+    const vol = (name: string) => within(volumes).getByText(name).closest("tr") as HTMLElement;
+    expect(within(vol("legacy_data")).getByText("Stack")).toBeTruthy();
+    expect(within(vol("shared-vol")).getByText("External")).toBeTruthy();
+  });
+
+  it("reads a secret as External and says on the Networks and Volumes cards what the badges mean", async () => {
+    mountResources();
+    const secrets = await cardOf("Secrets");
+    const pw = await within(secrets).findByText("legacy_pw");
+    expect(within(pw.closest("tr") as HTMLElement).getByText("External")).toBeTruthy();
+    const caption =
+      "Labelled objects would be owned by the stack after adopting. The others stay external.";
+    expect(within(await cardOf("Networks")).getByText(new RegExp(caption))).toBeTruthy();
+    expect(within(await cardOf("Volumes")).getByText(new RegExp(caption))).toBeTruthy();
+    // Not on the others, where it would mean nothing.
+    expect(within(secrets).queryByText(new RegExp(caption))).toBeNull();
+  });
+
+  it("leaves out a card with no objects", async () => {
+    mountResources();
+    await within(await cardOf("Networks")).findByText("legacy_default");
+    expect(screen.queryByRole("heading", { name: "Configs" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Tasks" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Containers" })).toBeNull();
+  });
+
+  it("keeps a card whose read failed, with its own Retry, and leaves the others alone", async () => {
+    resources = { ...resources, secrets: { items: [], error: "read_failed" } };
+    mountResources();
+    const secrets = await cardOf("Secrets");
+    expect(await within(secrets).findByText("Couldn't load secrets.")).toBeTruthy();
+    expect(within(secrets).getByRole("button", { name: "Retry loading secrets" })).toBeTruthy();
+    expect(await within(await cardOf("Networks")).findByText("legacy_default")).toBeTruthy();
+  });
+});
+
+describe("the Unmanaged stack page: Logs", () => {
+  const proto = HTMLElement.prototype as unknown as Record<string, unknown>;
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  const lay = (prop: string, value: number) => {
+    saved[prop] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, prop);
+    Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, value });
+  };
+
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    lay("offsetHeight", 400);
+    lay("offsetWidth", 800);
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    for (const [prop, desc] of Object.entries(saved)) {
+      if (desc) Object.defineProperty(HTMLElement.prototype, prop, desc);
+      else delete proto[prop];
+    }
+  });
+
+  function mountLogs() {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <UnmanagedLogs envId={ENV} name="legacy" params={{}} onParamsChange={() => {}} />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("opens the merged log at the stack's name, not at an ID", async () => {
+    mountLogs();
+    const stream = await waitFor(() => {
+      const found = FakeEventSource.instances[0];
+      if (!found) throw new Error("no stream was opened");
+      return found;
+    });
+    const url = new URL(stream.url, "http://x");
+    expect(url.pathname).toBe("/api/env/e1/unmanaged-stacks/legacy/logs/stream");
+    expect(url.searchParams.get("sid")).toBeTruthy();
+    await act(async () => {
+      stream.open();
+      stream.sendFrame("ready", { tty: false, target: "swarm", tasks: [] });
+    });
+  });
+
+  it("addresses the download of an unmanaged stack by its name, and a managed stack's by its ID as before", () => {
+    expect(
+      downloadUrl({ envId: ENV, source: unmanagedStackSource("my stack", "swarm") }, {}, false),
+    ).toBe("/api/env/e1/unmanaged-stacks/my%20stack/logs/download");
+    expect(downloadUrl({ envId: ENV, source: stackSource("s1", "swarm") }, {}, false)).toBe(
+      "/api/env/e1/stacks/s1/logs/download",
+    );
+  });
+
+  it("offers a download from the unmanaged route and no pop-out window", async () => {
+    mountLogs();
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    expect(screen.queryByRole("button", { name: "Open in new window" })).toBeNull();
+    expect(await screen.findByRole("button", { name: "Download…" })).toBeTruthy();
   });
 });

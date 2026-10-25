@@ -221,23 +221,63 @@ type stackFollower struct {
 	stop func()
 }
 
+// stackLogMount is what the routes of a stack's log share: the limits on how many streams and downloads one user and
+// the server run, whatever the kind of stack, and the memory of who has been audited.
+type stackLogMount struct {
+	d            StacksDeps
+	need         rbac.Requirement
+	streams      *streamLimiter
+	mem          *logAuditMemory
+	user, server *streamLimiter
+}
+
 // registerStackLogs registers the live log stream and the download of a stack's merged log. Both
 // are mounted through Router.Guarded because the contract cannot describe a stream (D-47), and
-// need stacks.read on the environment.
-func registerStackLogs(r *httpx.Router, d StacksDeps) {
+// need stacks.read on the environment. It returns what the routes of an unmanaged stack's log share with them.
+func registerStackLogs(r *httpx.Router, d StacksDeps) *stackLogMount {
 	t := d.Logs.withDefaults()
 	d.Logs = t
-	need := rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment}
-	lim := &streamLimiter{max: t.MaxStreamsPerUser, open: map[string]int{}}
-	mem := newLogAuditMemory(logAuditTTL, logAuditMax, t.Now)
-	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/stream", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		serveStackLogs(w, req, d, lim, mem)
+	m := &stackLogMount{
+		d:       d,
+		need:    rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		streams: &streamLimiter{max: t.MaxStreamsPerUser, open: map[string]int{}},
+		mem:     newLogAuditMemory(logAuditTTL, logAuditMax, t.Now),
+		user:    &streamLimiter{max: maxLogDownloads, open: map[string]int{}},
+		server:  &streamLimiter{max: t.MaxServerDownloads, open: map[string]int{}},
+	}
+	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/stream", m.need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serveStackLogs(w, req, d, m.streams, m.mem, managedLogSubject)
 	}))
-	user := &streamLimiter{max: maxLogDownloads, open: map[string]int{}}
-	server := &streamLimiter{max: t.MaxServerDownloads, open: map[string]int{}}
-	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/download", need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		downloadStackLogs(w, req, d, user, server)
+	r.Guarded(http.MethodGet, "/api/env/{envId}/stacks/{stackId}/logs/download", m.need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		downloadStackLogs(w, req, d, m.user, m.server, managedLogSubject)
 	}))
+	return m
+}
+
+// stackLogSubject finds the stack a log route opens and the masker that hides its known secrets. The error is the
+// answer to send.
+type stackLogSubject func(ctx context.Context, d StacksDeps, envID string, req *http.Request) (stackops.Stack, stacks.Masker, error)
+
+// managedLogSubject is the stack of Bayplan's the address names by its ID, with the masker of the secrets it knows.
+func managedLogSubject(ctx context.Context, d StacksDeps, envID string, req *http.Request) (stackops.Stack, stacks.Masker, error) {
+	st, err := d.repo().Stack(ctx, envID, chi.URLParam(req, "stackId"))
+	if err != nil {
+		return stackops.Stack{}, stacks.Masker{}, stackLookupProblem(d, envID, err)
+	}
+	masker, err := d.logMasker(ctx, st)
+	if err != nil {
+		return stackops.Stack{}, stacks.Masker{}, stackLogsMaskerProblem(d, envID, err)
+	}
+	return st, masker, nil
+}
+
+// logSubjectID is what a stack's log is audited and limited under: the stack's ID, or for a stack Bayplan did not make,
+// which has none, its environment and name.
+func logSubjectID(st stackops.Stack) string {
+	if st.Discovered {
+		return "unmanaged:" + st.EnvID + "/" + st.Name
+	}
+	return st.ID
 }
 
 // logMasker builds the masker of a stack's log from the secrets Bayplan knows of it: those of the
@@ -288,7 +328,7 @@ func stackLogsMaskerProblem(d StacksDeps, envID string, err error) error {
 //
 // No line of the log is stored, audited or written to Bayplan's own log; only the fact that a
 // stream was opened is recorded (D-35, P4 D-24).
-func serveStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, lim *streamLimiter, mem *logAuditMemory) {
+func serveStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, lim *streamLimiter, mem *logAuditMemory, subject stackLogSubject) {
 	ctx := req.Context()
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
@@ -308,14 +348,9 @@ func serveStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, lim 
 	}
 	defer release()
 
-	st, err := d.repo().Stack(ctx, env.ID, chi.URLParam(req, "stackId"))
+	st, masker, err := subject(ctx, d, env.ID, req)
 	if err != nil {
-		writeProblemError(w, stackLookupProblem(d, env.ID, err))
-		return
-	}
-	masker, err := d.logMasker(ctx, st)
-	if err != nil {
-		writeProblemError(w, stackLogsMaskerProblem(d, env.ID, err))
+		writeProblemError(w, err)
 		return
 	}
 
@@ -549,11 +584,15 @@ type dueEvent struct {
 // carries the same sid writes nothing. The target is the stack; the details are what was asked
 // for, never what the log held.
 func auditStackLogsViewed(ctx context.Context, d StacksDeps, mem *logAuditMemory, p *rbac.Principal, envID string, st stackops.Stack, params stackLogParams, userAgent string) {
-	key := logAuditKey{user: string(p.Type) + ":" + p.ID, container: st.ID, sid: params.sid}
+	key := logAuditKey{user: string(p.Type) + ":" + p.ID, container: logSubjectID(st), sid: params.sid}
 	if d.Audit == nil || mem.seen(key) {
 		return
 	}
 	details := map[string]string{"stack": st.Name, "sid": params.sid, "tail": params.tail}
+	if st.Discovered {
+		// A stack Bayplan did not make has no ID: the row names it, and says Bayplan does not manage it.
+		details["managed"] = "false"
+	}
 	if params.since != "" {
 		details["since"] = params.since
 	}
@@ -863,7 +902,7 @@ func taskIDs(announced map[string]StackLogTask) map[string]ServiceLogTask {
 // One logs.downloaded row is written once the range has been read and before the file starts; the
 // text of the log is never audited or logged. A user runs at most two downloads at once and the
 // server four (T-06-91, T-06-92).
-func downloadStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, userLim, serverLim *streamLimiter) {
+func downloadStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, userLim, serverLim *streamLimiter, subject stackLogSubject) {
 	ctx := req.Context()
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
@@ -890,14 +929,9 @@ func downloadStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, u
 	}
 	defer releaseServer()
 
-	st, err := d.repo().Stack(ctx, env.ID, chi.URLParam(req, "stackId"))
+	st, masker, err := subject(ctx, d, env.ID, req)
 	if err != nil {
-		writeProblemError(w, stackLookupProblem(d, env.ID, err))
-		return
-	}
-	masker, err := d.logMasker(ctx, st)
-	if err != nil {
-		writeProblemError(w, stackLogsMaskerProblem(d, env.ID, err))
+		writeProblemError(w, err)
 		return
 	}
 
@@ -1082,6 +1116,9 @@ func auditStackLogsDownloaded(ctx context.Context, d StacksDeps, p *rbac.Princip
 	details := map[string]string{
 		"stack": st.Name,
 		"until": until.UTC().Format(time.RFC3339Nano),
+	}
+	if st.Discovered {
+		details["managed"] = "false"
 	}
 	if dp.hasSince {
 		details["since"] = dp.since.UTC().Format(time.RFC3339Nano)

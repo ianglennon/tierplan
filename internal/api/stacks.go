@@ -370,10 +370,9 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackRemove(r, d)
 	registerStackJobs(r, d)
 	registerStackOverview(r, d)
-	registerUnmanagedStacks(r, d)
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
-	registerStackLogs(r, d)
+	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
 }
 
 // stackNotFound is the 404 for a stack the environment does not have.

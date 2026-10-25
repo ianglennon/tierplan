@@ -6,9 +6,11 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
 
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
@@ -60,8 +62,12 @@ type UnmanagedStackOutput struct {
 	Body         UnmanagedStackBody
 }
 
-// registerUnmanagedStacks registers the routes of the read-only page of an unmanaged stack.
-func registerUnmanagedStacks(r *httpx.Router, d StacksDeps) {
+// maxUnmanagedName is the longest name the routes take, as the path parameter's maxLength says.
+const maxUnmanagedName = 255
+
+// registerUnmanagedStacks registers the routes of the read-only page of an unmanaged stack: the stack, its
+// resources, and its log stream and download, which share the limits of the log routes of a managed stack.
+func registerUnmanagedStacks(r *httpx.Router, d StacksDeps, logs *stackLogMount) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "getUnmanagedStack", Method: http.MethodGet, Path: "/api/env/{envId}/unmanaged-stacks/{name}",
 		Summary: "A stack Bayplan did not make",
@@ -74,6 +80,54 @@ func registerUnmanagedStacks(r *httpx.Router, d StacksDeps) {
 		func(ctx context.Context, in *UnmanagedStackPathInput) (*UnmanagedStackOutput, error) {
 			return getUnmanagedStack(ctx, d, in)
 		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listUnmanagedStackResources", Method: http.MethodGet, Path: "/api/env/{envId}/unmanaged-stacks/{name}/resources",
+		Summary: "What an unmanaged stack uses, and what adopting it would own",
+		Description: "The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. " +
+			"The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. " +
+			"Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. " +
+			"A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).",
+		Tags: []string{"stacks"},
+	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *UnmanagedStackPathInput) (*StackResourcesOutput, error) {
+			return listUnmanagedStackResources(ctx, d, in)
+		})
+
+	// The log routes are mounted through Router.Guarded, as a managed stack's are, because the contract cannot
+	// describe a stream (D-47). The stack is the name in the address; its log carries no known secret to mask.
+	d = logs.d
+	r.Guarded(http.MethodGet, "/api/env/{envId}/unmanaged-stacks/{name}/logs/stream", logs.need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serveStackLogs(w, req, d, logs.streams, logs.mem, unmanagedLogSubject)
+	}))
+	r.Guarded(http.MethodGet, "/api/env/{envId}/unmanaged-stacks/{name}/logs/download", logs.need, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		downloadStackLogs(w, req, d, logs.user, logs.server, unmanagedLogSubject)
+	}))
+}
+
+func listUnmanagedStackResources(ctx context.Context, d StacksDeps, in *UnmanagedStackPathInput) (*StackResourcesOutput, error) {
+	f, err := d.findUnmanaged(ctx, in.EnvID, in.Name)
+	if err != nil {
+		return nil, err
+	}
+	// Nothing declares what the stack uses, so the zero Declared goes in and the services' own references stand in.
+	res := d.ops().Resources(ctx, in.EnvID, f.stack, stackops.Declared{})
+	return &StackResourcesOutput{CacheControl: "no-store", Body: stackResourcesBody(ctx, d, in.EnvID, f.stack, res)}, nil
+}
+
+// unmanagedLogSubject is the stack the address names by its name. A stack Bayplan did not make has no secret Bayplan
+// knows of, so its log is masked with nothing: what a person may read there they may read on the Services and
+// Containers pages already (P4 permissions).
+func unmanagedLogSubject(ctx context.Context, d StacksDeps, envID string, req *http.Request) (stackops.Stack, stacks.Masker, error) {
+	name, err := url.PathUnescape(chi.URLParam(req, "name"))
+	if err != nil || name == "" || len(name) > maxUnmanagedName {
+		return stackops.Stack{}, stacks.Masker{}, unmanagedNotFound("")
+	}
+	f, err := d.findUnmanaged(ctx, envID, name)
+	if err != nil {
+		return stackops.Stack{}, stacks.Masker{}, err
+	}
+	return f.stack, stacks.Masker{}, nil
 }
 
 // unmanagedNotFound is the 404 for a name that is not an unmanaged stack of the environment (now). managedID is

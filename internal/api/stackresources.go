@@ -151,6 +151,12 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 		d.Log.Warn("a stack's deployed definition could not be loaded for its resources", "environment", in.EnvID, "stack", st.Name, "error", decl.Err)
 	}
 	res := d.ops().Resources(ctx, in.EnvID, st, decl)
+	return &StackResourcesOutput{CacheControl: "no-store", Body: stackResourcesBody(ctx, d, in.EnvID, st, res)}, nil
+}
+
+// stackResourcesBody draws the cards of a stack's Resources as the answers carry them, for a stack Bayplan manages
+// and for one it found by its labels alike.
+func stackResourcesBody(ctx context.Context, d StacksDeps, envID string, st stackops.Stack, res stackops.Resources) StackResourcesBody {
 	body := StackResourcesBody{
 		Networks: StackNetworksCardBody{Items: make([]StackNetworkResourceBody, 0, len(res.Networks.Items)), Error: res.Networks.Error},
 		Volumes:  StackVolumesCardBody{Items: make([]StackVolumeResourceBody, 0, len(res.Volumes.Items)), Error: res.Volumes.Error, NotReporting: res.NotReporting},
@@ -167,9 +173,9 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 		targets := map[string]envs.NodeRef(nil)
 		if d.Aggregator != nil && len(res.Tasks.Items) > 0 {
 			var terr error
-			if targets, terr = d.Aggregator.SwarmNodeTargets(ctx, in.EnvID); terr != nil {
+			if targets, terr = d.Aggregator.SwarmNodeTargets(ctx, envID); terr != nil {
 				// A node nothing reaches is a task that cannot be opened, not a failed read.
-				d.Log.Warn("mapping swarm nodes to agents failed", "environment", in.EnvID, "error", terr)
+				d.Log.Warn("mapping swarm nodes to agents failed", "environment", envID, "error", terr)
 				targets = nil
 			}
 		}
@@ -194,7 +200,7 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 		}
 		body.Containers = &card
 	}
-	return &StackResourcesOutput{CacheControl: "no-store", Body: body}, nil
+	return body
 }
 
 // objectsCard is the Secrets or Configs card of the answer.

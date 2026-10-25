@@ -7,7 +7,13 @@ import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
-import { STACK_SERVICES_POLL_MS, StacksLoadError, stacksKey } from "@/api/stacks";
+import {
+  STACK_RESOURCES_POLL_MS,
+  STACK_SERVICES_POLL_MS,
+  type StackResources,
+  StacksLoadError,
+  stacksKey,
+} from "@/api/stacks";
 
 export type UnmanagedStack = components["schemas"]["UnmanagedStackBody"];
 
@@ -67,6 +73,42 @@ export function unmanagedStackQuery(envId: string, name: string) {
     refetchInterval: (query) => {
       if (document.visibilityState !== "visible") return false;
       return query.state.data?.target === "swarm" ? STACK_SERVICES_POLL_MS : LIST_REFETCH_MS;
+    },
+  });
+}
+
+// The query key of what an unmanaged stack uses. It extends the stack's key, so a refresh of the stack refreshes it.
+export function unmanagedStackResourcesKey(envId: string, name: string) {
+  return [...unmanagedStackKey(envId, name), "resources"] as const;
+}
+
+// What an unmanaged stack's services use, one card for each kind, each with its own error, with the ownership of
+// each previewing what adopting would own. It polls on a swarm while the page is visible, like a managed stack's.
+export function unmanagedStackResourcesQuery(
+  envId: string,
+  name: string,
+  o: { target: UnmanagedStack["target"] },
+) {
+  return queryOptions({
+    queryKey: unmanagedStackResourcesKey(envId, name),
+    queryFn: async (): Promise<StackResources> => {
+      const res = await api.GET("/api/env/{envId}/unmanaged-stacks/{name}/resources", {
+        params: { path: { envId, name } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new UnmanagedLoadError(
+          problem.status,
+          problem.type,
+          problem.fields.find((f) => f.location === "managedStackId")?.message,
+        );
+      }
+      return res.data;
+    },
+    retry: (count, error) => !isUnmanagedGone(error) && count < 1,
+    refetchInterval: () => {
+      if (document.visibilityState !== "visible") return false;
+      return o.target === "swarm" ? STACK_RESOURCES_POLL_MS : LIST_REFETCH_MS;
     },
   });
 }

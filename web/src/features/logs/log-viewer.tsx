@@ -42,6 +42,7 @@ import {
   isEndedTaskState,
   isSlotMark,
   type LogSource,
+  logRoute,
   type ServiceLogTask,
   type StackCapEvent,
 } from "@/features/logs/log-source";
@@ -207,9 +208,8 @@ export function popoutLogsUrl(envId: string, source: LogSource, view: LogViewPar
     if (view.container) q.set("container", text(view.container));
   }
   const query = q.toString();
-  const what = { container: "containers", service: "services", stack: "stacks" }[source.kind];
   return withBase(
-    `/popout/${encodeURIComponent(envId)}/${what}/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
+    `/popout/${encodeURIComponent(envId)}/${logRoute(source)}/${encodeURIComponent(source.id)}/logs${query ? `?${query}` : ""}`,
   );
 }
 
@@ -266,6 +266,7 @@ export function LogViewer(props: LogViewerProps) {
   const isStack = kind === "stack";
   const hasTasks = isService || isStack;
   const stackTarget = src.kind === "stack" ? src.target : undefined;
+  const unmanagedStack = src.kind === "stack" && src.unmanaged === true;
   const sourceId = src.id;
   const containerNode = src.kind === "container" ? src.nodeId : undefined;
   const t = useT();
@@ -403,7 +404,12 @@ export function LogViewer(props: LogViewerProps) {
       ? {
           source:
             kind === "stack"
-              ? { kind: "stack", id: sourceId, target: stackTarget ?? "swarm" }
+              ? {
+                  kind: "stack",
+                  id: sourceId,
+                  target: stackTarget ?? "swarm",
+                  ...(unmanagedStack ? { unmanaged: true as const } : {}),
+                }
               : { kind: "service", id: sourceId },
         }
       : { containerId: sourceId, nodeId: containerNode };
@@ -487,6 +493,7 @@ export function LogViewer(props: LogViewerProps) {
     hasTasks,
     isStack,
     stackTarget,
+    unmanagedStack,
   ]);
 
   // A pop-out nobody can see lets its stream go after a minute and takes it up again
@@ -952,7 +959,7 @@ export function LogViewer(props: LogViewerProps) {
             {actions}
           </>
         }
-        onOpenPopout={popout ? undefined : openPopout}
+        onOpenPopout={popout || unmanagedStack ? undefined : openPopout}
         moreItems={
           <>
             <DropdownMenuItem onSelect={() => setDownloadOpen(true)}>
