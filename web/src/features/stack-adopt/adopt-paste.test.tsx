@@ -93,6 +93,19 @@ const differing = (over: Record<string, unknown> = {}) =>
     ...over,
   });
 
+const variable = (name: string, over: Record<string, unknown> = {}) => ({
+  name,
+  value: "",
+  secret: false,
+  source: "unset",
+  default: "",
+  hasDefault: false,
+  required: true,
+  unused: false,
+  places: [],
+  ...over,
+});
+
 beforeEach(() => {
   sent = [];
   pasteAnswer = () => ({ status: 200, body: matching() });
@@ -119,9 +132,9 @@ beforeEach(() => {
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
       }
-      if (path === PATH) {
+      if (/^\/api\/env\/e1\/unmanaged-stacks\/[^/]+$/.test(path)) {
         return Response.json({
-          name: "legacy",
+          name: path.split("/").pop(),
           target: "swarm",
           state: "running",
           servicesRunning: 1,
@@ -136,14 +149,14 @@ beforeEach(() => {
           fingerprint: "fp-1",
         });
       }
-      if (path === `${PATH}/adopt-check` && req.method === "POST") {
+      if (path.endsWith("/adopt-check") && req.method === "POST") {
         if (body?.source === "paste") {
           const a = pasteAnswer(body);
           return Response.json(a.body, { status: a.status });
         }
         return Response.json(checkBody());
       }
-      if (path === `${PATH}/adopt` && req.method === "POST") {
+      if (path.endsWith("/adopt") && req.method === "POST") {
         return Response.json(adoptAnswer.body, { status: adoptAnswer.status });
       }
       return Response.json({}, { status: 404 });
@@ -291,5 +304,421 @@ describe("a pasted file that differs", () => {
     expect(adoptRequests().map((r) => r.body)).toEqual([
       { fingerprint: "fp-1", source: "rebuild" },
     ]);
+  });
+});
+
+// theResult is the live region of the paste field.
+const secretText = "hunter2-very-secret";
+const fileWithVars = `services:
+  web:
+    image: nginx:\${TAG}
+    environment:
+      PW: \${PW}
+`;
+
+// answerWithVars answers a check of a file that uses TAG and PW: a variable is required until it has a value in the body.
+function answerWithVars(body: Record<string, unknown>) {
+  const sentVars = (body.vars as { name: string; value: string; secret: boolean }[]) ?? [];
+  const has = (n: string) => sentVars.some((v) => v.name === n && v.value !== "");
+  const variables = [
+    variable("TAG", { required: !has("TAG"), hasDefault: false }),
+    variable("PW", {
+      required: !has("PW"),
+      secret: sentVars.find((v) => v.name === "PW")?.secret ?? false,
+    }),
+  ];
+  const missing = variables.filter((v) => v.required).length;
+  return {
+    status: 200,
+    body: missing
+      ? checkBody({
+          source: "paste",
+          fingerprint: "fp-paste",
+          clean: false,
+          blocked: true,
+          variables,
+          problems: [
+            {
+              severity: "error",
+              code: "variable_required",
+              message: "A required variable has no value.",
+              file: "compose.yaml",
+              line: 3,
+              col: 1,
+              endLine: 3,
+              endCol: 2,
+            },
+          ],
+        })
+      : matching({ variables }),
+  };
+}
+
+describe("pasted variables", () => {
+  it("lists each variable of the file with its label, its default or 'Required' as placeholder, and a Secret switch", async () => {
+    pasteAnswer = (body) => {
+      const a = answerWithVars(body);
+      const rows = (a.body as { variables: Record<string, unknown>[] }).variables;
+      rows[0] = { ...rows[0], name: "TAG", hasDefault: true, default: "1.27", required: false };
+      return a;
+    };
+    const box = await startFromPaste();
+
+    typeFile(box, fileWithVars);
+
+    const tag = (await screen.findByLabelText("Value of TAG", {}, SETTLE)) as HTMLInputElement;
+    const pw = screen.getByLabelText("Value of PW") as HTMLInputElement;
+    expect(tag.getAttribute("placeholder")).toBe("1.27");
+    expect(pw.getAttribute("placeholder")).toBe("Required");
+    expect(screen.getByRole("switch", { name: "Secret: TAG" })).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Secret: PW" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Used to check your file against what's running. They are saved with the stack.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("checks the file again with a value typed, and sends a secret one as a password field the browser does not remember", async () => {
+    pasteAnswer = answerWithVars;
+    const box = await startFromPaste();
+    typeFile(box, fileWithVars);
+    const pw = (await screen.findByLabelText("Value of PW", {}, SETTLE)) as HTMLInputElement;
+    const tag = screen.getByLabelText("Value of TAG") as HTMLInputElement;
+    expect(pw.type).toBe("text");
+
+    fireEvent.change(tag, { target: { value: "1.27" } });
+    fireEvent.change(pw, { target: { value: secretText } });
+    fireEvent.click(screen.getByRole("switch", { name: "Secret: PW" }));
+
+    await waitFor(() => {
+      const last = pasteChecks().at(-1)?.body;
+      expect(last?.vars).toEqual([
+        { name: "PW", value: secretText, secret: true },
+        { name: "TAG", value: "1.27", secret: false },
+      ]);
+    }, SETTLE);
+    const field = screen.getByLabelText("Value of PW") as HTMLInputElement;
+    expect(field.type).toBe("password");
+    expect(field.getAttribute("autocomplete")).toBe("new-password");
+    expect(
+      await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE),
+    ).toBeTruthy();
+  });
+
+  it("flags a variable that still has no value once the check has answered, tied to its input", async () => {
+    pasteAnswer = answerWithVars;
+    const box = await startFromPaste();
+
+    typeFile(box, fileWithVars);
+
+    const message = await screen.findByText(
+      "TAG has no value. Fill it in to check your file.",
+      {},
+      SETTLE,
+    );
+    const input = screen.getByLabelText("Value of TAG");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(message.id);
+  });
+});
+
+describe("what blocks Adopt for a pasted file", () => {
+  it("says how many variables to fill in, and stops saying it when they are", async () => {
+    pasteAnswer = answerWithVars;
+    const box = await startFromPaste();
+
+    typeFile(box, fileWithVars);
+
+    await waitFor(() => expect(reasonOf()).toBe("Fill in 2 variables first."), SETTLE);
+    fireEvent.change(await screen.findByLabelText("Value of TAG"), { target: { value: "1.27" } });
+    await waitFor(() => expect(reasonOf()).toBe("Fill in 1 variable first."), SETTLE);
+    fireEvent.change(screen.getByLabelText("Value of PW"), { target: { value: secretText } });
+    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+  });
+
+  it("says to fix the errors of a file that does not parse, lists them, and offers the rebuild", async () => {
+    pasteAnswer = () => ({
+      status: 200,
+      body: checkBody({
+        source: "paste",
+        fingerprint: "fp-paste",
+        clean: false,
+        blocked: true,
+        problems: [
+          {
+            severity: "error",
+            code: "yaml_invalid",
+            message: "This isn't valid YAML.",
+            file: "compose.yaml",
+            line: 4,
+            col: 1,
+            endLine: 4,
+            endCol: 2,
+          },
+          {
+            severity: "warning",
+            code: "x",
+            message: "Only a warning.",
+            file: "compose.yaml",
+            line: 1,
+            col: 1,
+            endLine: 1,
+            endCol: 2,
+          },
+        ],
+      }),
+    });
+    const box = await startFromPaste();
+
+    typeFile(box, "services: [unclosed");
+
+    expect(await screen.findByText("Line 4: This isn't valid YAML.", {}, SETTLE)).toBeTruthy();
+    expect(screen.queryByText(/Only a warning/)).toBeNull();
+    await waitFor(() =>
+      expect(reasonOf()).toBe(
+        "Fix the errors in the pasted file first, or rebuild from the running services.",
+      ),
+    );
+    expect(screen.getByText("Fix your file to see what will change.")).toBeTruthy();
+    fireEvent.click(
+      within(document.querySelector("[data-slot=pasted-problems]") as HTMLElement).getByRole(
+        "button",
+        {
+          name: "Use the rebuild instead",
+        },
+      ),
+    );
+    await waitFor(() => expect(reasonOf()).toBe(""));
+  });
+
+  it("treats a paste of nothing but blanks as no paste at all, and sends no check", async () => {
+    const box = await startFromPaste();
+
+    typeFile(box, "  \n\n ");
+
+    await waitFor(() =>
+      expect(reasonOf()).toBe("Paste a compose file first, or rebuild from the running services."),
+    );
+    expect(screen.getByText("Paste your file to see what will change.")).toBeTruthy();
+    expect(pasteChecks()).toEqual([]);
+  });
+
+  it("holds Adopt while a changed file waits to be checked, and never adopts a file the person has not seen checked", async () => {
+    const box = await startFromPaste();
+    typeFile(box, FILE);
+    await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe(""));
+
+    typeFile(box, `${FILE}# one more line\n`);
+
+    expect(reasonOf()).toBe("Checking legacy…");
+    fireEvent.click(adoptButton());
+    expect(adoptRequests()).toEqual([]);
+    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+  });
+});
+
+describe("what is kept of a pasted file", () => {
+  it("sets the textarea so that the browser neither fills, remembers nor corrects it, with 12 rows that scroll inside it", async () => {
+    const box = (await startFromPaste()) as HTMLTextAreaElement;
+
+    expect(box.getAttribute("autocomplete")).toBe("off");
+    expect(box.getAttribute("spellcheck")).toBe("false");
+    expect(box.getAttribute("autocapitalize")).toBe("off");
+    expect(box.rows).toBe(12);
+    expect(box.getAttribute("wrap")).toBe("off");
+    expect(box.className).toContain("overflow-auto");
+    expect(box.className).toContain("font-mono");
+    typeFile(box, Array.from({ length: 2000 }, (_, i) => `# line ${i}`).join("\n"));
+    expect(box.rows).toBe(12);
+  });
+
+  it("clears the file and the values on Cancel, on unmount, on a change of stack and when the stack is stored", async () => {
+    pasteAnswer = answerWithVars;
+    const view = mount();
+    fireEvent.click(await screen.findByRole("radio", { name: /I have the original compose file/ }));
+    typeFile(await screen.findByLabelText("Original compose file"), fileWithVars);
+    fireEvent.change(await screen.findByLabelText("Value of TAG", {}, SETTLE), {
+      target: { value: "1.27" },
+    });
+
+    // Cancel
+    fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Original compose file")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /I have the original compose file/ }));
+    expect((screen.getByLabelText("Original compose file") as HTMLTextAreaElement).value).toBe("");
+    expect(screen.queryByLabelText("Value of TAG")).toBeNull();
+
+    // A change of stack
+    typeFile(screen.getByLabelText("Original compose file"), fileWithVars);
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <AdoptPage envId={ENV} name="other" onAdopted={onAdopted} />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole("heading", { name: "Adopt other", level: 2 })).toBeTruthy();
+    expect(screen.queryByLabelText("Original compose file")).toBeNull();
+    expect(
+      screen
+        .getByRole("radio", { name: /Rebuild from the running services/ })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+
+    // Unmount and come back
+    view.unmount();
+    mount();
+    fireEvent.click(await screen.findByRole("radio", { name: /I have the original compose file/ }));
+    expect(
+      ((await screen.findByLabelText("Original compose file")) as HTMLTextAreaElement).value,
+    ).toBe("");
+  });
+
+  it("writes it nowhere but the page: no storage, no address, no toast, no query, no mutation", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    const pushState = vi.spyOn(window.history, "pushState");
+    pasteAnswer = answerWithVars;
+    mount();
+    fireEvent.click(await screen.findByRole("radio", { name: /I have the original compose file/ }));
+    typeFile(await screen.findByLabelText("Original compose file"), fileWithVars);
+    fireEvent.change(await screen.findByLabelText("Value of TAG", {}, SETTLE), {
+      target: { value: "1.27" },
+    });
+    fireEvent.change(screen.getByLabelText("Value of PW"), { target: { value: secretText } });
+    fireEvent.click(screen.getByRole("switch", { name: "Secret: PW" }));
+    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+
+    const heldWhileTyped = () =>
+      JSON.stringify([
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => [q.queryKey, q.state.data]),
+        client
+          .getMutationCache()
+          .getAll()
+          .map((m) => m.state.variables),
+      ]);
+    expect(heldWhileTyped()).not.toContain(secretText);
+    expect(heldWhileTyped()).not.toContain("image: nginx:");
+
+    fireEvent.click(adoptButton());
+    await waitFor(() => expect(onAdopted).toHaveBeenCalledWith("s9"));
+
+    // The adoption itself carried the text, once, to the server.
+    expect(adoptRequests()).toHaveLength(1);
+    expect(JSON.stringify(adoptRequests()[0]?.body)).toContain(secretText);
+    // Nothing else did: not the storages, the address, the toast, nor either cache.
+    const everything = JSON.stringify([
+      setItem.mock.calls,
+      replaceState.mock.calls,
+      pushState.mock.calls,
+      window.location.href,
+      toasts.success.mock.calls,
+      toasts.error.mock.calls,
+      toasts.info.mock.calls,
+    ]);
+    expect(everything).not.toContain(secretText);
+    expect(everything).not.toContain("image: nginx:");
+    expect(everything).not.toContain("1.27");
+    await waitFor(() => expect(heldWhileTyped()).not.toContain(secretText));
+    expect(heldWhileTyped()).not.toContain("image: nginx:");
+    expect(
+      (screen.queryByLabelText("Original compose file") as HTMLTextAreaElement | null)?.value ?? "",
+    ).toBe("");
+  });
+
+  it("does not leave the file in the mutation either when the server refuses it", async () => {
+    adoptAnswer = {
+      status: 422,
+      body: {
+        type: "pasted_file_invalid",
+        title: "x",
+        status: 422,
+        detail: "A required variable has no value.",
+      },
+    };
+    const box = await startFromPaste();
+    typeFile(box, `${FILE}# ${secretText}\n`);
+    await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe(""));
+
+    fireEvent.click(adoptButton());
+
+    expect(
+      await screen.findByText(
+        "The pasted file doesn't pass the check: A required variable has no value.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        JSON.stringify(
+          client
+            .getMutationCache()
+            .getAll()
+            .map((m) => m.state.variables),
+        ),
+      ).not.toContain(secretText),
+    );
+    // The page still holds the file, so the person can fix it.
+    expect((screen.getByLabelText("Original compose file") as HTMLTextAreaElement).value).toContain(
+      secretText,
+    );
+  });
+});
+
+describe("choosing a file", () => {
+  it("reads it into the field, and 'Remove pasted file' empties the field again", async () => {
+    const box = (await startFromPaste()) as HTMLTextAreaElement;
+    expect(screen.queryByRole("button", { name: "Remove pasted file" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Choose a compose file"), {
+      target: { files: [new File([FILE], "docker-compose.yml", { type: "text/yaml" })] },
+    });
+
+    await waitFor(() => expect(box.value).toBe(FILE));
+    fireEvent.click(screen.getByRole("button", { name: "Remove pasted file" }));
+    expect(box.value).toBe("");
+    expect(screen.queryByRole("button", { name: "Remove pasted file" })).toBeNull();
+  });
+
+  it("refuses a file over 1 MiB and keeps what was there", async () => {
+    const box = (await startFromPaste()) as HTMLTextAreaElement;
+    typeFile(box, FILE);
+
+    fireEvent.change(screen.getByLabelText("Choose a compose file"), {
+      target: { files: [new File([new Uint8Array(1024 * 1024 + 1)], "big.yml")] },
+    });
+
+    expect(
+      await screen.findByText(
+        "That file is over 1 MiB. Rebuild from the running services instead.",
+      ),
+    ).toBeTruthy();
+    expect(box.value).toBe(FILE);
+  });
+});
+
+describe("a pasted check that fails", () => {
+  it("says so in the check card, keeps Adopt off, and runs again on Retry check", async () => {
+    pasteAnswer = () => ({ status: 500, body: { type: "about:blank", title: "x", status: 500 } });
+    const box = await startFromPaste();
+
+    typeFile(box, FILE);
+
+    const retry = await screen.findByRole("button", { name: "Retry check" }, SETTLE);
+    expect(reasonOf()).toBe("Adopt is off until legacy has been checked.");
+    pasteAnswer = () => ({ status: 200, body: matching() });
+    fireEvent.click(retry);
+
+    expect(
+      await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE),
+    ).toBeTruthy();
+    expect(pasteChecks()).toHaveLength(2);
   });
 });

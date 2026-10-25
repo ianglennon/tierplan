@@ -238,16 +238,24 @@ function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
         pasted: paste && pastedInput ? pastedInput : undefined,
       });
       // The file and the values typed for it are gone from the page the moment the stack is stored.
-      setPastedText("");
-      setPastedValues({});
-      setKnown([]);
-      adopt.reset();
+      clearPasted();
       setStored(true);
       toastSuccess(t("stackAdopt.toast.adopted", { name, env: envName }));
       onAdopted(made.id);
     } catch (e) {
       setRefusal(e instanceof AdoptRequestError ? e : new AdoptRequestError(0));
+    } finally {
+      // The mutation keeps the variables it was called with until it is reset; the text is not left there.
+      adopt.reset();
     }
+  }
+
+  // clearPasted forgets the pasted file and every value typed for it, and goes back to the rebuild.
+  function clearPasted() {
+    setSource("rebuild");
+    setPastedText("");
+    setPastedValues({});
+    setKnown([]);
   }
 
   // Why Adopt stack is off, in the order that matters: the role it takes, a stack that cannot be adopted, and a
@@ -413,7 +421,11 @@ function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
           {t("stackAdopt.footer.nothing", { env: envName })}
         </p>
         <Button asChild variant="outline" className="max-md:h-11">
-          <Link to="/env/$envId/unmanaged-stacks/$name" params={{ envId, name }}>
+          <Link
+            to="/env/$envId/unmanaged-stacks/$name"
+            params={{ envId, name }}
+            onClick={clearPasted}
+          >
             {t("stackAdopt.footer.cancel")}
           </Link>
         </Button>
