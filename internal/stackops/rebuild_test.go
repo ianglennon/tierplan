@@ -10,13 +10,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -270,4 +273,214 @@ func TestRebuildLiveStandaloneOfAProjectWithNoContainers(t *testing.T) {
 	if !errors.As(err, &failed) {
 		t.Fatalf("RebuildLive of a project with no container: %v, want a *RebuildError", err)
 	}
+}
+
+const configHashLabel = "com.docker.compose.config-hash"
+
+// hashRebuild rebuilds a Foreign project after the test has changed what the host holds.
+func hashRebuild(t *testing.T, h *stackopstest.Hosted) rebuild.Result {
+	t.Helper()
+	rig := hostRig(t, h)
+	st := stackops.DiscoveredStack(rig.envID, h.Name, stacks.TargetStandalone)
+	res, err := rig.deps.RebuildLive(testsupport.Context(t), rig.envID, st, stackops.RebuildOptions{Reveal: true})
+	if err != nil {
+		t.Fatalf("RebuildLive: %v", err)
+	}
+	return res
+}
+
+// preparedProject is a rebuilt file loaded and prepared the way a deploy does it.
+func preparedProject(t *testing.T, name string, res rebuild.Result) *types.Project {
+	t.Helper()
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}}
+	loaded, err := stacks.Deployable(testsupport.Context(t), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy})
+	if err != nil {
+		t.Fatalf("Deployable: %v\n%s", err, res.YAML)
+	}
+	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, loaded.Project, stacks.NewFileSet(copy.Files), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stacks.PrepareStandalone(loaded.Project, "stack-"+name, res.Pins, objs); err != nil {
+		t.Fatalf("PrepareStandalone: %v", err)
+	}
+	return loaded.Project
+}
+
+func labelOfNetwork(h *stackopstest.Hosted, name string) *dockertest.FakeNetwork {
+	for i := range h.Networks {
+		if h.Networks[i].Name == name {
+			return &h.Networks[i]
+		}
+	}
+	return nil
+}
+
+func labelOfVolume(h *stackopstest.Hosted, name string) *dockertest.FakeVolume {
+	for i := range h.Volumes {
+		if h.Volumes[i].Name == name {
+			return &h.Volumes[i]
+		}
+	}
+	return nil
+}
+
+// TestRebuildMatchesNetworkAndVolumeHashes: the rebuilt file declares an existing network or volume only in the
+// form whose hash is the one the host holds, or references it as external, so the first deploy of an adopted
+// project recreates nothing and a volume's data is never at risk (STK-13, D-46, D-18, T-08-43).
+func TestRebuildMatchesNetworkAndVolumeHashes(t *testing.T) {
+	t.Parallel()
+	const service = "  web:\n    image: nginx:1.27\n    networks: [back]\n    volumes: [data:/data]\n"
+
+	// ownedFormsMatch holds the rebuilt file against the host: every object it owns hashes, as the SDK hashes
+	// it on a project loaded and prepared as a deploy does, to the label the host holds.
+	ownedFormsMatch := func(t *testing.T, h *stackopstest.Hosted, res rebuild.Result) {
+		t.Helper()
+		p := preparedProject(t, h.Name, res)
+		for key, n := range p.Networks {
+			if bool(n.External) {
+				continue
+			}
+			want := labelOfNetwork(h, n.Name).Labels[configHashLabel]
+			if got, err := dockerx.ComposeNetworkHash(&n); err != nil || got != want {
+				t.Errorf("network %s hashes to %s (%v), the host holds %s:\n%s", key, got, err, want, res.YAML)
+			}
+		}
+		for key, v := range p.Volumes {
+			if bool(v.External) {
+				continue
+			}
+			want := labelOfVolume(h, v.Name).Labels[configHashLabel]
+			if got, err := dockerx.ComposeVolumeHash(v); err != nil || got != want {
+				t.Errorf("volume %s hashes to %s (%v), the host holds %s:\n%s", key, got, err, want, res.YAML)
+			}
+		}
+	}
+
+	t.Run("the minimal rendering is written when it is the one", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+"networks:\n  back: {}\nvolumes:\n  data: {}\n")
+
+		res := hashRebuild(t, h)
+
+		ownedFormsMatch(t, h, res)
+		p := preparedProject(t, "shop", res)
+		if n := p.Networks["back"]; bool(n.External) || n.Driver != "" || len(n.DriverOpts) != 0 {
+			t.Errorf("network back = %+v, want the minimal rendering", n)
+		}
+		for _, o := range res.Objects {
+			if o.Treatment != rebuild.TreatmentOwned {
+				t.Errorf("object %+v is not owned", o)
+			}
+		}
+	})
+
+	t.Run("an explicit driver is written when the hash says the file had it", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+"networks:\n  back:\n    driver: bridge\nvolumes:\n  data: {}\n")
+
+		res := hashRebuild(t, h)
+
+		ownedFormsMatch(t, h, res)
+		if n := preparedProject(t, "shop", res).Networks["back"]; bool(n.External) || n.Driver != "bridge" {
+			t.Errorf("network back = %+v, want one that owns its driver bridge", n)
+		}
+	})
+
+	t.Run("driver options and address pools are written when the hash says the file had them", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+`networks:
+  back:
+    driver_opts:
+      com.docker.network.bridge.name: br-shop
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
+    labels:
+      team: web
+volumes:
+  data:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+    labels:
+      team: db
+`)
+
+		res := hashRebuild(t, h)
+
+		ownedFormsMatch(t, h, res)
+		p := preparedProject(t, "shop", res)
+		if n := p.Networks["back"]; bool(n.External) || n.DriverOpts["com.docker.network.bridge.name"] != "br-shop" ||
+			len(n.Ipam.Config) != 1 || n.Ipam.Config[0].Gateway != "172.28.0.1" || n.Labels["team"] != "web" {
+			t.Errorf("network back = %+v, want its options, pool and label", n)
+		}
+		if v := p.Volumes["data"]; bool(v.External) || v.DriverOpts["type"] != "tmpfs" || v.Labels["team"] != "db" {
+			t.Errorf("volume data = %+v, want its options and label", v)
+		}
+	})
+
+	t.Run("an address pool with a subnet only is written with the subnet only", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+"networks:\n  back:\n    ipam:\n      config:\n        - subnet: 172.28.0.0/16\nvolumes:\n  data: {}\n")
+
+		res := hashRebuild(t, h)
+
+		ownedFormsMatch(t, h, res)
+		if n := preparedProject(t, "shop", res).Networks["back"]; bool(n.External) || len(n.Ipam.Config) != 1 || n.Ipam.Config[0].Gateway != "" {
+			t.Errorf("network back = %+v, want a pool with its subnet only", n)
+		}
+	})
+
+	t.Run("an object whose hash no rendering gives is external, with a note", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+"networks:\n  back: {}\nvolumes:\n  data: {}\n")
+		labelOfNetwork(h, "shop_back").Labels[configHashLabel] = strings.Repeat("0", 64)
+		labelOfVolume(h, "shop_data").Labels[configHashLabel] = strings.Repeat("1", 64)
+
+		res := hashRebuild(t, h)
+
+		p := preparedProject(t, "shop", res)
+		if n := p.Networks["back"]; !bool(n.External) || n.Name != "shop_back" {
+			t.Errorf("network back = %+v, want an external network named shop_back", n)
+		}
+		if v := p.Volumes["data"]; !bool(v.External) || v.Name != "shop_data" {
+			t.Errorf("volume data = %+v, want an external volume named shop_data", v)
+		}
+		var noted []string
+		for _, n := range res.Notes {
+			if n.Code == rebuild.NoteObjectExternalHash {
+				noted = append(noted, n.Service)
+			}
+		}
+		if !slices.Equal(noted, []string{"shop_back", "shop_data"}) {
+			t.Errorf("object_external_hash notes for %v, want shop_back and shop_data: %+v", noted, res.Notes)
+		}
+		for _, o := range res.Objects {
+			if o.Treatment != rebuild.TreatmentExternal {
+				t.Errorf("object %+v is not external", o)
+			}
+		}
+	})
+
+	t.Run("an object with no hash label keeps the first rendering", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n"+service+"networks:\n  back:\n    driver: bridge\nvolumes:\n  data: {}\n")
+		delete(labelOfNetwork(h, "shop_back").Labels, configHashLabel)
+		delete(labelOfVolume(h, "shop_data").Labels, configHashLabel)
+
+		res := hashRebuild(t, h)
+
+		p := preparedProject(t, "shop", res)
+		if n := p.Networks["back"]; bool(n.External) || n.Driver != "" {
+			t.Errorf("network back = %+v, want the first rendering: the SDK leaves an object with no hash alone", n)
+		}
+		if v := p.Volumes["data"]; bool(v.External) {
+			t.Errorf("volume data = %+v, want an owned volume", v)
+		}
+		if len(res.Notes) != 0 {
+			t.Errorf("notes = %+v, want none", res.Notes)
+		}
+	})
 }
