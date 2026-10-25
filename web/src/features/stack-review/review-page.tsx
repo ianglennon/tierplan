@@ -6,6 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { CircleX, Info } from "lucide-react";
 import { useId, useState } from "react";
 
+import { useRestoreStack } from "@/api/stack-drift";
 import { useRollbackToRevision } from "@/api/stack-history";
 import {
   type DeployRequestError,
@@ -41,7 +42,8 @@ type Translate = (key: string, options?: Record<string, unknown>) => string;
 interface ReviewPageProps {
   envId: string;
   stackId: string;
-  // What is reviewed: the saved draft (deploy), or a fresh digest for the named services (update).
+  // What is reviewed: the saved draft (deploy), a fresh digest for the named services (update), an earlier revision
+  // (rollback) or the deployed revision again (restore).
   mode?: ReviewMode;
   services?: string[];
   // For a roll back, the revision it restores.
@@ -106,6 +108,29 @@ function rollbackRefusal(t: Translate, err: DeployRequestError, envName: string)
     : shared;
 }
 
+// restoreRefusal words a restore the server refused: the answers only a restore gives, then the ones it shares with
+// a deploy.
+function restoreRefusal(t: Translate, err: DeployRequestError, envName: string): string {
+  switch (err.type) {
+    case "deployed_changed":
+      return t("stackRestore.review.errors.deployedChanged");
+    case "no_deployed_revision":
+      return t("stackRestore.review.errors.none");
+    case "privileged_compose":
+      return t("stackRestore.review.errors.needsAdmin");
+    case "stack_invalid":
+    case "compose_invalid":
+    case "compose_unsupported":
+    case "pins_invalid":
+      return t("stackRestore.review.errors.invalid");
+  }
+  if (err.status === 0) return t("stackRestore.review.errors.lost");
+  const shared = deployRefusal(t, err, envName);
+  return shared === t("stackReview.deployErrors.generic")
+    ? t("stackRestore.review.errors.generic")
+    : shared;
+}
+
 // The review's code for the blocking problem of an environment that is busy. It has nothing in the
 // files to fix, so it is shown as the operation lock and not among the errors.
 const OPERATION_LOCKED = "operation_locked";
@@ -127,13 +152,15 @@ function noChange(data: StackReview): boolean {
 // not deploy, an image the registry cannot be asked about, errors, a stack with nothing to change,
 // and a deployment made after the draft was started that the person has not acknowledged.
 // Warnings are never a reason (D-10). Absent when a deploy may start. The server refuses
-// every one of these again at the deploy; this only says why the button waits.
+// every one of these again at the deploy; this only says why the button waits. A restore with nothing
+// to change has no drift to put back.
 function deployReason(
   t: Translate,
   data: StackReview,
   acknowledged: boolean,
   locked: boolean,
   envName: string,
+  restore: boolean,
 ): string | undefined {
   // Another operation holds the environment: nothing can start until it ends, whatever else is true.
   if (locked) return t("stackConverge.lock.reason", { env: envName });
@@ -147,7 +174,9 @@ function deployReason(
     (p) => p.severity === "error" && p.code !== OPERATION_LOCKED,
   ).length;
   if (errors > 0) return t("stackReview.reasons.errors", { count: errors });
-  if (noChange(data)) return t("stackReview.reasons.nothing");
+  if (noChange(data)) {
+    return t(restore ? "stackRestore.review.reasons.nothing" : "stackReview.reasons.nothing");
+  }
   // A deployment made since the draft was started needs the person to say they saw it (D-09).
   if (data.concurrent && !acknowledged) return t("stackYamlDiff.concurrent.reason");
   return undefined;
@@ -160,6 +189,7 @@ function loadRefusal(t: Translate, err: Error | null): string {
     return t("stackReview.error.targetChanged");
   }
   if (type === "services_invalid") return t("stackUpdate.refusal.services_invalid");
+  if (type === "no_deployed_revision") return t("stackRestore.review.error.none");
   if (type === "revision_not_good") return t("stackRollback.review.error.notGood");
   if (type === "revision_not_found") return t("stackRollback.review.error.gone");
   return t("stackReview.error.body");
@@ -184,6 +214,7 @@ export function ReviewPage({
   const review = useQuery(reviewQuery(envId, stackId, mode, services, revision));
   const deploy$ = useDeployStack(envId, stackId);
   const rollback$ = useRollbackToRevision(envId, stackId);
+  const restore$ = useRestoreStack(envId, stackId);
   const [deployError, setDeployError] = useState<string | null>(null);
   const [tab, setTab] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -193,6 +224,11 @@ export function ReviewPage({
   const data = review.data;
   const update = mode === "update";
   const rollback = mode === "rollback" && revision !== undefined;
+  const restore = mode === "restore";
+  // A roll back and a restore are both the exact redeploy of a stored revision: its digests, no registry. The revision a
+  // restore redeploys is the deployed one, which the review names.
+  const exact = rollback || restore;
+  const seq = restore ? data?.revision : revision;
 
   // Roll back stack sends the revision that was reviewed and the deployed revision the review was made against,
   // so the server refuses a stack that was deployed again since. Like a deploy, it is pending after the first
@@ -206,6 +242,24 @@ export function ReviewPage({
         onSuccess: (answer) => onDeployed(answer.jobId),
         onError: (err) => {
           setDeployError(rollbackRefusal(t, err, envName));
+          setStale(err.type === "deployed_changed");
+        },
+      },
+    );
+  }
+
+  // Restore stack sends the deployed revision that was reviewed, and the server refuses it when the stack was deployed
+  // again since. Like a deploy, it is pending after the first click and the request is never repeated: a restore only
+  // ever starts from this click (D-23).
+  function restoreStack() {
+    if (!data || seq === undefined || restore$.isPending || restore$.isSuccess) return;
+    setDeployError(null);
+    restore$.mutate(
+      { revision: seq },
+      {
+        onSuccess: (answer) => onDeployed(answer.jobId),
+        onError: (err) => {
+          setDeployError(restoreRefusal(t, err, envName));
           setStale(err.type === "deployed_changed");
         },
       },
@@ -236,11 +290,13 @@ export function ReviewPage({
   // The lock shows in the stack's own answer and in the review's problems; either holds Deploy back.
   const locked =
     Boolean(stack.data?.lock) || (data?.problems ?? []).some((p) => p.code === OPERATION_LOCKED);
-  const reason = data ? deployReason(t, data, acknowledged, locked, envName) : undefined;
+  const reason = data ? deployReason(t, data, acknowledged, locked, envName, restore) : undefined;
   const blocked = !data || reason !== undefined;
-  const starting = rollback
-    ? rollback$.isPending || rollback$.isSuccess
-    : deploy$.isPending || deploy$.isSuccess;
+  const starting = restore
+    ? restore$.isPending || restore$.isSuccess
+    : rollback
+      ? rollback$.isPending || rollback$.isSuccess
+      : deploy$.isPending || deploy$.isSuccess;
   const reasonId = useId();
   const problems = (data?.problems ?? []).filter((p) => p.code !== OPERATION_LOCKED);
   const changed = data?.services ?? [];
@@ -250,7 +306,7 @@ export function ReviewPage({
   // Changes (against what is running) is the page's first tab, unless there is nothing to show
   // there and the text still differs from the last deploy.
   const shown = tab ?? (unchanged && yamlChanged > 0 ? "yaml" : "changes");
-  const firstDeploy = !rollback && changed.length > 0 && changed.every((s) => s.change === "added");
+  const firstDeploy = !exact && changed.length > 0 && changed.every((s) => s.change === "added");
   const failed = review.isError && !data;
   // A standalone host recreates containers; a swarm, services (the group and the warning word it).
   const ownershipContext: { context?: "standalone" } =
@@ -267,15 +323,29 @@ export function ReviewPage({
       className="max-md:h-11"
       aria-disabled={blocked || starting ? true : undefined}
       aria-describedby={reason ? reasonId : undefined}
-      onClick={blocked || starting ? pressed : rollback ? rollBack : deploy}
+      onClick={
+        blocked || starting ? pressed : restore ? restoreStack : rollback ? rollBack : deploy
+      }
     >
       {starting ? (
         <>
           <Spinner aria-hidden="true" />
-          {t(rollback ? "stackRollback.review.footer.starting" : "stackReview.footer.starting")}
+          {t(
+            restore
+              ? "stackRestore.review.footer.starting"
+              : rollback
+                ? "stackRollback.review.footer.starting"
+                : "stackReview.footer.starting",
+          )}
         </>
       ) : (
-        t(rollback ? "stackRollback.review.footer.rollback" : "stackReview.footer.deploy")
+        t(
+          restore
+            ? "stackRestore.review.footer.restore"
+            : rollback
+              ? "stackRollback.review.footer.rollback"
+              : "stackReview.footer.deploy",
+        )
       )}
     </Button>
   );
@@ -287,19 +357,25 @@ export function ReviewPage({
           <Skeleton className="h-7 w-64" />
         ) : (
           <h3 className="text-xl font-semibold break-all">
-            {rollback
-              ? t("stackRollback.review.title", { name, seq: revision })
-              : update
-                ? t("stackReview.titleUpdate", { name })
-                : t("stackReview.title", { name })}
+            {restore
+              ? t("stackRestore.review.title", { name })
+              : rollback
+                ? t("stackRollback.review.title", { name, seq: revision })
+                : update
+                  ? t("stackReview.titleUpdate", { name })
+                  : t("stackReview.title", { name })}
           </h3>
         )}
         <p className="text-sm text-muted-foreground">
-          {rollback
-            ? t("stackRollback.review.body", { seq: revision })
-            : update
-              ? t("stackReview.bodyUpdate")
-              : t("stackReview.body", { env: envName })}
+          {restore
+            ? seq === undefined
+              ? t("stackRestore.review.bodyPending")
+              : t("stackRestore.review.body", { seq })
+            : rollback
+              ? t("stackRollback.review.body", { seq: revision })
+              : update
+                ? t("stackReview.bodyUpdate")
+                : t("stackReview.body", { env: envName })}
         </p>
         {data || failed ? null : (
           <p role="status" className="text-sm text-muted-foreground">
@@ -367,7 +443,7 @@ export function ReviewPage({
           <ImagePinTable
             images={data ? (data.images ?? []) : undefined}
             mode={mode}
-            revision={revision}
+            revision={seq}
           />
           {unchanged ? (
             <Empty className="border">
@@ -376,11 +452,13 @@ export function ReviewPage({
                   {t("stackReview.noChanges.title")}
                 </EmptyTitle>
                 <EmptyDescription>
-                  {rollback
-                    ? t("stackRollback.review.noChanges.body", { seq: revision })
-                    : update
-                      ? t("stackReview.noChanges.bodyUpdate")
-                      : t("stackReview.noChanges.body")}
+                  {restore
+                    ? t("stackRestore.review.noChanges.body", { seq })
+                    : rollback
+                      ? t("stackRollback.review.noChanges.body", { seq: revision })
+                      : update
+                        ? t("stackReview.noChanges.bodyUpdate")
+                        : t("stackReview.noChanges.body")}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -406,12 +484,14 @@ export function ReviewPage({
                   hunks={yaml?.hunks}
                   lines={yaml?.lines}
                   caption={
-                    rollback
-                      ? t("stackRollback.review.yamlCaption", {
-                          seq: revision,
-                          deployed: data.deployedSeq,
-                        })
-                      : t("stackYamlDiff.caption")
+                    restore
+                      ? t("stackRestore.review.yamlCaption", { seq })
+                      : rollback
+                        ? t("stackRollback.review.yamlCaption", {
+                            seq: revision,
+                            deployed: data.deployedSeq,
+                          })
+                        : t("stackYamlDiff.caption")
                   }
                 />
               </TabsContent>
@@ -437,7 +517,11 @@ export function ReviewPage({
                   void review.refetch();
                 }}
               >
-                {t("stackRollback.review.errors.reviewAgain")}
+                {t(
+                  restore
+                    ? "stackRestore.review.errors.reviewAgain"
+                    : "stackRollback.review.errors.reviewAgain",
+                )}
               </Button>
             ) : null}
           </AlertDescription>
@@ -450,7 +534,11 @@ export function ReviewPage({
           </p>
         ) : null}
         <Button asChild variant="outline" className="max-md:h-11">
-          {rollback ? (
+          {restore ? (
+            <Link to="/env/$envId/stacks/$stackId/drift" params={{ envId, stackId }}>
+              {t("stackRestore.review.footer.back")}
+            </Link>
+          ) : rollback ? (
             <Link
               to="/env/$envId/stacks/$stackId/history"
               params={{ envId, stackId }}

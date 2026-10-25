@@ -19,8 +19,10 @@ import {
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { DriftServiceList } from "@/features/stack-drift/drift-service-list";
 import { DriftSummary } from "@/features/stack-drift/drift-summary";
+import { RestoreAction } from "@/features/stack-drift/restore-action";
 import { NotDeployed } from "@/features/stacks/stack-overview";
 import { useT } from "@/i18n/use-t";
 import { formatRelative } from "@/lib/format";
@@ -139,7 +141,7 @@ function Body({ envId, stackId, name, data, target }: BodyProps) {
 
 // DriftPage is the page of a stack's drift (UI-SPEC "Drift page"): what runs on the environment against the revision
 // that is deployed. It checks the stack when it opens and again when asked, and shows what Bayplan knows until the
-// check comes back. Nothing here changes the stack.
+// check comes back. Nothing here changes the stack: Redeploy to restore opens the review, where a person confirms it.
 export function DriftPage({ envId, stackId }: DriftPageProps) {
   const t = useT();
   const stack = useQuery(stackQuery(envId, stackId));
@@ -219,6 +221,19 @@ export function DriftPage({ envId, stackId }: DriftPageProps) {
       ) : drift.failed ? null : (
         <Loading />
       )}
+      {data && (state === "drifted" || state === "none") ? (
+        <EditorFooter>
+          <p className="me-auto min-w-0 text-sm text-muted-foreground">
+            {t("stackRestore.revision", { seq: data.revision })}
+          </p>
+          <RestoreAction
+            envId={envId}
+            stackId={stackId}
+            drifted={state === "drifted"}
+            variant="default"
+          />
+        </EditorFooter>
+      ) : null}
     </div>
   );
 }

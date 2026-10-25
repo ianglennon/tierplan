@@ -23,7 +23,7 @@ interface ImagePinTableProps {
   // One row for each service with an image; absent while the review is on its way, when the rows
   // are skeletons and the card says the digests are being looked up.
   images?: StackReviewImage[];
-  // In update mode a row whose digest moved shows the old chip, an arrow and the new chip. In rollback mode
+  // In update mode a row whose digest moved shows the old chip, an arrow and the new chip. In rollback and restore mode
   // every row is the revision's own digest.
   mode?: ReviewMode;
   // The revision a roll back restores.
@@ -59,7 +59,7 @@ function DigestCell({
         <span className="flex flex-wrap items-center gap-2">
           <DigestChip digest={row.digest || row.current} />
           <span className="text-xs text-muted-foreground">
-            {mode === "rollback" && revision !== undefined
+            {(mode === "rollback" || mode === "restore") && revision !== undefined
               ? t("stackRollback.images.pinned", { seq: revision })
               : t("stackReview.images.pinned")}
           </span>
@@ -116,7 +116,7 @@ function NoteCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) {
       return <span className="text-muted-foreground">{t("stackReview.images.local")}</span>;
     default:
       // The note of a roll back's row only says the digest is the revision's, which the Digest column says.
-      return row.note && mode !== "rollback" ? (
+      return row.note && mode !== "rollback" && mode !== "restore" ? (
         <span className="text-muted-foreground">{row.note}</span>
       ) : (
         <span aria-hidden="true" className="text-muted-foreground">

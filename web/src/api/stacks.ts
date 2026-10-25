@@ -661,8 +661,9 @@ export async function revealFile(envId: string, stackId: string, path: string): 
 }
 
 // What a review is of: the saved draft (deploy), a newly looked-up digest for some services (update), or
-// an earlier revision with the digests it stored (rollback).
-export type ReviewMode = "deploy" | "update" | "rollback";
+// an earlier revision with the digests it stored (rollback), or the deployed revision again to put back what was
+// changed outside the stack (restore).
+export type ReviewMode = "deploy" | "update" | "rollback" | "restore";
 
 // ReviewRequestError is a review the server refused or that got no answer. The status is 0 when
 // the server could not be reached; the type is the problem type it named (target_changed,

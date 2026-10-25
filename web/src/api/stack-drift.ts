@@ -1,13 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
 import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
-import { isStackGone, StacksLoadError, stackKey } from "@/api/stacks";
+import { revisionsKey } from "@/api/stack-history";
+import {
+  DeployRequestError,
+  invalidateStacks,
+  isStackGone,
+  type StackDeployed,
+  StacksLoadError,
+  stackJobsKey,
+  stackKey,
+} from "@/api/stacks";
 
 export type StackDrift = components["schemas"]["StackDriftBody"];
 export type StackDriftService = components["schemas"]["StackDriftServiceBody"];
@@ -83,4 +92,43 @@ export function useDrift(envId: string, stackId: string): DriftView {
     checks: queryClient.getQueryState(freshOptions.queryKey)?.dataUpdateCount ?? 0,
     recheck: () => void fresh.refetch(),
   };
+}
+
+export interface RestoreStackInput {
+  // The deployed revision the review was made of, which the server checks is still the deployed one.
+  revision: number;
+}
+
+// useRestoreStack puts the deployed revision back (D-23): it redeploys exactly what the review showed, the compose
+// file, files, variables and stored digests, and the server records it as a new revision. It is only ever called from
+// the restore review's button, a person's explicit click: nothing restores drift by itself. It is never retried: a
+// restore whose answer was lost may have started, and the stack's page, read again, shows whether it did. The stack,
+// its drift, its history and the jobs list are read again whatever the answer.
+export function useRestoreStack(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackDeployed, DeployRequestError, RestoreStackInput>({
+    mutationFn: async ({ revision }) => {
+      try {
+        const res = await api.POST("/api/env/{envId}/stacks/{stackId}/rollback", {
+          params: { path: { envId, stackId } },
+          body: { mode: "restore", revision },
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new DeployRequestError(problem.status, problem.type, problem.fields);
+        }
+        return res.data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof DeployRequestError ? e : new DeployRequestError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: driftKey(envId, stackId) });
+      void queryClient.invalidateQueries({ queryKey: revisionsKey(envId, stackId) });
+      void queryClient.invalidateQueries({ queryKey: stackJobsKey });
+    },
+  });
 }

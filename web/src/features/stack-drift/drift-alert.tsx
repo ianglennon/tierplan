@@ -8,6 +8,7 @@ import type { StackDrift } from "@/api/stack-drift";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { DriftCause } from "@/features/stack-drift/drift-cause";
+import { RestoreAction } from "@/features/stack-drift/restore-action";
 import { useT } from "@/i18n/use-t";
 
 interface DriftAlertProps {
@@ -45,6 +46,7 @@ export function DriftAlert({ envId, stackId, name, drift }: DriftAlertProps) {
               {t("stackDrift.alert.view")}
             </Link>
           </Button>
+          <RestoreAction envId={envId} stackId={stackId} drifted variant="outline" ellipsis />
         </div>
       </AlertDescription>
     </Alert>

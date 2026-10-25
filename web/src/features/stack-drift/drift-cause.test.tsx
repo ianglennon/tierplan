@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -199,24 +200,39 @@ describe("the drifted services", () => {
 });
 
 describe("the Overview alert", () => {
+  // The alert offers Redeploy to restore, which reads the signed-in user and the stack; nothing here answers.
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({}, { status: 404 })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   function alert(over: Partial<React.ComponentProps<typeof DriftAlert>["drift"] & object>) {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <TestRouter>
-        <TooltipProvider>
-          <DriftAlert
-            envId="e1"
-            stackId="s1"
-            name="tracer"
-            drift={{
-              state: "drifted",
-              revision: 4,
-              count: 1,
-              causes: 0,
-              ...over,
-            }}
-          />
-        </TooltipProvider>
-      </TestRouter>,
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <DriftAlert
+              envId="e1"
+              stackId="s1"
+              name="tracer"
+              drift={{
+                state: "drifted",
+                revision: 4,
+                count: 1,
+                causes: 0,
+                ...over,
+              }}
+            />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
     );
     expect(screen.getByText("tracer has drifted from revision #4")).toBeTruthy();
     return document.querySelector('[data-slot="drift-alert"] [data-slot="drift-cause"]')

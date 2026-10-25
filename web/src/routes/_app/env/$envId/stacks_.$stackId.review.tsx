@@ -9,11 +9,11 @@ import { usePermission } from "@/hooks/use-me";
 import { z } from "@/lib/zod-config";
 
 // The review's search: what is reviewed (the saved draft, a fresh digest for some services, or an
-// earlier revision), the services an update names, as a comma list, and the revision a roll back
-// restores. A value that does not fit is dropped rather than refused, so an old or edited link still
+// earlier revision, or the deployed one again to restore the stack), the services an update names, as a
+// comma list, and the revision a roll back restores. A value that does not fit is dropped rather than refused, so an old or edited link still
 // opens the plain review (UI-SPEC "Screens").
 export const reviewSearchSchema = z.object({
-  mode: z.enum(["deploy", "update", "rollback"]).optional().catch(undefined),
+  mode: z.enum(["deploy", "update", "rollback", "restore"]).optional().catch(undefined),
   services: z.string().max(4000).optional().catch(undefined),
   revision: z.coerce.number().int().min(1).optional().catch(undefined),
 });

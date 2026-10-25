@@ -668,7 +668,7 @@ describe("Redeploy to restore", () => {
 
     const title = await screen.findByText("tracer has drifted from revision #4");
     const box = title.closest('[data-slot="drift-alert"]') as HTMLElement;
-    const link = within(box).getByRole("link", { name: "Redeploy to restore…" });
+    const link = await within(box).findByRole("link", { name: "Redeploy to restore…" });
     expect(link.getAttribute("href")).toBe(`/env/${ENV}/stacks/s1/review?mode=restore`);
   });
 
