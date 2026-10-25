@@ -32,6 +32,21 @@
         "lost": "The server didn't answer. The restore may have started: check the stack before you try again.",
         "generic": "Couldn't start the restore. Check the connection and try again."
       }
+    },
+    "console": {
+      "title": "Restoring {{name}}",
+      "retry": "Retry restore",
+      "announce": "Restore complete",
+      "complete": {
+        "title": "Restore complete",
+        "body": "{{name}} matches revision #{{revision}} again."
+      },
+      "failed": {
+        "title": "Restore failed"
+      },
+      "cancelled": {
+        "title": "Restore cancelled"
+      }
     }
   }
 }

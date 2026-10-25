@@ -6,6 +6,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { CircleX, Info } from "lucide-react";
 import { useRef } from "react";
 
+import { useRestoreStack } from "@/api/stack-drift";
 import { useRollbackToRevision } from "@/api/stack-history";
 import {
   type DeployRequestError,
@@ -113,6 +114,10 @@ function rollbackRefusal(t: Translate, err: DeployRequestError, envName: string)
       return t("stackRollback.console.errors.notGood");
     case "revision_not_found":
       return t("stackRollback.console.errors.gone");
+    case "deployed_changed":
+      return t("stackRestore.review.errors.deployedChanged");
+    case "no_deployed_revision":
+      return t("stackRestore.review.errors.none");
   }
   if (err.status === 0) return t("stackDeploy.rollback.errors.lost");
   return t("stackDeploy.rollback.errors.generic");
@@ -129,6 +134,7 @@ export function RollbackAction({
   stackId,
   retry,
   revision,
+  restore = false,
   variant = "default",
   caption = true,
 }: {
@@ -139,6 +145,8 @@ export function RollbackAction({
   // The revision a roll back to a chosen revision restores. A retry of one restores that revision again, not
   // the version before the deployed one; left out, the roll back restores that previous version.
   revision?: number;
+  // After a restore that failed: the button reads Retry restore and restores the deployed revision again, as a restore.
+  restore?: boolean;
   // The accent on the console, where it is the way forward; an outline beside the other actions of the
   // stack's page.
   variant?: "default" | "outline";
@@ -152,7 +160,8 @@ export function RollbackAction({
   const needs = useNeeds("stacks.deploy", envId);
   const previous = useRollbackStack(envId, stackId);
   const chosen = useRollbackToRevision(envId, stackId);
-  const rollback = revision === undefined ? previous : chosen;
+  const restored = useRestoreStack(envId, stackId);
+  const rollback = restore ? restored : revision === undefined ? previous : chosen;
   const now = useNow();
   const back = stack.data?.rollback;
   // A chosen revision is known; the server says if retention deleted it since.
@@ -163,7 +172,13 @@ export function RollbackAction({
     : available
       ? undefined
       : t("stackDeploy.rollback.noPrevious");
-  const label = t(retry ? "stackDeploy.rollback.retry" : "stackDeploy.rollback.action");
+  const label = t(
+    restore
+      ? "stackRestore.console.retry"
+      : retry
+        ? "stackDeploy.rollback.retry"
+        : "stackDeploy.rollback.action",
+  );
 
   // A second click that lands before the page has drawn the first one's pending state sends nothing.
   const sending = useRef(false);
@@ -187,7 +202,8 @@ export function RollbackAction({
         else toastError(message);
       },
     };
-    if (revision === undefined) previous.mutate(undefined, callbacks);
+    if (restore && revision !== undefined) restored.mutate({ revision }, callbacks);
+    else if (revision === undefined) previous.mutate(undefined, callbacks);
     else chosen.mutate({ revision }, callbacks);
   }
 
@@ -276,11 +292,13 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     </Button>
   );
   const rolledBack = job.mode === "rollback";
-  // For a roll back to a chosen revision: the revision it restores, which a retry restores again, and the
+  // A restore puts the deployed revision back to undo drift (D-23). It is a roll back to that revision with its own words.
+  const restored = job.mode === "restore";
+  // For a roll back to a chosen revision, or a restore: the revision it restores, which a retry restores again, and the
   // sentence that says Bayplan recorded the attempt as a revision of its own.
-  const restores = rolledBack && job.revision ? job.revision : undefined;
+  const restores = (rolledBack || restored) && job.revision ? job.revision : undefined;
   const recorded =
-    rolledBack && job.recordedRevision ? (
+    (rolledBack || restored) && job.recordedRevision ? (
       <p className="break-words">
         {t("stackRollback.console.failedRecorded", { recorded: job.recordedRevision })}
       </p>
@@ -297,6 +315,31 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
               {t("stacks.detail.gone.back")}
             </Link>
           </Button>
+        </div>
+      </section>
+    );
+  }
+  if (job.state === "done" && restored && job.revision) {
+    // A restore says the stack matches the deployed revision again, and where Bayplan recorded it (D-23).
+    return (
+      <section className="flex flex-col gap-3">
+        <h4 className="text-base font-semibold">{t("stackRestore.console.complete.title")}</h4>
+        <p className="text-sm break-words">
+          {t("stackRestore.console.complete.body", { name, revision: job.revision })}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {stack}
+          {job.recordedRevision ? (
+            <Button asChild variant="outline" className="max-md:h-11">
+              <Link
+                to="/env/$envId/stacks/$stackId/history"
+                params={{ envId, stackId }}
+                search={{ rev: job.recordedRevision }}
+              >
+                {t("stackRollback.console.openHistory")}
+              </Link>
+            </Button>
+          ) : null}
         </div>
       </section>
     );
@@ -382,7 +425,13 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
       <Alert variant="destructive">
         <CircleX aria-hidden="true" />
         <AlertTitle>
-          {t(rolledBack ? "stackDeploy.rollback.failed.title" : "stackDeploy.failed.title")}
+          {t(
+            restored
+              ? "stackRestore.console.failed.title"
+              : rolledBack
+                ? "stackDeploy.rollback.failed.title"
+                : "stackDeploy.failed.title",
+          )}
         </AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
           {unsettledSentence ? <p className="break-words">{unsettledSentence}</p> : null}
@@ -396,8 +445,9 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
             <RollbackAction
               envId={envId}
               stackId={stackId}
-              retry={rolledBack}
+              retry={rolledBack || restored}
               revision={restores}
+              restore={restored}
             />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>
@@ -418,7 +468,13 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
       <Alert>
         <Info aria-hidden="true" />
         <AlertTitle>
-          {t(rolledBack ? "stackDeploy.rollback.cancelled.title" : "stackDeploy.cancelled.title")}
+          {t(
+            restored
+              ? "stackRestore.console.cancelled.title"
+              : rolledBack
+                ? "stackDeploy.rollback.cancelled.title"
+                : "stackDeploy.cancelled.title",
+          )}
         </AlertTitle>
         <AlertDescription className="flex flex-col gap-3">
           {rows.length > 0 ? (
@@ -439,8 +495,9 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
             <RollbackAction
               envId={envId}
               stackId={stackId}
-              retry={rolledBack}
+              retry={rolledBack || restored}
               revision={restores}
+              restore={restored}
             />
             <Button asChild variant="outline" className="max-md:h-11">
               <Link to="/env/$envId/stacks/$stackId/editor" params={{ envId, stackId }}>

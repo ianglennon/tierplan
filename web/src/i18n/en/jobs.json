@@ -48,6 +48,12 @@
           "failed": "Failed",
           "cancelled": "Cancelled"
         },
+        "restore": {
+          "running": "Restoring",
+          "done": "Restored",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
         "stop": {
           "running": "Stopping",
           "done": "Stopped",
@@ -88,6 +94,10 @@
       "rollback": {
         "done": "Rolled back {{name}}.",
         "failed": "Roll back of {{name}} failed."
+      },
+      "restore": {
+        "done": "Restored {{name}}.",
+        "failed": "Restore of {{name}} failed."
       },
       "stop": {
         "done": "Stopped {{name}}.",

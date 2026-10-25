@@ -240,6 +240,7 @@
         "deployed": "Stack deployed",
         "deployed_rollback": "Rolled back stack {{name}} to revision #{{revision}}",
         "deployed_rollback_anon": "Rolled back stack {{name}}",
+        "deployed_restore": "Restored stack {{name}} from drift",
         "stopped": "Stack stopped",
         "started": "Stack started",
         "removed": "Stack removed",
