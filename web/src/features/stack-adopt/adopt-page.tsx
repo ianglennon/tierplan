@@ -4,9 +4,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleX, Lock, SquareStack } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { AdoptRequestError, adoptCheckQuery, useAdoptStack } from "@/api/stack-adopt";
+import {
+  AdoptRequestError,
+  adoptCheckQuery,
+  MAX_PASTED_BYTES,
+  type PastedFile,
+  useAdoptStack,
+  usePastedCheck,
+} from "@/api/stack-adopt";
+import type { StackVariable } from "@/api/stacks";
 import { isUnmanagedGone, managedStackIdOf, unmanagedStackQuery } from "@/api/unmanaged-stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -25,8 +33,11 @@ import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { AdoptCheckCard } from "@/features/stack-adopt/adopt-check-card";
+import { AdoptSource, type AdoptSourceKind } from "@/features/stack-adopt/adopt-source";
 import { EnvValuesNotice } from "@/features/stack-adopt/env-values-notice";
 import { OwnershipTable } from "@/features/stack-adopt/ownership-table";
+import { PastedFileCheck } from "@/features/stack-adopt/pasted-file-check";
+import { type PastedValue, PastedVariables } from "@/features/stack-adopt/pasted-variables";
 import { PolicyHits } from "@/features/stack-adopt/policy-hits";
 import {
   NotAdoptableNote,
@@ -121,6 +132,10 @@ function refusalText(t: Translate, err: AdoptRequestError, name: string, envName
         name,
         reason: err.detail || t("stackGenerated.error.reasonUnknown"),
       });
+    case "pasted_file_invalid":
+      return t("stackAdoptPaste.error.invalid", { reason: err.detail });
+    case "secret_too_short":
+      return t("stackAdoptPaste.error.secretShort");
   }
   if (err.status === 0) return t("stackAdopt.error.lost");
   if (err.status === 403) return t("stackAdopt.error.permission", { env: envName });
@@ -141,7 +156,12 @@ const CHECK_REFUSALS = [
 // the check the person saw and nothing else: the server rebuilds the definition itself, stores the stack with its
 // first revision, and sends nothing to the engine. It is never retried by itself. When what runs has changed since
 // the check, the server refuses and the page offers Check again, which runs the check again.
-export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
+export function AdoptPage(props: AdoptPageProps) {
+  // Another stack is another page: the pasted file and the values typed for it are never carried over to it.
+  return <AdoptPageBody key={`${props.envId}/${props.name}`} {...props} />;
+}
+
+function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const needs = useNeeds("stacks.create", envId);
@@ -149,22 +169,79 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
   const check = useQuery(adoptCheckQuery(envId, name));
   const adopt = useAdoptStack(envId, name);
   const [refusal, setRefusal] = useState<AdoptRequestError | null>(null);
+  // The original compose file, when the person has it (D-12). The text and the values typed for its variables live
+  // here and nowhere else: not in a query, a storage, the URL or a toast. They go with the page, on Cancel, on a route
+  // change and on unmount, and are cleared once the stack is stored.
+  const [source, setSource] = useState<AdoptSourceKind>("rebuild");
+  const [pastedText, setPastedText] = useState("");
+  const [pastedValues, setPastedValues] = useState<Record<string, PastedValue>>({});
+  const [showToken, setShowToken] = useState(0);
   // True once the stack is stored: the lists are read again and this name is managed now, so the page must not
   // turn into the gone state while the route takes the person to the new stack.
   const [stored, setStored] = useState(false);
   const { data } = query;
-  const checkError = check.error instanceof AdoptRequestError ? check.error : null;
-  const checking = check.isFetching;
+  const paste = source === "paste";
+  const hasText = pastedText.trim() !== "" && pastedText.length <= MAX_PASTED_BYTES;
+  // The variables the file uses are those its last settled check named; they stay listed while the next check runs, so
+  // a field being typed in does not vanish under the person. A value typed for a name the file no longer uses is
+  // not sent.
+  const [known, setKnown] = useState<StackVariable[]>([]);
+  const usedNames = useMemo(
+    () =>
+      known
+        .filter((v) => !v.unused)
+        .map((v) => v.name)
+        .join("\u0000"),
+    [known],
+  );
+  const varsKey = useMemo(() => {
+    const names = new Set(usedNames.split("\u0000"));
+    return JSON.stringify(
+      Object.entries(pastedValues)
+        .filter(([n, v]) => names.has(n) && v.value !== "")
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([n, v]) => ({ name: n, value: v.value, secret: v.secret })),
+    );
+  }, [usedNames, pastedValues]);
+  // The input keeps its identity while its content is the same: a check belongs to the input it was made for.
+  const pastedInput = useMemo<PastedFile | null>(
+    () =>
+      paste && hasText
+        ? { compose: pastedText, vars: JSON.parse(varsKey) as PastedFile["vars"] }
+        : null,
+    [paste, hasText, pastedText, varsKey],
+  );
+  const pastedCheck = usePastedCheck(envId, name, pastedInput);
+  const settledVariables = pastedCheck.data?.variables;
+  useEffect(() => {
+    if (settledVariables) setKnown(settledVariables);
+  }, [settledVariables]);
+  const checkError =
+    (paste ? pastedCheck.error : check.error) instanceof AdoptRequestError
+      ? ((paste ? pastedCheck.error : check.error) as AdoptRequestError)
+      : null;
+  // The check that Adopt is sent with: the pasted file's when the person has it, else the rebuild's.
+  const checkData = paste ? pastedCheck.data : check.data;
+  const checking = paste ? pastedCheck.checking : check.isFetching;
   const gone =
     !stored && (isUnmanagedGone(query.error) || checkError?.type === "unmanaged_stack_not_found");
   useDocumentTitle(t("stackAdopt.page.title", { name }));
 
   async function onAdopt() {
-    if (!data || !check.data || checking || adopt.isPending) return;
+    if (!data || !checkData || checking || adopt.isPending) return;
     setRefusal(null);
     try {
-      // The fingerprint of the check the person saw, not of the page's own read, which polls.
-      const made = await adopt.mutateAsync({ fingerprint: check.data.fingerprint });
+      // The fingerprint of the check the person saw, not of the page's own read, which polls. A pasted file goes as
+      // text, to be checked again by the server; the browser never sends what it concluded about it.
+      const made = await adopt.mutateAsync({
+        fingerprint: checkData.fingerprint,
+        pasted: paste && pastedInput ? pastedInput : undefined,
+      });
+      // The file and the values typed for it are gone from the page the moment the stack is stored.
+      setPastedText("");
+      setPastedValues({});
+      setKnown([]);
+      adopt.reset();
       setStored(true);
       toastSuccess(t("stackAdopt.toast.adopted", { name, env: envName }));
       onAdopted(made.id);
@@ -175,12 +252,26 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
 
   // Why Adopt stack is off, in the order that matters: the role it takes, a stack that cannot be adopted, and a
   // stack the page has not read yet. Absent when the person may adopt.
+  // For a pasted file the reasons go on: nothing pasted, a check still to come, and a file with nothing to adopt yet.
+  const requiredCount = (pastedCheck.data?.variables ?? []).filter(
+    (v) => v.required && !v.unused,
+  ).length;
   let reason: string | undefined;
   if (!needs.allowed) reason = needs.reason;
   else if (data && !data.adoptable) reason = data.reason;
-  else if (!data || checking) reason = t("stackAdopt.checking", { name });
-  else if (!check.data) reason = t("stackAdoptCheck.off.failed", { name });
-  const off = !needs.allowed || !data?.adoptable || !check.data || checking;
+  else if (!data) reason = t("stackAdopt.checking", { name });
+  else if (paste && !pastedInput) reason = t("stackAdoptPaste.off.empty");
+  else if (checking) reason = t("stackAdopt.checking", { name });
+  else if (!checkData) reason = t("stackAdoptCheck.off.failed", { name });
+  else if (paste && checkData.blocked) {
+    reason =
+      requiredCount > 0
+        ? t("stackAdoptPaste.off.fill", { count: requiredCount })
+        : t("stackAdoptPaste.off.errors");
+  }
+  const off = reason !== undefined;
+  // The notes under the title come from the newest check there is, the pasted file's or the rebuild's.
+  const notes = (paste ? pastedCheck.data : undefined) ?? check.data;
   const checkRefusal = checkError?.type === "stack_already_managed" ? checkError : null;
   const checkFailure =
     checkError && !CHECK_REFUSALS.includes(checkError.type ?? "") ? checkError : null;
@@ -188,7 +279,8 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
   function checkAgain() {
     setRefusal(null);
     void query.refetch();
-    void check.refetch();
+    if (paste) pastedCheck.retry();
+    else void check.refetch();
   }
 
   if (gone) {
@@ -258,24 +350,53 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
       {data ? (
         <>
           {!data.adoptable && data.reason ? <NotAdoptableNote reason={data.reason} /> : null}
-          {data.orphan || check.data?.orphan ? <OrphanIdNote /> : null}
-          {data.portainer || check.data?.portainer ? <PortainerAdvice /> : null}
+          {data.orphan || notes?.orphan ? <OrphanIdNote /> : null}
+          {data.portainer || notes?.portainer ? <PortainerAdvice /> : null}
         </>
       ) : query.isError ? null : (
         <Skeleton className="h-16 w-full" aria-hidden="true" />
       )}
-      <PolicyHits entries={(check.data?.policy.entries ?? []).map((e) => e.text)} />
+      <PolicyHits entries={(notes?.policy.entries ?? []).map((e) => e.text)} />
       <EnvValuesNotice />
+
+      <AdoptSource
+        source={source}
+        onSourceChange={(next) => {
+          setSource(next);
+          setRefusal(null);
+        }}
+      >
+        {paste ? (
+          <>
+            <PastedFileCheck
+              value={pastedText}
+              onChange={setPastedText}
+              check={pastedCheck.data}
+              checking={pastedCheck.checking}
+              onUseRebuild={() => setSource("rebuild")}
+              onShowDifferences={() => setShowToken((n) => n + 1)}
+            />
+            <PastedVariables
+              variables={known}
+              values={pastedValues}
+              onChange={(n, next) => setPastedValues((all) => ({ ...all, [n]: next }))}
+              settled={!!pastedCheck.data && !pastedCheck.checking}
+            />
+          </>
+        ) : null}
+      </AdoptSource>
 
       <AdoptCheckCard
         name={name}
         target={data?.target === "standalone" ? "standalone" : "swarm"}
-        check={check.data}
+        check={checkData}
         checking={checking}
         error={checkFailure}
         onRetry={checkAgain}
+        idle={paste && !pastedInput ? t("stackAdoptPaste.card.idle") : undefined}
+        showToken={showToken}
       />
-      <OwnershipTable name={name} check={check.data} checking={checking} />
+      <OwnershipTable name={name} check={checkData} checking={checking} />
 
       {refusal || checkRefusal ? (
         <Refusal

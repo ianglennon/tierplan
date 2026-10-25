@@ -26,6 +26,10 @@ interface AdoptCheckCardProps {
   // Why the check failed, when it did.
   error?: AdoptRequestError | null;
   onRetry: () => void;
+  // A line to show in place of a result when there is nothing to check yet (a pasted file that is still empty).
+  idle?: string;
+  // A number that goes up when the person asks to see the differences of a pasted file.
+  showToken?: number;
 }
 
 // OwnershipOnlyRow says how many services (containers on a host) differ from what runs in nothing but Bayplan's
@@ -89,9 +93,13 @@ export function AdoptCheckCard({
   checking,
   error,
   onRetry,
+  idle,
+  showToken,
 }: AdoptCheckCardProps) {
   const t = useT();
   const settled = check && !checking ? check : undefined;
+  // A pasted file with an error is not compared with what runs: the paste field lists what to fix.
+  const blocked = settled?.blocked === true;
   return (
     <SettingsCard title={t("stackAdoptCheck.card.title")}>
       <div aria-busy={checking || undefined} className="flex min-w-0 flex-col gap-4">
@@ -107,7 +115,11 @@ export function AdoptCheckCard({
 
         {/* The one announcement of a settled result: it is filled in when the check ends. */}
         <div role="status" aria-live="polite" className="flex flex-col gap-1 text-sm">
-          {settled?.clean ? (
+          {idle && !checking && !error ? <p className="text-muted-foreground">{idle}</p> : null}
+          {blocked ? (
+            <p className="text-muted-foreground">{t("stackAdoptPaste.card.blocked")}</p>
+          ) : null}
+          {settled?.clean && !blocked ? (
             <p className="flex items-start gap-2 font-medium">
               <CircleCheck
                 aria-hidden="true"
@@ -116,7 +128,7 @@ export function AdoptCheckCard({
               <span className="min-w-0 break-words">{t("stackAdoptCheck.clean")}</span>
             </p>
           ) : null}
-          {settled && !settled.clean ? (
+          {settled && !settled.clean && !blocked ? (
             <>
               <p className="flex items-start gap-2 font-medium">
                 <TriangleAlert
@@ -157,8 +169,12 @@ export function AdoptCheckCard({
           </Alert>
         ) : null}
 
-        {settled?.gaps?.length ? <RoundTripGaps services={settled.gaps} /> : null}
-        {settled ? <OwnershipOnlyRow names={settled.ownershipOnly ?? []} target={target} /> : null}
+        {settled?.gaps?.length ? (
+          <RoundTripGaps services={settled.gaps} showToken={showToken} />
+        ) : null}
+        {settled && !blocked ? (
+          <OwnershipOnlyRow names={settled.ownershipOnly ?? []} target={target} />
+        ) : null}
       </div>
     </SettingsCard>
   );

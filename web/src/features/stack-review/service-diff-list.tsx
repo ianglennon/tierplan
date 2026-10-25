@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { ArrowRight, ChevronRight, RotateCcw, RotateCw } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import type { StackReviewService } from "@/api/stacks";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -29,6 +29,9 @@ interface ServiceDiffListProps {
   // they are not the review's own (the Adopt page's are "Running now" and "After the first deploy").
   headings?: { current?: string; next?: string };
   caption?: (name: string) => string;
+  // A number that goes up when every row that can open should open ("Show differences" on the Adopt page). 0 or absent
+  // leaves each row as it is.
+  openAll?: number;
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -104,7 +107,7 @@ function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
   );
 }
 
-interface RowProps extends Pick<ServiceDiffListProps, "headings" | "caption"> {
+interface RowProps extends Pick<ServiceDiffListProps, "headings" | "caption" | "openAll"> {
   service: StackReviewService;
   defaultOpen: boolean;
 }
@@ -148,10 +151,13 @@ function CarriedRow({ service }: { service: StackReviewService }) {
 // ServiceRow is one service: the change in words with its glyph, the name in mono, how many
 // settings changed and the image change. A changed or added service expands to the field-level
 // difference; a removed one is its summary row and nothing more.
-function ServiceRow({ service, defaultOpen, headings, caption }: RowProps) {
+function ServiceRow({ service, defaultOpen, headings, caption, openAll }: RowProps) {
   const t = useT();
   const change = service.change as keyof typeof GLYPH;
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (openAll) setOpen(true);
+  }, [openAll]);
   const removed = service.change === "removed";
   const hidden = service.hiddenChanges ?? [];
   const rows = useMemo(
@@ -233,7 +239,7 @@ function ServiceRow({ service, defaultOpen, headings, caption }: RowProps) {
 // services a standalone deploy recreates or restarts because another is recreated. A first deploy lists
 // every service as Added. Masked values never appear on either side: the server sends them
 // hidden, and a change to a hidden one is only a path.
-export function ServiceDiffList({ services, headings, caption }: ServiceDiffListProps) {
+export function ServiceDiffList({ services, headings, caption, openAll }: ServiceDiffListProps) {
   // The server lists added and changed services by name, then the ones a recreate carries, then
   // the removed ones; the order is kept here too, so a list that came in another order still ends
   // with what goes away.
@@ -260,6 +266,7 @@ export function ServiceDiffList({ services, headings, caption }: ServiceDiffList
             defaultOpen={open <= OPEN_BY_DEFAULT}
             headings={headings}
             caption={caption}
+            openAll={openAll}
           />
         ),
       )}

@@ -264,7 +264,11 @@ describe("the Adopt page: adopting", () => {
     await waitFor(() => expect(onAdopted).toHaveBeenCalledWith("s9"));
     // The one request that is not a read is the adoption, and it carries the fingerprint alone (D-14).
     expect(writes()).toEqual([
-      { method: "POST", path: `${PATH}/adopt`, body: { fingerprint: "fp-check" } },
+      {
+        method: "POST",
+        path: `${PATH}/adopt`,
+        body: { fingerprint: "fp-check", source: "rebuild" },
+      },
     ]);
     expect(toasts.success).toHaveBeenCalledWith("Adopted legacy. Nothing changed on Prod.");
   });

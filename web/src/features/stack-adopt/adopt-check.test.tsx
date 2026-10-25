@@ -491,7 +491,9 @@ describe("the check and Adopt", () => {
     fireEvent.click(adoptButton());
 
     await waitFor(() => expect(onAdopted).toHaveBeenCalledWith("s9"));
-    expect(adoptRequests().map((r) => r.body)).toEqual([{ fingerprint: "fp-check" }]);
+    expect(adoptRequests().map((r) => r.body)).toEqual([
+      { fingerprint: "fp-check", source: "rebuild" },
+    ]);
   });
 
   it("runs the check again after adopt_stale, and Adopt then sends the new fingerprint", async () => {
@@ -512,8 +514,8 @@ describe("the check and Adopt", () => {
 
     await waitFor(() => expect(onAdopted).toHaveBeenCalledWith("s9"));
     expect(adoptRequests().map((r) => r.body)).toEqual([
-      { fingerprint: "fp-1" },
-      { fingerprint: "fp-2" },
+      { fingerprint: "fp-1", source: "rebuild" },
+      { fingerprint: "fp-2", source: "rebuild" },
     ]);
   });
 });
