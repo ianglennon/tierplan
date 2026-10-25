@@ -46,6 +46,8 @@ func Marshal(p *types.Project) ([]byte, error) {
 				stacks.ShortenPorts(svc)
 				plainLists(svc)
 				memorySizes(svc)
+				shortVolumes(svc)
+				tidyDurations(svc)
 				orderKeys(svc)
 			}
 		}
@@ -112,6 +114,13 @@ func plainLists(svc *yaml.Node) {
 			seq.Content = append(seq.Content, nets.Content[i])
 		}
 		replaceValue(svc, "networks", seq)
+	} else if nets != nil && nets.Kind == yaml.MappingNode {
+		// A network with no settings beside ones that have some reads as {}, not as null.
+		for i := 1; i < len(nets.Content); i += 2 {
+			if v := nets.Content[i]; v.Kind == yaml.ScalarNode && v.Tag == "!!null" {
+				nets.Content[i] = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Style: yaml.FlowStyle}
+			}
+		}
 	}
 	for _, key := range []string{"secrets", "configs"} {
 		refs := mappingValue(svc, key)
@@ -146,28 +155,119 @@ func replaceValue(m *yaml.Node, key string, value *yaml.Node) {
 	}
 }
 
-// memorySizes writes deploy.resources.limits.memory and reservations.memory with a unit, 512M instead of
-// "536870912". A size that no unit divides evenly stays in bytes.
+// memorySizes writes deploy.resources.limits.memory, reservations.memory and the size of a tmpfs mount with a unit,
+// 512M instead of "536870912". A size that no unit divides evenly stays in bytes.
 func memorySizes(svc *yaml.Node) {
-	deploy := mappingValue(svc, "deploy")
-	if deploy == nil || deploy.Kind != yaml.MappingNode {
-		return
-	}
-	res := mappingValue(deploy, "resources")
-	if res == nil || res.Kind != yaml.MappingNode {
-		return
-	}
-	for _, side := range []string{"limits", "reservations"} {
-		part := mappingValue(res, side)
-		if part == nil || part.Kind != yaml.MappingNode {
-			continue
+	sizeOf := func(n *yaml.Node, key string) {
+		if n == nil || n.Kind != yaml.MappingNode {
+			return
 		}
-		if mem := mappingValue(part, "memory"); mem != nil && mem.Kind == yaml.ScalarNode {
-			if n, err := strconv.ParseInt(mem.Value, 10, 64); err == nil {
-				mem.Value, mem.Tag, mem.Style = byteSize(n), "!!str", 0
+		if v := mappingValue(n, key); v != nil && v.Kind == yaml.ScalarNode {
+			if bytes, err := strconv.ParseInt(v.Value, 10, 64); err == nil {
+				v.Value, v.Tag, v.Style = byteSize(bytes), "!!str", 0
 			}
 		}
 	}
+	if deploy := mappingValue(svc, "deploy"); deploy != nil && deploy.Kind == yaml.MappingNode {
+		if res := mappingValue(deploy, "resources"); res != nil && res.Kind == yaml.MappingNode {
+			sizeOf(mappingValue(res, "limits"), "memory")
+			sizeOf(mappingValue(res, "reservations"), "memory")
+		}
+	}
+	if vols := mappingValue(svc, "volumes"); vols != nil && vols.Kind == yaml.SequenceNode {
+		for _, v := range vols.Content {
+			if v.Kind == yaml.MappingNode {
+				sizeOf(mappingValue(v, "tmpfs"), "size")
+			}
+		}
+	}
+}
+
+// shortVolumes writes a mount as source:target[:ro] when that says everything the long form does: a named volume
+// or an absolute bind with no options, and an anonymous volume as its target.
+func shortVolumes(svc *yaml.Node) {
+	vols := mappingValue(svc, "volumes")
+	if vols == nil || vols.Kind != yaml.SequenceNode {
+		return
+	}
+	for i, v := range vols.Content {
+		if short, ok := shortVolume(v); ok {
+			vols.Content[i] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: short}
+		}
+	}
+}
+
+func shortVolume(v *yaml.Node) (string, bool) {
+	if v.Kind != yaml.MappingNode {
+		return "", false
+	}
+	var typ, source, target string
+	var readOnly bool
+	for i := 0; i+1 < len(v.Content); i += 2 {
+		k, val := v.Content[i].Value, v.Content[i+1]
+		if val.Kind != yaml.ScalarNode {
+			return "", false
+		}
+		switch k {
+		case "type":
+			typ = val.Value
+		case "source":
+			source = val.Value
+		case "target":
+			target = val.Value
+		case "read_only":
+			readOnly = val.Value == "true"
+		default:
+			return "", false
+		}
+	}
+	if target == "" || strings.ContainsAny(target+source, ": ") {
+		return "", false
+	}
+	switch {
+	case typ == "volume" && source == "" && !readOnly:
+		return target, true
+	case typ == "volume" && source != "", typ == "bind" && strings.HasPrefix(source, "/"):
+		short := source + ":" + target
+		if readOnly {
+			short += ":ro"
+		}
+		return short, true
+	}
+	return "", false
+}
+
+// durationKeys are the keys whose value is a duration.
+var durationKeys = map[string]bool{
+	"delay": true, "window": true, "monitor": true, "interval": true, "timeout": true,
+	"start_period": true, "start_interval": true, "stop_grace_period": true,
+}
+
+// tidyDurations writes 2m where Go prints 2m0s and 1h where it prints 1h0m0s.
+func tidyDurations(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if v := n.Content[i+1]; durationKeys[n.Content[i].Value] && v.Kind == yaml.ScalarNode {
+				v.Value = tidyDuration(v.Value)
+			}
+		}
+	}
+	for _, c := range n.Content {
+		tidyDurations(c)
+	}
+}
+
+func tidyDuration(s string) string {
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 // byteSize is n bytes with the largest unit that divides it evenly, in the spelling compose reads back to the

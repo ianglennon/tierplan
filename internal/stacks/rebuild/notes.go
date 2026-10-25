@@ -16,6 +16,9 @@ const (
 	NoteNetworkNotOverlay = "network_not_overlay"
 	// NoteImageUnpinned: a service runs an image with no digest, so its pin is the reference as it is.
 	NoteImageUnpinned = "image_unpinned"
+	// NoteCPUsInexact: a processor limit or reservation is exact to nine decimals in the swarm spec but compose
+	// holds it as a 32-bit float, so the file carries the nearest value it can.
+	NoteCPUsInexact = "cpus_inexact"
 )
 
 func notePrefix(namespace, service, name string) Note {
@@ -36,5 +39,12 @@ func noteUnpinned(service, image string) Note {
 	return Note{
 		Service: service, Code: NoteImageUnpinned,
 		Message: fmt.Sprintf("%s runs %s, which has no digest, so it is pinned to the reference as it is.", service, image),
+	}
+}
+
+func noteCPUs(where string, nano int64) Note {
+	return Note{
+		Code:    NoteCPUsInexact,
+		Message: fmt.Sprintf("The processor %s is %d billionths of a CPU, which a compose file can't hold exactly. The file has the nearest value.", where, nano),
 	}
 }

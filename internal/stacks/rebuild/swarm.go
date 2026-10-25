@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"fmt"
 	"maps"
+	"math/big"
 	"os"
 	"slices"
 	"strconv"
@@ -240,7 +241,8 @@ func userLabels(in map[string]string) types.Labels {
 }
 
 // prepareFiles gives every secret and config its key before any service is written, so the key a reference uses
-// can be the name of the file it mounts as (db_password) when nothing else has it.
+// can be the name of the file it mounts as (db_password) when that is a plain name and nothing else has it. A
+// target that is a path (/etc/ssl/key.pem) is not a key.
 func (b *builder) prepareFiles(services []SwarmService) {
 	for _, svc := range services {
 		cs := svc.Spec.TaskTemplate.ContainerSpec
@@ -248,12 +250,12 @@ func (b *builder) prepareFiles(services []SwarmService) {
 			continue
 		}
 		for _, r := range cs.Secrets {
-			if name := b.secretName(r); name != "" && r.File != nil {
+			if name := b.secretName(r); name != "" && r.File != nil && safeKey(r.File.Name) == r.File.Name {
 				b.secretKeys.try(name, r.File.Name)
 			}
 		}
 		for _, r := range cs.Configs {
-			if name := b.configName(r); name != "" && r.File != nil && r.Runtime == nil {
+			if name := b.configName(r); name != "" && r.File != nil && r.Runtime == nil && safeKey(r.File.Name) == r.File.Name {
 				b.configKeys.try(name, r.File.Name)
 			}
 		}
@@ -328,7 +330,7 @@ func (b *builder) service(svc SwarmService) (string, types.ServiceConfig, error)
 	out.Environment = environment(cs.Env)
 	out.Labels = userLabels(cs.Labels)
 
-	d, err := b.deploy(spec)
+	d, err := b.deploy(short, spec)
 	if err != nil {
 		return "", types.ServiceConfig{}, fmt.Errorf("rebuild: service %s: %w", svc.Name, err)
 	}
@@ -342,7 +344,132 @@ func (b *builder) service(svc SwarmService) (string, types.ServiceConfig, error)
 	}
 	out.Secrets = b.secretRefs(cs.Secrets)
 	out.Configs = b.configRefs(cs.Configs)
+	b.containerSettings(short, cs, &out)
 	return short, out, nil
+}
+
+// containerSettings rebuilds the settings of the container spec that are a plain inverse of what convert reads:
+// the names it gives the container, how it runs and the limits of the process.
+func (b *builder) containerSettings(short string, cs *swarm.ContainerSpec, out *types.ServiceConfig) {
+	out.Hostname = cs.Hostname
+	out.ExtraHosts = extraHosts(cs.Hosts)
+	if dns := cs.DNSConfig; dns != nil {
+		for _, ns := range dns.Nameservers {
+			out.DNS = append(out.DNS, ns.String())
+		}
+		out.DNSSearch = types.StringList(slices.Clone(dns.Search))
+		out.DNSOpts = slices.Clone(dns.Options)
+	}
+	out.WorkingDir = cs.Dir
+	out.User = cs.User
+	out.GroupAdd = slices.Clone(cs.Groups)
+	out.StopGracePeriod = durationPtr(cs.StopGracePeriod)
+	out.StopSignal = cs.StopSignal
+	out.Tty = cs.TTY
+	out.StdinOpen = cs.OpenStdin
+	out.ReadOnly = cs.ReadOnly
+	if cs.Init != nil {
+		v := *cs.Init
+		out.Init = &v
+	}
+	if len(cs.Sysctls) > 0 {
+		out.Sysctls = types.Mapping(maps.Clone(cs.Sysctls))
+	}
+	out.CapAdd, out.CapDrop = capabilities(cs.CapabilityAdd), capabilities(cs.CapabilityDrop)
+	out.Ulimits = ulimits(cs.Ulimits)
+	out.OomScoreAdj = cs.OomScoreAdj
+	if !isolationIsDefault(cs.Isolation) {
+		out.Isolation = string(cs.Isolation)
+	}
+	if p := cs.Privileges; p != nil && p.CredentialSpec != nil {
+		out.CredentialSpec = b.credentialSpec(cs, p.CredentialSpec)
+	}
+}
+
+// extraHosts turns swarm's "IP-address hostname" entries into extra_hosts, which is a map from a name to the
+// addresses it has.
+func extraHosts(hosts []string) types.HostsList {
+	var out types.HostsList
+	for _, h := range hosts {
+		fields := strings.Fields(h)
+		if len(fields) < 2 {
+			continue
+		}
+		if out == nil {
+			out = types.HostsList{}
+		}
+		for _, name := range fields[1:] {
+			out[name] = append(out[name], fields[0])
+		}
+	}
+	return out
+}
+
+// capabilities are capability names the way a person writes them: convert gives each the CAP_ prefix, so it is
+// left off here.
+func capabilities(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, c := range in {
+		out[i] = strings.TrimPrefix(c, "CAP_")
+	}
+	return out
+}
+
+// ulimits turns the limits of a container spec into the map a file writes: one number when the soft and hard limits
+// are the same.
+func ulimits(in []*container.Ulimit) map[string]*types.UlimitsConfig {
+	var out map[string]*types.UlimitsConfig
+	for _, u := range in {
+		if u == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]*types.UlimitsConfig{}
+		}
+		if u.Soft == u.Hard {
+			out[u.Name] = &types.UlimitsConfig{Single: int(u.Soft)}
+		} else {
+			out[u.Name] = &types.UlimitsConfig{Soft: int(u.Soft), Hard: int(u.Hard)}
+		}
+	}
+	return out
+}
+
+// credentialSpec rebuilds credential_spec. A spec read from a config names the config by ID; the file names it by
+// the key of an external top-level config, like any other reference to a config.
+func (b *builder) credentialSpec(cs *swarm.ContainerSpec, in *swarm.CredentialSpec) *types.CredentialSpecConfig {
+	out := &types.CredentialSpecConfig{File: in.File, Registry: in.Registry}
+	if in.Config != "" {
+		name := ""
+		for _, r := range cs.Configs {
+			if r != nil && r.ConfigID == in.Config {
+				name = b.configName(r)
+			}
+		}
+		if name == "" {
+			for _, o := range b.in.Configs {
+				if o.ID == in.Config {
+					name = o.Name
+				}
+			}
+		}
+		if name != "" {
+			out.Config = b.declareConfig(name)
+		}
+	}
+	return out
+}
+
+// durationPtr is a compose duration for a pointer to one, nil for nil.
+func durationPtr(d *time.Duration) *types.Duration {
+	if d == nil {
+		return nil
+	}
+	v := types.Duration(*d)
+	return &v
 }
 
 // environment turns KEY=value entries into the file's map. An entry with no = names a variable with no value, which
@@ -363,17 +490,28 @@ func environment(env []string) types.MappingWithEquals {
 	return out
 }
 
-// deploy rebuilds the deploy block: the mode and replicas and the labels of the service.
-func (b *builder) deploy(spec swarm.ServiceSpec) (*types.DeployConfig, error) {
+// deploy rebuilds the deploy block: the mode and replicas, the labels, the resources, the restart, update and
+// rollback policies, the placement and the endpoint mode.
+func (b *builder) deploy(short string, spec swarm.ServiceSpec) (*types.DeployConfig, error) {
 	d := &types.DeployConfig{Labels: userLabels(spec.Labels)}
 	mode, replicas, err := serviceMode(spec.Mode)
 	if err != nil {
 		return nil, err
 	}
 	d.Mode, d.Replicas = mode, replicas
-	if ep := spec.EndpointSpec; ep != nil && ep.Mode == swarm.ResolutionModeDNSRR {
+	if ep := spec.EndpointSpec; ep != nil && !endpointModeIsDefault(ep.Mode) {
 		d.EndpointMode = string(ep.Mode)
 	}
+	d.UpdateConfig = updateConfig(spec.UpdateConfig)
+	d.RollbackConfig = updateConfig(spec.RollbackConfig)
+	var notes []Note
+	d.Resources, notes = resources(spec.TaskTemplate.Resources)
+	for _, n := range notes {
+		n.Service = short
+		b.note(n)
+	}
+	d.RestartPolicy = restartPolicy(spec.TaskTemplate.RestartPolicy)
+	d.Placement = placement(spec.TaskTemplate.Placement)
 	if isZero(*d) {
 		return nil, nil
 	}
@@ -392,7 +530,7 @@ func isZero(d types.DeployConfig) bool {
 func serviceMode(m swarm.ServiceMode) (string, *int, error) {
 	switch {
 	case m.Replicated != nil:
-		if m.Replicated.Replicas == nil || *m.Replicated.Replicas == 1 {
+		if replicasAreDefault(m.Replicated.Replicas) {
 			return "", nil, nil
 		}
 		n := int(*m.Replicated.Replicas) //nolint:gosec // a replica count that does not fit an int is not a count anyone set
@@ -421,14 +559,15 @@ func ports(ep *swarm.EndpointSpec) []types.ServicePortConfig {
 	}
 	out := make([]types.ServicePortConfig, 0, len(ep.Ports))
 	for _, p := range ep.Ports {
-		pc := types.ServicePortConfig{Name: p.Name, Target: p.TargetPort, Mode: string(cmp.Or(p.PublishMode, swarm.PortConfigPublishModeIngress))}
+		pc := types.ServicePortConfig{Name: p.Name, Target: p.TargetPort}
+		if !publishModeIsDefault(p.PublishMode) {
+			pc.Mode = string(p.PublishMode)
+		}
 		if p.PublishedPort != 0 {
 			pc.Published = strconv.FormatUint(uint64(p.PublishedPort), 10)
 		}
-		if proto := string(p.Protocol); proto != "" {
-			pc.Protocol = proto
-		} else {
-			pc.Protocol = "tcp"
+		if !protocolIsDefault(string(p.Protocol)) {
+			pc.Protocol = string(p.Protocol)
 		}
 		out = append(out, pc)
 	}
@@ -589,7 +728,17 @@ func (b *builder) serviceMounts(mounts []mount.Mount) []types.ServiceVolumeConfi
 		case mount.TypeBind:
 			v.Source = m.Source
 			if bo := m.BindOptions; bo != nil && bo.Propagation != "" {
-				v.Bind = &types.ServiceVolumeBind{Propagation: string(bo.Propagation)}
+				// create_host_path is true unless the file says otherwise, and is then left out of the file.
+				v.Bind = &types.ServiceVolumeBind{Propagation: string(bo.Propagation), CreateHostPath: true}
+			}
+		case mount.TypeTmpfs:
+			if to := m.TmpfsOptions; to != nil && (to.SizeBytes != 0 || to.Mode != 0) {
+				v.Tmpfs = &types.ServiceVolumeTmpfs{Size: types.UnitBytes(to.SizeBytes), Mode: uint32(to.Mode)}
+			}
+		case mount.TypeImage:
+			v.Source = m.Source
+			if io := m.ImageOptions; io != nil && io.Subpath != "" {
+				v.Image = &types.ServiceVolumeImage{SubPath: io.Subpath}
 			}
 		default:
 			v.Source = m.Source
@@ -658,9 +807,7 @@ func (b *builder) configRefs(refs []*swarm.ConfigReference) []types.ServiceConfi
 		if name == "" || r.Runtime != nil {
 			continue
 		}
-		key := b.configKeys.assign(name, b.stripped(name), name)
-		b.configs[key] = types.ConfigObjConfig{Name: name, External: true}
-		b.object(KindConfig, name, TreatmentExternal)
+		key := b.declareConfig(name)
 		ref := types.ServiceConfigObjConfig{Source: key}
 		if f := r.File; f != nil {
 			ref.Target, ref.UID, ref.GID, ref.Mode = fileReference(key, f.Name, f.UID, f.GID, f.Mode)
@@ -668,6 +815,14 @@ func (b *builder) configRefs(refs []*swarm.ConfigReference) []types.ServiceConfi
 		out = append(out, ref)
 	}
 	return out
+}
+
+// declareConfig writes an external top-level config under the key it has, and returns the key.
+func (b *builder) declareConfig(name string) string {
+	key := b.configKeys.assign(name, b.stripped(name), name)
+	b.configs[key] = types.ConfigObjConfig{Name: name, External: true}
+	b.object(KindConfig, name, TreatmentExternal)
+	return key
 }
 
 // stripped is the name without the namespace prefix, or the name when it has none.
@@ -693,4 +848,108 @@ func fileReference(key, name, uid, gid string, mode os.FileMode) (target, outUID
 		outMode = &m
 	}
 	return target, outUID, outGID, outMode
+}
+
+// updateConfig rebuilds update_config and rollback_config. Parallelism is written unless it is one, which is what
+// convert gives a policy that names none (zero, all at once, is a value of its own); the failure action and the
+// order are left out at their defaults.
+func updateConfig(uc *swarm.UpdateConfig) *types.UpdateConfig {
+	if uc == nil {
+		return nil
+	}
+	out := &types.UpdateConfig{
+		Delay: types.Duration(uc.Delay), Monitor: types.Duration(uc.Monitor), MaxFailureRatio: uc.MaxFailureRatio,
+	}
+	if uc.Parallelism != 1 {
+		p := uc.Parallelism
+		out.Parallelism = &p
+	}
+	if !failureActionIsDefault(uc.FailureAction) {
+		out.FailureAction = string(uc.FailureAction)
+	}
+	if !updateOrderIsDefault(uc.Order) {
+		out.Order = string(uc.Order)
+	}
+	return out
+}
+
+// restartPolicy rebuilds deploy.restart_policy. A limit of zero attempts is the same as none.
+func restartPolicy(rp *swarm.RestartPolicy) *types.RestartPolicy {
+	if rp == nil {
+		return nil
+	}
+	out := &types.RestartPolicy{Condition: string(rp.Condition), Delay: durationPtr(rp.Delay), Window: durationPtr(rp.Window)}
+	if !attemptsAreDefault(rp.MaxAttempts) {
+		n := *rp.MaxAttempts
+		out.MaxAttempts = &n
+	}
+	return out
+}
+
+// placement rebuilds deploy.placement: the constraints, the spread preferences and the limit of tasks per node.
+func placement(p *swarm.Placement) types.Placement {
+	var out types.Placement
+	if p == nil {
+		return out
+	}
+	out.Constraints = slices.Clone(p.Constraints)
+	out.MaxReplicas = p.MaxReplicas
+	for _, pref := range p.Preferences {
+		if pref.Spread != nil {
+			out.Preferences = append(out.Preferences, types.PlacementPreferences{Spread: pref.Spread.SpreadDescriptor})
+		}
+	}
+	return out
+}
+
+// resources rebuilds deploy.resources. A processor count is exact to nine decimals in a swarm spec but compose-go
+// holds it as a 32-bit float, so one that a float cannot carry is written as near as it can and noted.
+func resources(rr *swarm.ResourceRequirements) (types.Resources, []Note) {
+	var out types.Resources
+	var notes []Note
+	if rr == nil {
+		return out, nil
+	}
+	cpus := func(nano int64, where string) types.NanoCPUs {
+		v, exact := cpusOf(nano)
+		if !exact {
+			notes = append(notes, noteCPUs(where, nano))
+		}
+		return v
+	}
+	if l := rr.Limits; l != nil {
+		out.Limits = &types.Resource{NanoCPUs: cpus(l.NanoCPUs, "limit"), MemoryBytes: types.UnitBytes(l.MemoryBytes), Pids: l.Pids}
+	}
+	if r := rr.Reservations; r != nil {
+		res := &types.Resource{NanoCPUs: cpus(r.NanoCPUs, "reservation"), MemoryBytes: types.UnitBytes(r.MemoryBytes)}
+		for _, g := range r.GenericResources {
+			if g.DiscreteResourceSpec != nil {
+				res.GenericResources = append(res.GenericResources, types.GenericResource{
+					DiscreteResourceSpec: &types.DiscreteGenericResource{Kind: g.DiscreteResourceSpec.Kind, Value: g.DiscreteResourceSpec.Value},
+				})
+			}
+		}
+		out.Reservations = res
+	}
+	return out, notes
+}
+
+// cpusOf is a processor count in nano-CPUs as the float compose-go holds it, and whether converting it back gives
+// the same number of nano-CPUs (convert reads a float32 through its shortest decimal, so 0.1 is exact).
+func cpusOf(nano int64) (types.NanoCPUs, bool) {
+	if nano == 0 {
+		return 0, true
+	}
+	decimal := new(big.Rat).SetFrac64(nano, 1_000_000_000).FloatString(9)
+	decimal = strings.TrimRight(strings.TrimRight(decimal, "0"), ".")
+	f, err := strconv.ParseFloat(decimal, 32)
+	if err != nil {
+		return 0, false
+	}
+	back, ok := new(big.Rat).SetString(strconv.FormatFloat(float64(float32(f)), 'f', -1, 32))
+	if !ok {
+		return types.NanoCPUs(f), false
+	}
+	back.Mul(back, big.NewRat(1_000_000_000, 1))
+	return types.NanoCPUs(f), back.IsInt() && back.Num().Int64() == nano
 }

@@ -3,7 +3,12 @@
 
 package rebuild
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
+)
 
 // The engine fills in some values when it stores a service or a network, and a file that repeated them would not
 // read like a hand-written one. Each function here is one such rule and says which rule of stacks.NormalizeSpec
@@ -35,3 +40,42 @@ func plainDefault(info NetworkInfo) bool {
 	return !info.Attachable && !info.Internal && len(networkOptions(info.Options)) == 0 && len(userLabels(info.Labels)) == 0 &&
 		(info.IPAMDriver == "" || info.IPAMDriver == "default")
 }
+
+// replicasAreDefault mirrors the replicas rule of stacks.NormalizeSpec: a replicated service with no count has one
+// replica, so a count of one says nothing.
+func replicasAreDefault(replicas *uint64) bool { return replicas == nil || *replicas == 1 }
+
+// endpointModeIsDefault mirrors the endpoint rule of stacks.NormalizeSpec: a spec with no mode resolves through a
+// virtual IP, so vip says nothing (dnsrr is written as deploy.endpoint_mode).
+func endpointModeIsDefault(m swarm.ResolutionMode) bool {
+	return m == "" || m == swarm.ResolutionModeVIP
+}
+
+// protocolIsDefault mirrors the port rule of stacks.NormalizeSpec: a port with no protocol is tcp, which is also
+// what convert reads for a port that names none.
+func protocolIsDefault(p string) bool { return p == "" || p == "tcp" }
+
+// publishModeIsDefault mirrors the port rule of stacks.NormalizeSpec: a port with no publish mode is ingress.
+func publishModeIsDefault(m swarm.PortConfigPublishMode) bool {
+	return m == "" || m == swarm.PortConfigPublishModeIngress
+}
+
+// failureActionIsDefault mirrors the update rule of stacks.NormalizeSpec: a policy with no failure action reads back
+// as pause.
+func failureActionIsDefault(a swarm.FailureAction) bool {
+	return a == "" || a == swarm.UpdateFailureActionPause
+}
+
+// updateOrderIsDefault mirrors the update rule of stacks.NormalizeSpec: a policy with no order reads back as
+// stop-first.
+func updateOrderIsDefault(o swarm.UpdateOrder) bool {
+	return o == "" || o == swarm.UpdateOrderStopFirst
+}
+
+// attemptsAreDefault mirrors the restart rule of stacks.NormalizeSpec: a restart policy with no attempt limit reads
+// back with a limit of 0, which is unlimited.
+func attemptsAreDefault(n *uint64) bool { return n == nil || *n == 0 }
+
+// isolationIsDefault mirrors the isolation rule of stacks.NormalizeSpec: a container spec that names none reads
+// back as "default".
+func isolationIsDefault(i container.Isolation) bool { return i == "" || i == "default" }
