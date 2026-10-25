@@ -17,7 +17,7 @@
       "differences_one": "{{count}} difference",
       "differences_other": "{{count}} differences",
       "failed": "Couldn't check",
-      "stopped": "Stopped stacks don't drift.",
+      "stopped": "Not checked while stopped",
       "notDeployed": "Not deployed yet"
     },
     "page": {
