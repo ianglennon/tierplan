@@ -189,7 +189,7 @@ describe("container list: the name opens the container", () => {
 });
 
 describe("container list: stack links", () => {
-  it("links a stack or project Bayplan manages in its group header, and leaves a foreign one as text", async () => {
+  it("links a stack or project Bayplan manages in its group header, and a foreign one to its read-only page", async () => {
     answer = () =>
       Response.json(
         body([
@@ -207,7 +207,9 @@ describe("container list: stack links", () => {
     expect(within(shop).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
       "/env/e1/stacks/stk-shop",
     );
-    expect(within(blog).queryByRole("link")).toBeNull();
+    expect(within(blog).getByRole("link", { name: "Blog" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/Blog",
+    );
   });
 });
 

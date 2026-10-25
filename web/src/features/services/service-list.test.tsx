@@ -595,7 +595,7 @@ const names = () =>
     .filter((t) => t !== "");
 
 describe("the services list: stack links", () => {
-  it("links a stack Bayplan manages in its group header and leaves a foreign stack as text", async () => {
+  it("links a stack Bayplan manages in its group header and a foreign stack to its read-only page", async () => {
     items = [
       svc({ id: "id-web", name: "shop_web", stack: "shop", bayplanStackId: "stk-shop" }),
       svc({ id: "id-old", name: "old_app", stack: "legacy" }),
@@ -610,8 +610,9 @@ describe("the services list: stack links", () => {
     expect(within(shop).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
       "/env/e1/stacks/stk-shop",
     );
-    expect(within(legacy).queryByRole("link")).toBeNull();
-    expect(legacy.textContent).toContain("legacy");
+    expect(within(legacy).getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy",
+    );
   });
 });
 

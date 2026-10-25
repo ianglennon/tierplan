@@ -48,6 +48,9 @@
     },
     "actions": {
       "open": "Open stack"
+    },
+    "link": {
+      "tooltip": "Not managed by Bayplan."
     }
   }
 }

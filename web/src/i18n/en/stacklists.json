@@ -104,7 +104,8 @@
         "fileTooLarge": "That file is over 1 MiB. Choose a smaller one.",
         "fileUnreadable": "Couldn't read that file. Choose another.",
         "nameClash": "A stack named {{name}} already exists on this environment, not managed by Bayplan.",
-        "clashHint": "Pick another name. Bayplan will be able to take over existing stacks in a later version."
+        "clashHint": "Pick another name, or adopt the existing stack.",
+        "openClash": "Open {{name}}"
       }
     }
   }

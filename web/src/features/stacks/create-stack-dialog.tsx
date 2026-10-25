@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
@@ -104,10 +104,12 @@ interface Upload {
 }
 
 // A refusal of the whole request, shown inside the dialog with role=alert. A foreign stack's name
-// carries the spec's second line.
+// carries the spec's second line and, for a user who can read stacks there, the way to the stack that is there.
 interface Refusal {
   text: string;
   hint?: string;
+  // The stack, not managed by Bayplan, that holds the name: its environment and its name.
+  existing?: { envId: string; name: string };
 }
 
 // readText reads a file as UTF-8 text, and refuses what is not: a binary file is not a compose file.
@@ -202,7 +204,7 @@ function CreateStackForm({
   );
 
   // show puts a verdict of the name check in the dialog and says whether the name can be used.
-  function show(verdict: StackNameCheck, name: string): boolean {
+  function show(verdict: StackNameCheck, name: string, env: string): boolean {
     switch (verdict.status) {
       case "available":
         setRefusal(null);
@@ -214,6 +216,7 @@ function CreateStackForm({
         setRefusal({
           text: t("stackLists.create.errors.nameClash", { name }),
           hint: t("stackLists.create.errors.clashHint"),
+          existing: { envId: env, name },
         });
         return false;
       default:
@@ -246,8 +249,9 @@ function CreateStackForm({
       if (name) await form.trigger("name");
       return;
     }
-    const verdict = await check(fixedEnvId ?? form.getValues("env"), name, true);
-    if (verdict) show(verdict, name);
+    const env = fixedEnvId ?? form.getValues("env");
+    const verdict = await check(env, name, true);
+    if (verdict) show(verdict, name, env);
   }
 
   function refusalOf(err: StackRequestError, name: string, env: string): Refusal | null {
@@ -267,6 +271,7 @@ function CreateStackForm({
         return {
           text: t("stackLists.create.errors.nameClash", { name }),
           hint: t("stackLists.create.errors.clashHint"),
+          existing: { envId: env, name },
         };
       case "file_too_large":
         return { text: t("stackLists.create.errors.fileTooLarge") };
@@ -284,7 +289,7 @@ function CreateStackForm({
     setSubmitting(true);
     // The name is checked again: it may have been taken since the field lost focus.
     const verdict = await check(env, values.name, false);
-    if (verdict && !show(verdict, values.name)) {
+    if (verdict && !show(verdict, values.name, env)) {
       setSubmitting(false);
       return;
     }
@@ -348,7 +353,23 @@ function CreateStackForm({
         <Alert variant="destructive" role="alert">
           <AlertDescription className="flex flex-col gap-1">
             <span>{refusal.text}</span>
-            {refusal.hint ? <span className="text-muted-foreground">{refusal.hint}</span> : null}
+            {refusal.hint ? (
+              <span className="text-muted-foreground">
+                {refusal.hint}
+                {refusal.existing && hasPermission(me, "stacks.read", refusal.existing.envId) ? (
+                  <>
+                    {" "}
+                    <Link
+                      to="/env/$envId/unmanaged-stacks/$name"
+                      params={{ envId: refusal.existing.envId, name: refusal.existing.name }}
+                      className="rounded-sm text-accent-ink underline underline-offset-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      {t("stackLists.create.errors.openClash", { name: refusal.existing.name })}
+                    </Link>
+                  </>
+                ) : null}
+              </span>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -372,7 +393,7 @@ function CreateStackForm({
                       // The same name may be free on one environment and taken on another.
                       const name = form.getValues("name");
                       void check(next, name, true).then((verdict) => {
-                        if (verdict) show(verdict, name);
+                        if (verdict) show(verdict, name, next);
                       });
                     }}
                   >
