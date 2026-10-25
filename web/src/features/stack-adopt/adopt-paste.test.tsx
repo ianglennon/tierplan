@@ -24,8 +24,6 @@ vi.mock("@/lib/toast", () => ({
 
 const ENV = "e1";
 const PATH = `/api/env/${ENV}/unmanaged-stacks/legacy`;
-// The check waits this long after the last change; a test waits on what it asserts, with room for it.
-const SETTLE = { timeout: 5000 };
 
 interface Sent {
   method: string;
@@ -250,9 +248,7 @@ describe("a pasted file that matches", () => {
 
     typeFile(box, FILE);
 
-    expect(
-      await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE),
-    ).toBeTruthy();
+    expect(await within(theSourceCard()).findByText("Matches what's running.")).toBeTruthy();
     expect(pasteChecks().map((r) => r.body)).toEqual([
       { source: "paste", compose: FILE, vars: [] },
     ]);
@@ -277,7 +273,7 @@ describe("a pasted file that differs", () => {
 
     const card = theSourceCard();
     expect(
-      await within(card).findByText("Differs from what's running in 2 settings.", {}, SETTLE),
+      await within(card).findByText("Differs from what's running in 2 settings."),
     ).toBeTruthy();
     // Differences never block (D-20): Adopt is on, and the check card lists them.
     await waitFor(() => expect(reasonOf()).toBe(""));
@@ -366,7 +362,7 @@ describe("pasted variables", () => {
 
     typeFile(box, fileWithVars);
 
-    const tag = (await screen.findByLabelText("Value of TAG", {}, SETTLE)) as HTMLInputElement;
+    const tag = (await screen.findByLabelText("Value of TAG")) as HTMLInputElement;
     const pw = screen.getByLabelText("Value of PW") as HTMLInputElement;
     expect(tag.getAttribute("placeholder")).toBe("1.27");
     expect(pw.getAttribute("placeholder")).toBe("Required");
@@ -383,7 +379,7 @@ describe("pasted variables", () => {
     pasteAnswer = answerWithVars;
     const box = await startFromPaste();
     typeFile(box, fileWithVars);
-    const pw = (await screen.findByLabelText("Value of PW", {}, SETTLE)) as HTMLInputElement;
+    const pw = (await screen.findByLabelText("Value of PW")) as HTMLInputElement;
     const tag = screen.getByLabelText("Value of TAG") as HTMLInputElement;
     expect(pw.type).toBe("text");
 
@@ -397,13 +393,11 @@ describe("pasted variables", () => {
         { name: "PW", value: secretText, secret: true },
         { name: "TAG", value: "1.27", secret: false },
       ]);
-    }, SETTLE);
+    });
     const field = screen.getByLabelText("Value of PW") as HTMLInputElement;
     expect(field.type).toBe("password");
     expect(field.getAttribute("autocomplete")).toBe("new-password");
-    expect(
-      await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE),
-    ).toBeTruthy();
+    expect(await within(theSourceCard()).findByText("Matches what's running.")).toBeTruthy();
   });
 
   it("flags a variable that still has no value once the check has answered, tied to its input", async () => {
@@ -412,11 +406,7 @@ describe("pasted variables", () => {
 
     typeFile(box, fileWithVars);
 
-    const message = await screen.findByText(
-      "TAG has no value. Fill it in to check your file.",
-      {},
-      SETTLE,
-    );
+    const message = await screen.findByText("TAG has no value. Fill it in to check your file.");
     const input = screen.getByLabelText("Value of TAG");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.getAttribute("aria-describedby")).toBe(message.id);
@@ -430,11 +420,11 @@ describe("what blocks Adopt for a pasted file", () => {
 
     typeFile(box, fileWithVars);
 
-    await waitFor(() => expect(reasonOf()).toBe("Fill in 2 variables first."), SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe("Fill in 2 variables first."));
     fireEvent.change(await screen.findByLabelText("Value of TAG"), { target: { value: "1.27" } });
-    await waitFor(() => expect(reasonOf()).toBe("Fill in 1 variable first."), SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe("Fill in 1 variable first."));
     fireEvent.change(screen.getByLabelText("Value of PW"), { target: { value: secretText } });
-    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe(""));
   });
 
   it("says to fix the errors of a file that does not parse, lists them, and offers the rebuild", async () => {
@@ -473,7 +463,7 @@ describe("what blocks Adopt for a pasted file", () => {
 
     typeFile(box, "services: [unclosed");
 
-    expect(await screen.findByText("Line 4: This isn't valid YAML.", {}, SETTLE)).toBeTruthy();
+    expect(await screen.findByText("Line 4: This isn't valid YAML.")).toBeTruthy();
     expect(screen.queryByText(/Only a warning/)).toBeNull();
     await waitFor(() =>
       expect(reasonOf()).toBe(
@@ -507,7 +497,7 @@ describe("what blocks Adopt for a pasted file", () => {
   it("holds Adopt while a changed file waits to be checked, and never adopts a file the person has not seen checked", async () => {
     const box = await startFromPaste();
     typeFile(box, FILE);
-    await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE);
+    await within(theSourceCard()).findByText("Matches what's running.");
     await waitFor(() => expect(reasonOf()).toBe(""));
 
     typeFile(box, `${FILE}# one more line\n`);
@@ -515,7 +505,7 @@ describe("what blocks Adopt for a pasted file", () => {
     expect(reasonOf()).toBe("Checking legacy…");
     fireEvent.click(adoptButton());
     expect(adoptRequests()).toEqual([]);
-    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe(""));
   });
 });
 
@@ -539,7 +529,7 @@ describe("what is kept of a pasted file", () => {
     const view = mount();
     fireEvent.click(await screen.findByRole("radio", { name: /I have the original compose file/ }));
     typeFile(await screen.findByLabelText("Original compose file"), fileWithVars);
-    fireEvent.change(await screen.findByLabelText("Value of TAG", {}, SETTLE), {
+    fireEvent.change(await screen.findByLabelText("Value of TAG"), {
       target: { value: "1.27" },
     });
 
@@ -586,12 +576,12 @@ describe("what is kept of a pasted file", () => {
     mount();
     fireEvent.click(await screen.findByRole("radio", { name: /I have the original compose file/ }));
     typeFile(await screen.findByLabelText("Original compose file"), fileWithVars);
-    fireEvent.change(await screen.findByLabelText("Value of TAG", {}, SETTLE), {
+    fireEvent.change(await screen.findByLabelText("Value of TAG"), {
       target: { value: "1.27" },
     });
     fireEvent.change(screen.getByLabelText("Value of PW"), { target: { value: secretText } });
     fireEvent.click(screen.getByRole("switch", { name: "Secret: PW" }));
-    await waitFor(() => expect(reasonOf()).toBe(""), SETTLE);
+    await waitFor(() => expect(reasonOf()).toBe(""));
 
     const heldWhileTyped = () =>
       JSON.stringify([
@@ -645,7 +635,7 @@ describe("what is kept of a pasted file", () => {
     };
     const box = await startFromPaste();
     typeFile(box, `${FILE}# ${secretText}\n`);
-    await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE);
+    await within(theSourceCard()).findByText("Matches what's running.");
     await waitFor(() => expect(reasonOf()).toBe(""));
 
     fireEvent.click(adoptButton());
@@ -711,14 +701,12 @@ describe("a pasted check that fails", () => {
 
     typeFile(box, FILE);
 
-    const retry = await screen.findByRole("button", { name: "Retry check" }, SETTLE);
+    const retry = await screen.findByRole("button", { name: "Retry check" });
     expect(reasonOf()).toBe("Adopt is off until legacy has been checked.");
     pasteAnswer = () => ({ status: 200, body: matching() });
     fireEvent.click(retry);
 
-    expect(
-      await within(theSourceCard()).findByText("Matches what's running.", {}, SETTLE),
-    ).toBeTruthy();
+    expect(await within(theSourceCard()).findByText("Matches what's running.")).toBeTruthy();
     expect(pasteChecks()).toHaveLength(2);
   });
 });
