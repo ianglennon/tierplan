@@ -6,7 +6,13 @@ import { z } from "@/lib/zod-config";
 
 // The status chips, in the order they show and in the order a comma list is written, so the same
 // choice is always the same link. They are the server's own names for status= on the stack lists.
-export const STACK_STATUS_VALUES = ["degraded", "stopped", "draft", "deploy_failed"] as const;
+export const STACK_STATUS_VALUES = [
+  "degraded",
+  "stopped",
+  "draft",
+  "deploy_failed",
+  "drifted",
+] as const;
 export type StackStatusValue = (typeof STACK_STATUS_VALUES)[number];
 
 // The Show toggle-group: only the stacks Bayplan manages or only the ones it found. Absent means both.

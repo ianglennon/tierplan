@@ -67,6 +67,7 @@
       "stopped": "Stopped",
       "draft": "Draft",
       "deploy_failed": "Deploy failed",
+      "drifted": "Drifted",
       "chip": "{{label}} {{count, number}}"
     },
     "clearFilters": "Clear filters",
