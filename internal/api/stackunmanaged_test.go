@@ -15,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -598,5 +599,79 @@ func TestGeneratedComposeCountsExternals(t *testing.T) {
 	}
 	if want := []string{"app:image_unpinned", "worker:image_unpinned"}; !slices.Equal(codes, want) {
 		t.Errorf("notes = %v, want %v", codes, want)
+	}
+}
+
+// foreignStandaloneCompose is a project somebody ran with docker compose up: values a Viewer must not read in
+// its environment, its command and its log options.
+const foreignStandaloneCompose = `
+services:
+  web:
+    image: nginx:1.27
+    environment:
+      DB_PASSWORD: s3cret-value
+      MODE: prod
+    command: ["/entry.sh", "--token", "cmd-secret"]
+    logging:
+      driver: syslog
+      options:
+        syslog-address: tcp://log-secret:514
+    depends_on:
+      - db
+    networks: [back]
+    volumes:
+      - data:/data
+  db:
+    image: postgres:17
+    networks: [back]
+networks:
+  back: {}
+volumes:
+  data: {}
+`
+
+// TestGeneratedComposeStandalone is the Generated compose tab of a docker compose up project (plan 08-12, STK-13,
+// D-12, D-47): rebuilt from its containers, masked for a caller without secrets.reveal, nothing written.
+func TestGeneratedComposeStandalone(t *testing.T) {
+	t.Parallel()
+	f, e, _ := standaloneEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	standOnHost(f, stackopstest.Foreign(t, "shop", foreignStandaloneCompose))
+	writesBefore := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodGet, unmanagedPath("shop", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose for a viewer: %d %s", rec.Code, rec.Body)
+	}
+	got := answerOf[generatedAnswer](t, rec)
+	for _, secret := range []string{"s3cret-value", "cmd-secret", "log-secret"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("the answer for a viewer carries %q", secret)
+		}
+	}
+	for _, want := range []string{"<hidden>", "image: nginx:1.27", "image: postgres:17", "depends_on:", "data:/data"} {
+		if !strings.Contains(got.YAML, want) {
+			t.Errorf("yaml for a viewer lacks %q:\n%s", want, got.YAML)
+		}
+	}
+	if got.ExternalSecrets != 0 || got.ExternalConfigs != 0 {
+		t.Errorf("externals = %d secrets, %d configs, want none on a standalone host", got.ExternalSecrets, got.ExternalConfigs)
+	}
+
+	rec = admin.do(http.MethodGet, unmanagedPath("shop", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose for an admin: %d %s", rec.Code, rec.Body)
+	}
+	shown := answerOf[generatedAnswer](t, rec)
+	for _, secret := range []string{"s3cret-value", "cmd-secret", "log-secret"} {
+		if !strings.Contains(shown.YAML, secret) {
+			t.Errorf("the answer for a caller who may reveal lacks %q", secret)
+		}
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the engine received %d writes while rebuilding, want none", after-writesBefore)
 	}
 }

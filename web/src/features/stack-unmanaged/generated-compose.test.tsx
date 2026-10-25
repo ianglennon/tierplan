@@ -15,6 +15,7 @@ import { editorText } from "@/test-editor";
 
 const ENV = "e1";
 const PATH = `/api/env/${ENV}/unmanaged-stacks/legacy/compose`;
+const SHOP_PATH = `/api/env/${ENV}/unmanaged-stacks/shop/compose`;
 const YAML =
   "services:\n  app:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: <hidden>\n";
 
@@ -41,7 +42,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (req: Request) => {
-      if (new URL(req.url).pathname === PATH) {
+      const path = new URL(req.url).pathname;
+      if (path === PATH || path === SHOP_PATH) {
         composeRequests++;
         return answer();
       }
@@ -57,10 +59,10 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(name = "legacy") {
   render(
     <QueryClientProvider client={client}>
-      <GeneratedCompose envId={ENV} name="legacy" />
+      <GeneratedCompose envId={ENV} name={name} />
     </QueryClientProvider>,
   );
 }
@@ -83,6 +85,33 @@ describe("the Generated compose tab", () => {
       screen.getByText(
         "What Bayplan would use if you adopt this stack, rebuilt from the running services. It is a preview: nothing is saved. Hidden values show as <hidden>.",
       ),
+    ).toBeTruthy();
+  });
+
+  it("shows the rebuilt file of a docker compose project the same way, with the project's name in the failure", async () => {
+    const compose =
+      "services:\n  web:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: <hidden>\n    depends_on:\n      - db\n    volumes:\n      - data:/data\n  db:\n    image: postgres:17\nvolumes:\n  data: {}\n";
+    answer = () => ok({ yaml: compose });
+    mount("shop");
+    await screen.findByRole("textbox", { name: "Generated compose, read only" });
+    expect(editorText()).toBe(compose);
+    expect(screen.queryByRole("heading", { name: "Notes" })).toBeNull();
+    cleanup();
+    client.clear();
+
+    answer = () =>
+      Response.json(
+        {
+          type: "rebuild_failed",
+          title: "Can't rebuild",
+          status: 422,
+          detail: "no container of shop is running",
+        },
+        { status: 422 },
+      );
+    mount("shop");
+    expect(
+      await screen.findByText("Bayplan couldn't rebuild shop: no container of shop is running"),
     ).toBeTruthy();
   });
 

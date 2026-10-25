@@ -4,6 +4,7 @@
 package stackops_test
 
 import (
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -195,5 +197,77 @@ func TestRebuildLiveOwnedAndExternalObjects(t *testing.T) {
 		if secretOrConfigRead.MatchString(req) {
 			t.Errorf("the rebuild asked for %s: a secret or a config was inspected", req)
 		}
+	}
+}
+
+// foreignProject is a docker compose up project whose services hold values a Viewer must not read.
+const foreignProject = `
+services:
+  web:
+    image: nginx:1.27
+    environment:
+      DB_PASSWORD: s3cret-value
+      MODE: prod
+    command: ["/entry.sh", "--token", "cmd-secret"]
+    logging:
+      driver: syslog
+      options:
+        syslog-address: tcp://log-secret:514
+    networks: [back]
+networks:
+  back: {}
+`
+
+// TestRebuildLiveStandaloneMasksForAViewer: a standalone project is rebuilt from its containers, and a caller
+// without secrets.reveal gets <hidden> for every value the containers hold (T-08-44, D-47).
+func TestRebuildLiveStandaloneMasksForAViewer(t *testing.T) {
+	t.Parallel()
+	rig := hostRig(t, stackopstest.Foreign(t, "shop", foreignProject))
+	st := stackops.DiscoveredStack(rig.envID, "shop", stacks.TargetStandalone)
+
+	hidden, err := rig.deps.RebuildLive(testsupport.Context(t), rig.envID, st, stackops.RebuildOptions{Reveal: false})
+	if err != nil {
+		t.Fatalf("RebuildLive without reveal: %v", err)
+	}
+	shown, err := rig.deps.RebuildLive(testsupport.Context(t), rig.envID, st, stackops.RebuildOptions{Reveal: true})
+	if err != nil {
+		t.Fatalf("RebuildLive with reveal: %v", err)
+	}
+
+	for _, secret := range []string{"s3cret-value", "cmd-secret", "log-secret"} {
+		if strings.Contains(string(hidden.YAML), secret) {
+			t.Errorf("the preview for a viewer carries %q:\n%s", secret, hidden.YAML)
+		}
+		if !strings.Contains(string(shown.YAML), secret) {
+			t.Errorf("the preview for a caller who may reveal lacks %q:\n%s", secret, shown.YAML)
+		}
+	}
+	if !strings.Contains(string(hidden.YAML), "<hidden>") || !strings.Contains(string(hidden.YAML), "DB_PASSWORD") {
+		t.Errorf("the masked preview does not say what it hides, or lost the names of the environment:\n%s", hidden.YAML)
+	}
+	for _, text := range []string{string(hidden.YAML), string(shown.YAML)} {
+		if strings.Contains(text, "IMAGE_REF") || strings.Contains(text, "/bin/run") {
+			t.Errorf("the image's own environment or command is in the file:\n%s", text)
+		}
+	}
+	if writes := rig.fake.Writes(); len(writes) != 0 {
+		t.Errorf("the rebuild wrote to the engine: %v", writes)
+	}
+	if got := shown.Pins["web"]; got != "nginx:1.27@"+stackopstest.Digest("a") {
+		t.Errorf("pin = %q, want the repo digest of the image the container runs", got)
+	}
+}
+
+// TestRebuildLiveStandaloneOfAProjectWithNoContainers is a rebuild error, not an empty file.
+func TestRebuildLiveStandaloneOfAProjectWithNoContainers(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	st := stackops.DiscoveredStack(rig.envID, "shop", stacks.TargetStandalone)
+
+	_, err := rig.deps.RebuildLive(testsupport.Context(t), rig.envID, st, stackops.RebuildOptions{})
+
+	var failed *stackops.RebuildError
+	if !errors.As(err, &failed) {
+		t.Fatalf("RebuildLive of a project with no container: %v, want a *RebuildError", err)
 	}
 }
