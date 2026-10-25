@@ -11,11 +11,15 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SpecViewer } from "@/features/spec-editor/spec-viewer";
-import { useT } from "@/i18n/use-t";
+import { keyExists, useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
 
 // How long the Copy button says "Copied".
 const COPIED_MS = 2000;
+
+// Note is one thing the rebuild could not say plainly. For the notes that name a service or an object, service holds
+// its name.
+type Note = { service: string; code: string; message: string };
 
 interface GeneratedComposeProps {
   envId: string;
@@ -62,6 +66,15 @@ export function GeneratedCompose({ envId, name }: GeneratedComposeProps) {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
+  }
+
+  // The sentence of a note is the page's own for a code it has words for (the server sends the code, and the name the
+  // sentence is about), else the sentence the server wrote.
+  function noteText(note: Note): string {
+    const key = `stackGenerated.notes.codes.${note.code}`;
+    return /^[a-z_]+$/.test(note.code) && keyExists(key)
+      ? t(key, { name: note.service })
+      : note.message;
   }
 
   const reason =
@@ -134,7 +147,7 @@ export function GeneratedCompose({ envId, name }: GeneratedComposeProps) {
           <h4 className="text-sm font-medium">{t("stackGenerated.notes.title")}</h4>
           <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
             {data.notes.map((note) => (
-              <li key={`${note.service}:${note.code}:${note.message}`}>{note.message}</li>
+              <li key={`${note.service}:${note.code}:${note.message}`}>{noteText(note)}</li>
             ))}
           </ul>
         </section>
