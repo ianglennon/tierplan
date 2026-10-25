@@ -1,0 +1,20 @@
+{
+  "stackDriftCause": {
+    "scaled": "{{service}} was scaled from {{from}} to {{to}} by {{user}} in Bayplan, <time/>.",
+    "scaledTo": "{{service}} was scaled to {{to}} by {{user}} in Bayplan, <time/>.",
+    "rolled_back": "{{service}} was rolled back by {{user}} in Bayplan, <time/>.",
+    "edited": "{{service}} was edited by {{user}} in Bayplan, <time/>.",
+    "adopted": "Differed from the rebuilt definition when {{name}} was adopted.",
+    "adoptedStack": "Differed from the rebuilt definition when the stack was adopted.",
+    "multiple_one": "{{count}} change, the latest by {{user}} in Bayplan, <time/>.",
+    "multiple_other": "{{count}} changes, the latest by {{user}} in Bayplan, <time/>.",
+    "outside": "Changed outside Bayplan.",
+    "short": {
+      "scaled": "{{service}} was scaled by {{user}} in Bayplan.",
+      "rolled_back": "{{service}} was rolled back by {{user}} in Bayplan.",
+      "edited": "{{service}} was edited by {{user}} in Bayplan.",
+      "multiple_one": "{{count}} change, the latest by {{user}} in Bayplan.",
+      "multiple_other": "{{count}} changes, the latest by {{user}} in Bayplan."
+    }
+  }
+}

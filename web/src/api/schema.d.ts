@@ -9095,6 +9095,13 @@ export interface components {
             version: number;
         };
         StackDriftBody: {
+            /** @description The cause to name for the stack: the newest action of Bayplan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * Format: int64
+             * @description How many drifted services an action of Bayplan's own explains
+             */
+            causes: number;
             /** @description When the stack was read, RFC 3339 UTC */
             checkedAt: string;
             /**
@@ -9119,7 +9126,26 @@ export interface components {
              */
             state: "none" | "drifted" | "stopped" | "not_deployed" | "unknown";
         };
+        StackDriftCauseBody: {
+            /**
+             * @description scaled: a scale from the service page. rolled_back: a service roll back. edited: a service edit. adopted: the difference was there when the stack was adopted and its first deploy has not put it right yet
+             * @enum {string}
+             */
+            action: "scaled" | "rolled_back" | "edited" | "adopted";
+            /** @description When, RFC 3339 UTC; empty for adopted */
+            at: string;
+            /** @description The display name of who did it; empty for adopted */
+            by: string;
+            /** @description For scaled, the replica count before; empty when the audit row did not say, and for any other action */
+            from: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description For scaled, the replica count after; empty for any other action */
+            to: string;
+        };
         StackDriftServiceBody: {
+            /** @description Why the service differs, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Bayplan */
+            cause?: components["schemas"]["StackDriftCauseBody"];
             /**
              * @description changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have
              * @enum {string}
@@ -9146,6 +9172,13 @@ export interface components {
             short: string;
         };
         StackDriftSummaryBody: {
+            /** @description As the drift route's cause */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * Format: int64
+             * @description As the drift route's causes
+             */
+            causes: number;
             /** @description When the stack was read, RFC 3339 UTC */
             checkedAt: string;
             /**

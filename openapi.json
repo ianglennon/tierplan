@@ -12654,6 +12654,15 @@
       "StackDriftBody": {
         "additionalProperties": false,
         "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/StackDriftCauseBody",
+            "description": "The cause to name for the stack: the newest action of Bayplan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known"
+          },
+          "causes": {
+            "description": "How many drifted services an action of Bayplan's own explains",
+            "format": "int64",
+            "type": "integer"
+          },
           "checkedAt": {
             "description": "When the stack was read, RFC 3339 UTC",
             "type": "string"
@@ -12705,13 +12714,62 @@
           "deployedBy",
           "checkedAt",
           "count",
-          "services"
+          "services",
+          "causes"
+        ],
+        "type": "object"
+      },
+      "StackDriftCauseBody": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "description": "scaled: a scale from the service page. rolled_back: a service roll back. edited: a service edit. adopted: the difference was there when the stack was adopted and its first deploy has not put it right yet",
+            "enum": [
+              "scaled",
+              "rolled_back",
+              "edited",
+              "adopted"
+            ],
+            "type": "string"
+          },
+          "at": {
+            "description": "When, RFC 3339 UTC; empty for adopted",
+            "type": "string"
+          },
+          "by": {
+            "description": "The display name of who did it; empty for adopted",
+            "type": "string"
+          },
+          "from": {
+            "description": "For scaled, the replica count before; empty when the audit row did not say, and for any other action",
+            "type": "string"
+          },
+          "service": {
+            "description": "The service's name in the compose file",
+            "type": "string"
+          },
+          "to": {
+            "description": "For scaled, the replica count after; empty for any other action",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "service",
+          "by",
+          "at",
+          "from",
+          "to"
         ],
         "type": "object"
       },
       "StackDriftServiceBody": {
         "additionalProperties": false,
         "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/StackDriftCauseBody",
+            "description": "Why the service differs, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Bayplan"
+          },
           "change": {
             "description": "changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have",
             "enum": [
@@ -12775,6 +12833,15 @@
       "StackDriftSummaryBody": {
         "additionalProperties": false,
         "properties": {
+          "cause": {
+            "$ref": "#/components/schemas/StackDriftCauseBody",
+            "description": "As the drift route's cause"
+          },
+          "causes": {
+            "description": "As the drift route's causes",
+            "format": "int64",
+            "type": "integer"
+          },
           "checkedAt": {
             "description": "When the stack was read, RFC 3339 UTC",
             "type": "string"
@@ -12805,7 +12872,8 @@
           "state",
           "revision",
           "checkedAt",
-          "count"
+          "count",
+          "causes"
         ],
         "type": "object"
       },

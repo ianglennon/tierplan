@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store"
 )
 
 // The timing of the background drift check (D-22). A stack is checked about every five minutes, with jitter so the
@@ -73,6 +74,8 @@ type DriftMonitorDeps struct {
 	Repo DriftSource
 	// Store holds the newest check of each stack, which the lists read.
 	Store *DriftStore
+	// Audit is the store whose audit log names the causes of the drift a check finds (D-24). Nil leaves them out.
+	Audit *store.Store
 	// Locks is the operation lock. No stack of an environment is checked while it is held (a deploy under way is not
 	// drift).
 	Locks OperationLock
@@ -570,7 +573,9 @@ func (w *driftWorker) check(ctx context.Context, st Stack, held *heldCache, time
 		print = heldFingerprint(h, st, info.Seq)
 	}
 	if timed && print != "" && w.prints[st.ID] == print {
-		if cur, ok := m.d.Store.Get(st.ID); ok && DriftCurrent(cur, st, info.Seq) {
+		// A drift whose cause is not known is looked at again: Bayplan writes the audit row of a scale after the
+		// engine has changed, so an early look can miss it, and nothing else would give it a second chance.
+		if cur, ok := m.d.Store.Get(st.ID); ok && DriftCurrent(cur, st, info.Seq) && (cur.State != DriftDrifted || cur.Latest != nil) {
 			return DriftOutcomeSkipped
 		}
 	}
@@ -590,7 +595,7 @@ func (w *driftWorker) check(ctx context.Context, st Stack, held *heldCache, time
 	}
 	cctx, cancel := context.WithTimeout(ctx, driftCheckTimeout)
 	defer cancel()
-	res, err := m.drift(cctx, DriftInput{EnvID: w.envID, Stack: st, Deployed: &good, Pins: pins})
+	res, err := m.drift(cctx, DriftInput{EnvID: w.envID, Stack: st, Deployed: &good, Pins: pins, Audit: m.d.Audit})
 	if err != nil {
 		w.logFailure(ctx, st, "check the stack", err)
 		return DriftOutcomeFailed

@@ -17,6 +17,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/storetest"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -593,6 +595,58 @@ func TestDriftMonitorLeavesAStoppedOrNeverDeployedStackAlone(t *testing.T) {
 	for _, id := range []string{"halted-id", "fresh-id"} {
 		if res, ok := m.store.Get(id); ok {
 			t.Errorf("%s has a stored result %+v", id, res)
+		}
+	}
+}
+
+// A check is given the store whose audit log names the causes (plan 08-22, D-24), and a drift whose cause is not
+// known is looked at again by the next timed look, because Bayplan writes the audit row of a scale after the engine has
+// changed and an early look can miss it. A drift whose cause is known is let be.
+func TestDriftMonitorGivesTheChecksTheAuditLogAndLooksAgainAtAnUnexplainedDrift(t *testing.T) {
+	t.Parallel()
+	src, hub := &fakeDriftSource{}, newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	audit := storetest.New(t)
+	var mu sync.Mutex
+	var gotAudit []*store.Store
+	var latest *stackops.DriftCause
+	check := func(_ context.Context, in stackops.DriftInput) (stackops.DriftResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotAudit = append(gotAudit, in.Audit)
+		return stackops.DriftResult{State: stackops.DriftDrifted, Revision: in.Deployed.Seq, CheckedAt: time.Unix(1, 0).UTC(), Latest: latest}, nil
+	}
+	held := func(context.Context, string, bool) (stackops.Held, error) {
+		return stackops.Held{Services: []dockerx.ServiceRow{
+			{ID: "svc-1", Name: "web_web", Stack: web.Name, Desired: 1, UpdatedAt: time.Unix(100, 0).UTC(), Labels: map[string]string{stacks.LabelStackID: web.ID}},
+		}}, nil
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: check, HeldFunc: held, Subscribe: hub.Subscribe, Audit: audit})
+	m.settle(t, "web-id")
+
+	// Nothing moved, but nobody knows why the stack drifted: the next timed look checks it again.
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+
+	// Now the cause is known: nothing moved, so the look makes no check.
+	mu.Lock()
+	latest = &stackops.DriftCause{Action: stackops.CauseScaled, By: "alice", Service: "web"}
+	mu.Unlock()
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "web-id", stackops.DriftOutcomeSkipped)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(gotAudit) != 3 {
+		t.Fatalf("web was checked %d times, want 3", len(gotAudit))
+	}
+	for i, a := range gotAudit {
+		if a != audit {
+			t.Errorf("check %d was given the store %p, want the audit store %p", i, a, audit)
 		}
 	}
 }

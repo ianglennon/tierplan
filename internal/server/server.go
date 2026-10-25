@@ -738,7 +738,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	stackLocks, driftStore := stackops.NewLocks(), stackops.NewDriftStore()
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
-		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Locks: stackLocks,
+		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
 		Subscribe: hub.Subscribe, Log: log,
 	})
 	monitor.Watch(driftMonitor.EnvStarted, driftMonitor.EnvStopped)

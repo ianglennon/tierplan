@@ -12,6 +12,7 @@ import { isStackGone, StacksLoadError, stackKey } from "@/api/stacks";
 export type StackDrift = components["schemas"]["StackDriftBody"];
 export type StackDriftService = components["schemas"]["StackDriftServiceBody"];
 export type StackDriftSummary = components["schemas"]["StackDriftSummaryBody"];
+export type StackDriftCause = components["schemas"]["StackDriftCauseBody"];
 
 // The query key of a stack's drift. It extends the stack's key, so whatever refreshes the stack's page refreshes its
 // drift too. The key of a fresh check extends it again, so a check made on purpose and the newest one the server

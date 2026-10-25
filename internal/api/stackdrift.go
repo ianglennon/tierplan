@@ -16,15 +16,36 @@ import (
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
+// StackDriftCauseBody is why a service, or a stack, differs from the deployed revision when the audit log or the adoption
+// knows (D-24). Nothing of an audit row but the action, the actor's display name, the time and a scale's replica counts
+// is in it.
+type StackDriftCauseBody struct {
+	Action  string `json:"action" enum:"scaled,rolled_back,edited,adopted" doc:"scaled: a scale from the service page. rolled_back: a service roll back. edited: a service edit. adopted: the difference was there when the stack was adopted and its first deploy has not put it right yet"`
+	Service string `json:"service" doc:"The service's name in the compose file"`
+	By      string `json:"by" doc:"The display name of who did it; empty for adopted"`
+	At      string `json:"at" doc:"When, RFC 3339 UTC; empty for adopted"`
+	From    string `json:"from" doc:"For scaled, the replica count before; empty when the audit row did not say, and for any other action"`
+	To      string `json:"to" doc:"For scaled, the replica count after; empty for any other action"`
+}
+
+// causeBody is a cause as the routes answer it, nil for none.
+func causeBody(c *stackops.DriftCause) *StackDriftCauseBody {
+	if c == nil {
+		return nil
+	}
+	return &StackDriftCauseBody{Action: c.Action, Service: c.Service, By: c.By, At: rfc3339(c.At), From: c.From, To: c.To}
+}
+
 // StackDriftServiceBody is one service that differs from the deployed revision.
 type StackDriftServiceBody struct {
-	Name          string         `json:"name" doc:"The swarm service name"`
-	Short         string         `json:"short" doc:"The service's name in the compose file"`
-	Change        string         `json:"change" enum:"changed,missing,extra" doc:"changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have"`
-	Current       map[string]any `json:"current" nullable:"true" doc:"What the revision deployed, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service"`
-	Next          map[string]any `json:"next" nullable:"true" doc:"What runs now, masked the same way. Null for a missing service"`
-	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden. The values are never sent"`
-	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
+	Name          string               `json:"name" doc:"The swarm service name"`
+	Short         string               `json:"short" doc:"The service's name in the compose file"`
+	Change        string               `json:"change" enum:"changed,missing,extra" doc:"changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have"`
+	Current       map[string]any       `json:"current" nullable:"true" doc:"What the revision deployed, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service"`
+	Next          map[string]any       `json:"next" nullable:"true" doc:"What runs now, masked the same way. Null for a missing service"`
+	HiddenChanges []string             `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden. The values are never sent"`
+	Settings      int                  `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
+	Cause         *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the service differs, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Bayplan"`
 }
 
 // StackDriftBody is how what runs compares with the deployed revision of a stack.
@@ -36,15 +57,19 @@ type StackDriftBody struct {
 	CheckedAt  string                  `json:"checkedAt" doc:"When the stack was read, RFC 3339 UTC"`
 	Count      int                     `json:"count" doc:"How many settings differ in all: the settings of each changed service plus one for each missing or extra service"`
 	Services   []StackDriftServiceBody `json:"services" doc:"The services that differ, in name order (changed and missing ones, then extra ones)"`
+	Cause      *StackDriftCauseBody    `json:"cause,omitempty" doc:"The cause to name for the stack: the newest action of Bayplan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known"`
+	Causes     int                     `json:"causes" doc:"How many drifted services an action of Bayplan's own explains"`
 }
 
 // StackDriftSummaryBody is the drift a stack's page can say without the services: the newest check that is still about
 // the revision that is deployed.
 type StackDriftSummaryBody struct {
-	State     string `json:"state" enum:"none,drifted,stopped,not_deployed,unknown" doc:"As the drift route's state"`
-	Revision  int64  `json:"revision" doc:"The revision the check compared with"`
-	CheckedAt string `json:"checkedAt" doc:"When the stack was read, RFC 3339 UTC"`
-	Count     int    `json:"count" doc:"How many settings differ in all"`
+	State     string               `json:"state" enum:"none,drifted,stopped,not_deployed,unknown" doc:"As the drift route's state"`
+	Revision  int64                `json:"revision" doc:"The revision the check compared with"`
+	CheckedAt string               `json:"checkedAt" doc:"When the stack was read, RFC 3339 UTC"`
+	Count     int                  `json:"count" doc:"How many settings differ in all"`
+	Cause     *StackDriftCauseBody `json:"cause,omitempty" doc:"As the drift route's cause"`
+	Causes    int                  `json:"causes" doc:"As the drift route's causes"`
 }
 
 // StackDriftInput is the path of the drift route and whether to read the stack again.
@@ -142,7 +167,7 @@ func getStackDrift(ctx context.Context, d StacksDeps, lim *streamLimiter, in *St
 		if err != nil {
 			return stackops.DriftResult{}, err
 		}
-		return ops.Drift(cctx, stackops.DriftInput{EnvID: env.ID, Stack: st, Deployed: &good, Pins: pins})
+		return ops.Drift(cctx, stackops.DriftInput{EnvID: env.ID, Stack: st, Deployed: &good, Pins: pins, Audit: d.Store})
 	})
 	if err != nil {
 		return nil, targetProblem(d, env.ID, err)
@@ -180,11 +205,12 @@ func driftBody(res stackops.DriftResult, info stackops.DeployedRevision, hasInfo
 			// The review reads the running service as current and the deploy as next; drift reads from the deployed
 			// revision to what runs now.
 			Name: b.Name, Short: b.Short, Change: res.Services[i].Change, Current: b.Next, Next: b.Current,
-			HiddenChanges: b.HiddenChanges, Settings: b.Settings,
+			HiddenChanges: b.HiddenChanges, Settings: b.Settings, Cause: causeBody(res.Services[i].Cause),
 		}
 	}
 	body := StackDriftBody{
 		State: res.State, Revision: res.Revision, CheckedAt: rfc3339(res.CheckedAt), Count: res.Count, Services: services,
+		Cause: causeBody(res.Latest), Causes: res.Causes,
 	}
 	if hasInfo {
 		body.DeployedAt, body.DeployedBy = rfc3339(info.At), info.By
@@ -201,5 +227,8 @@ func driftSummaryOf(d StacksDeps, st stackops.Stack, deployedSeq int64) *StackDr
 	if !ok || !driftCurrent(res, st, deployedSeq) {
 		return nil
 	}
-	return &StackDriftSummaryBody{State: res.State, Revision: res.Revision, CheckedAt: rfc3339(res.CheckedAt), Count: res.Count}
+	return &StackDriftSummaryBody{
+		State: res.State, Revision: res.Revision, CheckedAt: rfc3339(res.CheckedAt), Count: res.Count,
+		Cause: causeBody(res.Latest), Causes: res.Causes,
+	}
 }

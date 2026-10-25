@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
@@ -385,5 +386,88 @@ func TestStackDriftStandalone(t *testing.T) {
 	}
 	if n := len(f.fake.Writes()); n != writes {
 		t.Errorf("writes went from %d to %d, reading drift writes nothing", writes, n)
+	}
+}
+
+// A drift caused inside Bayplan names who did it and when; one found with no such action says nothing of a cause, and
+// nothing of an audit row but the action, the name, the time and the replica counts leaves (plan 08-22, D-24, T-08-78).
+func TestStackDriftCarriesTheCause(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	// The audit log keeps the fixture's clock, which starts in the past, and a revision is taken by the wall clock: the
+	// clock moves past it before anyone signs in, so the scale is after the deploy as it is in life.
+	f.clk.t = time.Now().Add(time.Minute)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "caused")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+
+	type drifted struct {
+		Cause    map[string]any `json:"cause"`
+		Causes   int            `json:"causes"`
+		Services []struct {
+			Short string
+			Cause map[string]any `json:"cause"`
+		} `json:"services"`
+	}
+	read := func() (drifted, string) {
+		rec := operator.do(http.MethodGet, driftPath(st.ID, true), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("drift: %d %s", rec.Code, rec.Body)
+		}
+		return answerOf[drifted](t, rec), rec.Body.String()
+	}
+
+	// Somebody adds an environment variable to the service on the swarm: nothing in the audit log explains it.
+	f.editLiveService(t, e, "caused", "web", func(s *swarm.ServiceSpec) {
+		s.TaskTemplate.ContainerSpec.Env = append(s.TaskTemplate.ContainerSpec.Env, "MODE=other")
+	})
+	got, _ := read()
+	if len(got.Services) != 1 || got.Services[0].Cause != nil || got.Cause != nil || got.Causes != 0 {
+		t.Fatalf("a change from outside = %+v, want no cause: the reader says it was made outside Bayplan", got)
+	}
+
+	// A scale from the service page is Bayplan's own action and drift as well.
+	var webID string
+	for _, s := range answerOf[stackServicesAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/services", "")).Items {
+		if s.Short == "web" {
+			webID = s.ID
+		}
+	}
+	if rec := operator.do(http.MethodPost, "services/scale", `{"targets":[{"serviceId":"`+webID+`","replicas":3}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("scale: %d %s", rec.Code, rec.Body)
+	}
+	got, body := read()
+	if len(got.Services) != 1 || got.Services[0].Cause == nil || got.Cause == nil || got.Causes != 1 {
+		t.Fatalf("after a scale = %s, want the scale as the cause of web and of the stack", body)
+	}
+	for name, cause := range map[string]map[string]any{"service": got.Services[0].Cause, "stack": got.Cause} {
+		keys := make([]string, 0, len(cause))
+		for k := range cause {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		if want := []string{"action", "at", "by", "from", "service", "to"}; !slices.Equal(keys, want) {
+			t.Errorf("the %s cause holds %v, want only %v: no other audit detail leaves", name, keys, want)
+		}
+		if cause["action"] != "scaled" || cause["service"] != "web" || cause["from"] != "1" || cause["to"] != "3" || cause["by"] == "" || cause["at"] == "" {
+			t.Errorf("the %s cause = %v, want web scaled from 1 to 3 by the operator, with the time", name, cause)
+		}
+	}
+	for _, leak := range []string{"userAgent", "ip", "environment", "details", "target"} {
+		if strings.Contains(body, `"`+leak+`"`) {
+			t.Errorf("the answer holds %q, an audit field that must not leave", leak)
+		}
+	}
+
+	// The stack's page and the lists carry the cause with the summary.
+	detail := answerOf[struct {
+		Drift *struct {
+			Cause  map[string]any `json:"cause"`
+			Causes int            `json:"causes"`
+		} `json:"drift"`
+	}](t, operator.do(http.MethodGet, "stacks/"+st.ID, ""))
+	if detail.Drift == nil || detail.Drift.Causes != 1 || detail.Drift.Cause["action"] != "scaled" {
+		t.Errorf("the stack's page = %+v, want the scale in its drift summary", detail.Drift)
 	}
 }

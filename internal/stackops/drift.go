@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/store"
 )
 
 // The states of a drift check (D-21).
@@ -43,13 +44,19 @@ const (
 // revision's masker: Current is what runs now and Next what the revision deployed, as in a roll back review (a
 // missing service has only Next, an extra one neither; on a standalone host an extra service that more than one
 // container runs holds its scale as Current, which is what a page counts its containers by).
+//
+// Cause is why the service differs when the audit log or the adoption knows, nil when it does not (D-24).
 type DriftService struct {
 	Name, Short, Change string
 	Diff                stacks.ServiceChange
+	Cause               *DriftCause
 }
 
 // DriftResult is a drift check: the state, the revision it was made against, when, the services that differ, how many
-// settings differ in all, and a Fingerprint of what the engine held that changes whenever a service does.
+// settings differ in all, and a Fingerprint of what the engine held that changes whenever a service does. Latest is the
+// cause to name for the stack as a whole: the newest action of Bayplan's own on a drifted service, or an adoption's
+// difference when there is no such action, nil when nothing is known. Causes is how many drifted services Bayplan's own
+// actions explain.
 type DriftResult struct {
 	State       string
 	Revision    int64
@@ -57,15 +64,19 @@ type DriftResult struct {
 	Services    []DriftService
 	Count       int
 	Fingerprint string
+	Latest      *DriftCause
+	Causes      int
 }
 
 // DriftInput is a stack to check: the environment, the stack, its deployed revision (the newest good one, nil for none)
-// and the images that revision ran, by swarm service name.
+// and the images that revision ran, by swarm service name. Audit is the store whose audit log names the causes of the
+// drift; nil leaves the causes of Bayplan's own actions out.
 type DriftInput struct {
 	EnvID    string
 	Stack    Stack
 	Deployed *Snapshot
 	Pins     map[string]string
+	Audit    *store.Store
 }
 
 // Drift compares what runs with the deployed revision. The revision is prepared as a roll back to it is
@@ -89,7 +100,11 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 		res.State, res.Revision = DriftStopped, in.Deployed.Seq
 		return res, nil
 	case in.Stack.Target == stacks.TargetStandalone:
-		return d.driftStandalone(ctx, in)
+		res, err := d.driftStandalone(ctx, in)
+		if err == nil {
+			d.attachCauses(ctx, in, &res, nil)
+		}
+		return res, err
 	}
 	res.Revision = in.Deployed.Seq
 	deployed := *in.Deployed
@@ -177,6 +192,11 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 	if len(res.Services) > 0 {
 		res.State = DriftDrifted
 	}
+	ids := make(map[string]string, len(live.Services))
+	for _, s := range live.Services {
+		ids[s.Name] = s.ID
+	}
+	d.attachCauses(ctx, in, &res, ids)
 	return res, nil
 }
 
