@@ -3,7 +3,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useLocation } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -267,5 +267,123 @@ describe("Accept live into draft", () => {
 
     await heldBack("No drift to restore.");
     expect(posts).toHaveLength(0);
+  });
+});
+
+describe("Accept live when a saved draft exists", () => {
+  beforeEach(() => {
+    detail = { ...detail, hasDraft: true };
+    draft = {
+      isDraft: true,
+      version: 5,
+      savedBy: "ada",
+      savedAt: "2026-10-19T10:30:00Z",
+      baseSeq: 4,
+      files: [],
+      vars: [],
+    };
+  });
+
+  // dialog waits for the confirm: the page learns the stack has a saved draft a moment after it opens.
+  async function openConfirm() {
+    fireEvent.click(await ready());
+    return screen.findByRole("alertdialog", { name: "Replace the draft?" });
+  }
+
+  it("asks Replace the draft? and names who saved it and when, with Keep draft focused", async () => {
+    mount();
+
+    const dialog = await openConfirm();
+
+    expect(dialog.textContent).toMatch(
+      /This rebuilds the draft from what's running\. The saved draft by ada, .+, is replaced, including files and variables\. It can't be undone\./,
+    );
+    const keep = within(dialog).getByRole("button", { name: "Keep draft" });
+    await waitFor(() => expect(document.activeElement).toBe(keep));
+    expect(
+      within(dialog).getByRole("button", { name: "Replace draft" }).getAttribute("data-variant"),
+    ).toBe("destructive");
+    expect(posts).toHaveLength(0);
+  });
+
+  it("sends nothing and keeps the draft on Keep draft", async () => {
+    mount();
+    const dialog = await openConfirm();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep draft" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(posts).toHaveLength(0);
+    expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
+  });
+
+  it("rebuilds the draft on Replace draft, at the version the dialog showed, and opens the Editor", async () => {
+    mount();
+    const dialog = await openConfirm();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace draft" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/editor?pane=files"),
+    );
+    expect(posts.map((p) => p.body)).toEqual([{ draftVersion: 5 }]);
+    expect(toasts.success).toHaveBeenCalledWith(
+      "Rebuilt the draft of tracer from what's running. Review it, then deploy.",
+    );
+  });
+
+  it("shows the Phase 7 conflict wording when the draft moved, and stays on the page", async () => {
+    acceptAnswer = () =>
+      Response.json(
+        {
+          type: "draft_conflict",
+          title: "Conflict",
+          status: 409,
+          detail: "x",
+          errors: [
+            { location: "savedBy", message: "bob" },
+            { location: "version", message: "6" },
+          ],
+        },
+        { status: 409 },
+      );
+    mount();
+    const dialog = await openConfirm();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace draft" }));
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "bob saved this draft while you were editing. Reloading shows their version and drops your unsaved changes.",
+      ),
+    );
+    expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
+  });
+
+  it("does not ask when the stack's draft holds nothing that was not deployed", async () => {
+    detail = { ...detail, hasDraft: false };
+    mount();
+
+    fireEvent.click(await ready());
+
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("the drift page's footer on a narrow screen", () => {
+  it("holds the revision above the footer as a caption, and keeps the two buttons in it", async () => {
+    mount();
+    await ready();
+
+    const footer = document.querySelector('[data-slot="editor-footer"]') as HTMLElement;
+    const caption = screen.getAllByText("Revision #4").find((el) => !footer.contains(el));
+    expect(caption).toBeTruthy();
+    expect(caption?.className).toContain("md:hidden");
+    expect(footer.contains(caption ?? null)).toBe(false);
+    expect(within(footer).getByRole("button", { name: "Accept live into draft" })).toBeTruthy();
+    expect(within(footer).getByRole("link", { name: "Redeploy to restore" })).toBeTruthy();
+    // The one in the footer is the wide screens' and goes when the caption shows.
+    expect(within(footer).getByText("Revision #4").className).toContain("max-md:hidden");
   });
 });

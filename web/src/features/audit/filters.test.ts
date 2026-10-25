@@ -135,6 +135,18 @@ describe("actionLabel", () => {
     expect(audit.audit.actions.stack.deployed_restore).toBe("Restored stack {{name}} from drift");
   });
 
+  it("labels accepting live state into the draft with the stack's name when the entry has it", () => {
+    expect(actionLabel("stack.drift_accepted", echo, { stack: "web", revision: "4" })).toBe(
+      "t:audit.actions.stack.drift_accepted_named",
+    );
+    expect(actionLabel("stack.drift_accepted", echo)).toBe("t:audit.actions.stack.drift_accepted");
+    expect(KNOWN_ACTIONS).toContain("stack.drift_accepted");
+    expect(audit.audit.actions.stack.drift_accepted_named).toBe(
+      "Accepted live state into the draft of {{name}}",
+    );
+    expect(audit.audit.actions.stack.drift_accepted).toBe("Accepted live state into the draft");
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];
