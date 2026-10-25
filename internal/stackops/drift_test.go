@@ -5,6 +5,7 @@ package stackops_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -132,153 +133,135 @@ func TestDriftDetectsEachKind(t *testing.T) {
 			s.TaskTemplate.Placement.Constraints = append(s.TaskTemplate.Placement.Constraints, "node.labels.zone==a")
 		}, "node.labels.zone==a"},
 	}
+	// Each kind is its own stack on its own fake swarm, judged in turn in this one test: a failure names the kind and
+	// the others still report.
+	judge := func(label string, check func(*driftRig) []string, prep func(*driftRig)) {
+		rig := newDriftRig(t)
+		prep(rig)
+		for _, p := range check(rig) {
+			t.Error(label + ": " + p)
+		}
+	}
 	for _, tc := range edits {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			rig := newDriftRig(t)
-			rig.editLive(t, "web", tc.edit)
-
+		judge(tc.name, func(rig *driftRig) []string {
 			res := rig.drift(t)
-
 			if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"changed web"}) {
-				t.Fatalf("drift = %s %v, want drifted with web changed", res.State, driftNames(res))
+				return []string{fmt.Sprintf("drift = %s %v, want drifted with web changed", res.State, driftNames(res))}
 			}
+			var out []string
 			svc := res.Services[0]
 			if svc.Name != "drift_web" || svc.Diff.Settings < 1 || res.Count != svc.Diff.Settings {
-				t.Errorf("service = %+v count %d, want drift_web with its settings counted", svc, res.Count)
+				out = append(out, fmt.Sprintf("service = %+v count %d, want drift_web with its settings counted", svc, res.Count))
 			}
 			if !strings.Contains(string(svc.Diff.Current), tc.shown) {
-				t.Errorf("what runs now = %s, want it to hold %q", svc.Diff.Current, tc.shown)
+				out = append(out, fmt.Sprintf("what runs now = %s, want it to hold %q", svc.Diff.Current, tc.shown))
 			}
 			if strings.Contains(string(svc.Diff.Next), tc.shown) {
-				t.Errorf("what was deployed = %s, want it without %q", svc.Diff.Next, tc.shown)
+				out = append(out, fmt.Sprintf("what was deployed = %s, want it without %q", svc.Diff.Next, tc.shown))
 			}
-		})
+			return out
+		}, func(rig *driftRig) { rig.editLive(t, "web", tc.edit) })
 	}
 
-	t.Run("a missing service", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
+	judge("a missing service", func(rig *driftRig) []string {
+		res := rig.drift(t)
+		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing gone"}) || res.Count != 1 {
+			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with gone missing, counted once", res.State, driftNames(res), res.Count)}
+		}
+		if len(res.Services[0].Diff.Next) == 0 {
+			return []string{"a missing service holds the spec the revision deployed"}
+		}
+		return nil
+	}, func(rig *driftRig) {
 		gone := rig.ownedNow(t, rig.st)["drift_gone"]
 		err := rig.deps.Aggregator.WriteOnManager(testsupport.Context(t), rig.envID, func(c *dockerx.Client) error {
 			return c.ServiceRemove(context.Background(), gone.ID)
 		})
 		if err != nil {
-			t.Fatal(err)
-		}
-
-		res := rig.drift(t)
-
-		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing gone"}) || res.Count != 1 {
-			t.Fatalf("drift = %s %v count %d, want drifted with gone missing, counted once", res.State, driftNames(res), res.Count)
-		}
-		if len(res.Services[0].Diff.Next) == 0 {
-			t.Error("a missing service holds the spec the revision deployed")
+			t.Error(err)
 		}
 	})
 
-	t.Run("an extra owned service", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
-		spec := swarm.ServiceSpec{
-			Annotations: swarm.Annotations{Name: "drift_extra", Labels: map[string]string{
-				stacks.LabelSwarmNamespace: "drift", stacks.LabelStackID: rig.st.ID,
-			}},
-			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "busybox:1"}},
+	createService := func(owner string) func(*driftRig) {
+		return func(rig *driftRig) {
+			id := rig.st.ID
+			if owner != "" {
+				id = owner
+			}
+			spec := swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "drift_extra", Labels: map[string]string{
+					stacks.LabelSwarmNamespace: "drift", stacks.LabelStackID: id,
+				}},
+				TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "busybox:1"}},
+			}
+			err := rig.deps.Aggregator.WriteOnManager(testsupport.Context(t), rig.envID, func(c *dockerx.Client) error {
+				_, _, err := c.ServiceCreate(context.Background(), mustJSON(t, spec), "")
+				return err
+			})
+			if err != nil {
+				t.Error(err)
+			}
 		}
-		err := rig.deps.Aggregator.WriteOnManager(testsupport.Context(t), rig.envID, func(c *dockerx.Client) error {
-			_, _, err := c.ServiceCreate(context.Background(), mustJSON(t, spec), "")
-			return err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-
+	}
+	judge("an extra owned service", func(rig *driftRig) []string {
 		res := rig.drift(t)
-
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"extra extra"}) || res.Count != 1 {
-			t.Fatalf("drift = %s %v count %d, want drifted with extra extra, counted once", res.State, driftNames(res), res.Count)
+			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with extra extra, counted once", res.State, driftNames(res), res.Count)}
 		}
-	})
-
-	t.Run("a service of the namespace that another owner made is not the stack's", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
-		spec := swarm.ServiceSpec{
-			Annotations: swarm.Annotations{Name: "drift_alien", Labels: map[string]string{
-				stacks.LabelSwarmNamespace: "drift", stacks.LabelStackID: "someone-else",
-			}},
-			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "busybox:1"}},
-		}
-		err := rig.deps.Aggregator.WriteOnManager(testsupport.Context(t), rig.envID, func(c *dockerx.Client) error {
-			_, _, err := c.ServiceCreate(context.Background(), mustJSON(t, spec), "")
-			return err
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-
+		return nil
+	}, createService(""))
+	judge("a service of the namespace that another owner made", func(rig *driftRig) []string {
 		if res := rig.drift(t); res.State != stackops.DriftNone {
-			t.Errorf("drift = %s %v, want none: ownership decides what is the stack's", res.State, driftNames(res))
+			return []string{fmt.Sprintf("drift = %s %v, want none: ownership decides what is the stack's", res.State, driftNames(res))}
 		}
-	})
+		return nil
+	}, createService("someone-else"))
 }
 
 func TestDriftIgnoresNoise(t *testing.T) {
 	t.Parallel()
-	t.Run("the force-update counter", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
-		rig.editLive(t, "web", func(s *swarm.ServiceSpec) { s.TaskTemplate.ForceUpdate += 3 })
-		if res := rig.drift(t); res.State != stackops.DriftNone {
-			t.Errorf("drift = %s %v, want none: the counter is carried over as a deploy does", res.State, driftNames(res))
-		}
-	})
-	t.Run("the version index and the update status", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
-		before := rig.drift(t)
-		if !rig.fake.BumpService("drift_web") {
-			t.Fatal("the fake has no service drift_web")
-		}
-		rig.fake.SetUpdateState("drift_web", "completed", "update completed")
-		rig.fake.SetTaskState("drift_api", "running", "")
-
-		res := rig.drift(t)
-
-		if res.State != stackops.DriftNone {
-			t.Errorf("drift = %s %v, want none", res.State, driftNames(res))
-		}
-		if res.Fingerprint == before.Fingerprint {
-			t.Errorf("fingerprint = %q both times, want a service whose version moved to show", res.Fingerprint)
-		}
-	})
-	t.Run("Bayplan's labels absent on an adopted stack that has not been deployed yet", func(t *testing.T) {
-		t.Parallel()
-		rig := newDriftRig(t)
-		strip := func(labels map[string]string) {
-			for k := range labels {
-				if strings.HasPrefix(k, "bayplan.") {
-					delete(labels, k)
-				}
+	strip := func(labels map[string]string) {
+		for k := range labels {
+			if strings.HasPrefix(k, "bayplan.") {
+				delete(labels, k)
 			}
 		}
-		for _, name := range []string{"web", "api", "gone"} {
-			rig.editLive(t, name, func(s *swarm.ServiceSpec) {
-				strip(s.Labels)
-				strip(s.TaskTemplate.ContainerSpec.Labels)
-			})
-		}
-		// The labels are the owner's mark: with them gone only an adopted stack that is pending still owns the services.
-		rig.st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "drift"}
-		rig.st.Adoption = stacks.Adoption{Pending: true}
+	}
 
-		res := rig.drift(t)
+	forceUpdate := newDriftRig(t)
+	forceUpdate.editLive(t, "web", func(s *swarm.ServiceSpec) { s.TaskTemplate.ForceUpdate += 3 })
+	if res := forceUpdate.drift(t); res.State != stackops.DriftNone {
+		t.Errorf("the force-update counter: drift = %s %v, want none: the counter is carried over as a deploy does", res.State, driftNames(res))
+	}
 
-		if res.State != stackops.DriftNone {
-			t.Errorf("drift = %s %v, want none: the labels say who owns a service, not how it is set up", res.State, driftNames(res))
-		}
-	})
+	versions := newDriftRig(t)
+	before := versions.drift(t)
+	if !versions.fake.BumpService("drift_web") {
+		t.Fatal("the fake has no service drift_web")
+	}
+	versions.fake.SetUpdateState("drift_web", "completed", "update completed")
+	versions.fake.SetTaskState("drift_api", "running", "")
+	res := versions.drift(t)
+	if res.State != stackops.DriftNone {
+		t.Errorf("the version index and the update status: drift = %s %v, want none", res.State, driftNames(res))
+	}
+	if res.Fingerprint == before.Fingerprint {
+		t.Errorf("fingerprint = %q both times, want a service whose version moved to show", res.Fingerprint)
+	}
+
+	adopted := newDriftRig(t)
+	for _, name := range []string{"web", "api", "gone"} {
+		adopted.editLive(t, name, func(s *swarm.ServiceSpec) {
+			strip(s.Labels)
+			strip(s.TaskTemplate.ContainerSpec.Labels)
+		})
+	}
+	// The labels are the owner's mark: with them gone only an adopted stack that is pending still owns the services.
+	adopted.st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "drift"}
+	adopted.st.Adoption = stacks.Adoption{Pending: true}
+	if res := adopted.drift(t); res.State != stackops.DriftNone {
+		t.Errorf("Bayplan's labels absent on an adopted stack that has not been deployed yet: drift = %s %v, want none: the labels say who owns a service, not how it is set up", res.State, driftNames(res))
+	}
 }
 
 func TestDriftStoppedAndNotDeployed(t *testing.T) {
