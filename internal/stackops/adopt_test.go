@@ -147,8 +147,7 @@ func TestAdoptCommitStoresRevisionOne(t *testing.T) {
 
 func TestAdoptChangesNothingOnTheEngine(t *testing.T) {
 	t.Parallel()
-	t.Run("swarm", func(t *testing.T) {
-		t.Parallel()
+	{ // swarm
 		rig := objectsRig(t)
 		if _, err := rig.adopt(t, adoptRepo(t, rig), stacks.TargetSwarm, "shop", stackops.SelfMarks{}); err != nil {
 			t.Fatalf("AdoptCommit: %v", err)
@@ -161,9 +160,8 @@ func TestAdoptChangesNothingOnTheEngine(t *testing.T) {
 				t.Errorf("adopting asked for %s: a secret or a config was inspected", req)
 			}
 		}
-	})
-	t.Run("standalone", func(t *testing.T) {
-		t.Parallel()
+	}
+	{ // standalone
 		rig := hostRig(t, stackopstest.Foreign(t, "shop", foreignProject))
 		if _, err := rig.adopt(t, adoptRepo(t, rig), stacks.TargetStandalone, "shop", stackops.SelfMarks{}); err != nil {
 			t.Fatalf("AdoptCommit: %v", err)
@@ -171,7 +169,7 @@ func TestAdoptChangesNothingOnTheEngine(t *testing.T) {
 		if writes := rig.fake.Writes(); len(writes) != 0 {
 			t.Errorf("adopting wrote to the engine: %v", writes)
 		}
-	})
+	}
 }
 
 // TestAdoptStaleFingerprint: a fingerprint that is not what runs now stores nothing (T-08-46). The browser says what
@@ -180,8 +178,7 @@ func TestAdoptStaleFingerprint(t *testing.T) {
 	t.Parallel()
 	ctx := testsupport.Context(t)
 
-	t.Run("a swarm service that was updated since", func(t *testing.T) {
-		t.Parallel()
+	{ // a swarm service that was updated since
 		before := objectsRig(t)
 		fp, err := before.deps.AdoptFingerprint(ctx, before.envID, stacks.TargetSwarm, "shop")
 		if err != nil {
@@ -199,10 +196,9 @@ func TestAdoptStaleFingerprint(t *testing.T) {
 		if list, _ := repo.Stacks(ctx, after.envID); len(list) != 0 {
 			t.Errorf("a stale adoption stored %+v, want nothing", list)
 		}
-	})
+	}
 
-	t.Run("a container that was replaced since", func(t *testing.T) {
-		t.Parallel()
+	{ // a container that was replaced since
 		before := hostRig(t, stackopstest.Foreign(t, "shop", foreignProject))
 		fp, err := before.deps.AdoptFingerprint(ctx, before.envID, stacks.TargetStandalone, "shop")
 		if err != nil {
@@ -220,19 +216,17 @@ func TestAdoptStaleFingerprint(t *testing.T) {
 		if list, _ := repo.Stacks(ctx, after.envID); len(list) != 0 {
 			t.Errorf("a stale adoption stored %+v, want nothing", list)
 		}
-	})
+	}
 
-	t.Run("a fingerprint that was never read", func(t *testing.T) {
-		t.Parallel()
+	{ // a fingerprint that was never read
 		rig := objectsRig(t)
 		repo := adoptRepo(t, rig)
 		if _, err := rig.adoptWith(t, repo, stacks.TargetSwarm, "shop", "", stackops.SelfMarks{}); !errors.Is(err, stackops.ErrAdoptStale) {
 			t.Fatalf("AdoptCommit with an empty fingerprint = %v, want ErrAdoptStale", err)
 		}
-	})
+	}
 
-	t.Run("the same state gives the same fingerprint", func(t *testing.T) {
-		t.Parallel()
+	{ // the same state gives the same fingerprint
 		rig := objectsRig(t)
 		a, err := rig.deps.AdoptFingerprint(ctx, rig.envID, stacks.TargetSwarm, "shop")
 		if err != nil {
@@ -242,7 +236,7 @@ func TestAdoptStaleFingerprint(t *testing.T) {
 		if err != nil || a == "" || a != b {
 			t.Errorf("fingerprints %q and %q (%v), want one non-empty digest for one state", a, b, err)
 		}
-	})
+	}
 }
 
 func TestAdoptRefusesBayplanAndAgentStacks(t *testing.T) {
@@ -310,8 +304,7 @@ func TestAdoptRefusesAManagedOrAMissingName(t *testing.T) {
 // the Docker socket or is privileged is adopted; a later deploy of it is judged as any deploy (D-17).
 func TestAdoptPrivilegedStackNeverFailsOnPolicy(t *testing.T) {
 	t.Parallel()
-	t.Run("a swarm service that mounts the Docker socket", func(t *testing.T) {
-		t.Parallel()
+	{ // a swarm service that mounts the Docker socket
 		rig := objectsRigWith(t, 0, func(spec *swarm.ServiceSpec) {
 			spec.TaskTemplate.ContainerSpec.Mounts = append(spec.TaskTemplate.ContainerSpec.Mounts,
 				mount.Mount{Type: mount.TypeBind, Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"})
@@ -326,10 +319,9 @@ func TestAdoptPrivilegedStackNeverFailsOnPolicy(t *testing.T) {
 		if err != nil || !strings.Contains(string(draft.Copy.Compose()), "docker.sock") {
 			t.Errorf("draft = %v, %v, want the socket mount kept in the definition", draft.Copy.Compose(), err)
 		}
-	})
+	}
 
-	t.Run("a privileged container", func(t *testing.T) {
-		t.Parallel()
+	{ // a privileged container
 		rig := hostRig(t, stackopstest.Foreign(t, "shop", "services:\n  web:\n    image: nginx:1.27\n    privileged: true\n    volumes:\n      - /var/run/docker.sock:/var/run/docker.sock\n"))
 		repo := adoptRepo(t, rig)
 
@@ -341,5 +333,5 @@ func TestAdoptPrivilegedStackNeverFailsOnPolicy(t *testing.T) {
 		if err != nil || !strings.Contains(string(draft.Copy.Compose()), "privileged: true") {
 			t.Errorf("draft = %s, %v, want privileged kept in the definition", draft.Copy.Compose(), err)
 		}
-	})
+	}
 }
