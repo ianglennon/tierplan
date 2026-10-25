@@ -6,13 +6,17 @@ package stackops_test
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -186,5 +190,365 @@ func TestDriftMonitorChecksOnTick(t *testing.T) {
 	// The worker reads and never writes to an engine (D-23, T-08-77).
 	if got := rig.fake.Writes(); len(got) != writes {
 		t.Errorf("the background check wrote %v", got[writes:])
+	}
+}
+
+// monitorEnv is the environment every stand-in test works on.
+const monitorEnv = "env-monitor"
+
+// monitorStack is a deployed stack of the target, with a good revision 1.
+func monitorStack(src *fakeDriftSource, id, name string, target stacks.Target) stackops.Stack {
+	st := stackops.Stack{ID: id, Name: name, Target: target}
+	src.add(monitorEnv, st, stackops.Snapshot{ID: "rev-" + id, StackID: id, Seq: 1, Kind: stackops.KindRevision, Outcome: stackops.OutcomeGood}, map[string]string{})
+	st.EnvID = monitorEnv
+	return st
+}
+
+// driftCalls stands in for the check of a stack: it counts the calls and answers that nothing differs.
+type driftCalls struct {
+	mu      sync.Mutex
+	byStack map[string]int
+	// hook, when set, runs inside each call before it answers.
+	hook func(in stackops.DriftInput)
+}
+
+func newDriftCalls() *driftCalls { return &driftCalls{byStack: map[string]int{}} }
+
+func (c *driftCalls) check(_ context.Context, in stackops.DriftInput) (stackops.DriftResult, error) {
+	c.mu.Lock()
+	c.byStack[in.Stack.ID]++
+	hook := c.hook
+	c.mu.Unlock()
+	if hook != nil {
+		hook(in)
+	}
+	return stackops.DriftResult{State: stackops.DriftNone, Revision: in.Deployed.Seq, CheckedAt: time.Unix(1, 0).UTC()}, nil
+}
+
+func (c *driftCalls) count(stackID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byStack[stackID]
+}
+
+// fakeHub stands in for the events hub: each Subscribe hands out a channel the test writes to or closes.
+type fakeHub struct {
+	mu     sync.Mutex
+	subs   []chan dockerx.EventRow
+	opened chan struct{}
+}
+
+func newFakeHub() *fakeHub { return &fakeHub{opened: make(chan struct{}, 16)} }
+
+func (h *fakeHub) Subscribe(context.Context, string) ([]dockerx.EventRow, <-chan dockerx.EventRow, func()) {
+	ch := make(chan dockerx.EventRow, 64)
+	h.mu.Lock()
+	h.subs = append(h.subs, ch)
+	h.mu.Unlock()
+	h.opened <- struct{}{}
+	return nil, ch, func() {}
+}
+
+// sub is the channel of the n-th subscription, counting from zero. The worker subscribes before it arms its first
+// timer, so a test that has seen that timer has seen the subscription too.
+func (h *fakeHub) sub(t *testing.T, n int) chan dockerx.EventRow {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if n >= len(h.subs) {
+		t.Fatalf("the worker has made %d subscriptions, want at least %d", len(h.subs), n+1)
+	}
+	return h.subs[n]
+}
+
+// serviceEvent and containerEvent are the Docker events the worker reads.
+func serviceEvent(action, name string, attrs map[string]string) dockerx.EventRow {
+	return dockerx.EventRow{Type: "service", Action: action, Name: name, Attributes: attrs}
+}
+
+func containerEvent(action string, attrs map[string]string) dockerx.EventRow {
+	return dockerx.EventRow{Type: "container", Action: action, Name: "c1", Attributes: attrs}
+}
+
+// settle moves the clock to the worker's first look, waits until every stack named was checked and until the worker
+// has armed its next timer, so the test starts from a worker at rest.
+func (r *monitorRig) settle(t *testing.T, stackIDs ...string) {
+	t.Helper()
+	r.clk.Advance(3 * time.Second)
+	for _, id := range stackIDs {
+		r.await(t, id, stackops.DriftOutcomeStored)
+	}
+	testsupport.Await(t, "the worker to arm its next timed look", r.clk.armed)
+}
+
+// quiet says the worker holds no timer it was not asked for: every arming the test counted was consumed.
+func (r *monitorRig) quiet(t *testing.T) {
+	t.Helper()
+	if n := len(r.clk.armed); n != 0 {
+		t.Errorf("the worker armed %d more timers than the test expected", n)
+	}
+}
+
+func TestDriftMonitorDebouncesEvents(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	monitorStack(src, "db-id", "db", stacks.TargetSwarm)
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, Subscribe: hub.Subscribe})
+	m.settle(t, "db-id", "web-id")
+	ns := map[string]string{stacks.LabelSwarmNamespace: web.Name}
+
+	// Three events for one stack arm one timer; an event for another stack arms its own. The second timer is how the test
+	// knows the first three were all read.
+	for range 3 {
+		hub.sub(t, 0) <- serviceEvent("update", "web_web", ns)
+	}
+	hub.sub(t, 0) <- serviceEvent("update", "db_db", map[string]string{stacks.LabelSwarmNamespace: "db"})
+	testsupport.Await(t, "the timer of web", m.clk.armed)
+	testsupport.Await(t, "the timer of db", m.clk.armed)
+	m.quiet(t)
+	if calls.count("web-id") != 1 {
+		t.Fatalf("web was checked %d times before its quiet time ran out, want only the first look", calls.count("web-id"))
+	}
+
+	m.clk.Advance(3 * time.Second)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	m.await(t, "db-id", stackops.DriftOutcomeStored)
+	if calls.count("web-id") != 2 || calls.count("db-id") != 2 {
+		t.Errorf("checks of web and db = %d and %d, want 2 and 2: one look and one check for the three events", calls.count("web-id"), calls.count("db-id"))
+	}
+}
+
+func TestDriftMonitorMapsServiceEventsByName(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	shop := monitorStack(src, "shop-id", "shop", stacks.TargetSwarm)
+	monitorStack(src, "box-id", "box", stacks.TargetStandalone)
+	held := func(_ context.Context, _ string, swarm bool) (stackops.Held, error) {
+		if !swarm {
+			return stackops.Held{}, nil
+		}
+		return stackops.Held{Services: []dockerx.ServiceRow{
+			{ID: "svc-1", Name: "shop_web", Stack: shop.Name, Labels: map[string]string{stacks.LabelStackID: shop.ID}},
+		}}, nil
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, HeldFunc: held, Subscribe: hub.Subscribe})
+	m.settle(t, "box-id", "shop-id")
+	ch := hub.sub(t, 0)
+
+	// What cannot change what a check finds is let go without a timer: a container of a swarm task (it names a
+	// namespace, not a project), a health check result, an exec, an image.
+	ch <- containerEvent("die", map[string]string{stacks.LabelSwarmNamespace: "shop"})
+	ch <- dockerx.EventRow{Type: "container", Action: "health_status", InvalidateOnly: true, Attributes: map[string]string{stacks.LabelComposeProject: "box"}}
+	ch <- containerEvent("exec_start", map[string]string{stacks.LabelComposeProject: "box"})
+	ch <- dockerx.EventRow{Type: "image", Action: "pull", Name: "nginx"}
+	// A service event that names no stack is found among the services each stack owns; one no stack owns finds none.
+	ch <- serviceEvent("update", "unrelated_svc", nil)
+	ch <- serviceEvent("update", "shop_web", nil)
+	// A container names its stack by its Compose project.
+	ch <- containerEvent("die", map[string]string{stacks.LabelComposeProject: "box"})
+	testsupport.Await(t, "the timer of the unrelated service", m.clk.armed)
+	testsupport.Await(t, "the timer of shop_web", m.clk.armed)
+	testsupport.Await(t, "the timer of the box container", m.clk.armed)
+	m.quiet(t)
+
+	m.clk.Advance(3 * time.Second)
+	skipped := m.await(t, "shop-id", stackops.DriftOutcomeStored)
+	for _, s := range skipped {
+		if s.stack != "box-id" || s.outcome != stackops.DriftOutcomeStored {
+			t.Errorf("the worker also reported %+v, want only the box container and the shop service to be checked", s)
+		}
+	}
+	if calls.count("shop-id") != 2 || calls.count("box-id") != 2 {
+		t.Errorf("checks of shop and box = %d and %d, want 2 and 2 (one look, one event each)", calls.count("shop-id"), calls.count("box-id"))
+	}
+}
+
+func TestDriftMonitorSkipsWhileLocked(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, Subscribe: hub.Subscribe})
+	m.settle(t, "web-id")
+
+	// A deploy is under way: the event is read, its time runs out, and the worker looks and finds the lock held.
+	release, _, ok := m.locks.TryAcquire(monitorEnv, stackops.Holder{StackID: web.ID, StackName: web.Name, Kind: "deploy"})
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	defer release()
+	hub.sub(t, 0) <- serviceEvent("update", "web_web", map[string]string{stacks.LabelSwarmNamespace: web.Name})
+	testsupport.Await(t, "the timer of web", m.clk.armed)
+	m.clk.Advance(3 * time.Second)
+	m.await(t, "", stackops.DriftOutcomeHeld)
+	if calls.count("web-id") != 1 {
+		t.Errorf("web was checked %d times, want the first look only: a deploy under way is not drift", calls.count("web-id"))
+	}
+	if _, ok := m.store.Get("web-id"); !ok {
+		t.Error("the result of the first look is gone")
+	}
+}
+
+func TestDriftMonitorRechecksAfterRelease(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, Subscribe: hub.Subscribe})
+	m.settle(t, "web-id")
+
+	release, _, _ := m.locks.TryAcquire(monitorEnv, stackops.Holder{StackID: web.ID, StackName: web.Name, Kind: "deploy"})
+	hub.sub(t, 0) <- serviceEvent("update", "web_web", map[string]string{stacks.LabelSwarmNamespace: web.Name})
+	testsupport.Await(t, "the timer of web", m.clk.armed)
+	m.clk.Advance(3 * time.Second)
+	m.await(t, "", stackops.DriftOutcomeHeld)
+
+	// The deploy ends: the lock is freed and the stack is asked for again. The check the event wanted and the one asked
+	// for are one check.
+	src.deploy(web.ID)
+	release()
+	m.mon.Recheck(monitorEnv, web.ID)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	if calls.count("web-id") != 2 {
+		t.Fatalf("web was checked %d times, want the first look and one check after the release", calls.count("web-id"))
+	}
+	res, ok := m.store.Get("web-id")
+	if !ok || res.Revision != 2 {
+		t.Errorf("result = %+v, %v, want the one made against the revision the deploy took", res, ok)
+	}
+}
+
+func TestDriftMonitorDropsAResultComputedUnderALock(t *testing.T) {
+	t.Parallel()
+	src, calls := &fakeDriftSource{}, newDriftCalls()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	entered, proceed := make(chan struct{}, 4), make(chan struct{})
+	calls.hook = func(stackops.DriftInput) {
+		entered <- struct{}{}
+		<-proceed
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check})
+
+	// The check starts, then a deploy takes the lock: what the check found is not stored as drift.
+	m.clk.Advance(3 * time.Second)
+	testsupport.Await(t, "the check to start", entered)
+	release, _, ok := m.locks.TryAcquire(monitorEnv, stackops.Holder{StackID: web.ID, StackName: web.Name, Kind: "deploy"})
+	if !ok {
+		t.Fatal("could not take the lock")
+	}
+	close(proceed)
+	m.await(t, "web-id", stackops.DriftOutcomeDropped)
+	if res, ok := m.store.Get("web-id"); ok {
+		t.Fatalf("a result computed while the lock was taken was stored: %+v", res)
+	}
+
+	// The deploy ends and asks for a check: the result after it is stored.
+	release()
+	m.mon.Recheck(monitorEnv, web.ID)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	if _, ok := m.store.Get("web-id"); !ok {
+		t.Error("the check after the deploy stored nothing")
+	}
+}
+
+func TestDriftMonitorResubscribes(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, Subscribe: hub.Subscribe})
+	testsupport.Await(t, "the first subscription", hub.opened)
+	m.settle(t, "web-id")
+
+	// The hub closes a subscriber that falls behind: the worker waits on the clock and asks again.
+	close(hub.sub(t, 0))
+	testsupport.Await(t, "the worker to arm its wait before it subscribes again", m.clk.armed)
+	m.clk.Advance(time.Second)
+	testsupport.Await(t, "the second subscription", hub.opened)
+
+	// And it works from the new one.
+	hub.sub(t, 1) <- serviceEvent("update", "web_web", map[string]string{stacks.LabelSwarmNamespace: web.Name})
+	testsupport.Await(t, "the timer of web", m.clk.armed)
+	m.clk.Advance(3 * time.Second)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	if calls.count("web-id") != 2 {
+		t.Errorf("web was checked %d times, want the first look and the check the new subscription's event asked for", calls.count("web-id"))
+	}
+}
+
+func TestDriftMonitorOneCheckAtATime(t *testing.T) {
+	t.Parallel()
+	src, calls := &fakeDriftSource{}, newDriftCalls()
+	monitorStack(src, "a-id", "a", stacks.TargetSwarm)
+	monitorStack(src, "b-id", "b", stacks.TargetSwarm)
+	var inFlight, most atomic.Int32
+	calls.hook = func(stackops.DriftInput) {
+		n := inFlight.Add(1)
+		for {
+			cur := most.Load()
+			if n <= cur || most.CompareAndSwap(cur, n) {
+				break
+			}
+		}
+		// Give a second check, if the worker ran one beside this, every chance to start.
+		for range 200 {
+			runtime.Gosched()
+		}
+		inFlight.Add(-1)
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check})
+
+	// Both stacks are due at the first look, and again when both are asked for at once.
+	m.settle(t, "a-id", "b-id")
+	m.mon.Recheck(monitorEnv, "a-id")
+	m.mon.Recheck(monitorEnv, "b-id")
+	m.await(t, "a-id", stackops.DriftOutcomeStored)
+	m.await(t, "b-id", stackops.DriftOutcomeStored)
+	if got := most.Load(); got != 1 {
+		t.Errorf("%d checks ran at the same moment on one environment, want one at a time", got)
+	}
+}
+
+func TestDriftMonitorFingerprintSkipsTheDiff(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	web := monitorStack(src, "web-id", "web", stacks.TargetSwarm)
+	var mu sync.Mutex
+	updated := time.Unix(100, 0).UTC()
+	held := func(context.Context, string, bool) (stackops.Held, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return stackops.Held{Services: []dockerx.ServiceRow{
+			{ID: "svc-1", Name: "web_web", Stack: web.Name, Desired: 1, UpdatedAt: updated, Labels: map[string]string{stacks.LabelStackID: web.ID}},
+		}}, nil
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, HeldFunc: held, Subscribe: hub.Subscribe})
+	m.settle(t, "web-id")
+
+	// Nothing moved at the next timed look: the diff is not made.
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "web-id", stackops.DriftOutcomeSkipped)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("web-id") != 1 {
+		t.Fatalf("web was checked %d times, want the first look only", calls.count("web-id"))
+	}
+
+	// A service changed: the next timed look checks again.
+	mu.Lock()
+	updated = updated.Add(time.Minute)
+	mu.Unlock()
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("web-id") != 2 {
+		t.Fatalf("web was checked %d times, want a second check for the changed service", calls.count("web-id"))
+	}
+
+	// An event is the evidence that something moved, and the cache it is judged by can lag the engine: it checks
+	// whatever the fingerprint says.
+	hub.sub(t, 0) <- serviceEvent("update", "web_web", map[string]string{stacks.LabelSwarmNamespace: web.Name})
+	testsupport.Await(t, "the timer of web", m.clk.armed)
+	m.clk.Advance(3 * time.Second)
+	m.await(t, "web-id", stackops.DriftOutcomeStored)
+	if calls.count("web-id") != 3 {
+		t.Errorf("web was checked %d times, want a third check for the event", calls.count("web-id"))
 	}
 }

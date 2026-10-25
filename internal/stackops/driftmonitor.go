@@ -64,8 +64,10 @@ type DriftMonitorDeps struct {
 	// Log receives what the worker could not do. Nil means slog.Default().
 	Log *slog.Logger
 
-	// DriftFunc, when set, is the check of one stack in place of Ops.Drift. A test counts the checks with it.
+	// DriftFunc, when set, is the check of one stack in place of Ops.Drift, and HeldFunc the read of what an
+	// environment holds in place of Ops.Cached. A test counts the checks and feeds the fingerprint with them.
 	DriftFunc func(ctx context.Context, in DriftInput) (DriftResult, error)
+	HeldFunc  func(ctx context.Context, envID string, swarm bool) (Held, error)
 	// Checked, when set, is told what became of each stack the worker looked at (the DriftOutcome values), and, with
 	// an empty stack ID, that a pass held back for an operation. A test waits on it instead of on a length of time.
 	Checked func(envID, stackID, outcome string)

@@ -2165,3 +2165,56 @@ type StackAdoptionAnswer struct {
 	Pending     bool   `json:"pending"`
 	AdoptedFrom string `json:"adoptedFrom"`
 }
+
+// The background drift check is asked for a stack when an operation on it ends (plan 08-21, D-22), and by then the
+// environment's lock is free, or the worker would find it held and have nothing to do until the next timed look.
+func TestStackDeployAsksForADriftRecheckWhenTheOperationEnds(t *testing.T) {
+	t.Parallel()
+	type ask struct {
+		env, stack string
+		// locked is what the stack's page said about the operation lock at the moment of the call.
+		locked bool
+		err    string
+	}
+	asks := make(chan ask, 8)
+	var reader atomic.Pointer[roleCaller]
+	f, e := stackEnvTuned(t, func(f *envFix) {
+		f.stackDriftRecheck = func(envID, stackID string) {
+			a := ask{env: envID, stack: stackID}
+			c := reader.Load()
+			if c == nil {
+				a.err = "no reader"
+				asks <- a
+				return
+			}
+			rec := c.do(http.MethodGet, "stacks/"+stackID, "")
+			var page struct {
+				Lock *lockAnswer `json:"lock"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil || rec.Code != http.StatusOK {
+				a.err = rec.Body.String()
+			}
+			a.locked = page.Lock != nil
+			asks <- a
+		}
+	})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	reader.Store(operator)
+	st := newStack(t, admin, "recheck")
+
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	got := testsupport.Await(t, "the recheck after the deploy", asks)
+	if got.env != e.ID || got.stack != st.ID || got.locked || got.err != "" {
+		t.Errorf("after the deploy: %+v, want this stack on this environment with the lock already free", got)
+	}
+
+	// A stop is an operation too.
+	if _, job := f.lifecycle(t, operator, stopPath(st.ID)); job.State != "done" {
+		t.Fatalf("stop = %+v", job)
+	}
+	got = testsupport.Await(t, "the recheck after the stop", asks)
+	if got.stack != st.ID || got.locked || got.err != "" {
+		t.Errorf("after the stop: %+v, want this stack with the lock already free", got)
+	}
+}

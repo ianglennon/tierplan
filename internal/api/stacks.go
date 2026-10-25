@@ -138,6 +138,9 @@ type StacksDeps struct {
 	OnDrift func(ctx context.Context)
 	// Drift holds the newest drift check of each stack, in memory. Nil means a store of this deps' own.
 	Drift *stackops.DriftStore
+	// DriftRecheck, when set, is called with the environment and the stack when an operation on a stack has ended and
+	// freed the environment's lock, so the background drift check looks at the stack again (D-22).
+	DriftRecheck func(envID, stackID string)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of

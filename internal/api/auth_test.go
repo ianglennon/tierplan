@@ -136,6 +136,8 @@ type authFixture struct {
 	stackOnAdoptCheck func(context.Context)
 	// stackOnDrift is called as a read of a stack for drift holds its slot (plan 08-19).
 	stackOnDrift func(context.Context)
+	// stackDriftRecheck is called when an operation on a stack ends, as the background drift check is asked (plan 08-21).
+	stackDriftRecheck func(envID, stackID string)
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
@@ -370,7 +372,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			Logs:       stackLogs,
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
