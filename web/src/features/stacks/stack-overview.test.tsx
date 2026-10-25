@@ -562,6 +562,28 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
     ).toBeTruthy();
   });
 
+  it("counts containers on a standalone host", async () => {
+    detail = { ...detail, target: "standalone", servicesTotal: 2, servicesRunning: 2 };
+    mount();
+
+    expect(
+      await screen.findByText(
+        "The first deploy adds Bayplan's ownership labels and recreates 2 containers (brief restart). Review shows exactly what changes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("counts one container in the singular on a standalone host", async () => {
+    detail = { ...detail, target: "standalone", servicesTotal: 1, servicesRunning: 1 };
+    mount();
+
+    expect(
+      await screen.findByText(
+        "The first deploy adds Bayplan's ownership labels and recreates 1 container (brief restart). Review shows exactly what changes.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("does not guess a count when the engine could not be read", async () => {
     detail = { ...detail, servicesTotal: undefined, servicesRunning: undefined };
     mount();

@@ -93,6 +93,61 @@ describe("OtherResourcesTable", () => {
     expect(within(added).getByText("—")).toBeTruthy();
   });
 
+  it("words a network the deploy recreates and a volume Bayplan keeps with the server's sentences (D-46, D-56)", () => {
+    render(
+      <OtherResourcesTable
+        objects={[
+          object({
+            change: "changed",
+            kind: "network",
+            name: "demo_back",
+            detail:
+              "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it.",
+          }),
+          object({
+            change: "changed",
+            kind: "volume",
+            name: "demo_data",
+            detail: "Its settings differ from the compose file. Bayplan keeps it as it is.",
+          }),
+        ]}
+      />,
+    );
+    const table = screen.getByRole("table", { name: "Other resources" });
+    const net = within(table).getByText("demo_back").closest("tr") as HTMLElement;
+    expect(within(net).getByText("Changed")).toBeTruthy();
+    expect(within(net).getByText("Network")).toBeTruthy();
+    expect(
+      within(net).getByText(
+        "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it.",
+      ),
+    ).toBeTruthy();
+    const vol = within(table).getByText("demo_data").closest("tr") as HTMLElement;
+    expect(within(vol).getByText("Changed")).toBeTruthy();
+    expect(within(vol).getByText("Volume")).toBeTruthy();
+    expect(
+      within(vol).getByText(
+        "Its settings differ from the compose file. Bayplan keeps it as it is.",
+      ),
+    ).toBeTruthy();
+    // The glyph is only for scanning: the word carries the meaning, and the glyph is hidden from a reader.
+    expect(net.querySelector('[aria-hidden="true"]')?.textContent).toBe("~");
+  });
+
+  it("keeps a network and a volume of one name as two rows", () => {
+    render(
+      <OtherResourcesTable
+        objects={[
+          object({ change: "changed", kind: "network", name: "data", detail: "net" }),
+          object({ change: "changed", kind: "volume", name: "data", detail: "vol" }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("data")).toHaveLength(2);
+    expect(screen.getByText("net")).toBeTruthy();
+    expect(screen.getByText("vol")).toBeTruthy();
+  });
+
   it("draws a name with markup in it as text", () => {
     render(<OtherResourcesTable objects={[object({ name: "<i>net</i>" })]} />);
     expect(screen.getByText("<i>net</i>").querySelector("i")).toBeNull();

@@ -1261,6 +1261,22 @@ const labelsOnly = (short: string, replicas = 2) => ({
   ownershipOnly: true,
 });
 
+// composeOnly is a container's service of an adopted Compose project that differs in nothing but the configuration
+// hash Bayplan's labels change: the two sides are the same, and no setting differs.
+const composeOnly = (short: string) => {
+  const service = { image: "nginx:1.27", environment: { MODE: "prod" } };
+  return {
+    name: short,
+    short,
+    change: "changed",
+    current: service,
+    next: service,
+    hiddenChanges: [],
+    settings: 0,
+    ownershipOnly: true,
+  };
+};
+
 // adoptedBody is the review of an adopted stack whose first deploy is still to come.
 function adoptedBody(services: Record<string, unknown>[], over: Record<string, unknown> = {}) {
   const only = services.filter((s) => s.ownershipOnly).length;
@@ -1400,6 +1416,88 @@ describe("an adopted stack's first review", () => {
         "2 containers will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
       ),
     ).toBeTruthy();
+  });
+
+  it("words the whole warning for containers on a standalone host", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([composeOnly("api"), composeOnly("worker")]));
+    mount();
+    const title = await screen.findByText("Taking ownership restarts 2 containers");
+    const alert = title.closest('[role="status"]') as HTMLElement;
+    expect(
+      within(alert).getByText(
+        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Ownership labels only: 2")).toBeTruthy();
+  });
+
+  it("says what a standalone row changes instead of a diff with nothing in it, and counts no tasks", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([composeOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    const item = within(group).getByRole("listitem");
+    expect(item.textContent).toContain("api");
+    expect(item.textContent).not.toContain("task");
+    expect(
+      within(item).getByText(
+        "Compose recreates the container because Bayplan's labels change its configuration hash. No setting you wrote changes.",
+      ),
+    ).toBeTruthy();
+    expect(within(item).queryByText("No changes")).toBeNull();
+  });
+
+  it("lists the network a standalone deploy recreates and the volume it keeps in Other resources, counted as Changed", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        adoptedBody([changedWeb()], {
+          objects: [
+            {
+              change: "changed",
+              kind: "network",
+              name: "shop_back",
+              detail:
+                "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it.",
+            },
+            {
+              change: "changed",
+              kind: "volume",
+              name: "shop_data",
+              detail: "Its settings differ from the compose file. Bayplan keeps it as it is.",
+            },
+          ],
+          summary: {
+            services: counts(0, 1, 0),
+            networks: counts(0, 1, 0),
+            volumes: counts(0, 1, 0),
+            secrets: counts(),
+            configs: counts(),
+            imagesNew: 0,
+            imagesPinned: 1,
+            ownershipOnly: 0,
+          },
+        }),
+      );
+    mount();
+    const other = await screen.findByRole("table", { name: "Other resources" });
+    const net = within(other).getByText("shop_back").closest("tr") as HTMLElement;
+    expect(within(net).getByText("Changed")).toBeTruthy();
+    expect(
+      within(net).getByText(/The deploy recreates it, which restarts the containers/),
+    ).toBeTruthy();
+    const vol = within(other).getByText("shop_data").closest("tr") as HTMLElement;
+    expect(within(vol).getByText("Volume")).toBeTruthy();
+    expect(within(vol).getByText(/Bayplan keeps it as it is\./)).toBeTruthy();
+    const summary = screen.getByRole("table", { name: "Summary of changes" });
+    for (const row of ["Networks", "Volumes"]) {
+      const cells = within(within(summary).getByRole("row", { name: new RegExp(`^${row}`) }))
+        .getAllByRole("cell")
+        .map((c) => c.textContent);
+      expect(cells).toEqual(["0", "1", "0"]);
+    }
   });
 
   it("omits the group, the warning and the Summary line when no service is ownership-only", async () => {
