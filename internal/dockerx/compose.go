@@ -451,3 +451,14 @@ func (c *Client) ComposeContainers(ctx context.Context, project string) ([]Compo
 // of the service as it is now is recreated by the next Up. It leaves out what the SDK leaves out (build,
 // pull policy, scale, replicas, depends_on, profiles), and custom labels are not in it.
 func ServiceHash(svc types.ServiceConfig) (string, error) { return compose.ServiceHash(svc) }
+
+// ComposeNetworkHash is the configuration hash the Compose SDK stamps on a network it creates
+// (com.docker.compose.config-hash), computed the same way: the next Up recreates a network whose label
+// differs from the hash of the network as the project declares it now. cfg is the network as a deploy loads
+// and prepares it, so its name is the engine's. Bayplan's own labels (CustomLabels) are not in it.
+func ComposeNetworkHash(cfg *types.NetworkConfig) (string, error) { return compose.NetworkHash(cfg) }
+
+// ComposeVolumeHash is ComposeNetworkHash for a volume. A volume whose label differs from the hash of the
+// volume as the project declares it now is the one the SDK would ask to recreate (and lose the data of), so
+// an adopted stack declares only the form whose hash is the label (D-46).
+func ComposeVolumeHash(cfg types.VolumeConfig) (string, error) { return compose.VolumeHash(cfg) }

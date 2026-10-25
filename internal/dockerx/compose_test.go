@@ -6,6 +6,8 @@ package dockerx
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"os"
@@ -378,5 +380,44 @@ func TestComposePromptKeepsVolumes(t *testing.T) {
 				t.Errorf("keepVolumes(%q, %v) = %v, %v, want false and no error", tc.message, tc.fallback, got, err)
 			}
 		})
+	}
+}
+
+// The hashes the research probe read from a real engine with Compose 5.6.0 (08-RESEARCH Pattern 9): the label
+// of a network is the sha256 of the JSON of its config, and the SDK's own functions give the same.
+func TestComposeObjectHashesMatchTheResearchProbe(t *testing.T) {
+	t.Parallel()
+	sum := func(s string) string {
+		h := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(h[:])
+	}
+	net := func(driver string) string {
+		got, err := ComposeNetworkHash(&types.NetworkConfig{Name: "bpresearchprobe_back", Driver: driver})
+		if err != nil {
+			t.Fatalf("ComposeNetworkHash: %v", err)
+		}
+		return got
+	}
+	if got, want := net(""), sum(`{"name":"bpresearchprobe_back","ipam":{}}`); got != want || !strings.HasPrefix(got, "22fa6b37") {
+		t.Errorf("minimal network hash = %s, want %s (the probe's 22fa6b37...)", got, want)
+	}
+	if got := net("bridge"); got == net("") || !strings.HasPrefix(got, "d3215973") {
+		t.Errorf("a network with driver bridge hashes to %s, want another hash than the minimal one, d3215973...", got)
+	}
+	vol, err := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data"})
+	if err != nil {
+		t.Fatalf("ComposeVolumeHash: %v", err)
+	}
+	if want := sum(`{"name":"bpresearchprobe_data","driver":"local"}`); vol != want || !strings.HasPrefix(vol, "ba5a7ea5") {
+		t.Errorf("volume hash = %s, want %s (the probe's ba5a7ea5...)", vol, want)
+	}
+	if same, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", Driver: "local"}); same != vol {
+		t.Errorf("an explicit driver local hashes to %s, want the same as no driver (%s)", same, vol)
+	}
+	// A label is part of the hash; a custom label (Bayplan's own) is not.
+	with, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", Labels: types.Labels{"a": "b"}})
+	custom, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", CustomLabels: types.Labels{"bayplan.stack.id": "x"}})
+	if with == vol || custom != vol {
+		t.Errorf("label hash %s custom-label hash %s, want a label to move the hash and a custom label not to (%s)", with, custom, vol)
 	}
 }
