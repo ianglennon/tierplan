@@ -374,6 +374,16 @@ describe("JobsIndicator stack jobs", () => {
     expect(within(row).getByText("Rolling back")).toBeTruthy();
   });
 
+  it("draws a ListRestart for a restore, with its own words", async () => {
+    stackJobs = [stackJob({ kind: "restore" })];
+    mount();
+    await open("Jobs, 1 in progress");
+    const row = within(await screen.findByRole("list")).getAllByRole("listitem")[0] as HTMLElement;
+    expect(row.querySelector(".lucide-list-restart")).not.toBeNull();
+    expect(row.querySelector(".lucide-undo-2")).toBeNull();
+    expect(within(row).getByText("Restoring")).toBeTruthy();
+  });
+
   it("opens the console of a running deploy from its row", async () => {
     stackJobs = [stackJob({ id: "d7", stackId: "s9" })];
     mount();
@@ -396,6 +406,9 @@ describe("JobsIndicator stack jobs", () => {
     ["rollback", "running", "Rolling back"],
     ["rollback", "done", "Rolled back"],
     ["rollback", "failed", "Failed"],
+    ["restore", "running", "Restoring"],
+    ["restore", "done", "Restored"],
+    ["restore", "failed", "Failed"],
     ["update", "running", "Updating images"],
     ["update", "done", "Images updated"],
     ["stop", "running", "Stopping"],
@@ -653,6 +666,7 @@ describe("JobsIndicator job toasts", () => {
       "deploy",
       "update",
       "rollback",
+      "restore",
       "start",
       "stop",
       "remove",

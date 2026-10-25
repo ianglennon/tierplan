@@ -126,6 +126,15 @@ describe("actionLabel", () => {
     );
   });
 
+  it("labels a restore of a stack from drift, and nothing else that has a mode", () => {
+    const restore = { mode: "restore", stack: "web", restoredFrom: "4" };
+    expect(actionLabel("stack.deployed", echo, restore)).toBe(
+      "t:audit.actions.stack.deployed_restore",
+    );
+    expect(actionLabel("stack.stopped", echo, restore)).toBe("t:audit.actions.stack.stopped");
+    expect(audit.audit.actions.stack.deployed_restore).toBe("Restored stack {{name}} from drift");
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

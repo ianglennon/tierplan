@@ -2425,3 +2425,55 @@ describe("a roll back to a chosen revision", () => {
     expect(screen.queryByRole("link", { name: "Open history" })).toBeNull();
   });
 });
+
+// A restore of the deployed revision (plan 08-23, STK-14, D-23): the console words it as a restore.
+describe("a restore of the deployed revision", () => {
+  const stoppedAtWeb = [check, { ...services, state: "failed" as const }, row("web", "failed")];
+
+  it("is titled Restoring and not Rolling back", async () => {
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    mount();
+    expect(await screen.findByRole("heading", { name: "Restoring web" })).toBeTruthy();
+    expect(screen.queryByText(/Rolling back/)).toBeNull();
+  });
+
+  it("says Restore complete, that web matches the revision again, and offers the stack and the history", async () => {
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
+    mount();
+    expect(await screen.findByRole("heading", { name: "Restore complete" })).toBeTruthy();
+    expect(screen.getByText("web matches revision #5 again.")).toBeTruthy();
+    const stack = screen.getByRole("link", { name: "Open stack" });
+    expect(stack.getAttribute("data-variant")).toBe("default");
+    const history = screen.getByRole("link", { name: "Open history" });
+    expect(history.getAttribute("href")).toBe("/env/e1/stacks/s1/history?rev=9");
+    expect(history.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Roll back complete")).toBeNull();
+    expect(screen.queryByText(/Bayplan recorded it as revision/)).toBeNull();
+  });
+
+  it("says Restore failed, that the attempt was recorded, and retries the restore", async () => {
+    role = "operator";
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "failed", items: stoppedAtWeb };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Restore failed")).toBeTruthy();
+    expect(
+      within(alert).getByText("Bayplan recorded the failed attempt as revision #9."),
+    ).toBeTruthy();
+    expect(within(alert).queryByRole("button", { name: "Retry roll back" })).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry restore" }));
+    await waitFor(() => expect(rollbacks).toHaveLength(1));
+    expect(JSON.parse((await rollbacks[0]?.text()) ?? "")).toEqual({
+      mode: "restore",
+      revision: 5,
+    });
+  });
+});
