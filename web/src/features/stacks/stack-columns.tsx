@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
+import { DriftBadge } from "@/features/stacks/drift-badge";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { canStart, canStop, canUpdateImages, useStackStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
@@ -299,6 +300,7 @@ export function stackColumns(
               <TruncatedText>{s.name}</TruncatedText>
             </Link>
             {s.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
+            <DriftBadge drift={s.drift} />
           </span>
         ),
     },

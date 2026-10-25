@@ -1,0 +1,6 @@
+{
+  "stackDriftList": {
+    "badge": "Drifted",
+    "tooltip": "Running state no longer matches revision #{{revision}}."
+  }
+}
