@@ -318,7 +318,7 @@ func secretItem(row dockerx.SecretRow, used int, known stackIDs) SecretItem {
 	owner, kind := secretOwner(row.Labels)
 	return SecretItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
-		UsedBy: used, Owner: owner, OwnerKind: kind, BayplanStackID: known.confirm(owner, row.Labels[stacks.LabelStackID]),
+		UsedBy: used, Owner: owner, OwnerKind: kind, BayplanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 

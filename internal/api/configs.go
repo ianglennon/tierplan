@@ -321,7 +321,7 @@ func configItem(row dockerx.ConfigRow, used int, known stackIDs) ConfigItem {
 	return ConfigItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
 		Templating: configTemplatingLabel(row.Templating), UsedBy: used, Owner: owner, OwnerKind: kind,
-		BayplanStackID: known.confirm(owner, row.Labels[stacks.LabelStackID]),
+		BayplanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 

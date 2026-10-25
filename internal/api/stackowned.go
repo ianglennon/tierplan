@@ -48,20 +48,18 @@ func namespaceOwner(labels map[string]string) (string, bool) {
 	return stack, owned
 }
 
-// stackIDs are the stacks Bayplan holds on one environment, by ID, with the name each goes by.
-type stackIDs map[string]string
+// stackIDs are the stacks Bayplan holds on one environment, by name, each with the rule that says which objects are
+// its own (stackops.Ownership). A name is unique in an environment, so the name an object states picks the stack.
+type stackIDs map[string]stackops.Ownership
 
 // knownStacks are the stacks of an environment as confirm reads them.
 func knownStacks(list []stackops.Stack) stackIDs {
 	out := make(stackIDs, len(list))
 	for _, s := range list {
-		out[s.ID] = s.Name
+		out[s.Name] = stackops.OwnershipOf(s)
 	}
 	return out
 }
-
-// confirmObject is confirm for a secret or a config.
-func (k stackIDs) confirmObject(stack, id string) string { return k.confirm(stack, id) }
 
 // loadStackIDs reads the stacks of an environment once, for the rows of one request. A store that is
 // missing or cannot be read yields none: no link is drawn and nothing else changes.
@@ -77,22 +75,25 @@ func loadStackIDs(ctx context.Context, st *store.Store, envID string, log *slog.
 		log.Error("reading the stacks for their links failed", "environment", envID, "error", err)
 		return nil
 	}
-	out := make(stackIDs, len(list))
-	for _, s := range list {
-		out[s.ID] = s.Name
-	}
-	return out
+	return knownStacks(list)
 }
 
-// confirm returns the ID when it names a stack of this environment under the name the object says it
-// belongs to, else empty (T-07-146): a label anybody can put on an object is never a link target by
-// itself, and an ID under another stack's name is a forgery or a stale label.
+// confirm returns the ID of the stack of this environment that the object is linked to, else empty (T-07-146): the object
+// states the stack's name and carries the stack's own ID, or, while an adopted stack's first deploy is pending, no ID or the
+// one recorded at adoption (T-08-68). A label anybody can put on an object is never a link target by itself, and an ID
+// under another stack's name is a forgery or a stale label.
 func (k stackIDs) confirm(stack, id string) string {
-	if id == "" || stack == "" {
-		return ""
+	if own, ok := k[stack]; ok && stack != "" && own.Claims(stack, id) {
+		return own.StackID
 	}
-	if name, ok := k[id]; ok && name == stack {
-		return id
+	return ""
+}
+
+// confirmObject is confirm for a secret or a config: the stack's own ID alone links, because a secret or a config an
+// adopted stack only references is not its own.
+func (k stackIDs) confirmObject(stack, id string) string {
+	if own, ok := k[stack]; ok && stack != "" && own.ClaimsObject(stack, id) {
+		return own.StackID
 	}
 	return ""
 }

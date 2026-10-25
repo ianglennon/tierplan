@@ -95,6 +95,19 @@ func (o Ownership) OwnsWorkload(labels map[string]string) bool {
 	return o.owns(labels[o.labelKey()], labels)
 }
 
+// Claims says whether an object that states the stack's namespace or project as name, and the bayplan.stack.id id (empty
+// for none), is linked to the stack: it carries the stack's own ID, or the stack is adopted and pending and the object
+// carries no ID or the one recorded at adoption. It is OwnsWorkload for a caller that holds the two values a page
+// shows and not the labels. An ID is a claim, never a fact: another stack's ID under this name links to nothing.
+func (o Ownership) Claims(name, id string) bool {
+	return o.owns(name, map[string]string{stacks.LabelStackID: id})
+}
+
+// ClaimsObject is Claims for a secret or a config, which a stack owns by its own ID alone (OwnsObject).
+func (o Ownership) ClaimsObject(name, id string) bool {
+	return o.ownsExactly(name, map[string]string{stacks.LabelStackID: id})
+}
+
 // OwnsService is OwnsWorkload for a swarm service row, whose namespace the engine reader has already taken
 // from the label.
 func (o Ownership) OwnsService(r dockerx.ServiceRow) bool {
