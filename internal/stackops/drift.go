@@ -70,13 +70,16 @@ type DriftResult struct {
 
 // DriftInput is a stack to check: the environment, the stack, its deployed revision (the newest good one, nil for none)
 // and the images that revision ran, by swarm service name. Audit is the store whose audit log names the causes of the
-// drift; nil leaves the causes of Bayplan's own actions out.
+// drift; nil leaves the causes of Bayplan's own actions out. Raw leaves the settings of every row unmasked, which a
+// review of a deploy compares with its own (RevertsDrift) and masks itself: a result made with it is never cached or
+// sent.
 type DriftInput struct {
 	EnvID    string
 	Stack    Stack
 	Deployed *Snapshot
 	Pins     map[string]string
 	Audit    *store.Store
+	Raw      bool
 }
 
 // Drift compares what runs with the deployed revision. The revision is prepared as a roll back to it is
@@ -171,7 +174,7 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 		running[name] = stacks.StripOwnership(spec)
 	}
 
-	masker := stacks.NewMasker(deployed.Copy.Vars, deployed.Copy.Files)
+	masker := driftMasker(in, deployed)
 	for _, c := range stacks.DiffServices(desired, running, masker) {
 		ds := DriftService{Name: c.Name, Short: c.Short, Diff: c}
 		switch c.Change {
@@ -198,6 +201,14 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 	}
 	d.attachCauses(ctx, in, &res, ids)
 	return res, nil
+}
+
+// driftMasker hides the secrets of the deployed revision in the rows of a check, and nothing for a raw one.
+func driftMasker(in DriftInput, deployed Snapshot) stacks.Masker {
+	if in.Raw {
+		return stacks.Masker{}
+	}
+	return stacks.NewMasker(deployed.Copy.Vars, deployed.Copy.Files)
 }
 
 // DriftCurrent says whether a stored result still describes the stack: it was made against the revision that is

@@ -22,6 +22,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
 	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/bayplan/internal/store"
 )
 
 // The modes of a review: a deploy of the draft, an update of the images of some services (D-16), a roll back to a
@@ -147,6 +148,8 @@ type ReviewInput struct {
 	// not record about a running container. Nil means none.
 	Revisions RevisionStore
 	Caller    Caller
+	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
+	Audit *store.Store
 	// Rebuilt is the definition rebuilt from what runs, which ReviewModeAdopt reviews against what runs. Copy holds
 	// the compose file made from it and Stack the stack as it will be adopted. Nil for any other mode.
 	Rebuilt *rebuild.Result
@@ -204,6 +207,8 @@ type Summary struct {
 	// OwnershipOnly counts the services of an adopt check that differ from what runs in nothing but Bayplan's
 	// ownership labels (D-16). They are not in Services.Changed.
 	OwnershipOnly int
+	// RevertsDrift counts the outside changes a deploy, an update or a roll back puts back (D-25).
+	RevertsDrift int
 }
 
 // ImageRow is one service's image: the reference as written, the digest it will run with and the
@@ -242,6 +247,12 @@ type Review struct {
 	// Adoption is set while the stack is adopted and has not been deployed yet: the first deploy takes ownership by
 	// adding Bayplan's labels to every service (D-16).
 	Adoption *AdoptionReview
+	// RevertsDrift are the changes made outside the stack that this deploy would put back, apart from the draft's own
+	// changes (D-25). It is empty for a restore, which is the drift itself, and when nothing would be reverted.
+	RevertsDrift []DriftRevert
+	// RevertsDriftUnavailable says the drift could not be computed, so RevertsDrift is empty for want of knowing and
+	// not because nothing would be reverted.
+	RevertsDriftUnavailable bool
 }
 
 // AdoptionReview is what the first deploy of an adopted stack does that is not in the file: Pending says it is that
@@ -430,6 +441,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		}
 	}
 	rv.Problems = rv.Problems.Sorted()
+	d.addRevertsDrift(ctx, in, &rv, rawSwarmRows(desired, running), masker)
 	return rv, nil
 }
 

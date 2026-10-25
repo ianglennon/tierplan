@@ -159,6 +159,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		}
 	}
 	rv.Problems = rv.Problems.Sorted()
+	d.addRevertsDrift(ctx, in, rv, rawStandaloneRows(cmp, diff.Removed, standalonePins(items, pinned)), reviewMasker(in))
 	return nil
 }
 
@@ -316,8 +317,9 @@ type standaloneChange struct {
 	// now and the running configuration is not what the file says (a change made by hand on the host): the
 	// SDK compares labels only and would leave the container as it is, so the deploy forces it.
 	Added, HashDiffers, Forced bool
-	// Row is the service's row of the review.
-	Row stacks.ServiceChange
+	// Row is the service's row of the review, masked. Raw is the same row unmasked, which the Reverts drift section
+	// compares with the drift check's (RevertsDrift) and masks itself.
+	Row, Raw stacks.ServiceChange
 }
 
 // standaloneComparison is what a standalone deploy would do to the services, read once: the added and
@@ -509,7 +511,8 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 		if len(have) == 0 {
 			next := stacks.NormalizeComposeService(svc, stacks.ImageDefaults{}, rc)
 			rows := stacks.DiffComposeServices(map[string]types.ServiceConfig{name: next}, nil, m)
-			out.Changes = append(out.Changes, standaloneChange{Name: name, Added: true, Row: rows[0]})
+			raw := stacks.DiffComposeServices(map[string]types.ServiceConfig{name: next}, nil, stacks.Masker{})
+			out.Changes = append(out.Changes, standaloneChange{Name: name, Added: true, Row: rows[0], Raw: raw[0]})
 			continue
 		}
 		has[name] = true
@@ -559,18 +562,21 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 				differing = p
 			}
 		}
-		var row stacks.ServiceChange
+		var row, raw stacks.ServiceChange
 		switch {
 		case differing != nil:
 			row = stacks.ChangedComposeService(name, differing.run, differing.des, m)
+			raw = stacks.ChangedComposeService(name, differing.run, differing.des, stacks.Masker{})
 		case hashDiffers && first != nil:
 			row = stacks.ChangedComposeService(name, first.run, first.des, m)
+			raw = stacks.ChangedComposeService(name, first.run, first.des, stacks.Masker{})
 		case hashDiffers:
 			row = stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeChanged}
+			raw = row
 		default:
 			continue
 		}
-		out.Changes = append(out.Changes, standaloneChange{Name: name, HashDiffers: hashDiffers, Forced: forced, Row: row})
+		out.Changes = append(out.Changes, standaloneChange{Name: name, HashDiffers: hashDiffers, Forced: forced, Row: row, Raw: raw})
 		if hashDiffers || forced {
 			recreated = append(recreated, name)
 		}

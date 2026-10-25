@@ -71,7 +71,7 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 	own := OwnershipOf(in.Stack)
 	var owned []dockerx.ComposeContainer
 	var cmp standaloneComparison
-	masker := stacks.NewMasker(deployed.Copy.Vars, deployed.Copy.Files)
+	masker := driftMasker(in, deployed)
 	err = d.Aggregator.OnNode(ctx, in.EnvID, node, func(c *dockerx.Client) error {
 		all, e := c.ComposeContainers(ctx, in.Stack.Name)
 		if e != nil {
