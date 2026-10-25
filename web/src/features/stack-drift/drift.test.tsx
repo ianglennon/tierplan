@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { DriftView, StackDrift } from "@/api/stack-drift";
+import { type DriftView, driftKey, type StackDrift } from "@/api/stack-drift";
 import type { StackDetail } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { DriftPage } from "@/features/stack-drift/drift-page";
@@ -28,6 +28,8 @@ let cached: Json | "fail";
 let fresh: Json | "fail";
 let client: QueryClient;
 let driftCalls: { fresh: boolean }[];
+// When set, the fresh check waits for it: the page is then looking at a check that has not come back.
+let holdFresh: Promise<void> | null;
 
 function changed(short: string, over: Json = {}): Json {
   return {
@@ -76,6 +78,7 @@ beforeEach(() => {
   cached = drift();
   fresh = drift();
   driftCalls = [];
+  holdFresh = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -92,6 +95,7 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks/s1/drift`) {
         const isFresh = url.searchParams.get("fresh") === "true";
         driftCalls.push({ fresh: isFresh });
+        if (isFresh && holdFresh) await holdFresh;
         const answer = isFresh ? fresh : cached;
         if (answer === "fail") {
           return Response.json(
@@ -364,5 +368,174 @@ describe("Check again", () => {
     await waitFor(() => expect(live.textContent).toMatch(/^Checked /));
     expect(live.getAttribute("aria-live")).toBe("polite");
     expect(driftCalls.filter((c) => c.fresh).length).toBe(before + 1);
+  });
+});
+
+// The states the drift page has for a stack (UI-SPEC "Drift page"): populated by how many services drifted, empty,
+// loading, failed, stopped, not deployed, and a value too long for its column.
+function drifted(n: number): Json {
+  const services = Array.from({ length: n }, (_, i) => changed(`svc${i}`));
+  return drift({ services, count: n });
+}
+
+describe("the drift page", () => {
+  it.each([
+    [1, 1],
+    [3, 3],
+  ])("opens every service when %i drifted", async (n, tables) => {
+    fresh = drifted(n);
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const list = await screen.findByRole("list", { name: "Services that drifted" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(n);
+    expect(within(list).getAllByRole("table")).toHaveLength(tables);
+  });
+
+  it("keeps 30 drifted services closed and counts them in the summary", async () => {
+    fresh = drifted(30);
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const list = await screen.findByRole("list", { name: "Services that drifted" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(30);
+    expect(within(list).queryAllByRole("table")).toHaveLength(0);
+    for (const b of within(list).getAllByRole("button")) {
+      expect(b.getAttribute("aria-expanded")).toBe("false");
+    }
+    const summary = screen.getByRole("table", { name: "Summary of drift" });
+    expect(
+      within(within(summary).getByRole("row", { name: /Services/ })).getAllByRole("cell")[0]
+        ?.textContent,
+    ).toBe("30");
+  });
+
+  it("says there is no drift when what runs matches the revision", async () => {
+    fresh = drift({ state: "none", count: 0, services: [] });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("No drift")).toBeTruthy();
+    expect(screen.getByText("What's running matches revision #4.")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Summary of drift" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Services that drifted" })).toBeNull();
+  });
+
+  it("shows a skeleton and says it is checking while nothing is known", async () => {
+    cached = "fail";
+    holdFresh = new Promise(() => {});
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Checking for drift…")).toBeTruthy();
+    expect(screen.getByTestId("drift-loading").getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByText("No drift")).toBeNull();
+    expect((screen.getByRole("button", { name: "Checking…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("shows the newest check the server holds while a fresh one runs", async () => {
+    cached = drifted(2);
+    holdFresh = new Promise(() => {});
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const list = await screen.findByRole("list", { name: "Services that drifted" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeTruthy();
+    expect(screen.queryByText("Checking for drift…")).toBeNull();
+  });
+
+  it("says it could not check, and checks again when asked", async () => {
+    cached = "fail";
+    fresh = "fail";
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Couldn't check tracer for drift.")).toBeTruthy();
+    expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
+    fresh = drift({ state: "none", count: 0, services: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Retry check" }));
+
+    expect(await screen.findByText("No drift")).toBeTruthy();
+    expect(screen.queryByText("Couldn't check tracer for drift.")).toBeNull();
+  });
+
+  it("keeps what it knew and says so when the fresh check fails", async () => {
+    cached = drifted(1);
+    fresh = "fail";
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Couldn't check tracer for drift.")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Services that drifted" })).toBeTruthy();
+  });
+
+  it("says a revision that cannot be compared could not be", async () => {
+    fresh = drift({ state: "unknown", count: 0, services: [] });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Couldn't compare tracer with revision #4.")).toBeTruthy();
+    expect(screen.queryByText("No drift")).toBeNull();
+  });
+
+  it("says a stopped stack does not drift", async () => {
+    fresh = drift({ state: "stopped", count: 0, services: [] });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Stopped stacks don't drift.")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "Summary of drift" })).toBeNull();
+    expect(screen.queryByText("No drift")).toBeNull();
+  });
+
+  it("shows the Not deployed yet state for a stack with no revision", async () => {
+    detail = { ...detail, state: "not_deployed", deployedRevision: undefined };
+    fresh = drift({ state: "not_deployed", revision: 0, count: 0, services: [], deployedAt: "" });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Not deployed yet")).toBeTruthy();
+    expect(screen.queryByText("No drift")).toBeNull();
+  });
+
+  it("wraps a long value in mono instead of widening the page", async () => {
+    const long = `registry.example.com/${"x".repeat(300)}:1`;
+    fresh = drift({
+      services: [
+        changed("web", {
+          current: { TaskTemplate: { ContainerSpec: { Image: long } } },
+          next: { TaskTemplate: { ContainerSpec: { Image: "nginx:1" } } },
+        }),
+      ],
+    });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const cell = await screen.findByText(long);
+    expect(cell.className).toContain("break-all");
+    expect(cell.className).toContain("font-mono");
+  });
+});
+
+describe("the Overview's drift alert", () => {
+  it("is not drawn for a stopped stack, one never deployed, or one that does not drift", async () => {
+    for (const state of ["stopped", "not_deployed", "none", "unknown"]) {
+      cleanup();
+      client.clear();
+      fresh = drift({ state, count: 0, services: [] });
+      mount(<StackOverview envId={ENV} stackId="s1" />);
+      await screen.findByText("Details");
+      await waitFor(() => expect(driftCalls.some((c) => c.fresh)).toBe(true));
+      expect(document.querySelector('[data-slot="drift-alert"]')).toBeNull();
+    }
+  });
+
+  it("appears and disappears without moving focus", async () => {
+    fresh = drift({ state: "none", count: 0, services: [] });
+    mount(<StackOverview envId={ENV} stackId="s1" />);
+    const link = await screen.findByRole("link", { name: "Prod" });
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    const freshKey = [...driftKey(ENV, "s1"), "fresh"];
+
+    act(() => client.setQueryData(freshKey, drift()));
+    expect(await screen.findByText("tracer has drifted from revision #4")).toBeTruthy();
+    expect(document.activeElement).toBe(link);
+
+    act(() => client.setQueryData(freshKey, drift({ state: "none", count: 0, services: [] })));
+    await waitFor(() => expect(document.querySelector('[data-slot="drift-alert"]')).toBeNull());
+    expect(document.activeElement).toBe(link);
   });
 });
