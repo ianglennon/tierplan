@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
@@ -312,5 +313,77 @@ func TestStackDriftChecksAreLimitedPerUser(t *testing.T) {
 	// The slots are given back.
 	if rec := holder.do(http.MethodGet, driftPath(st.ID, true), ""); rec.Code != http.StatusOK {
 		t.Errorf("a read after the others finished: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+// driftStandaloneCompose is a standalone stack with a secret-looking environment value, so the redaction of a compose
+// service's live values is seen.
+const driftStandaloneCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    environment:\n      API_KEY: key-one-8c1d\n    restart: unless-stopped\n"
+
+func TestStackDriftStandalone(t *testing.T) {
+	t.Parallel()
+	f, e, up := standaloneEnv(t, nil)
+	_, st, h := deployedStandalone(t, f, e, driftStandaloneCompose)
+	standOnHost(f, h)
+	admin := f.caller(t, e, "revealer-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+
+	// The containers are as the deploy left them: no drift.
+	got := answerOf[driftAnswer](t, viewer.do(http.MethodGet, driftPath(st.ID, true), ""))
+	if got.State != "none" || got.Revision != 1 || got.Count != 0 || len(got.Services) != 0 {
+		t.Fatalf("drift right after a deploy = %+v, want none at revision 1", got)
+	}
+	_, calls := up.lastProject()
+	writes := len(f.fake.Writes())
+
+	// Somebody changes the container on the host: its secret environment value and its restart policy.
+	env := h.Docs["web"].Config.Env
+	for i, entry := range env {
+		if strings.HasPrefix(entry, "API_KEY=") {
+			env[i] = "API_KEY=key-live-77aa"
+		}
+	}
+	h.Docs["web"].HostConfig.RestartPolicy = container.RestartPolicy{Name: "always"}
+	standOnHost(f, h)
+
+	rec := viewer.do(http.MethodGet, driftPath(st.ID, true), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fresh drift as a viewer: %d %s", rec.Code, rec.Body)
+	}
+	for _, v := range []string{"key-live-77aa", "key-one-8c1d"} {
+		if strings.Contains(rec.Body.String(), v) {
+			t.Fatalf("an environment value %q reached a viewer: %s", v, rec.Body)
+		}
+	}
+	got = answerOf[driftAnswer](t, rec)
+	if got.State != "drifted" || got.Count != 2 || len(got.Services) != 1 {
+		t.Fatalf("drift = %+v, want drifted with web's two settings", got)
+	}
+	svc := got.Services[0]
+	if svc.Name != "web" || svc.Short != "web" || svc.Change != "changed" || svc.Settings != 2 {
+		t.Errorf("service = %+v, want web changed at two settings", svc)
+	}
+	if !slices.Contains(svc.HiddenChanges, "environment.API_KEY") {
+		t.Errorf("hidden changes = %v, want the environment variable listed by its path", svc.HiddenChanges)
+	}
+	// The service reads from what the revision deployed to what runs now.
+	if svc.Current["restart"] != "unless-stopped" || svc.Next["restart"] != "always" {
+		t.Errorf("restart = %v then %v, want the deployed policy as current and the running one as next", svc.Current["restart"], svc.Next["restart"])
+	}
+
+	// An Admin may reveal secrets and sees both values.
+	rec = admin.do(http.MethodGet, driftPath(st.ID, false), "")
+	for _, v := range []string{"key-live-77aa", "key-one-8c1d"} {
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), v) {
+			t.Errorf("an admin's answer lacks %q: %d %s", v, rec.Code, rec.Body)
+		}
+	}
+
+	// Reading drift asked the Compose SDK for nothing and wrote nothing to the host.
+	if _, now := up.lastProject(); now != calls {
+		t.Errorf("the Compose SDK was run %d more times by drift checks", now-calls)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, reading drift writes nothing", writes, n)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
@@ -324,6 +325,29 @@ type standaloneChange struct {
 type standaloneComparison struct {
 	Changes []standaloneChange
 	Carried []stacks.ServiceChange
+	// Images are the image of each container of a service of the project the comparison could read, which the
+	// field-level comparison leaves out (NormalizeComposeService): a drift check compares them with the images a
+	// revision pinned. They are in the order of the services' names and of the containers' names.
+	Images []runningImage
+}
+
+// runningImage is the image one container was made from: Ref is the reference it was created with (its
+// Config.Image), ImageID the ID of the image it runs, and Digests the digests the host knows that image by
+// (its RepoDigests), empty when the host no longer holds the image.
+type runningImage struct {
+	Service, Container, Ref, ImageID string
+	Digests                          []string
+}
+
+// repoDigests are the digests of an image's RepoDigests entries (name@sha256:...), in the order the host lists them.
+func repoDigests(img image.InspectResponse) []string {
+	var out []string
+	for _, rd := range img.RepoDigests {
+		if _, digest, ok := strings.Cut(rd, "@"); ok {
+			out = append(out, digest)
+		}
+	}
+	return out
 }
 
 // forced are the changed services the SDK would leave as they are: their hash matches and their running
@@ -503,6 +527,11 @@ func compareStandalone(ctx context.Context, host *dockerx.Client, project *types
 			insp, img, ok, err := reader.read(ctx, c)
 			if err != nil {
 				return out, err
+			}
+			if insp.Config != nil {
+				out.Images = append(out.Images, runningImage{
+					Service: name, Container: c.ID, Ref: insp.Config.Image, ImageID: insp.Image, Digests: repoDigests(img),
+				})
 			}
 			if !ok {
 				continue

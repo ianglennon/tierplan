@@ -248,6 +248,9 @@ func TestStandaloneDriftIgnoresOwnershipLabels(t *testing.T) {
 	// A project somebody ran with the docker compose command and Bayplan adopted: its containers carry no label of
 	// Bayplan's, so every config hash differs from the one the prepared revision has, and nothing the person wrote differs.
 	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
+	// What the labels change is the config hash: here the web container's hash is not the prepared service's, and
+	// nothing the person wrote differs.
+	h.Docs["web"].Config.Labels["com.docker.compose.config-hash"] = "0ld"
 	rig := hostRig(t, h)
 	st := stackops.Stack{
 		ID: "stack-shop", Name: "shop", Target: stacks.TargetStandalone,

@@ -73,6 +73,8 @@ type DriftInput struct {
 // Bayplan's own labels (D-21, D-24). Current is what runs now and Next what the revision deployed, as a roll back review
 // reads them.
 //
+// A stack on a standalone host is compared by driftStandalone.
+//
 // It only reads. A stopped stack is DriftStopped and a stack with no good revision DriftNotDeployed, neither read from
 // the engine. A revision that cannot be redeployed any more is DriftUnknown. A failure to read the swarm is the error
 // returned (D-23: nothing here writes to an engine).
@@ -86,9 +88,7 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 		res.State, res.Revision = DriftStopped, in.Deployed.Seq
 		return res, nil
 	case in.Stack.Target == stacks.TargetStandalone:
-		// Standalone hosts follow in plan 08-20.
-		res.State, res.Revision = DriftUnknown, in.Deployed.Seq
-		return res, nil
+		return d.driftStandalone(ctx, in)
 	}
 	res.Revision = in.Deployed.Seq
 	deployed := *in.Deployed
