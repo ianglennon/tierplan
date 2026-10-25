@@ -483,4 +483,39 @@ volumes:
 			t.Errorf("notes = %+v, want none", res.Notes)
 		}
 	})
+
+	t.Run("the project's default network is left implicit when it is the plain one", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n  web:\n    image: nginx:1.27\n")
+
+		res := hashRebuild(t, h)
+
+		ownedFormsMatch(t, h, res)
+		if strings.Contains(string(res.YAML), "networks") {
+			t.Errorf("the file declares the network a project gets without declaring one:\n%s", res.YAML)
+		}
+		var owned []string
+		for _, o := range res.Objects {
+			owned = append(owned, o.Kind+":"+o.Name+":"+o.Treatment)
+		}
+		if !slices.Equal(owned, []string{"network:shop_default:owned"}) {
+			t.Errorf("objects = %v, want the default network, owned", owned)
+		}
+	})
+
+	t.Run("a default network the hash does not match is declared external, and the service names it", func(t *testing.T) {
+		t.Parallel()
+		h := stackopstest.Foreign(t, "shop", "services:\n  web:\n    image: nginx:1.27\n")
+		labelOfNetwork(h, "shop_default").Labels[configHashLabel] = strings.Repeat("0", 64)
+
+		res := hashRebuild(t, h)
+
+		p := preparedProject(t, "shop", res)
+		if n := p.Networks["default"]; !bool(n.External) || n.Name != "shop_default" {
+			t.Errorf("network default = %+v, want an external network named shop_default:\n%s", n, res.YAML)
+		}
+		if _, on := p.Services["web"].Networks["default"]; !on {
+			t.Errorf("web networks = %v, want it on the default network", p.Services["web"].Networks)
+		}
+	})
 }

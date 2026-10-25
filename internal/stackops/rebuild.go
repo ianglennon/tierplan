@@ -204,14 +204,126 @@ func (d Deps) rebuildStandalone(ctx context.Context, envID string, st Stack, o R
 	if len(in.Containers) == 0 {
 		return rebuild.Result{}, &RebuildError{Reason: "no container of " + st.Name + " is on the host"}
 	}
-	res, err := rebuild.Standalone(in)
+	res, err := d.rebuildMatchingHashes(ctx, st, in)
 	if err != nil {
-		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
+		return rebuild.Result{}, err
 	}
 	if err := checkRebuilt(ctx, st, res); err != nil {
 		return rebuild.Result{}, err
 	}
 	return res, nil
+}
+
+// rebuildMatchingHashes rebuilds a standalone project so that its first deploy leaves every network and volume
+// it owns as it is (D-46, D-18). The Compose SDK recreates a network, and asks to recreate a volume with its data,
+// when the hash of the config the project declares differs from the config-hash label the object was made with.
+// So for each owned network and volume that carries the label, each rendering of it (rebuild.NetworkCandidates
+// and VolumeCandidates, fewest settings first) is written into the file, the file is loaded and prepared as a
+// deploy loads and prepares it, and the SDK's own hash of the object is compared with the label; the first
+// rendering that is equal is kept. When none is, the object is written external, with a note, and the SDK never
+// touches it. An object with no label is left alone by the SDK whatever it is declared as, and keeps the first.
+func (d Deps) rebuildMatchingHashes(ctx context.Context, st Stack, in rebuild.StandaloneInput) (rebuild.Result, error) {
+	in.Choice = map[string]int{}
+	res, err := rebuild.Standalone(in)
+	if err != nil {
+		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
+	}
+	changed := false
+	for _, o := range res.Objects {
+		if o.Treatment != rebuild.TreatmentOwned || (o.Kind != rebuild.KindNetwork && o.Kind != rebuild.KindVolume) {
+			continue
+		}
+		label := hashLabel(in, o)
+		if label == "" {
+			continue
+		}
+		pick := o.Kind + ":" + o.Key
+		matched := -1
+		for i := range res.Variants[pick] {
+			in.Choice[pick] = i
+			trial, err := rebuild.Standalone(in)
+			if err != nil {
+				return rebuild.Result{}, &RebuildError{Reason: err.Error()}
+			}
+			got, err := hashOfObject(ctx, st, trial, o)
+			if err != nil {
+				return rebuild.Result{}, err
+			}
+			if got == label {
+				matched = i
+				break
+			}
+		}
+		in.Choice[pick] = matched
+		changed = changed || matched != 0
+	}
+	if !changed {
+		return res, nil
+	}
+	res, err = rebuild.Standalone(in)
+	if err != nil {
+		return rebuild.Result{}, &RebuildError{Reason: err.Error()}
+	}
+	return res, nil
+}
+
+// hashLabel is the config hash the host holds for an owned network or volume: empty for an object made by a Compose
+// that stamped none.
+func hashLabel(in rebuild.StandaloneInput, o rebuild.Object) string {
+	switch o.Kind {
+	case rebuild.KindNetwork:
+		for _, n := range in.Networks {
+			if n.Name == o.Name {
+				return n.Labels[stacks.LabelComposeConfigHash]
+			}
+		}
+	case rebuild.KindVolume:
+		for _, v := range in.Volumes {
+			if v.Name == o.Name {
+				return v.Labels[stacks.LabelComposeConfigHash]
+			}
+		}
+	}
+	return ""
+}
+
+// hashOfObject is the hash the SDK would compute for an object of a rebuilt file: the file is loaded the way
+// every deploy loads it (stacks.Deployable) and prepared the way a standalone deploy prepares it
+// (stacks.PrepareStandalone), so the name the SDK gives the object, and whatever else preparation sets, is what is
+// hashed. Bayplan's own labels on the object are custom labels and are not in the hash. A loaded project that does
+// not hold the object (the default network a file leaves implicit is always held) is a rebuild that cannot be used.
+func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.Object) (string, error) {
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}}
+	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: st.Name, Target: stacks.TargetStandalone, Copy: copy})
+	if err != nil {
+		var refused *stacks.NotDeployableError
+		if errors.As(err, &refused) && len(refused.Problems) > 0 {
+			return "", &RebuildError{Reason: refused.Problems[0].Message}
+		}
+		return "", &RebuildError{Reason: err.Error()}
+	}
+	project := loaded.Project
+	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, stacks.NewFileSet(copy.Files), nil)
+	if err != nil {
+		return "", &RebuildError{Reason: err.Error()}
+	}
+	if err := stacks.PrepareStandalone(project, st.ID, res.Pins, objs); err != nil {
+		return "", &RebuildError{Reason: err.Error()}
+	}
+	switch o.Kind {
+	case rebuild.KindNetwork:
+		n, ok := project.Networks[o.Key]
+		if !ok {
+			return "", &RebuildError{Reason: "the network " + o.Name + " is not in the rebuilt file"}
+		}
+		return dockerx.ComposeNetworkHash(&n)
+	default:
+		v, ok := project.Volumes[o.Key]
+		if !ok {
+			return "", &RebuildError{Reason: "the volume " + o.Name + " is not in the rebuilt file"}
+		}
+		return dockerx.ComposeVolumeHash(v)
+	}
 }
 
 // readStandaloneForRebuild reads, from the host, the containers of a Compose project with their images, and the
