@@ -19,6 +19,11 @@ type DriftStore struct {
 	mu      sync.Mutex
 	results map[string]DriftResult
 	calls   map[string]*driftCall
+
+	// Joined, when set before the store is used, is called each time a caller starts or joins the check of a stack,
+	// with how many callers wait on it now. A test uses it to know that every caller has joined before it lets the
+	// check finish.
+	Joined func(stackID string, waiting int)
 }
 
 // driftCall is a check in flight: waiters is how many callers wait on it, and res and err are set before done closes.
@@ -56,17 +61,6 @@ func (s *DriftStore) Forget(stackID string) {
 	delete(s.results, stackID)
 }
 
-// Waiting is how many callers wait on the check of the stack that is in flight, 0 when none is. A test waits on it to
-// know that every caller has joined before it lets the check finish.
-func (s *DriftStore) Waiting(stackID string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c, ok := s.calls[stackID]; ok {
-		return c.waiters
-	}
-	return 0
-}
-
 // Check runs fn for the stack and records its result. Callers that arrive while a check of the same stack runs share
 // it: fn runs once and each gets its result. The check is not tied to the first caller's context (a caller that gives
 // up leaves it running for the others), and a caller returns early with its own context's error when it gives up
@@ -80,7 +74,11 @@ func (s *DriftStore) Check(ctx context.Context, stackID string, fn func(context.
 		c = &driftCall{done: make(chan struct{}), waiters: 1}
 		s.calls[stackID] = c
 	}
+	waiting := c.waiters
 	s.mu.Unlock()
+	if s.Joined != nil {
+		s.Joined(stackID, waiting)
+	}
 	if !joined {
 		go s.run(context.WithoutCancel(ctx), stackID, c, fn)
 	}

@@ -18,6 +18,8 @@ func TestDriftStoreSharesOneCheck(t *testing.T) {
 	t.Parallel()
 	const callers = 4
 	store := stackops.NewDriftStore()
+	joined := make(chan int, callers)
+	store.Joined = func(_ string, waiting int) { joined <- waiting }
 	var runs atomic.Int32
 	started, release := make(chan struct{}), make(chan struct{})
 	fn := func(context.Context) (stackops.DriftResult, error) {
@@ -42,7 +44,9 @@ func TestDriftStoreSharesOneCheck(t *testing.T) {
 		}()
 	}
 	testsupport.Await(t, "the check to start", started)
-	testsupport.WaitFor(t, "every caller to wait on the one check", func() bool { return store.Waiting("stack-1") == callers })
+	for range callers {
+		testsupport.Await(t, "a caller to wait on the one check", joined)
+	}
 	close(release)
 	wg.Wait()
 	close(results)
@@ -57,9 +61,6 @@ func TestDriftStoreSharesOneCheck(t *testing.T) {
 	}
 	if got, ok := store.Get("stack-1"); !ok || got.Revision != 7 {
 		t.Errorf("stored = %+v %v, want the result kept", got, ok)
-	}
-	if store.Waiting("stack-1") != 0 {
-		t.Error("the check is still counted after it finished")
 	}
 	// The stack is free again: the next check runs on its own.
 	if _, err := store.Check(testsupport.Context(t), "stack-1", func(context.Context) (stackops.DriftResult, error) {
@@ -96,6 +97,8 @@ func TestDriftStoreKeepsNothingOfAFailedCheckAndForgets(t *testing.T) {
 func TestDriftStoreCallerThatGivesUpLeavesTheCheckForTheOthers(t *testing.T) {
 	t.Parallel()
 	store := stackops.NewDriftStore()
+	joined := make(chan int, 2)
+	store.Joined = func(_ string, waiting int) { joined <- waiting }
 	started, release := make(chan struct{}), make(chan struct{})
 	fn := func(context.Context) (stackops.DriftResult, error) {
 		close(started)
@@ -114,7 +117,9 @@ func TestDriftStoreCallerThatGivesUpLeavesTheCheckForTheOthers(t *testing.T) {
 		res, _ := store.Check(testsupport.Context(t), "s", fn)
 		other <- res
 	}()
-	testsupport.WaitFor(t, "the second caller to join", func() bool { return store.Waiting("s") == 2 })
+	for range 2 {
+		testsupport.Await(t, "a caller to wait on the check", joined)
+	}
 
 	cancel()
 	if err := testsupport.Await(t, "the first caller to give up", gone); !errors.Is(err, context.Canceled) {
