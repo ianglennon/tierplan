@@ -50,6 +50,7 @@ var sharedSwarmCases = []struct {
 	{"StackDeployNetworkFullOnEveryNode", sharedStackDeployNetworkFullOnEveryNode},
 	{"StackDeployParity", sharedStackDeployParity},
 	{"StackDeployTasksFailed", sharedStackDeployTasksFailed},
+	{"StackDrift", sharedStackDrift},
 	{"StackHistoryRollback", sharedStackHistoryRollback},
 	{"StackLifecycle", sharedStackLifecycle},
 	{"StackPin", sharedStackPin},
