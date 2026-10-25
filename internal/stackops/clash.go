@@ -33,7 +33,8 @@ func (d Deps) ForeignStack(ctx context.Context, envID string, target stacks.Targ
 	if stackID == "" {
 		stackID = noStack
 	}
-	return d.foreignUnder(ctx, envID, Ownership{StackID: stackID, Name: name, Target: target})
+	// Not an adopted stack: only an object that carries this ID is the stack's, so the create path stays strict.
+	return d.foreignUnder(ctx, envID, OwnershipOf(Stack{ID: stackID, Name: name, Target: target}))
 }
 
 // ForeignStackOf is ForeignStack for a stack Bayplan holds, judged by the stack's own ownership rule (D-16): an

@@ -102,6 +102,7 @@ type ownedStack struct {
 // the volumes of every node, fresh, and counts the containers outside the stack that mount each.
 func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes bool) (ownedStack, error) {
 	var out ownedStack
+	own := OwnershipOf(st)
 	if st.Target == stacks.TargetStandalone {
 		node, err := d.StandaloneNode(ctx, envID)
 		if err != nil {
@@ -113,16 +114,16 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, row := range cs {
-				if ownsLabels(st, row.Labels) {
+				if own.OwnsWorkload(row.Labels) {
 					out.containers = append(out.containers, row)
 				}
 			}
-			nets, e := c.NetworksWithLabel(ctx, stacks.LabelComposeProject, st.Name)
+			nets, e := c.NetworksWithLabel(ctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
 			for _, n := range nets {
-				if ownsLabels(st, n.Labels) {
+				if own.OwnsNetwork(n.Name, n.Labels) {
 					out.networks = append(out.networks, n)
 				}
 			}
@@ -142,16 +143,16 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, s := range svcs {
-				if ownsLabels(st, s.Labels) {
+				if own.OwnsWorkload(s.Labels) {
 					out.services = append(out.services, s)
 				}
 			}
-			nets, e := c.NetworksWithLabel(ctx, stacks.LabelSwarmNamespace, st.Name)
+			nets, e := c.NetworksWithLabel(ctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
 			for _, n := range nets {
-				if ownsLabels(st, n.Labels) {
+				if own.OwnsNetwork(n.Name, n.Labels) {
 					out.networks = append(out.networks, n)
 				}
 			}
@@ -160,7 +161,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, o := range secretRows(secrets) {
-				if ownsLabels(st, o.Labels) {
+				if own.OwnsObject(o.Labels) {
 					out.secrets = append(out.secrets, o)
 				}
 			}
@@ -169,7 +170,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, o := range configRows(configs) {
-				if ownsLabels(st, o.Labels) {
+				if own.OwnsObject(o.Labels) {
 					out.configs = append(out.configs, o)
 				}
 			}
@@ -190,12 +191,12 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 	out.anyVolume = map[string]bool{}
 	for _, v := range agg.Volumes {
 		out.anyVolume[v.NodeID+"/"+v.Name] = true
-		if !ownsLabels(st, v.Labels) {
+		if !own.OwnsVolume(v.Name, v.Labels) {
 			continue
 		}
 		choice := VolumeChoice{Name: v.Name, NodeID: v.NodeID, NodeName: v.Node}
 		for _, c := range agg.Containers {
-			if c.NodeID != v.NodeID || ownsLabels(st, c.Labels) {
+			if c.NodeID != v.NodeID || own.OwnsWorkload(c.Labels) {
 				continue
 			}
 			if slices.ContainsFunc(c.Mounts, func(m dockerx.MountRow) bool { return m.Type == "volume" && m.Name == v.Name }) {
@@ -351,6 +352,9 @@ type removal struct {
 	res    RemoveResult
 	// ownedVolumes is how many volumes the stack has on its nodes, read by the check.
 	ownedVolumes int
+	// serviceIDs are the IDs of the swarm services the check found the stack owns: the tasks that outlive a removed
+	// service are the stack's by them.
+	serviceIDs map[string]bool
 	// failures are the first object of each step that stayed, until the step ends.
 	failures map[string]failure
 }
@@ -528,6 +532,10 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 		}
 	}
 	x.ownedVolumes = len(owned.volumes)
+	x.serviceIDs = make(map[string]bool, len(owned.services))
+	for _, s := range owned.services {
+		x.serviceIDs[s.ID] = true
+	}
 	x.line(fmt.Sprintf("Found %d services or containers, %d networks, %d secrets and %d configs", len(owned.services)+len(owned.containers), len(owned.networks), len(owned.secrets), len(owned.configs)))
 	x.done(ItemCheck, nil)
 	return owned, true
@@ -602,6 +610,7 @@ func terminalTask(state string) bool {
 // containers of the Compose project.
 func (x *removal) remaining(ctx context.Context) (int, error) {
 	d, in := x.d, x.in
+	own := OwnershipOf(in.Stack)
 	rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
 	defer cancel()
 	if in.Stack.Target == stacks.TargetStandalone {
@@ -614,7 +623,7 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 			}
 			n = 0
 			for _, row := range cs {
-				if ownsLabels(in.Stack, row.Labels) {
+				if own.OwnsWorkload(row.Labels) {
 					n++
 				}
 			}
@@ -624,13 +633,15 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 	}
 	var tasks int
 	err := d.Clusters.ClusterRead(rctx, in.EnvID, func(c *dockerx.Client) error {
-		rows, e := c.Tasks(rctx, dockerx.TaskFilter{Labels: []string{stacks.LabelStackID + "=" + in.Stack.ID}})
+		// A task keeps the labels its service had, so the namespace finds the tasks of a service that is gone; a task is
+		// the stack's when its service was one the check found the stack owns, since a task row names no owner.
+		rows, e := c.Tasks(rctx, dockerx.TaskFilter{Labels: []string{own.labelKey() + "=" + own.Name}})
 		if e != nil {
 			return e
 		}
 		tasks = 0
 		for _, t := range rows {
-			if !terminalTask(t.State) {
+			if x.serviceIDs[t.ServiceID] && !terminalTask(t.State) {
 				tasks++
 			}
 		}
@@ -665,8 +676,9 @@ func (x *removal) containersOn(ctx context.Context, nodeID string) (int, error) 
 			return e
 		}
 		n = 0
+		own := OwnershipOf(x.in.Stack)
 		for _, row := range rows {
-			if ownsLabels(x.in.Stack, row.Labels) {
+			if own.OwnsWorkload(row.Labels) {
 				n++
 			}
 		}
@@ -856,6 +868,7 @@ func (e *volumeBusyError) Error() string {
 // service, mounts it; a volume used outside the stack is left, named, and the others are still removed.
 func (x *removal) removeVolumes(ctx context.Context) {
 	d, in := x.d, x.in
+	own := OwnershipOf(in.Stack)
 	for _, v := range in.Volumes {
 		id := idRemoveVolume + v.key()
 		if ctx.Err() != nil {
@@ -875,11 +888,11 @@ func (x *removal) removeVolumes(ctx context.Context) {
 		removed := false
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 		err := d.Aggregator.WriteOnNode(wctx, in.EnvID, v.NodeID, func(c *dockerx.Client) error {
-			mine, e := c.VolumesWithLabel(wctx, stacks.LabelStackID, in.Stack.ID)
+			mine, e := c.VolumesWithLabel(wctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
-			if !slices.ContainsFunc(mine, func(row dockerx.VolumeRow) bool { return row.Name == v.Name && ownsLabels(in.Stack, row.Labels) }) {
+			if !slices.ContainsFunc(mine, func(row dockerx.VolumeRow) bool { return row.Name == v.Name && own.OwnsVolume(row.Name, row.Labels) }) {
 				_, exists, e := c.VolumeDriver(wctx, v.Name)
 				if e != nil {
 					return e

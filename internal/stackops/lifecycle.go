@@ -247,8 +247,9 @@ func (d Deps) CheckStart(ctx context.Context, envID string, st Stack, store Life
 	return StartCheck{Recreates: true, Policy: pol}, err
 }
 
-// ownedServices are the services of the swarm that carry the stack's namespace and its ID, by name. A service
-// of the namespace that another owner made is not the stack's and is never touched.
+// ownedServices are the services of the swarm that the stack owns (OwnershipOf), by name: those that carry its
+// namespace and its ID, and, until an adopted stack's first deploy, those that carry no ID or the one recorded at
+// adoption. A service of the namespace that another owner made is not the stack's and is never touched.
 func (d Deps) ownedServices(ctx context.Context, envID string, st Stack) ([]dockerx.ServiceDetail, error) {
 	var all []dockerx.ServiceDetail
 	err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
@@ -259,9 +260,10 @@ func (d Deps) ownedServices(ctx context.Context, envID string, st Stack) ([]dock
 	if err != nil {
 		return nil, err
 	}
+	own := OwnershipOf(st)
 	out := make([]dockerx.ServiceDetail, 0, len(all))
 	for _, s := range all {
-		if s.Labels[stacks.LabelStackID] == st.ID {
+		if own.OwnsWorkload(s.Labels) {
 			out = append(out, s)
 		}
 	}

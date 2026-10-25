@@ -541,8 +541,9 @@ func usersOf(o objectInfo, uses []serviceUse, refs func(dockerx.ServiceRef) []do
 func swarmObjects(stack Stack, declared []DeclaredObject, uses []serviceUse, all []objectInfo, refs func(dockerx.ServiceRef) []dockerx.ServiceObjectRef) []ObjectResource {
 	out := []ObjectResource{}
 	owned := map[string]bool{}
+	own := OwnershipOf(stack)
 	for _, o := range all {
-		if stack.Discovered || !ownsLabels(stack, o.Labels) {
+		if stack.Discovered || !own.OwnsObject(o.Labels) {
 			continue
 		}
 		owned[o.ID] = true

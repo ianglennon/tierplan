@@ -806,3 +806,257 @@ func TestRemoveWaitsForTheNodesToRemoveTheContainersOfTasksThatHaveEndedBeforeIt
 		t.Errorf("volume writes = %v, want rm_data removed once its container was gone", got)
 	}
 }
+
+// An adopted stack (plan 08-18) is removed like any other, and only what it owns: its services by the namespace
+// while its first deploy is pending and by its own ID after, the networks and volumes it recorded when it was
+// adopted, and the secrets and configs it made. What it only references, and what appeared later, stays.
+
+// adoptedRm is the stack "rm" as an adopted one: it recorded two networks and two volumes, and references the secret
+// extsecret and the config extconfig as external.
+func adoptedRm(pending bool) stackops.Stack {
+	st := rmStack()
+	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "rm"}
+	st.Adoption = stacks.Adoption{
+		Pending: pending, PriorID: "stale-id",
+		Networks: []string{"rm_front", "rm_back"}, Volumes: []string{"rm_data", "rm_cache"},
+		Secrets: []string{"extsecret"}, Configs: []string{"extconfig"},
+	}
+	return st
+}
+
+// rmNamespaceOnly are the labels docker stack deploy puts on an object: the namespace and nothing of Bayplan's.
+func rmNamespaceOnly() map[string]string {
+	return map[string]string{"com.docker.stack.namespace": "rm"}
+}
+
+// adoptedRemoveRig is a swarm that runs the adopted stack "rm", with the services labelled as pending says: with the
+// namespace alone before its first deploy, with the stack's ID after. Its networks and volumes carry the namespace and
+// no Bayplan ID, or a stale one; the secret and the config it made carry its ID; the ones it references carry only the
+// namespace. Beside them are an external network and volume and another stack's service.
+func adoptedRemoveRig(t *testing.T, pending bool, tune func(*dockertest.FakeConfig)) *swarmRig {
+	t.Helper()
+	svcLabels := rmOwned()
+	if pending {
+		svcLabels = rmNamespaceOnly()
+	}
+	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.ServiceRows = []dockertest.FakeService{
+			{ID: "svc-web", Name: "rm_web", Mode: "replicated", Image: "nginx:1.27", Version: 3, Labels: svcLabels, Desired: 2, Running: 2},
+			{ID: "svc-api", Name: "rm_api", Mode: "replicated", Image: "nginx:1.28", Version: 2, Labels: svcLabels, Desired: 1, Running: 1},
+			{ID: "svc-other", Name: "other_web", Mode: "replicated", Image: "nginx:1.28", Version: 2, Labels: rmOther(), Desired: 1, Running: 1},
+		}
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "net-front", Name: "rm_front", Driver: "overlay", Scope: "swarm", Labels: rmNamespaceOnly()},
+			{ID: "net-back", Name: "rm_back", Driver: "overlay", Scope: "swarm", Labels: withLabel(rmNamespaceOnly(), "bayplan.stack.id", "stale-id")},
+			{ID: "net-shared", Name: "shared", Driver: "overlay", Scope: "swarm"},
+			{ID: "net-other", Name: "other_net", Driver: "overlay", Scope: "swarm", Labels: rmOther()},
+		}
+		c.Secrets = []dockertest.FakeSecret{
+			{ID: "sec-tok", Name: "rm_tok_abc", Labels: rmOwned()},
+			{ID: "sec-ext", Name: "extsecret", Labels: rmNamespaceOnly()},
+		}
+		c.Configs = []dockertest.FakeConfigObject{
+			{ID: "cfg-site", Name: "rm_site_abc", Labels: rmOwned()},
+			{ID: "cfg-ext", Name: "extconfig", Labels: rmNamespaceOnly()},
+		}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "rm_data", Driver: "local", Labels: rmNamespaceOnly()},
+			{Name: "rm_cache", Driver: "local", Labels: withLabel(rmNamespaceOnly(), "bayplan.stack.id", "stale-id")},
+			{Name: "shared_vol", Driver: "local"},
+			{Name: "other_data", Driver: "local", Labels: rmOther()},
+		}
+		if tune != nil {
+			tune(c)
+		}
+	})
+}
+
+func TestRemoveAdoptedSwarmStack(t *testing.T) {
+	t.Parallel()
+	rig := adoptedRemoveRig(t, false, nil)
+	vols := previewedVolumesOf(t, rig, adoptedRm(false))
+	store := &removeStore{}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: adoptedRm(false), Store: store, Volumes: []stackops.VolumeChoice{vols["rm_data"]}})
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if res.Services != 2 || res.Networks != 2 || res.Secrets != 1 || res.Configs != 1 || res.Volumes != 1 || res.KeptVolumes != 1 || !res.DefinitionDeleted {
+		t.Errorf("result = %+v, want 2 services, the 2 recorded networks, the secret and the config it made, 1 volume removed and 1 kept", res)
+	}
+	writes := rig.fake.Writes()
+	for _, want := range []string{
+		"DELETE /services/svc-web", "DELETE /services/svc-api", "DELETE /networks/net-front", "DELETE /networks/net-back",
+		"DELETE /secrets/sec-tok", "DELETE /configs/cfg-site", "DELETE /volumes/rm_data",
+	} {
+		if !slices.Contains(writes, want) {
+			t.Errorf("writes = %v, want %q", writes, want)
+		}
+	}
+	for _, w := range writes {
+		for _, keep := range []string{"svc-other", "net-shared", "net-other", "sec-ext", "cfg-ext", "rm_cache", "shared_vol", "other_data"} {
+			if strings.Contains(w, keep) {
+				t.Errorf("write %q touched %s, which the adopted stack does not own or was not ticked", w, keep)
+			}
+		}
+	}
+	if !store.wasDeleted() {
+		t.Errorf("the definition was not deleted")
+	}
+}
+
+func TestAnAdoptedSwarmStackIsRemovedBeforeItsFirstDeploy(t *testing.T) {
+	t.Parallel()
+	// The services carry the namespace alone, so the pending adoption is what makes them the stack's.
+	rig := adoptedRemoveRig(t, true, nil)
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: adoptedRm(true), Store: &removeStore{}})
+
+	if !res.OK() || job.State != jobs.JobDone || res.Services != 2 || res.Networks != 2 {
+		t.Fatalf("remove = %+v %v, want the 2 services and the 2 recorded networks removed", res, itemStates(job))
+	}
+	if got := writesTo(rig, "DELETE /services/"); !slices.Equal(slices.Sorted(slices.Values(got)), []string{"DELETE /services/svc-api", "DELETE /services/svc-web"}) {
+		t.Errorf("service writes = %v, want only the stack's two", got)
+	}
+}
+
+func TestRemovalPreviewOfAdoptedStack(t *testing.T) {
+	t.Parallel()
+	rig := adoptedRemoveRig(t, true, nil)
+	decl := stackops.Declared{
+		Networks: []stackops.DeclaredObject{{Key: "outer", Name: "shared", External: true}},
+		Secrets:  []stackops.DeclaredObject{{Key: "ext", Name: "extsecret", External: true}},
+		Configs:  []stackops.DeclaredObject{{Key: "ext", Name: "extconfig", External: true}},
+	}
+
+	got, err := rig.deps.Preview(testsupport.Context(t), rig.envID, adoptedRm(true), decl)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"rm_api", "rm_web"}; !slices.Equal(got.Services, want) {
+		t.Errorf("services = %v, want %v", got.Services, want)
+	}
+	if want := []string{"rm_back", "rm_front"}; !slices.Equal(got.Networks, want) {
+		t.Errorf("networks = %v, want the two recorded %v", got.Networks, want)
+	}
+	if !slices.Equal(got.Secrets, []string{"rm_tok_abc"}) || !slices.Equal(got.Configs, []string{"rm_site_abc"}) {
+		t.Errorf("secrets = %v configs = %v, want only the ones it made: the external ones it references are not its own", got.Secrets, got.Configs)
+	}
+	var vols []string
+	for _, v := range got.Volumes {
+		vols = append(vols, v.Name)
+	}
+	if want := []string{"rm_cache", "rm_data"}; !slices.Equal(vols, want) {
+		t.Errorf("volumes = %v, want the two recorded %v", vols, want)
+	}
+	if want := []string{"extconfig", "extsecret", "shared"}; !slices.Equal(got.Externals, want) {
+		t.Errorf("externals = %v, want %v", got.Externals, want)
+	}
+}
+
+func TestRemoveLeavesAForeignLateService(t *testing.T) {
+	t.Parallel()
+	// After the first deploy the stack's services carry its ID. Two services of the namespace appeared since, one with
+	// no Bayplan ID and one with another stack's: neither is the stack's, and their running tasks are not waited for.
+	rig := adoptedRemoveRig(t, false, func(c *dockertest.FakeConfig) {
+		c.ServiceRows = append(c.ServiceRows,
+			dockertest.FakeService{ID: "svc-late", Name: "rm_late", Mode: "replicated", Image: "nginx:1.28", Version: 1, Labels: rmNamespaceOnly(), Desired: 1, Running: 1},
+			dockertest.FakeService{ID: "svc-alien", Name: "rm_alien", Mode: "replicated", Image: "nginx:1.28", Version: 1, Labels: withLabel(rmNamespaceOnly(), "bayplan.stack.id", "stack-alien"), Desired: 1, Running: 1},
+		)
+		c.Tasks = []swarm.Task{
+			{ID: "t-late", ServiceID: "svc-late", DesiredState: swarm.TaskStateRunning, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, Annotations: swarm.Annotations{Labels: rmNamespaceOnly()}},
+			{ID: "t-alien", ServiceID: "svc-alien", DesiredState: swarm.TaskStateRunning, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, Annotations: swarm.Annotations{Labels: withLabel(rmNamespaceOnly(), "bayplan.stack.id", "stack-alien")}},
+		}
+	})
+	rig.deps.ConvergeTimeout = 2 * time.Second
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: adoptedRm(false), Store: &removeStore{}})
+
+	if !res.OK() || job.State != jobs.JobDone || res.Services != 2 {
+		t.Fatalf("remove = %+v %v, want the stack's two services removed and the wait over", res, itemStates(job))
+	}
+	for _, w := range rig.fake.Writes() {
+		if strings.Contains(w, "svc-late") || strings.Contains(w, "svc-alien") {
+			t.Errorf("write %q touched a service the stack does not own", w)
+		}
+	}
+}
+
+func TestRemoveAdoptedStandaloneStack(t *testing.T) {
+	t.Parallel()
+	project := map[string]string{"com.docker.compose.project": "plain"}
+	var base dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: withLabel(project, "com.docker.compose.service", "web"), Mounts: []string{"plain_data"}},
+		}
+		c.Networks = []dockertest.FakeNetwork{{ID: "net-plain", Name: "plain_default", Driver: "bridge", Scope: "local", Labels: project}}
+		c.Volumes = []dockertest.FakeVolume{
+			{Name: "plain_data", Driver: "local", Labels: project},
+			{Name: "plain_keep", Driver: "local", Labels: project},
+			{Name: "external_vol", Driver: "local"},
+		}
+		base = *c
+	})
+	var downs []string
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.DownProject = func(_ context.Context, _ *dockerx.Client, p string) error {
+		downs = append(downs, p)
+		base.Containers, base.Networks = nil, nil
+		rig.fake.Reconfigure(base)
+		return nil
+	}
+	st := stackops.Stack{
+		ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone,
+		Source:   stacks.Source{Kind: stacks.SourceAdopted, Ref: "plain"},
+		Adoption: stacks.Adoption{Pending: true, Networks: []string{"plain_default"}, Volumes: []string{"plain_data", "plain_keep"}},
+	}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := rig.deps.Preview(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(preview.Containers, []string{"plain-web-1"}) || !slices.Equal(preview.Networks, []string{"plain_default"}) || len(preview.Volumes) != 2 {
+		t.Fatalf("preview = %+v, want the container, the recorded network and the two recorded volumes", preview)
+	}
+	var data stackops.VolumeChoice
+	for _, v := range preview.Volumes {
+		if v.Name == "plain_data" {
+			data = v
+		}
+	}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: &removeStore{}, Volumes: []stackops.VolumeChoice{data}})
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if !slices.Equal(downs, []string{"plain"}) {
+		t.Errorf("down calls = %v, want one for the project plain", downs)
+	}
+	if got := writesTo(rig, "DELETE /volumes/"); !slices.Equal(got, []string{"DELETE /volumes/plain_data"}) {
+		t.Errorf("volume writes = %v, want only the ticked plain_data (not plain_keep, not external_vol)", got)
+	}
+	if res.Services != 1 || res.Volumes != 1 || res.KeptVolumes != 1 {
+		t.Errorf("result = %+v, want 1 container, 1 volume removed and 1 kept", res)
+	}
+}
+
+// previewedVolumesOf is previewedVolumes for a stack other than rm.
+func previewedVolumesOf(t *testing.T, rig *swarmRig, st stackops.Stack) map[string]stackops.VolumeChoice {
+	t.Helper()
+	preview, err := rig.deps.Preview(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]stackops.VolumeChoice{}
+	for _, v := range preview.Volumes {
+		out[v.Name] = v
+	}
+	return out
+}

@@ -292,6 +292,7 @@ func hasExternalObject(objs []stacks.ObjectContent, kind stacks.ObjectKind) bool
 // create (T-07-33).
 func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs []stacks.ObjectContent, live []objectRow, prog *progress) (refs objectRefs, created []string, err error) {
 	refs = newObjectRefs()
+	own := OwnershipOf(stack)
 	for _, o := range objs {
 		if o.External {
 			row, ok := findObject(live, o.Kind, o.ExternalName)
@@ -303,7 +304,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 		}
 		full, hash := stacks.ObjectName(stack.Name, o.Name, o.Content)
 		if row, ok := findObject(live, o.Kind, full); ok {
-			if row.Labels[stacks.LabelStackID] != stack.ID {
+			if !own.OwnsObject(row.Labels) {
 				return refs, created, &stepError{code: CodeObjectNameTaken, name: full, err: dockerx.ErrNameTaken}
 			}
 			refs.set(o.Kind, o.Name, objectRef{ID: row.ID, Name: full})
@@ -365,22 +366,33 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 // next deploy finds the same objects by their labels; err is only a read that failed, when
 // nothing could be judged.
 func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Stack, keep objectRefs, prog *progress) (removed, leftInPlace []string, err error) {
+	own := OwnershipOf(stack)
 	var svcs []dockerx.ServiceDetail
 	var secrets, configs []objectRow
 	err = d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
 		var e error
+		secrets, configs = nil, nil // a read that is tried on another manager starts again
 		if svcs, e = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, stack.Name); e != nil {
 			return e
 		}
-		srows, e := c.SecretsWithLabel(ctx, stacks.LabelStackID, stack.ID)
+		srows, e := c.SecretsWithLabel(ctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		crows, e := c.ConfigsWithLabel(ctx, stacks.LabelStackID, stack.ID)
+		crows, e := c.ConfigsWithLabel(ctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		secrets, configs = secretRows(srows), configRows(crows)
+		for _, r := range secretRows(srows) {
+			if own.OwnsObject(r.Labels) {
+				secrets = append(secrets, r)
+			}
+		}
+		for _, r := range configRows(crows) {
+			if own.OwnsObject(r.Labels) {
+				configs = append(configs, r)
+			}
+		}
 		return nil
 	})
 	if err != nil {

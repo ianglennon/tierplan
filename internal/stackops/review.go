@@ -523,6 +523,7 @@ func (d Deps) readLive(ctx context.Context, envID, stackName string, want liveWa
 // that name, so a service that is unchanged converts to the spec the swarm holds.
 func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) objectRefs {
 	refs := newObjectRefs()
+	own := OwnershipOf(stack)
 	for _, o := range objs {
 		if o.External {
 			ref := objectRef{Name: o.ExternalName}
@@ -534,7 +535,7 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 		}
 		full, _ := stacks.ObjectName(stack.Name, o.Name, o.Content)
 		ref := objectRef{Name: full}
-		if row, ok := findObject(live, o.Kind, full); ok && row.Labels[stacks.LabelStackID] == stack.ID {
+		if row, ok := findObject(live, o.Kind, full); ok && own.OwnsObject(row.Labels) {
 			ref.ID = row.ID
 		}
 		refs.set(o.Kind, o.Name, ref)
@@ -677,10 +678,10 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 			continue
 		}
 		full, _ := stacks.ObjectName(stack.Name, o.Name, o.Content)
-		if row, ok := findObject(live.Objects, o.Kind, full); ok && row.Labels[stacks.LabelStackID] == stack.ID {
+		if row, ok := findObject(live.Objects, o.Kind, full); ok && own.OwnsObject(row.Labels) {
 			continue // the same content: the object is reused
 		}
-		if ownedVersion(live.Objects, o.Kind, stack.ID, o.Name) {
+		if ownedVersion(live.Objects, o.Kind, own, o.Name) {
 			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: kind, Name: o.Name, Detail: detailNewVersion})
 			continue
 		}
@@ -690,7 +691,7 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 	for _, r := range live.Objects {
 		name := r.Labels[stacks.LabelObject]
 		key := string(r.Kind) + "/" + name
-		if r.Labels[stacks.LabelStackID] != stack.ID || name == "" || used[key] || removed[key] {
+		if !own.OwnsObject(r.Labels) || name == "" || used[key] || removed[key] {
 			continue
 		}
 		removed[key] = true
@@ -713,9 +714,9 @@ func section(k stacks.ObjectKind) string {
 
 // ownedVersion reports whether the stack owns a secret or config of this kind made for the
 // compose name, under whatever hash.
-func ownedVersion(live []objectRow, kind stacks.ObjectKind, stackID, name string) bool {
+func ownedVersion(live []objectRow, kind stacks.ObjectKind, own Ownership, name string) bool {
 	for _, r := range live {
-		if r.Kind == kind && r.Labels[stacks.LabelStackID] == stackID && r.Labels[stacks.LabelObject] == name {
+		if r.Kind == kind && own.OwnsObject(r.Labels) && r.Labels[stacks.LabelObject] == name {
 			return true
 		}
 	}

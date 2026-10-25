@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -706,5 +707,86 @@ func mustUnmarshal(t *testing.T, raw json.RawMessage, v any) {
 	t.Helper()
 	if err := json.Unmarshal(raw, v); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestStopStartAdoptedStack: an adopted stack stops and starts before its first deploy, when its services carry the
+// namespace alone, as it does after (plan 08-18, D-14). A service of the namespace that is not the stack's is left
+// alone: one that another stack's ID names, and, once the first deploy is done, one that carries no ID.
+func TestStopStartAdoptedStack(t *testing.T) {
+	t.Parallel()
+	alien := dockertest.FakeService{
+		ID: "svc-alien", Name: "shop_alien", Mode: "replicated", Image: "nginx:1", Running: 2, Desired: 2, Replicas: 2,
+		Labels: map[string]string{stacks.LabelSwarmNamespace: "shop", stacks.LabelStackID: "someone-else"},
+	}
+	var base dockertest.FakeConfig
+	a := adoptRig(t, corpusRigTuned(t, "deploy.yaml", nil, func(c *dockertest.FakeConfig) { base = *c }))
+	rig, st := a.rig, a.stack
+	// The other stack's service appears after the adoption (one there at adoption would be taken for the stale ID of
+	// the stack's own, D-11).
+	base.ServiceRows = append(slices.Clone(base.ServiceRows), alien)
+	rig.fake.Reconfigure(base)
+	if !st.Adoption.Pending {
+		t.Fatalf("the stack is not pending its first deploy: %+v", st.Adoption)
+	}
+	before := rig.ownedNow(t, st)
+
+	stopRes, stopJob := rig.stop(t, st, a.repo)
+
+	if !stopRes.OK() || stopJob.State != jobs.JobDone {
+		t.Fatalf("stop = %+v %v, want it done", stopRes, itemStates(stopJob))
+	}
+	if len(stopRes.Scaled) == 0 {
+		t.Fatalf("stop scaled %v, want every replicated service of the adopted stack", stopRes.Scaled)
+	}
+	for name, svc := range rig.ownedNow(t, st) {
+		if name == "shop_alien" {
+			if svc.Replicas != 2 || svc.Labels[stacks.LabelStoppedReplicas] != "" {
+				t.Errorf("the other stack's service was changed: replicas %d labels %v", svc.Replicas, svc.Labels)
+			}
+			continue
+		}
+		if before[name].Replicas == 0 {
+			continue // a global service is removed, not scaled
+		}
+		if svc.Replicas != 0 || svc.Labels[stacks.LabelStoppedReplicas] != strconv.FormatUint(before[name].Replicas, 10) {
+			t.Errorf("%s: replicas %d label %q after stop, want 0 and %d remembered", name, svc.Replicas, svc.Labels[stacks.LabelStoppedReplicas], before[name].Replicas)
+		}
+	}
+
+	startRes, startJob := rig.start(t, st, a.repo)
+
+	if !startRes.OK() || startJob.State != jobs.JobDone {
+		t.Fatalf("start = %+v %v, want it done", startRes, itemStates(startJob))
+	}
+	for name, svc := range rig.ownedNow(t, st) {
+		if name == "shop_alien" {
+			continue
+		}
+		if svc.Replicas != before[name].Replicas {
+			t.Errorf("%s: replicas %d after start, want the %d it had", name, svc.Replicas, before[name].Replicas)
+		}
+		if _, left := svc.Labels[stacks.LabelStoppedReplicas]; left {
+			t.Errorf("%s still carries the stopped-replicas label after start", name)
+		}
+	}
+	for _, u := range rig.fake.ServiceUpdates() {
+		if u.ServiceID == "svc-alien" {
+			t.Errorf("an update was sent for the other stack's service: %+v", u)
+		}
+	}
+
+	// Once the first deploy is done, the services that carry no ID are not the stack's.
+	if err := a.repo.ClearAdoptionPending(testsupport.Context(t), st.ID); err != nil {
+		t.Fatal(err)
+	}
+	done, err := a.repo.Stack(testsupport.Context(t), rig.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := len(rig.fake.ServiceUpdates())
+	res, _ := rig.stop(t, done, a.repo)
+	if len(res.Scaled)+len(res.Removed) != 0 || len(rig.fake.ServiceUpdates()) != updates {
+		t.Errorf("stop after the first deploy touched %+v: a service with no ID is another owner's", res)
 	}
 }

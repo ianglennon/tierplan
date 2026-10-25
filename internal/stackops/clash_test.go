@@ -105,6 +105,40 @@ func TestForeignStackOnAStandaloneHostFindsAComposeProjectOfTheNameWithoutThisSt
 	}
 }
 
+// TestCreateClashStaysStrict: the create path's check asks the ownership of a stack that is not adopted, so an object
+// that an adopted stack would own (no ID, or an ID it recorded, a network it recorded) is still foreign to a stack
+// being created, and a stored stack that is not adopted still owns only what carries its own ID (plan 08-18).
+func TestCreateClashStaysStrict(t *testing.T) {
+	t.Parallel()
+	stale := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stale-id"}
+	staleProj := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stale-id"}
+	ctx := testsupport.Context(t)
+
+	for name, labels := range map[string]map[string]string{"no ID": swarmNS, "a stale ID": stale} {
+		rig := newSwarmRig(t, nil, dockertest.FakeService{ID: "s1", Name: "web_app", Mode: "replicated", Image: "x", Labels: labels})
+		for who, stackID := range map[string]string{"a stack being created": "", "a stack with an ID": "stack-web"} {
+			if got, err := rig.deps.ForeignStack(ctx, rig.envID, stacks.TargetSwarm, "web", stackID); err != nil || !got {
+				t.Errorf("%s, %s: ForeignStack = %v, %v, want the service to be foreign", name, who, got, err)
+			}
+		}
+		managed := stackops.Stack{ID: "stack-web", Name: "web", Target: stacks.TargetSwarm}
+		if got, err := rig.deps.ForeignStackOf(ctx, rig.envID, managed); err != nil || !got {
+			t.Errorf("%s: ForeignStackOf(managed) = %v, %v, want the service to be foreign to a stack that was not adopted", name, got, err)
+		}
+	}
+	for name, labels := range map[string]map[string]string{"no ID": projNS, "a stale ID": staleProj} {
+		rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+			standalone(c)
+			c.Containers = []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web-app-1"}, Image: "x", State: "running", Labels: labels}}
+		})
+		for who, stackID := range map[string]string{"a stack being created": "", "a stack with an ID": "stack-web"} {
+			if got, err := rig.deps.ForeignStack(ctx, rig.envID, stacks.TargetStandalone, "web", stackID); err != nil || !got {
+				t.Errorf("%s, %s: ForeignStack = %v, %v, want the container to be foreign", name, who, got, err)
+			}
+		}
+	}
+}
+
 func TestCheckTargetRefusesAnEnvironmentThatIsNoLongerTheKindTheStackWasCreatedFor(t *testing.T) {
 	t.Parallel()
 	swarmStack := stackops.Stack{ID: "s", Name: "web", Target: stacks.TargetSwarm}

@@ -541,3 +541,35 @@ func TestStandaloneCleanupUsesOwnership(t *testing.T) {
 		t.Errorf("removals = %v, want only the container this deploy created for the stack (not %s from adoption, not another stack's)", got, existing)
 	}
 }
+
+// TestFailedDeployOfAnAdoptedStackCleansUpByOwnership: the clean-up of a deploy that stopped finds what the stack owns
+// by its namespace and asks the stack's ownership (plan 08-18). The network and the secret this deploy created carry
+// the stack's ID and go; a network the stack recorded when it was adopted, which carries the namespace alone and which
+// a service uses, stays; a secret of the namespace that the stack only references stays too.
+func TestFailedDeployOfAnAdoptedStackCleansUpByOwnership(t *testing.T) {
+	t.Parallel()
+	ns := map[string]string{"com.docker.stack.namespace": "t"}
+	rig := failRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n-legacy", Name: "t_legacy", Driver: "overlay", Scope: "swarm", Labels: ns}}
+		c.Secrets = []dockertest.FakeSecret{{ID: "sec-ref", Name: "t_ref", Labels: ns}}
+	})
+	st, in := stackInput(t, "t", failCompose, tokFile("s3cret"))
+	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "t"}
+	st.Adoption = stacks.Adoption{Networks: []string{"t_legacy"}, Secrets: []string{"t_ref"}}
+	in.Stack = st
+	secret := hashedName("t", "tok", "s3cret")
+
+	res, _ := rig.deploy(t, in)
+
+	if res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want the swarm's rejection of t_mid", res)
+	}
+	if !slices.Equal(res.CleanedUp, []string{"t_fresh", secret}) {
+		t.Errorf("CleanedUp = %v, want the network and the secret this deploy created", res.CleanedUp)
+	}
+	for _, w := range rig.fake.Writes() {
+		if strings.Contains(w, "n-legacy") || strings.Contains(w, "sec-ref") {
+			t.Errorf("write %q touched an object the deploy did not create", w)
+		}
+	}
+}

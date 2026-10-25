@@ -68,23 +68,40 @@ func (d Deps) cleanupCreated(ctx context.Context, envID string, stack Stack, res
 		secrets  []objectRow
 		configs  []objectRow
 	)
+	own := OwnershipOf(stack)
 	readErr := d.Clusters.ClusterRead(cctx, envID, func(c *dockerx.Client) error {
 		var e error
+		networks, secrets, configs = nil, nil, nil // a read that is tried on another manager starts again
 		if svcs, e = c.ServicesWithLabel(cctx, stacks.LabelSwarmNamespace, stack.Name); e != nil {
 			return e
 		}
-		if networks, e = c.NetworksWithLabel(cctx, stacks.LabelStackID, stack.ID); e != nil {
-			return e
-		}
-		srows, e := c.SecretsWithLabel(cctx, stacks.LabelStackID, stack.ID)
+		nets, e := c.NetworksWithLabel(cctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		crows, e := c.ConfigsWithLabel(cctx, stacks.LabelStackID, stack.ID)
+		for _, n := range nets {
+			if own.OwnsNetwork(n.Name, n.Labels) {
+				networks = append(networks, n)
+			}
+		}
+		srows, e := c.SecretsWithLabel(cctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		secrets, configs = secretRows(srows), configRows(crows)
+		crows, e := c.ConfigsWithLabel(cctx, own.labelKey(), own.Name)
+		if e != nil {
+			return e
+		}
+		for _, r := range secretRows(srows) {
+			if own.OwnsObject(r.Labels) {
+				secrets = append(secrets, r)
+			}
+		}
+		for _, r := range configRows(crows) {
+			if own.OwnsObject(r.Labels) {
+				configs = append(configs, r)
+			}
+		}
 		return nil
 	})
 	if readErr != nil {
