@@ -239,7 +239,7 @@ func jitter(d time.Duration) time.Duration {
 	if spread <= 0 {
 		return d
 	}
-	return d + time.Duration(rand.Int64N(2*spread+1)-spread)
+	return d + time.Duration(rand.Int64N(2*spread+1)-spread) //nolint:gosec // jitter that spreads reads, not a secret
 }
 
 // driftWorker is the worker of one environment. Only its goroutine reads or writes prints; mu guards what the event

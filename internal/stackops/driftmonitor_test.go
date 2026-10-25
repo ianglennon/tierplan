@@ -569,3 +569,30 @@ func TestDriftMonitorFingerprintSkipsTheDiff(t *testing.T) {
 		t.Errorf("web was checked %d times, want a third check for the event", calls.count("web-id"))
 	}
 }
+
+func TestDriftMonitorLeavesAStoppedOrNeverDeployedStackAlone(t *testing.T) {
+	t.Parallel()
+	src, calls := &fakeDriftSource{}, newDriftCalls()
+	monitorStack(src, "halted-id", "halted", stacks.TargetSwarm)
+	src.setStopped("halted-id", true)
+	// A stack with no revision that deployed has nothing to compare.
+	src.mu.Lock()
+	src.stacks = append(src.stacks, stackops.Stack{ID: "fresh-id", EnvID: monitorEnv, Name: "fresh", Target: stacks.TargetSwarm})
+	src.mu.Unlock()
+	monitorStack(src, "live-id", "live", stacks.TargetSwarm)
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check})
+
+	m.clk.Advance(3 * time.Second)
+	// The stacks are looked at in name order.
+	m.await(t, "fresh-id", stackops.DriftOutcomeIgnored)
+	m.await(t, "halted-id", stackops.DriftOutcomeIgnored)
+	m.await(t, "live-id", stackops.DriftOutcomeStored)
+	if calls.count("halted-id") != 0 || calls.count("fresh-id") != 0 {
+		t.Errorf("a stopped stack was checked %d times and a stack never deployed %d times, want neither", calls.count("halted-id"), calls.count("fresh-id"))
+	}
+	for _, id := range []string{"halted-id", "fresh-id"} {
+		if res, ok := m.store.Get(id); ok {
+			t.Errorf("%s has a stored result %+v", id, res)
+		}
+	}
+}
