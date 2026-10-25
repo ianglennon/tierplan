@@ -25,6 +25,10 @@ const OPEN_BY_DEFAULT = 3;
 
 interface ServiceDiffListProps {
   services: StackReviewService[];
+  // The headings of the value columns of an expanded row, and its caption as a function of the service's name, when
+  // they are not the review's own (the Adopt page's are "Running now" and "After the first deploy").
+  headings?: { current?: string; next?: string };
+  caption?: (name: string) => string;
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -100,7 +104,7 @@ function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
   );
 }
 
-interface RowProps {
+interface RowProps extends Pick<ServiceDiffListProps, "headings" | "caption"> {
   service: StackReviewService;
   defaultOpen: boolean;
 }
@@ -144,7 +148,7 @@ function CarriedRow({ service }: { service: StackReviewService }) {
 // ServiceRow is one service: the change in words with its glyph, the name in mono, how many
 // settings changed and the image change. A changed or added service expands to the field-level
 // difference; a removed one is its summary row and nothing more.
-function ServiceRow({ service, defaultOpen }: RowProps) {
+function ServiceRow({ service, defaultOpen, headings, caption }: RowProps) {
   const t = useT();
   const change = service.change as keyof typeof GLYPH;
   const [open, setOpen] = useState(defaultOpen);
@@ -213,6 +217,8 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
               current={service.current}
               next={service.next}
               create={service.change === "added"}
+              headings={headings}
+              caption={caption?.(service.short)}
             />
           ) : null}
           {hidden.length > 0 ? <HiddenChanges name={service.short} paths={hidden} /> : null}
@@ -227,7 +233,7 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
 // services a standalone deploy recreates or restarts because another is recreated. A first deploy lists
 // every service as Added. Masked values never appear on either side: the server sends them
 // hidden, and a change to a hidden one is only a path.
-export function ServiceDiffList({ services }: ServiceDiffListProps) {
+export function ServiceDiffList({ services, headings, caption }: ServiceDiffListProps) {
   // The server lists added and changed services by name, then the ones a recreate carries, then
   // the removed ones; the order is kept here too, so a list that came in another order still ends
   // with what goes away.
@@ -248,7 +254,13 @@ export function ServiceDiffList({ services }: ServiceDiffListProps) {
         isCarried(s) ? (
           <CarriedRow key={s.name} service={s} />
         ) : (
-          <ServiceRow key={s.name} service={s} defaultOpen={open <= OPEN_BY_DEFAULT} />
+          <ServiceRow
+            key={s.name}
+            service={s}
+            defaultOpen={open <= OPEN_BY_DEFAULT}
+            headings={headings}
+            caption={caption}
+          />
         ),
       )}
     </ul>

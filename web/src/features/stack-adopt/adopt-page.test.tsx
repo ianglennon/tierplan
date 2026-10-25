@@ -37,6 +37,8 @@ let unmanaged: Record<string, unknown>;
 // What the stack's own read does: answer, 404 (with the ID of the stack that holds the name), or wait.
 let notFound: { managedStackId?: string } | null;
 let readHeld: Promise<void> | null;
+// What the adopt check answers: its body, or a refusal.
+let checkAnswer: { status: number; body: unknown };
 // What the adopt route answers, and whether it waits for release() first.
 let adoptAnswer: { status: number; body: unknown };
 let adoptHeld: Promise<void> | null;
@@ -72,6 +74,10 @@ beforeEach(() => {
   };
   notFound = null;
   readHeld = null;
+  checkAnswer = {
+    status: 200,
+    body: { fingerprint: "fp-1", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+  };
   adoptAnswer = { status: 201, body: { id: "s9", name: "legacy", envId: ENV } };
   adoptHeld = null;
   toasts.success.mockReset();
@@ -114,6 +120,9 @@ beforeEach(() => {
         }
         return Response.json(unmanaged);
       }
+      if (path === `${PATH}/adopt-check` && req.method === "POST") {
+        return Response.json(checkAnswer.body, { status: checkAnswer.status });
+      }
       if (path === `${PATH}/adopt` && req.method === "POST") {
         if (adoptHeld) await adoptHeld;
         return Response.json(adoptAnswer.body, { status: adoptAnswer.status });
@@ -141,8 +150,9 @@ function mount() {
   );
 }
 
-const writes = () => sent.filter((s) => s.method !== "GET");
-const reads = () => sent.filter((s) => s.method === "GET" && s.path === PATH);
+// The adoption is the one write: the check is a POST too, but it only reads.
+const writes = () => sent.filter((s) => s.method !== "GET" && s.path !== `${PATH}/adopt-check`);
+const checks = () => sent.filter((s) => s.method === "POST" && s.path === `${PATH}/adopt-check`);
 
 // adoptButton is the footer's Adopt stack, found once the page has read the stack.
 async function adoptButton() {
@@ -226,7 +236,12 @@ describe("the Adopt page: what it says", () => {
 });
 
 describe("the Adopt page: adopting", () => {
-  it("sends the fingerprint it read and nothing else, then hands over the new stack and says nothing changed", async () => {
+  it("sends the fingerprint of the check it ran and nothing else, then hands over the new stack and says nothing changed", async () => {
+    // The page's own read carries another fingerprint: only the check's counts.
+    checkAnswer = {
+      status: 200,
+      body: { fingerprint: "fp-check", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+    };
     mount();
 
     fireEvent.click(await readyAdopt());
@@ -234,7 +249,7 @@ describe("the Adopt page: adopting", () => {
     await waitFor(() => expect(onAdopted).toHaveBeenCalledWith("s9"));
     // The one request that is not a read is the adoption, and it carries the fingerprint alone (D-14).
     expect(writes()).toEqual([
-      { method: "POST", path: `${PATH}/adopt`, body: { fingerprint: "fp-1" } },
+      { method: "POST", path: `${PATH}/adopt`, body: { fingerprint: "fp-check" } },
     ]);
     expect(toasts.success).toHaveBeenCalledWith("Adopted legacy. Nothing changed on Prod.");
   });
@@ -314,7 +329,7 @@ describe("the Adopt page: adopting", () => {
 });
 
 describe("the Adopt page: what it says when the server refuses", () => {
-  it("offers Check again when what runs changed, reads the stack again, and never retries the adoption", async () => {
+  it("offers Check again when what runs changed, runs the check again, and never retries the adoption", async () => {
     adoptAnswer = problem(409, "adopt_stale");
     mount();
     fireEvent.click(await readyAdopt());
@@ -325,10 +340,14 @@ describe("the Adopt page: what it says when the server refuses", () => {
       ),
     ).toBeTruthy();
     expect(writes()).toHaveLength(1);
-    const before = reads().length;
+    const before = checks().length;
+    checkAnswer = {
+      status: 200,
+      body: { fingerprint: "fp-2", clean: true, gaps: [], gapCount: 0, ownershipOnly: [] },
+    };
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
 
-    await waitFor(() => expect(reads().length).toBeGreaterThan(before));
+    await waitFor(() => expect(checks().length).toBeGreaterThan(before));
     await waitFor(() => expect(screen.queryByText(/changed since the check/)).toBeNull());
     expect(writes()).toHaveLength(1);
     expect(onAdopted).not.toHaveBeenCalled();

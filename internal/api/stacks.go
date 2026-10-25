@@ -130,6 +130,9 @@ type StacksDeps struct {
 	// OnChanges, when set, is called once a read of a revision's changes holds its slot and before it runs. Tests
 	// use it to hold one in flight.
 	OnChanges func(ctx context.Context)
+	// OnAdoptCheck, when set, is called once an adopt check holds its slot and before it runs. Tests use it to hold
+	// one in flight.
+	OnAdoptCheck func(ctx context.Context)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of
@@ -405,7 +408,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 	registerStackResources(r, d)
 	registerStackHistory(r, d, newChangesLimiter())
 	registerUnmanagedStacks(r, d, registerStackLogs(r, d))
-	registerStackAdopt(r, d)
+	registerStackAdopt(r, d, newAdoptCheckLimiter())
 }
 
 // stackNotFound is the 404 for a stack the environment does not have.

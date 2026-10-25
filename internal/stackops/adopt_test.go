@@ -6,7 +6,6 @@ package stackops_test
 import (
 	"bytes"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
@@ -444,7 +443,7 @@ func TestAdoptCheckRedactsForAViewer(t *testing.T) {
 			t.Errorf("the gaps for a caller who may reveal lack %q: %s", secret, whole(shown))
 		}
 	}
-	if !strings.Contains(whole(hidden), "<hidden>") {
+	if !strings.Contains(whole(hidden), `\u003chidden\u003e`) { // the placeholder, as JSON writes it
 		t.Errorf("the gaps for a viewer do not say what they hide: %s", whole(hidden))
 	}
 	if hidden.Fingerprint != shown.Fingerprint || len(hidden.Gaps) != len(shown.Gaps) {

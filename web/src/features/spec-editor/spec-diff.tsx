@@ -163,6 +163,8 @@ interface SpecDiffProps {
   next: unknown;
   // The headings of the two value columns; Current and New when left out.
   headings?: { current?: string; next?: string };
+  // The table's caption, when it is not "Changes to {name}" (the Adopt page's is "Differences in {name}").
+  caption?: string;
   // The spec is of a service that does not exist yet: every setting is new, so the table has the
   // columns Setting and Value and no Change or Current.
   create?: boolean;
@@ -173,7 +175,14 @@ interface SpecDiffProps {
 // text, long values wrap, and a value the server withheld is shown as bullets on both sides
 // and never as the value (D-39). The review step, the rollback dialog and the rotate flow draw
 // it.
-export function SpecDiff({ name, current, next, headings, create = false }: SpecDiffProps) {
+export function SpecDiff({
+  name,
+  current,
+  next,
+  headings,
+  caption,
+  create = false,
+}: SpecDiffProps) {
   const t = useT();
   const rows = useMemo(() => diffSpecs(current, next), [current, next]);
   if (rows.length === 0) {
@@ -191,7 +200,7 @@ export function SpecDiff({ name, current, next, headings, create = false }: Spec
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">
       <Table>
-        <caption className="sr-only">{t("specEditor.diff.caption", { name })}</caption>
+        <caption className="sr-only">{caption ?? t("specEditor.diff.caption", { name })}</caption>
         <TableHeader>
           <TableRow>
             {create ? null : (

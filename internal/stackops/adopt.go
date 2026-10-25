@@ -14,6 +14,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/convert"
 	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
@@ -140,54 +141,167 @@ type Adopted struct {
 	Services int
 }
 
-// AdoptWithOutcome is AdoptCommit with the outcome the caller records.
-func (d Deps) AdoptWithOutcome(ctx context.Context, repo Repo, in AdoptInput) (Adopted, error) {
+// adoptPrepared is a stack read, and rebuilt from what runs it, ready to be reviewed and adopted.
+type adoptPrepared struct {
+	found Discovered
+	res   rebuild.Result
+	copy  stacks.WorkingCopy
+	// stack is the stack as it would be adopted: pending its first deploy, under the placeholder ID of the check.
+	stack Stack
+}
+
+// prepareAdoption reads what runs and rebuilds the definition from it, reveal included because equality is decided on
+// the real values (D-15, D-47). It refuses a name Bayplan already holds (ErrNameTaken), a name nothing carries
+// (ErrUnmanagedGone) and a stack that is not adoptable (*NotAdoptableError), and sends nothing to the engine.
+func (d Deps) prepareAdoption(ctx context.Context, in AdoptInput) (adoptPrepared, error) {
 	if slices.ContainsFunc(in.Managed, func(s Stack) bool { return s.Name == in.Name }) {
-		return Adopted{}, ErrNameTaken
+		return adoptPrepared{}, ErrNameTaken
 	}
 	found, ok, err := d.DiscoverNamed(ctx, in.EnvID, in.Target, in.Name, in.Self)
 	if err != nil {
-		return Adopted{}, err
+		return adoptPrepared{}, err
 	}
 	if !ok {
-		return Adopted{}, ErrUnmanagedGone
+		return adoptPrepared{}, ErrUnmanagedGone
 	}
 	if !found.Adoptable() {
-		return Adopted{}, &NotAdoptableError{Found: found}
+		return adoptPrepared{}, &NotAdoptableError{Found: found}
 	}
-
 	res, err := d.RebuildLive(ctx, in.EnvID, DiscoveredStack(in.EnvID, in.Name, in.Target), RebuildOptions{Reveal: true})
+	if err != nil {
+		return adoptPrepared{}, err
+	}
+	return adoptPrepared{
+		found: found, res: res,
+		copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}},
+		stack: Stack{
+			ID: AdoptCheckID, EnvID: in.EnvID, Name: in.Name, Target: in.Target,
+			Source: stacks.Source{Kind: stacks.SourceAdopted, Ref: in.Name}, Adoption: adoptionRecordOf(found, res),
+		},
+	}, nil
+}
+
+// review is the adopt review of the prepared stack against what runs, and the plan it converted.
+func (p adoptPrepared) review(ctx context.Context, d Deps) (Review, convert.Plan, error) {
+	rv := Review{Pins: map[string]string{}, NeedsAdmin: []string{}}
+	plan, err := d.reviewAdoptPlan(ctx, ReviewInput{
+		EnvID: p.stack.EnvID, Stack: p.stack, Copy: p.copy, Mode: ReviewModeAdopt, Rebuilt: &p.res,
+	}, &rv)
+	return rv, plan, err
+}
+
+// AdoptWithOutcome is AdoptCommit with the outcome the caller records.
+func (d Deps) AdoptWithOutcome(ctx context.Context, repo Repo, in AdoptInput) (Adopted, error) {
+	prep, err := d.prepareAdoption(ctx, in)
 	if err != nil {
 		return Adopted{}, err
 	}
-	if res.Fingerprint != in.Fingerprint {
+	if prep.res.Fingerprint != in.Fingerprint {
 		return Adopted{}, ErrAdoptStale
 	}
 
-	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: res.YAML}}}
-	loaded, err := stacks.Deployable(ctx, stacks.CheckInput{Name: in.Name, Target: in.Target, Copy: copy})
+	copy := prep.copy
+	loaded, err := loadRebuilt(ctx, in.Name, in.Target, copy)
 	if err != nil {
-		var refused *stacks.NotDeployableError
-		if errors.As(err, &refused) && len(refused.Problems) > 0 {
-			return Adopted{}, &RebuildError{Reason: refused.Problems[0].Message}
-		}
-		return Adopted{}, &RebuildError{Reason: err.Error()}
+		return Adopted{}, err
 	}
 	rendered, err := stacks.Render(stacks.RenderInput{
-		Loaded: loaded, Pins: LivePins(res.Pins), Masker: stacks.NewMasker(copy.Vars, copy.Files),
+		Loaded: loaded, Pins: LivePins(prep.res.Pins), Masker: stacks.NewMasker(copy.Vars, copy.Files),
 	})
 	if err != nil {
 		return Adopted{}, &RebuildError{Reason: err.Error()}
 	}
+	// The same review the page showed is made again, so the paths of the gaps are stored with the stack and drift can
+	// say a difference was there when it was adopted (D-55). The paths only: a value is never stored here.
+	rv, _, err := prep.review(ctx, d)
+	if err != nil {
+		return Adopted{}, err
+	}
+	adoption := prep.stack.Adoption
+	adoption.Gaps = gapPaths(rv.Services)
 
 	st, rev, err := repo.Adopt(ctx, AdoptRecord{
 		EnvID: in.EnvID, Name: in.Name, Target: in.Target, SourceRef: in.Name, Actor: in.Caller.Actor,
-		Copy: copy, Pins: res.Pins, Rendered: rendered, Adoption: adoptionRecordOf(found, res),
+		Copy: copy, Pins: prep.res.Pins, Rendered: rendered, Adoption: adoption,
 	})
 	if err != nil {
 		return Adopted{}, err
 	}
 	return Adopted{Stack: st, Revision: rev.Seq, Services: len(loaded.Project.Services)}, nil
+}
+
+// gapPaths is the places the rebuilt definition differs from what runs, by service: for a changed service the paths
+// of its settings that differ (a setting that differs in a value the masker hides, by its path as well), for a service
+// that is added, removed or recreated an empty list. An ownership-only service is no gap. No value is in it.
+func gapPaths(rows []stacks.ServiceChange) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range rows {
+		if c.OwnershipOnly {
+			continue
+		}
+		paths := []string{}
+		if c.Change == stacks.ChangeChanged {
+			for _, p := range stacks.ChangedPaths(c.Current, c.Next) {
+				paths = append(paths, p.Path)
+			}
+			paths = append(paths, c.HiddenChanges...)
+			slices.Sort(paths)
+			paths = slices.Compact(paths)
+		}
+		out[c.Name] = paths
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// AdoptCheckResult is what adopting a stack would be like, read before anything is stored (plan 08-14, D-16, D-20).
+// Gaps are the services whose first deploy would change something that is not an ownership label, with what changes;
+// OwnershipOnly the services that differ in nothing else, by their compose names. Clean says there is no gap. Objects
+// are the networks, volumes, secrets and configs of the stack with how each is treated (D-13, D-18), Notes what the
+// rebuild could not say plainly, and Policy the host-access settings of the definition, listed for whoever asks and
+// blocking nothing (D-17). Portainer and Orphan say the stack carries Portainer's marks or the ID of a stack Bayplan
+// made once (D-19, D-11).
+type AdoptCheckResult struct {
+	Fingerprint   string
+	Gaps          []stacks.ServiceChange
+	OwnershipOnly []string
+	Clean         bool
+	Objects       []rebuild.Object
+	Notes         []rebuild.Note
+}
+
+// AdoptCheck reads the unmanaged stack of in.Name, rebuilds its definition and reviews it against what runs in adopt
+// mode. It writes nothing, to an engine or to the store, and a gap never refuses (D-20). The fingerprint it answers is
+// the one the adoption must be sent with: it names the state of the engine the check was made of. The rebuild is made
+// with the real values because equality is decided on them; for a caller without secrets.reveal (reveal false) every
+// environment value, command, argument, health check command and log option in the gaps is then withheld (D-47).
+//
+// The refusals are the commit's: ErrNameTaken, ErrUnmanagedGone, *NotAdoptableError and the rebuild's own errors.
+func (d Deps) AdoptCheck(ctx context.Context, in AdoptInput, reveal bool) (AdoptCheckResult, error) {
+	prep, err := d.prepareAdoption(ctx, in)
+	if err != nil {
+		return AdoptCheckResult{}, err
+	}
+	rv, _, err := prep.review(ctx, d)
+	if err != nil {
+		return AdoptCheckResult{}, err
+	}
+	out := AdoptCheckResult{
+		Fingerprint: prep.res.Fingerprint, OwnershipOnly: adoptNames(rv.Services),
+		Objects: prep.res.Objects, Notes: prep.res.Notes,
+	}
+	for _, c := range rv.Services {
+		if !c.OwnershipOnly {
+			out.Gaps = append(out.Gaps, c)
+		}
+	}
+	out.Clean = len(out.Gaps) == 0
+	if !reveal {
+		out.Gaps = RedactChanges(out.Gaps, in.Target)
+	}
+	return out, nil
 }
 
 // adoptionRecordOf is what the adoption writes down about the objects of the stack: the ID some object of it

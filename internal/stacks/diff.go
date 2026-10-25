@@ -47,6 +47,10 @@ type ServiceChange struct {
 	// Because names the service that is recreated and carries this one with it, for a recreated or
 	// restarted row. Swarm never sets it.
 	Because string `json:"because,omitempty"`
+	// OwnershipOnly is set by MarkOwnershipOnly (and by an adoption check of a standalone host) on a changed
+	// service whose only differences are Bayplan's ownership labels: the first deploy recreates it to put them on
+	// and changes nothing else (D-16).
+	OwnershipOnly bool `json:"ownershipOnly,omitempty"`
 }
 
 // MaskSpec walks every string of a value as it appears in JSON and replaces what m hides with
@@ -341,44 +345,95 @@ func fileName(e any) (string, bool) {
 // countChanges counts the leaves that differ between two trees. A section on one side only counts
 // each of its leaves, as the browser's diff lists them.
 func countChanges(path string, a, b any) int {
+	n := 0
+	walkChanges(path, a, b, func(string, any, any) { n++ })
+	return n
+}
+
+// PathChange is one setting that differs between two specs: its path (the keys of objects joined with ".", an
+// environment entry as Env[NAME] and any other keyed or numbered list entry as [key] or [index]) and the JSON text
+// of the value on each side, empty for a side that has none. The values are the raw ones, unmasked, so a
+// PathChange is for the server only: a caller that stores or sends the paths drops From and To.
+type PathChange struct{ Path, From, To string }
+
+// ChangedPaths lists the leaves that differ between two specs, sorted by path, by the same rules countChanges
+// counts them by: the same tree, the same keyed lists, so a reordered list is not a change.
+func ChangedPaths(cur, next any) []PathChange {
+	curTree, err1 := toTree(cur)
+	nextTree, err2 := toTree(next)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	var out []PathChange
+	walkChanges("", curTree, nextTree, func(path string, a, b any) {
+		out = append(out, PathChange{Path: path, From: leafText(a), To: leafText(b)})
+	})
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+// leafText is the JSON text of a leaf, or empty for a side that has none.
+func leafText(v any) string {
+	if v == nil {
+		return ""
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// walkChanges calls emit for every leaf that differs between two trees, with the leaf's path and the value on
+// each side (nil for a side that has none).
+func walkChanges(path string, a, b any, emit func(path string, a, b any)) {
 	switch av := a.(type) {
 	case map[string]any:
 		bv, bok := b.(map[string]any)
 		if !bok && b != nil {
-			return countChanges(path, a, nil) + countChanges(path, nil, b)
+			walkChanges(path, a, nil, emit)
+			walkChanges(path, nil, b, emit)
+			return
 		}
-		n := 0
 		for _, k := range unionKeys(av, bv) {
-			n += countChanges(joinPath(path, k), av[k], bv[k])
+			walkChanges(joinPath(path, k), av[k], bv[k], emit)
 		}
-		return n
+		return
 	case []any:
 		bv, bok := b.([]any)
 		if !bok && b != nil {
-			return countChanges(path, a, nil) + countChanges(path, nil, b)
+			walkChanges(path, a, nil, emit)
+			walkChanges(path, nil, b, emit)
+			return
 		}
-		return countList(path, av, bv)
+		walkList(path, av, bv, emit)
+		return
 	case nil:
 		switch bv := b.(type) {
 		case nil:
-			return 0
+			return
 		case map[string]any:
-			return countChanges(path, map[string]any{}, bv)
+			walkChanges(path, map[string]any{}, bv, emit)
+			return
 		case []any:
-			return countList(path, nil, bv)
+			walkList(path, nil, bv, emit)
+			return
 		}
-		return 1
+		emit(path, a, b)
+		return
 	}
 	switch bv := b.(type) {
 	case map[string]any, []any:
-		return countChanges(path, a, nil) + countChanges(path, nil, bv)
+		walkChanges(path, a, nil, emit)
+		walkChanges(path, nil, bv, emit)
+		return
 	case nil:
-		return 1
+		emit(path, a, b)
+		return
 	}
-	if fmt.Sprint(a) == fmt.Sprint(b) {
-		return 0
+	if fmt.Sprint(a) != fmt.Sprint(b) {
+		emit(path, a, b)
 	}
-	return 1
 }
 
 func unionKeys(a, b map[string]any) []string {
@@ -395,19 +450,17 @@ func unionKeys(a, b map[string]any) []string {
 	return keys
 }
 
-func countList(path string, a, b []any) int {
+func walkList(path string, a, b []any, emit func(path string, a, b any)) {
 	if key, ok := keyedLists[path]; ok {
 		ka, oka := keyEntries(a, key)
 		kb, okb := keyEntries(b, key)
 		if oka && okb {
-			n := 0
 			for _, k := range unionKeys(ka, kb) {
-				n += countChanges(path+"["+k+"]", ka[k], kb[k])
+				walkChanges(path+"["+k+"]", ka[k], kb[k], emit)
 			}
-			return n
+			return
 		}
 	}
-	n := 0
 	for i := 0; i < max(len(a), len(b)); i++ {
 		var x, y any
 		if i < len(a) {
@@ -416,9 +469,8 @@ func countList(path string, a, b []any) int {
 		if i < len(b) {
 			y = b[i]
 		}
-		n += countChanges(fmt.Sprintf("%s[%d]", path, i), x, y)
+		walkChanges(fmt.Sprintf("%s[%d]", path, i), x, y, emit)
 	}
-	return n
 }
 
 // keyEntries lists a keyed list's entries by key, or reports false when an entry names no key or
@@ -436,4 +488,37 @@ func keyEntries(list []any, key func(any) (string, bool)) (map[string]any, bool)
 		out[k] = e
 	}
 	return out, true
+}
+
+// ownershipLabelPaths are the path prefixes of Bayplan's own labels on a swarm service spec: on the service and on
+// its containers.
+var ownershipLabelPaths = []string{"Labels.bayplan.", "TaskTemplate.ContainerSpec.Labels.bayplan."}
+
+// ownershipLabelPath reports whether a path is a label of Bayplan's own bookkeeping.
+func ownershipLabelPath(path string) bool {
+	return slices.ContainsFunc(ownershipLabelPaths, func(prefix string) bool { return strings.HasPrefix(path, prefix) })
+}
+
+// OwnershipOnlyPaths reports whether a service differs from its twin only in Bayplan's ownership labels: it has
+// at least one difference and every difference is a bayplan.* label of the service or of its containers. Any other
+// difference keeps the service a gap (T-08-55).
+func OwnershipOnlyPaths(paths []PathChange) bool {
+	return len(paths) > 0 && !slices.ContainsFunc(paths, func(p PathChange) bool { return !ownershipLabelPath(p.Path) })
+}
+
+// MarkOwnershipOnly sets OwnershipOnly on each changed service of changes whose differences from the running
+// service, both normalised as DiffServices compares them, are all Bayplan ownership labels. desired and running are
+// the maps DiffServices was given; the decision is made on the raw values, before anything is masked.
+func MarkOwnershipOnly(changes []ServiceChange, desired, running map[string]swarm.ServiceSpec) {
+	for i, c := range changes {
+		if c.Change != ChangeChanged {
+			continue
+		}
+		next, nok := desired[c.Name]
+		cur, cok := running[c.Name]
+		if !nok || !cok {
+			continue
+		}
+		changes[i].OwnershipOnly = OwnershipOnlyPaths(ChangedPaths(NormalizeSpec(cur), NormalizeSpec(next)))
+	}
 }

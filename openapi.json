@@ -235,6 +235,52 @@
         ],
         "type": "object"
       },
+      "AdoptCheckBody": {
+        "additionalProperties": false,
+        "properties": {
+          "clean": {
+            "description": "True when nothing will change on the first deploy except Bayplan's ownership labels",
+            "type": "boolean"
+          },
+          "fingerprint": {
+            "description": "The state of the engine the check was made of. Adopt sends it back; when what runs has changed since, the adoption is refused 409 adopt_stale",
+            "type": "string"
+          },
+          "gapCount": {
+            "description": "How many services are in gaps",
+            "format": "int64",
+            "type": "integer"
+          },
+          "gaps": {
+            "description": "The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads \u003chidden\u003e, and a setting that differs only in such a value is listed by its path in hiddenChanges",
+            "items": {
+              "$ref": "#/components/schemas/StackReviewServiceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ownershipOnly": {
+            "description": "The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "fingerprint",
+          "clean",
+          "gaps",
+          "gapCount",
+          "ownershipOnly"
+        ],
+        "type": "object"
+      },
       "AdoptClusterBody": {
         "additionalProperties": false,
         "properties": {
@@ -25355,6 +25401,68 @@
           }
         },
         "summary": "Adopt a stack Bayplan did not make",
+        "tags": [
+          "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt-check": {
+      "post": {
+        "description": "Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is \u003chidden\u003e. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).",
+        "operationId": "checkAdoption",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The swarm namespace or the Compose project that names the stack",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The swarm namespace or the Compose project that names the stack",
+              "maxLength": 255,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptCheckBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check what adopting a stack would change on its first deploy",
         "tags": [
           "stacks"
         ]

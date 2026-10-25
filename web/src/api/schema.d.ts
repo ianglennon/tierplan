@@ -2436,6 +2436,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check what adopting a stack would change on its first deploy
+         * @description Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).
+         */
+        post: operations["checkAdoption"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/unmanaged-stacks/{name}/compose": {
         parameters: {
             query?: never;
@@ -4082,6 +4102,21 @@ export interface components {
              * @description How many users were added. Users who were already in the team are not counted and leave no audit entry
              */
             added: number;
+        };
+        AdoptCheckBody: {
+            /** @description True when nothing will change on the first deploy except Bayplan's ownership labels */
+            clean: boolean;
+            /** @description The state of the engine the check was made of. Adopt sends it back; when what runs has changed since, the adoption is refused 409 adopt_stale */
+            fingerprint: string;
+            /**
+             * Format: int64
+             * @description How many services are in gaps
+             */
+            gapCount: number;
+            /** @description The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges */
+            gaps: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else */
+            ownershipOnly: string[] | null;
         };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */
@@ -15670,6 +15705,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkAdoption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptCheckBody"];
                 };
             };
             /** @description Error */

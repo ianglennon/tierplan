@@ -6,7 +6,7 @@ import { Link } from "@tanstack/react-router";
 import { CircleX, Lock, SquareStack } from "lucide-react";
 import { useState } from "react";
 
-import { AdoptRequestError, useAdoptStack } from "@/api/stack-adopt";
+import { AdoptRequestError, adoptCheckQuery, useAdoptStack } from "@/api/stack-adopt";
 import { isUnmanagedGone, managedStackIdOf, unmanagedStackQuery } from "@/api/unmanaged-stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -24,6 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { AdoptCheckCard } from "@/features/stack-adopt/adopt-check-card";
 import { EnvValuesNotice } from "@/features/stack-adopt/env-values-notice";
 import {
   NotAdoptableNote,
@@ -124,30 +125,44 @@ function refusalText(t: Translate, err: AdoptRequestError, name: string, envName
   return t("common.mutationFailed");
 }
 
-// AdoptPage is the page an Env Admin adopts an unmanaged stack from (UI-SPEC "Adopt page", STK-13, D-14): what
-// adopting does, the note about environment values, and a footer with Cancel and Adopt stack. Pressing Adopt sends the
-// fingerprint of what the page last read and nothing else: the server rebuilds the definition itself, stores the
-// stack with its first revision, and sends nothing to the engine. It is never retried by itself. When what runs has
-// changed since the page read it, the server refuses and the page offers Check again, which reads it again.
+// The refusals of the check that are not a failure to check: the page words them as it words the adoption's own, or
+// leaves them to the notes it already shows.
+const CHECK_REFUSALS = [
+  "stack_already_managed",
+  "stack_not_adoptable",
+  "unmanaged_stack_not_found",
+];
+
+// AdoptPage is the page an Env Admin adopts an unmanaged stack from (UI-SPEC "Adopt page", STK-13, D-14, D-20): what
+// adopting does, the note about environment values, the check of what the first deploy would change, and a footer
+// with Cancel and Adopt stack. The check runs on entry and changes nothing. Pressing Adopt sends the fingerprint of
+// the check the person saw and nothing else: the server rebuilds the definition itself, stores the stack with its
+// first revision, and sends nothing to the engine. It is never retried by itself. When what runs has changed since
+// the check, the server refuses and the page offers Check again, which runs the check again.
 export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const needs = useNeeds("stacks.create", envId);
   const query = useQuery(unmanagedStackQuery(envId, name));
+  const check = useQuery(adoptCheckQuery(envId, name));
   const adopt = useAdoptStack(envId, name);
   const [refusal, setRefusal] = useState<AdoptRequestError | null>(null);
   // True once the stack is stored: the lists are read again and this name is managed now, so the page must not
   // turn into the gone state while the route takes the person to the new stack.
   const [stored, setStored] = useState(false);
   const { data } = query;
-  const gone = !stored && isUnmanagedGone(query.error);
+  const checkError = check.error instanceof AdoptRequestError ? check.error : null;
+  const checking = check.isFetching;
+  const gone =
+    !stored && (isUnmanagedGone(query.error) || checkError?.type === "unmanaged_stack_not_found");
   useDocumentTitle(t("stackAdopt.page.title", { name }));
 
   async function onAdopt() {
-    if (!data || adopt.isPending) return;
+    if (!data || !check.data || checking || adopt.isPending) return;
     setRefusal(null);
     try {
-      const made = await adopt.mutateAsync({ fingerprint: data.fingerprint });
+      // The fingerprint of the check the person saw, not of the page's own read, which polls.
+      const made = await adopt.mutateAsync({ fingerprint: check.data.fingerprint });
       setStored(true);
       toastSuccess(t("stackAdopt.toast.adopted", { name, env: envName }));
       onAdopted(made.id);
@@ -161,8 +176,18 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
   let reason: string | undefined;
   if (!needs.allowed) reason = needs.reason;
   else if (data && !data.adoptable) reason = data.reason;
-  else if (!data) reason = t("stackAdopt.checking", { name });
-  const off = !needs.allowed || !data?.adoptable;
+  else if (!data || checking) reason = t("stackAdopt.checking", { name });
+  else if (!check.data) reason = t("stackAdoptCheck.off.failed", { name });
+  const off = !needs.allowed || !data?.adoptable || !check.data || checking;
+  const checkRefusal = checkError?.type === "stack_already_managed" ? checkError : null;
+  const checkFailure =
+    checkError && !CHECK_REFUSALS.includes(checkError.type ?? "") ? checkError : null;
+
+  function checkAgain() {
+    setRefusal(null);
+    void query.refetch();
+    void check.refetch();
+  }
 
   if (gone) {
     return (
@@ -239,16 +264,22 @@ export function AdoptPage({ envId, name, onAdopted }: AdoptPageProps) {
       )}
       <EnvValuesNotice />
 
-      {refusal ? (
+      <AdoptCheckCard
+        name={name}
+        target={data?.target === "standalone" ? "standalone" : "swarm"}
+        check={check.data}
+        checking={checking}
+        error={checkFailure}
+        onRetry={checkAgain}
+      />
+
+      {refusal || checkRefusal ? (
         <Refusal
-          err={refusal}
+          err={refusal ?? (checkRefusal as AdoptRequestError)}
           envId={envId}
           name={name}
           envName={envName}
-          onCheck={() => {
-            setRefusal(null);
-            void query.refetch();
-          }}
+          onCheck={checkAgain}
         />
       ) : null}
 

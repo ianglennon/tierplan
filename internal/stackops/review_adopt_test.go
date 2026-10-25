@@ -53,7 +53,7 @@ func withoutBayplanLabels(labels map[string]string) map[string]string {
 // namespace labels and none of Bayplan's. edit changes each service's spec before it is stood up.
 func corpusRig(t *testing.T, file string, edit func(short string, spec *swarm.ServiceSpec)) *swarmRig {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join("..", "stacks", "convert", "testdata", "compose", file))
+	content, err := os.ReadFile(filepath.Join("..", "stacks", "convert", "testdata", "compose", file)) //nolint:gosec // a fixed corpus path
 	if err != nil {
 		t.Fatal(err)
 	}

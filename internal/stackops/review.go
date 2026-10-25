@@ -21,10 +21,12 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
-// The modes of a review: a deploy of the draft, an update of the images of some services (D-16), or a roll back to a
-// revision (ReviewModeRollback, review_rollback.go).
+// The modes of a review: a deploy of the draft, an update of the images of some services (D-16), a roll back to a
+// revision (ReviewModeRollback, review_rollback.go), or the check before a stack is adopted (ReviewModeAdopt,
+// review_adopt.go).
 const (
 	ReviewModeDeploy = "deploy"
 	ReviewModeUpdate = "update"
@@ -145,6 +147,9 @@ type ReviewInput struct {
 	// not record about a running container. Nil means none.
 	Revisions RevisionStore
 	Caller    Caller
+	// Rebuilt is the definition rebuilt from what runs, which ReviewModeAdopt reviews against what runs. Copy holds
+	// the compose file made from it and Stack the stack as it will be adopted. Nil for any other mode.
+	Rebuilt *rebuild.Result
 }
 
 // DeployedRevision is the stack's last good revision: its number, who started its deploy and
@@ -196,6 +201,9 @@ type Summary struct {
 	// ImagesPinned counts the services that keep or carry a digest, ImagesNew the ones whose
 	// digest was just looked up.
 	ImagesPinned, ImagesNew int
+	// OwnershipOnly counts the services of an adopt check that differ from what runs in nothing but Bayplan's
+	// ownership labels (D-16). They are not in Services.Changed.
+	OwnershipOnly int
 }
 
 // ImageRow is one service's image: the reference as written, the digest it will run with and the
@@ -245,6 +253,11 @@ type Review struct {
 func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error) {
 	rv = Review{DraftVersion: in.DraftVersion, Pins: map[string]string{}, NeedsAdmin: []string{}}
 	// A review judges what the caller may deploy, so it cannot be made without a way to judge it.
+	if in.Mode == ReviewModeAdopt {
+		// The adopt check judges no policy (D-17): it lists what the first deploy would change and nothing else.
+		err = d.reviewAdopt(ctx, in, &rv)
+		return rv, err
+	}
 	if d.Checker == nil || in.Caller.Principal == nil {
 		return rv, ErrNoPolicy
 	}
@@ -517,13 +530,19 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 // service of the namespace that Bayplan does not own is left out; the name-clash check refuses
 // the stack for it.
 func liveSpecs(live liveStack, stack Stack) (map[string]swarm.ServiceSpec, error) {
+	return liveSpecsOwned(live, func(s dockerx.ServiceDetail) bool { return s.Labels[stacks.LabelStackID] == stack.ID })
+}
+
+// liveSpecsOwned is liveSpecs for the services owns says are the stack's: an adopted stack that has not been
+// deployed yet owns services that carry no ID of its own (OwnershipOf).
+func liveSpecsOwned(live liveStack, owns func(dockerx.ServiceDetail) bool) (map[string]swarm.ServiceSpec, error) {
 	idName := make(map[string]string, len(live.AllNetworks))
 	for _, n := range live.AllNetworks {
 		idName[n.ID] = n.Name
 	}
 	out := make(map[string]swarm.ServiceSpec, len(live.Services))
 	for _, s := range live.Services {
-		if s.Labels[stacks.LabelStackID] != stack.ID {
+		if !owns(s) {
 			continue
 		}
 		var spec swarm.ServiceSpec

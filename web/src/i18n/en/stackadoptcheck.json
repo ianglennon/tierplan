@@ -1,0 +1,33 @@
+{
+  "stackAdoptCheck": {
+    "card": {
+      "title": "What happens on the first deploy",
+      "checking": "Checking {{name}}…"
+    },
+    "clean": "Nothing will change except Bayplan's ownership labels.",
+    "gaps": {
+      "title_one": "{{count}} difference will change on the first deploy.",
+      "title_other": "{{count}} differences will change on the first deploy.",
+      "sub": "You can still adopt. Nothing changes until you deploy.",
+      "caption": "Differences in {{name}}",
+      "running": "Running now",
+      "after": "After the first deploy"
+    },
+    "ownershipOnly": {
+      "services_one": "{{count}} service will be recreated to take Bayplan ownership labels (brief restart).",
+      "services_other": "{{count}} services will be recreated to take Bayplan ownership labels (brief restart).",
+      "containers_one": "{{count}} container will be recreated to take Bayplan ownership labels (brief restart).",
+      "containers_other": "{{count}} containers will be recreated to take Bayplan ownership labels (brief restart).",
+      "show": "Show services"
+    },
+    "error": {
+      "title": "Couldn't check {{name}} against what's running.",
+      "body": "Check the connection and try again. Nothing was changed.",
+      "busy": "Too many checks are running. Try again in a moment.",
+      "retry": "Retry check"
+    },
+    "off": {
+      "failed": "Adopt is off until {{name}} has been checked."
+    }
+  }
+}
