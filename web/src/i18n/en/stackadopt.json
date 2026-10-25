@@ -1,0 +1,48 @@
+{
+  "stackAdopt": {
+    "action": {
+      "adopt": "Adopt stack",
+      "adoptRow": "Adopt stack…",
+      "hint": "To remove it, adopt it first."
+    },
+    "page": {
+      "title": "Adopt {{name}}",
+      "body": "Bayplan builds a compose definition from what's running on {{env}}, checks it, and then manages the stack. Adopting doesn't change anything that is running.",
+      "breadcrumbRoot": "Stacks",
+      "breadcrumbCurrent": "Adopt"
+    },
+    "envValues": {
+      "title": "Environment values are copied in as they are",
+      "body": "That includes passwords. Move secret values to Variables after adopting. Secrets and configs that already exist stay as they are and are referenced as external."
+    },
+    "footer": {
+      "nothing": "Nothing changes on {{env}} until your first deploy.",
+      "cancel": "Cancel",
+      "adopt": "Adopt stack",
+      "adopting": "Adopting…"
+    },
+    "toast": {
+      "adopted": "Adopted {{name}}. Nothing changed on {{env}}."
+    },
+    "error": {
+      "stale": "What is running on {{env}} changed since the check. Run the check again before you adopt.",
+      "checkAgain": "Check again",
+      "alreadyManaged": "{{name}} is already managed by Bayplan.",
+      "openStack": "Open stack",
+      "notAdoptable": "{{name}} can't be adopted.",
+      "lost": "Bayplan couldn't reach the server. Nothing was changed. Check the connection and try again.",
+      "permission": "You need the Admin role on {{env}} to adopt a stack."
+    },
+    "gone": {
+      "heading": "This stack is gone",
+      "body": "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",
+      "back": "Back to stacks"
+    },
+    "loadFailed": {
+      "title": "Couldn't check {{name}} against what's running.",
+      "body": "Check the connection and try again. Nothing was changed.",
+      "retry": "Retry check"
+    },
+    "checking": "Checking {{name}}…"
+  }
+}

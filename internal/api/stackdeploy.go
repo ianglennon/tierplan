@@ -1034,6 +1034,7 @@ func operationLocked(envName string, h stackops.Holder) error {
 			{Location: "stack", Message: h.StackName},
 			{Location: "job", Message: h.JobID},
 			{Location: "started", Message: started},
+			{Location: "stackId", Message: h.StackID},
 		},
 	}
 }

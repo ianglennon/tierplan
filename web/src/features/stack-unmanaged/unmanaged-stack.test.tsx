@@ -321,7 +321,9 @@ describe("the Unmanaged stack page: unusual names (D-48, D-53)", () => {
     // The note is the reason of the server, as given; a Bayplan-owned stack's reason reads the same way. Adopt stack
     // is there but off, and never a link to the Adopt page.
     expect(screen.queryByRole("link", { name: /adopt/i })).toBeNull();
-    expect(screen.getByRole("button", { name: "Adopt stack" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Adopt stack" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
   });
 });
 

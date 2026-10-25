@@ -207,10 +207,14 @@ function UnmanagedName({ row }: { row: StackRow }) {
   );
 }
 
-// UnmanagedRowActions is the row menu of a stack found on the engine: Open stack, and nothing that changes it.
-// Bayplan offers no Deploy, Update images, Stop, Start or Remove on a stack it does not manage.
+// UnmanagedRowActions is the row menu of a stack found on the engine: Open stack, and Adopt stack…, which opens the
+// Adopt page and changes nothing by itself. For anyone below Env Admin it is off with the role it takes, and for a
+// stack that cannot be adopted with the server's reason. Bayplan offers no Deploy, Update images, Stop, Start or
+// Remove on a stack it does not manage.
 function UnmanagedRowActions({ row }: { row: StackRow }) {
   const t = useT();
+  const adopt = useNeeds("stacks.create", row.envId);
+  const adoptable = row.unmanaged?.adoptable !== false;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -233,6 +237,22 @@ function UnmanagedRowActions({ row }: { row: StackRow }) {
             {t("stackUnmanagedPage.actions.open")}
           </Link>
         </DropdownMenuItem>
+        {adopt.allowed && adoptable ? (
+          <DropdownMenuItem asChild className="max-md:min-h-11">
+            <Link
+              to="/env/$envId/unmanaged-stacks/$name/adopt"
+              params={{ envId: row.envId, name: row.name }}
+            >
+              {t("stackAdopt.action.adoptRow")}
+            </Link>
+          </DropdownMenuItem>
+        ) : adopt.allowed || adopt.reason ? (
+          <NeedsTooltip reason={adopt.allowed ? row.unmanaged?.reason : adopt.reason}>
+            <DropdownMenuItem className="max-md:min-h-11">
+              {t("stackAdopt.action.adoptRow")}
+            </DropdownMenuItem>
+          </NeedsTooltip>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

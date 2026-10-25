@@ -104,6 +104,7 @@ import { Route as AppEnvEnvIdUnmanagedStacksNameIndexRouteImport } from './route
 import { Route as AppEnvEnvIdUnmanagedStacksNameComposeRouteImport } from './routes/_app/env/$envId/unmanaged-stacks.$name.compose'
 import { Route as AppEnvEnvIdUnmanagedStacksNameLogsRouteImport } from './routes/_app/env/$envId/unmanaged-stacks.$name.logs'
 import { Route as AppEnvEnvIdUnmanagedStacksNameResourcesRouteImport } from './routes/_app/env/$envId/unmanaged-stacks.$name.resources'
+import { Route as AppEnvEnvIdUnmanagedStacksNameAdoptRouteImport } from './routes/_app/env/$envId/unmanaged-stacks_.$name.adopt'
 import { Route as AppEnvEnvIdVolumesVolumeNameIndexRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.index'
 import { Route as AppEnvEnvIdVolumesVolumeNameInspectRouteImport } from './routes/_app/env/$envId/volumes_.$volumeName.inspect'
 import { Route as AppEnvEnvIdStacksStackIdDeploysJobIdRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.deploys.$jobId'
@@ -641,6 +642,12 @@ const AppEnvEnvIdUnmanagedStacksNameResourcesRoute =
     path: '/resources',
     getParentRoute: () => AppEnvEnvIdUnmanagedStacksNameRoute,
   } as any)
+const AppEnvEnvIdUnmanagedStacksNameAdoptRoute =
+  AppEnvEnvIdUnmanagedStacksNameAdoptRouteImport.update({
+    id: '/unmanaged-stacks_/$name/adopt',
+    path: '/unmanaged-stacks/$name/adopt',
+    getParentRoute: () => AppEnvEnvIdRoute,
+  } as any)
 const AppEnvEnvIdVolumesVolumeNameIndexRoute =
   AppEnvEnvIdVolumesVolumeNameIndexRouteImport.update({
     id: '/',
@@ -746,6 +753,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/unmanaged-stacks/$name/compose': typeof AppEnvEnvIdUnmanagedStacksNameComposeRoute
   '/env/$envId/unmanaged-stacks/$name/logs': typeof AppEnvEnvIdUnmanagedStacksNameLogsRoute
   '/env/$envId/unmanaged-stacks/$name/resources': typeof AppEnvEnvIdUnmanagedStacksNameResourcesRoute
+  '/env/$envId/unmanaged-stacks/$name/adopt': typeof AppEnvEnvIdUnmanagedStacksNameAdoptRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/configs/$configId/': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/env/$envId/containers/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -831,6 +839,7 @@ export interface FileRoutesByTo {
   '/env/$envId/unmanaged-stacks/$name/compose': typeof AppEnvEnvIdUnmanagedStacksNameComposeRoute
   '/env/$envId/unmanaged-stacks/$name/logs': typeof AppEnvEnvIdUnmanagedStacksNameLogsRoute
   '/env/$envId/unmanaged-stacks/$name/resources': typeof AppEnvEnvIdUnmanagedStacksNameResourcesRoute
+  '/env/$envId/unmanaged-stacks/$name/adopt': typeof AppEnvEnvIdUnmanagedStacksNameAdoptRoute
   '/env/$envId/volumes/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/env/$envId/configs/$configId': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -932,6 +941,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/unmanaged-stacks/$name/compose': typeof AppEnvEnvIdUnmanagedStacksNameComposeRoute
   '/_app/env/$envId/unmanaged-stacks/$name/logs': typeof AppEnvEnvIdUnmanagedStacksNameLogsRoute
   '/_app/env/$envId/unmanaged-stacks/$name/resources': typeof AppEnvEnvIdUnmanagedStacksNameResourcesRoute
+  '/_app/env/$envId/unmanaged-stacks_/$name/adopt': typeof AppEnvEnvIdUnmanagedStacksNameAdoptRoute
   '/_app/env/$envId/volumes_/$volumeName/inspect': typeof AppEnvEnvIdVolumesVolumeNameInspectRoute
   '/_app/env/$envId/configs_/$configId/': typeof AppEnvEnvIdConfigsConfigIdIndexRoute
   '/_app/env/$envId/containers_/$containerId/': typeof AppEnvEnvIdContainersContainerIdIndexRoute
@@ -1033,6 +1043,7 @@ export interface FileRouteTypes {
     | '/env/$envId/unmanaged-stacks/$name/compose'
     | '/env/$envId/unmanaged-stacks/$name/logs'
     | '/env/$envId/unmanaged-stacks/$name/resources'
+    | '/env/$envId/unmanaged-stacks/$name/adopt'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/configs/$configId/'
     | '/env/$envId/containers/$containerId/'
@@ -1118,6 +1129,7 @@ export interface FileRouteTypes {
     | '/env/$envId/unmanaged-stacks/$name/compose'
     | '/env/$envId/unmanaged-stacks/$name/logs'
     | '/env/$envId/unmanaged-stacks/$name/resources'
+    | '/env/$envId/unmanaged-stacks/$name/adopt'
     | '/env/$envId/volumes/$volumeName/inspect'
     | '/env/$envId/configs/$configId'
     | '/env/$envId/containers/$containerId'
@@ -1218,6 +1230,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/unmanaged-stacks/$name/compose'
     | '/_app/env/$envId/unmanaged-stacks/$name/logs'
     | '/_app/env/$envId/unmanaged-stacks/$name/resources'
+    | '/_app/env/$envId/unmanaged-stacks_/$name/adopt'
     | '/_app/env/$envId/volumes_/$volumeName/inspect'
     | '/_app/env/$envId/configs_/$configId/'
     | '/_app/env/$envId/containers_/$containerId/'
@@ -1911,6 +1924,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdUnmanagedStacksNameResourcesRouteImport
       parentRoute: typeof AppEnvEnvIdUnmanagedStacksNameRoute
     }
+    '/_app/env/$envId/unmanaged-stacks_/$name/adopt': {
+      id: '/_app/env/$envId/unmanaged-stacks_/$name/adopt'
+      path: '/unmanaged-stacks/$name/adopt'
+      fullPath: '/env/$envId/unmanaged-stacks/$name/adopt'
+      preLoaderRoute: typeof AppEnvEnvIdUnmanagedStacksNameAdoptRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/env/$envId/volumes_/$volumeName/': {
       id: '/_app/env/$envId/volumes_/$volumeName/'
       path: '/'
@@ -2255,6 +2275,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdUnmanagedStacksNameRoute: typeof AppEnvEnvIdUnmanagedStacksNameRouteWithChildren
   AppEnvEnvIdVolumesVolumeNameRoute: typeof AppEnvEnvIdVolumesVolumeNameRouteWithChildren
   AppEnvEnvIdServicesServiceIdEditRoute: typeof AppEnvEnvIdServicesServiceIdEditRoute
+  AppEnvEnvIdUnmanagedStacksNameAdoptRoute: typeof AppEnvEnvIdUnmanagedStacksNameAdoptRoute
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
@@ -2287,6 +2308,8 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdVolumesVolumeNameRoute:
     AppEnvEnvIdVolumesVolumeNameRouteWithChildren,
   AppEnvEnvIdServicesServiceIdEditRoute: AppEnvEnvIdServicesServiceIdEditRoute,
+  AppEnvEnvIdUnmanagedStacksNameAdoptRoute:
+    AppEnvEnvIdUnmanagedStacksNameAdoptRoute,
 }
 
 const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(
