@@ -4,16 +4,19 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
 // Adopting a stack Bayplan did not make (plan 08-13, STK-13, D-14): the route takes the fingerprint the page read,
@@ -403,5 +406,106 @@ func TestAdoptedStackHistoryHoldsRevisionOne(t *testing.T) {
 	r := got.Items[0]
 	if r.Seq != 1 || r.Origin != "adopted" || r.Outcome != "good" || !r.Deployed || r.Pinned != 2 || r.AdoptedFrom != "legacy" || r.CreatedBy != "envadmin-1" {
 		t.Errorf("revision = %+v, want #1, adopted from legacy by envadmin-1, good, deployed, 2 images pinned", r)
+	}
+}
+
+// adoptCheckPath is the path of the adopt check route of a name, after /api/env/{envId}/.
+func adoptCheckPath(name string) string { return unmanagedPath(name, "/adopt-check") }
+
+// adoptCheckAnswer is the part of the check's answer the route tests read.
+type adoptCheckAnswer struct {
+	Fingerprint   string            `json:"fingerprint"`
+	Clean         bool              `json:"clean"`
+	GapCount      int               `json:"gapCount"`
+	Gaps          []json.RawMessage `json:"gaps"`
+	OwnershipOnly []string          `json:"ownershipOnly"`
+}
+
+// TestAdoptCheckRoute: anyone who may read stacks may run the check (a Viewer included), it changes nothing, what it
+// answers is masked for a reader without secrets.reveal, and a user may hold two at once (429 check_busy).
+func TestAdoptCheckRoute(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var hold atomic.Bool
+	var calls atomic.Int32
+	f, e := stackEnvTuned(t, func(f *envFix) {
+		// While hold is set the first two checks are held in flight; the others pass through.
+		f.stackOnAdoptCheck = func(context.Context) {
+			if hold.Load() && calls.Add(1) <= 2 {
+				entered <- struct{}{}
+				<-release
+			}
+		}
+	})
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	holder := f.caller(t, e, "holder-1", "viewer")
+	other := f.caller(t, e, "other-1", "viewer")
+	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 2, 2, nil), foreignSecretService("legacy", "db", 1, 1, nil))
+	writesBefore := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodPost, adoptCheckPath("legacy"), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("check as a viewer: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	got := answerOf[adoptCheckAnswer](t, rec)
+	if got.Fingerprint != fingerprintOf(t, viewer, "legacy") {
+		t.Errorf("the check's fingerprint %q is not the page's: Adopt could never be sent with it", got.Fingerprint)
+	}
+	if got.Clean != (got.GapCount == 0) || got.GapCount != len(got.Gaps) {
+		t.Errorf("answer = %+v, want Clean to say there are no gaps and gapCount to count them", got)
+	}
+	for kind, secret := range sdSecrets {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("a viewer's check carries the %s value %q: %s", kind, secret, rec.Body)
+		}
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the check sent %d writes to the engine, want none", after-writesBefore)
+	}
+	if list := viewer.do(http.MethodGet, "stacks", ""); strings.Contains(list.Body.String(), `"managed":true`) {
+		t.Errorf("the check stored a stack: %s", list.Body)
+	}
+
+	hold.Store(true)
+	var wg sync.WaitGroup
+	codes := make(chan int, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes <- holder.do(http.MethodPost, adoptCheckPath("legacy"), "").Code
+		}()
+	}
+	testsupport.Await(t, "the first check to be in flight", entered)
+	testsupport.Await(t, "the second check to be in flight", entered)
+
+	// Two are in flight for this user: the third is refused, and says why.
+	third := holder.do(http.MethodPost, adoptCheckPath("legacy"), "")
+	if third.Code != http.StatusTooManyRequests || problemType(t, third) != "check_busy" {
+		t.Errorf("a third check: %d %s, want 429 check_busy", third.Code, third.Body)
+	}
+	// Another user is unaffected.
+	if rec := other.do(http.MethodPost, adoptCheckPath("legacy"), ""); rec.Code != http.StatusOK {
+		t.Errorf("another user's check: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	close(release)
+	wg.Wait()
+	close(codes)
+	for code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("a held check ended with %d, want 200", code)
+		}
+	}
+	// The slots are given back.
+	if rec := holder.do(http.MethodPost, adoptCheckPath("legacy"), ""); rec.Code != http.StatusOK {
+		t.Errorf("a check after the held ones ended: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := viewer.do(http.MethodPost, adoptCheckPath("ghost"), ""); rec.Code != http.StatusNotFound || problemType(t, rec) != "unmanaged_stack_not_found" {
+		t.Errorf("check of a name nothing carries: %d %s, want 404 unmanaged_stack_not_found", rec.Code, rec.Body)
 	}
 }

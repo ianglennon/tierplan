@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -333,5 +334,120 @@ func TestAdoptPrivilegedStackNeverFailsOnPolicy(t *testing.T) {
 		if err != nil || !strings.Contains(string(draft.Copy.Compose()), "privileged: true") {
 			t.Errorf("draft = %s, %v, want privileged kept in the definition", draft.Copy.Compose(), err)
 		}
+	}
+}
+
+// TestAdoptCheckChangesNothing: the check is a read. It sends nothing to an engine, inspects no secret or config
+// and stores no row (T-08-52, STK-13).
+func TestAdoptCheckChangesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := testsupport.Context(t)
+	for name, tc := range map[string]struct {
+		rig    *swarmRig
+		target stacks.Target
+	}{
+		"swarm":      {strayRig(t), stacks.TargetSwarm},
+		"standalone": {hostRig(t, stackopstest.Foreign(t, "shop", foreignProject)), stacks.TargetStandalone},
+	} {
+		repo := adoptRepo(t, tc.rig)
+
+		if _, err := tc.rig.checkOf(t, tc.target, true); err != nil {
+			t.Fatalf("%s: AdoptCheck: %v", name, err)
+		}
+
+		if writes := tc.rig.fake.Writes(); len(writes) != 0 {
+			t.Errorf("%s: the check wrote to the engine: %v", name, writes)
+		}
+		for _, req := range tc.rig.fake.Requests() {
+			if secretOrConfigRead.MatchString(req) {
+				t.Errorf("%s: the check asked for %s: a secret or a config was inspected", name, req)
+			}
+		}
+		if list, err := repo.Stacks(ctx, tc.rig.envID); err != nil || len(list) != 0 {
+			t.Errorf("%s: the check stored %+v, %v, want nothing", name, list, err)
+		}
+	}
+}
+
+// TestAdoptStoresGapPaths: adopting a stack with gaps stores the paths of the gaps by service, never their values
+// (D-55), so drift can say a difference was there at adoption.
+func TestAdoptStoresGapPaths(t *testing.T) {
+	t.Parallel()
+	rig := strayRig(t)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+
+	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+
+	read, err := repo.Stack(ctx, rig.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gaps := read.Adoption.Gaps
+	for _, service := range []string{"web", "shop_web"} {
+		if _, ok := gaps[service]; !ok {
+			t.Errorf("gaps = %v, want an entry for %s", gaps, service)
+		}
+	}
+	for service, paths := range gaps {
+		for _, p := range paths {
+			if strings.Contains(p, "s3cret-value") || strings.Contains(p, "cmd-secret") {
+				t.Errorf("the gap of %s stores a value: %q", service, p)
+			}
+		}
+	}
+
+	// A clean stack stores no gap.
+	clean := corpusRig(t, "deploy.yaml", nil)
+	cleanRepo := adoptRepo(t, clean)
+	cst, err := clean.adopt(t, cleanRepo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit of the clean stack: %v", err)
+	}
+	cread, err := cleanRepo.Stack(ctx, clean.envID, cst.ID)
+	if err != nil || len(cread.Adoption.Gaps) != 0 {
+		t.Errorf("a clean round trip stored gaps %v (%v), want none", cread.Adoption.Gaps, err)
+	}
+}
+
+// TestAdoptCheckRedactsForAViewer: a caller without secrets.reveal reads <hidden> for every environment value, command
+// and log option in the gaps, though equality was decided on the real values (T-08-52, D-47).
+func TestAdoptCheckRedactsForAViewer(t *testing.T) {
+	t.Parallel()
+	rig := strayRig(t)
+
+	hidden, err := rig.checkOf(t, stacks.TargetSwarm, false)
+	if err != nil {
+		t.Fatalf("AdoptCheck without reveal: %v", err)
+	}
+	shown, err := rig.checkOf(t, stacks.TargetSwarm, true)
+	if err != nil {
+		t.Fatalf("AdoptCheck with reveal: %v", err)
+	}
+
+	whole := func(res stackops.AdoptCheckResult) string {
+		var b strings.Builder
+		for _, g := range res.Gaps {
+			b.Write(g.Current)
+			b.Write(g.Next)
+		}
+		return b.String()
+	}
+	for _, secret := range []string{"s3cret-value", "cmd-secret", "log-secret"} {
+		if strings.Contains(whole(hidden), secret) {
+			t.Errorf("the gaps for a viewer carry %q: %s", secret, whole(hidden))
+		}
+		if !strings.Contains(whole(shown), secret) {
+			t.Errorf("the gaps for a caller who may reveal lack %q: %s", secret, whole(shown))
+		}
+	}
+	if !strings.Contains(whole(hidden), "<hidden>") {
+		t.Errorf("the gaps for a viewer do not say what they hide: %s", whole(hidden))
+	}
+	if hidden.Fingerprint != shown.Fingerprint || len(hidden.Gaps) != len(shown.Gaps) {
+		t.Errorf("a viewer's check differs in more than its values: %d gaps against %d", len(hidden.Gaps), len(shown.Gaps))
 	}
 }

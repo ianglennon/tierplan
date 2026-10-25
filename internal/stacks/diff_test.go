@@ -119,3 +119,78 @@ func TestDiffServicesCountsKeyedListsByName(t *testing.T) {
 		t.Fatalf("changes = %+v, want 2 settings (B changed, C added; A and the order are not changes)", got)
 	}
 }
+
+// TestChangedPathsKeyedLists: ChangedPaths lists the leaves countChanges counts, by the same rules: an environment
+// entry is matched by its variable and not by its place, so a reorder lists nothing, and the paths are sorted.
+func TestChangedPathsKeyedLists(t *testing.T) {
+	t.Parallel()
+	cur := svc(t, "shop_web", `"A=1","B=2"`, 1)
+	next := svc(t, "shop_web", `"B=3","A=1","C=4"`, 1)
+
+	got := stacks.ChangedPaths(cur, next)
+
+	want := []stacks.PathChange{
+		{Path: "TaskTemplate.ContainerSpec.Env[B]", From: `"B=2"`, To: `"B=3"`},
+		{Path: "TaskTemplate.ContainerSpec.Env[C]", From: "", To: `"C=4"`},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("ChangedPaths = %+v, want %+v", got, want)
+	}
+	if n := len(stacks.ChangedPaths(cur, cur)); n != 0 {
+		t.Errorf("ChangedPaths of a spec with itself = %d paths, want none", n)
+	}
+	reordered := svc(t, "shop_web", `"B=2","A=1"`, 1)
+	if n := len(stacks.ChangedPaths(cur, reordered)); n != 0 {
+		t.Errorf("ChangedPaths of a reordered environment = %d paths, want none", n)
+	}
+}
+
+// TestMarkOwnershipOnly: a service is ownership-only when every difference is a bayplan.* label of the service or of
+// its containers; one other difference keeps it a gap (T-08-55).
+func TestMarkOwnershipOnly(t *testing.T) {
+	t.Parallel()
+	running := svc(t, "shop_web", `"A=1"`, 1)
+	labelled := func(spec swarm.ServiceSpec) swarm.ServiceSpec {
+		out := specOf(t, marshalSpec(t, spec))
+		out.Labels["bayplan.stack.id"] = "id-1"
+		return out
+	}
+
+	only := labelled(running)
+	withEnv := labelled(svc(t, "shop_web", `"A=2"`, 1))
+	foreign := specOf(t, marshalSpec(t, running))
+	foreign.Labels["team"] = "platform"
+	foreign.Labels["bayplan.stack.id"] = "id-1"
+	containerLabel := specOf(t, marshalSpec(t, running))
+	containerLabel.TaskTemplate.ContainerSpec.Labels = map[string]string{"bayplan.stack.id": "id-1"}
+
+	for name, tc := range map[string]struct {
+		desired swarm.ServiceSpec
+		want    bool
+	}{
+		"only the bayplan label":                    {only, true},
+		"a bayplan label on the containers":         {containerLabel, true},
+		"a bayplan label and an environment change": {withEnv, false},
+		"a bayplan label and another label":         {foreign, false},
+	} {
+		desired := map[string]swarm.ServiceSpec{"shop_web": tc.desired}
+		live := map[string]swarm.ServiceSpec{"shop_web": running}
+		rows := stacks.DiffServices(desired, live, stacks.Masker{})
+		if len(rows) != 1 {
+			t.Fatalf("%s: rows = %+v, want one changed service", name, rows)
+		}
+
+		stacks.MarkOwnershipOnly(rows, desired, live)
+
+		if rows[0].OwnershipOnly != tc.want {
+			t.Errorf("%s: OwnershipOnly = %v, want %v", name, rows[0].OwnershipOnly, tc.want)
+		}
+	}
+
+	// An added or a removed service is never ownership-only.
+	added := stacks.DiffServices(map[string]swarm.ServiceSpec{"shop_new": only}, nil, stacks.Masker{})
+	stacks.MarkOwnershipOnly(added, map[string]swarm.ServiceSpec{"shop_new": only}, nil)
+	if added[0].OwnershipOnly {
+		t.Errorf("an added service was marked ownership-only")
+	}
+}
