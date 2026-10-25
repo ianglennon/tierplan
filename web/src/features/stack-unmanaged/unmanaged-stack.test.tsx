@@ -223,6 +223,7 @@ describe("the Unmanaged stack page: header and notes", () => {
     await screen.findByRole("heading", { name: "legacy", level: 2 });
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Overview",
+      "Generated compose",
       "Resources",
       "Logs",
     ]);

@@ -494,3 +494,77 @@ func TestUnmanagedStackWithAnUnusualName(t *testing.T) {
 		t.Errorf("resources of My App: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
+
+// generatedAnswer is the Generated compose answer.
+type generatedAnswer struct {
+	YAML  string `json:"yaml"`
+	Notes []struct {
+		Service string `json:"service"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"notes"`
+	ExternalSecrets int `json:"externalSecrets"`
+	ExternalConfigs int `json:"externalConfigs"`
+}
+
+// TestGeneratedCompose is the Generated compose tab (plan 08-11, STK-12, D-09, D-12, D-47): the compose file
+// that rebuilds the running services of a stack Bayplan did not make, masked for a caller without
+// secrets.reveal, with nothing stored and nothing written to an engine.
+func TestGeneratedCompose(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 2, 2, nil))
+	writesBefore := len(f.fake.Writes())
+
+	rec := viewer.do(http.MethodGet, unmanagedPath("legacy", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose for a viewer: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	got := answerOf[generatedAnswer](t, rec)
+	for what, secret := range sdSecrets {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Errorf("the answer for a viewer carries the %s value %q", what, secret)
+		}
+	}
+	if !strings.Contains(got.YAML, "<hidden>") || !strings.Contains(got.YAML, "image: nginx:1.27") {
+		t.Errorf("yaml for a viewer = %q, want the rebuilt services with the hidden values marked", got.YAML)
+	}
+	if got.ExternalSecrets != 1 || got.ExternalConfigs != 1 {
+		t.Errorf("externals = %d secrets, %d configs, want 1 and 1", got.ExternalSecrets, got.ExternalConfigs)
+	}
+
+	rec = admin.do(http.MethodGet, unmanagedPath("legacy", "/compose"), "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("generated compose for an admin: %d %s", rec.Code, rec.Body)
+	}
+	shown := answerOf[generatedAnswer](t, rec)
+	for what, secret := range sdSecrets {
+		if !strings.Contains(shown.YAML, secret) {
+			t.Errorf("the answer for a caller who may reveal lacks the %s value %q", what, secret)
+		}
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the engine received %d writes while rebuilding, want none", after-writesBefore)
+	}
+}
+
+func TestGeneratedComposeOfAStackThatIsGoneOrManagedIs404(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	newStack(t, admin, "web")
+	for _, name := range []string{"nothing-here", "web"} {
+		rec := viewer.do(http.MethodGet, unmanagedPath(name, "/compose"), "")
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "unmanaged_stack_not_found" {
+			t.Errorf("generated compose of %s: %d %s, want 404 unmanaged_stack_not_found", name, rec.Code, rec.Body)
+		}
+	}
+}
