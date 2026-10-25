@@ -107,7 +107,7 @@ beforeEach(() => {
           total: rows,
           unfilteredTotal: rows,
           capped: false,
-          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0, drifted: 0 },
           ...(answer as object),
           ...extra,
         });
@@ -406,12 +406,12 @@ describe("GlobalStackList: search, status chips, sort and the cap", () => {
   });
 
   it("shows the status chips with the counts of the whole set, and puts a chosen one in the URL", async () => {
-    extra = { statusCounts: { degraded: 4, stopped: 0, draft: 1, deployFailed: 2 } };
+    extra = { statusCounts: { degraded: 4, stopped: 0, draft: 1, deployFailed: 2, drifted: 3 } };
     const { onChange } = mount({ q: "zzz" });
     await screen.findByRole("link", { name: "alpha" });
     const group = screen.getByRole("group", { name: "Filter by status" });
     expect(group.className).toContain("flex-wrap");
-    for (const label of ["Degraded 4", "Stopped 0", "Draft 1", "Deploy failed 2"]) {
+    for (const label of ["Degraded 4", "Stopped 0", "Draft 1", "Deploy failed 2", "Drifted 3"]) {
       expect(within(group).getByRole("button", { name: label })).toBeTruthy();
     }
     fireEvent.click(within(group).getByRole("button", { name: "Deploy failed 2" }));

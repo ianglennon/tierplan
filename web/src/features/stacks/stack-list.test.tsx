@@ -87,7 +87,7 @@ beforeEach(() => {
           total: items.length,
           unfilteredTotal: items.length,
           capped: false,
-          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0, drifted: 0 },
           ...(stacks as object),
           ...listExtra,
         });
@@ -231,6 +231,63 @@ describe("StackList", () => {
     const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
     expect(within(row("drafty")).getByText("Draft")).toBeTruthy();
     expect(within(row("plain")).queryByText("Draft")).toBeNull();
+  });
+
+  it("badges a stack that drifted after its name, after Draft when it has both, with the revision in its tooltip text", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a",
+          name: "both",
+          hasDraft: true,
+          drift: { state: "drifted", revision: 3, count: 2 },
+        }),
+        stack({ id: "b", name: "alone", drift: { state: "drifted", revision: 1, count: 1 } }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "both" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    const badges = (n: string) =>
+      within(row(n))
+        .getAllByText(/^(Draft|Drifted)$/)
+        .map((b) => b.textContent);
+    expect(badges("both")).toEqual(["Draft", "Drifted"]);
+    expect(badges("alone")).toEqual(["Drifted"]);
+    // The words of the Tooltip are also the badge's description, for a reader who never opens it.
+    const badge = within(row("both")).getByText("Drifted");
+    const description = document.getElementById(badge.getAttribute("aria-describedby") ?? "");
+    expect(description?.textContent).toBe("Running state no longer matches revision #3.");
+  });
+
+  it("shows no Drifted badge for a stack that was not found drifted, stopped, not deployed or not checked", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a",
+          name: "fine",
+          state: "running",
+          drift: { state: "none", revision: 1, count: 0 },
+        }),
+        stack({
+          id: "b",
+          name: "halted",
+          state: "stopped",
+          drift: { state: "stopped", revision: 1, count: 0 },
+        }),
+        stack({ id: "c", name: "fresh", drift: { state: "not_deployed", revision: 0, count: 0 } }),
+        stack({
+          id: "d",
+          name: "opaque",
+          state: "running",
+          drift: { state: "unknown", revision: 2, count: 0 },
+        }),
+        stack({ id: "e", name: "unchecked", state: "running" }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "fine" });
+    expect(screen.queryByText("Drifted")).toBeNull();
   });
 
   it("renders a name with markup in it as text", async () => {
@@ -498,18 +555,44 @@ describe("StackList: search and status chips", () => {
     expect(last.searchParams.get("dir")).toBe("desc");
   });
 
-  it("shows the four status chips with the counts the server gave, in a labelled group that wraps", async () => {
+  it("shows the five status chips with the counts the server gave, in a labelled group that wraps, Drifted after the others", async () => {
     listExtra = {
-      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0 },
+      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0, drifted: 4 },
       unfilteredTotal: 9,
     };
     mount({ search: { q: "zzz" } });
     await screen.findByRole("link", { name: "web" });
     const group = screen.getByRole("group", { name: "Filter by status" });
     expect(group.className).toContain("flex-wrap");
-    for (const label of ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0"]) {
+    const labels = ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0", "Drifted 4"];
+    for (const label of labels) {
       expect(within(group).getByRole("button", { name: label })).toBeTruthy();
     }
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(labels);
+  });
+
+  it("puts the Drifted chip in the URL after the other chips, and takes it out again", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: /^Drifted/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "drifted" });
+    fireEvent.click(screen.getByRole("button", { name: /^Draft/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "draft,drifted" });
+    fireEvent.click(screen.getByRole("button", { name: /^Drifted/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "draft" });
+  });
+
+  it("restores the Drifted chip from the URL and sends status=drifted to the server", async () => {
+    mount({ search: { status: "drifted" } });
+    await screen.findByRole("link", { name: "web" });
+    const chip = screen.getByRole("button", { name: /^Drifted/ });
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    const last = requests.at(-1) as URL;
+    expect(last.searchParams.get("status")).toBe("drifted");
   });
 
   it("puts a chosen chip in the URL and takes it out again", async () => {
