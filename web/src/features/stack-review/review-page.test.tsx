@@ -1231,3 +1231,199 @@ describe("in roll back mode", () => {
     expect(screen.queryByText("Pinned (running)")).toBeNull();
   });
 });
+
+// The first review of an adopted stack (plan 08-16, D-16): the services that differ in nothing but Bayplan's
+// ownership labels are told apart from real changes, and the restart is announced before the summary.
+
+const STACK_ID = "stk-1";
+
+// A service as the review states it: with the label the first deploy adds (next) or without (current).
+const labelled = (
+  short: string,
+  replicas: number,
+  withId: boolean,
+  extra: Record<string, unknown> = {},
+) => ({
+  Name: `s1_${short}`,
+  Labels: withId ? { "bayplan.stack.id": STACK_ID } : {},
+  Mode: { Replicated: { Replicas: replicas } },
+  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", ...extra } },
+});
+
+const labelsOnly = (short: string, replicas = 2) => ({
+  name: `s1_${short}`,
+  short,
+  change: "changed",
+  current: labelled(short, replicas, false),
+  next: labelled(short, replicas, true),
+  hiddenChanges: [],
+  settings: 1,
+  ownershipOnly: true,
+});
+
+// adoptedBody is the review of an adopted stack whose first deploy is still to come.
+function adoptedBody(services: Record<string, unknown>[], over: Record<string, unknown> = {}) {
+  const only = services.filter((s) => s.ownershipOnly).length;
+  const changed = services.length - only;
+  return reviewBody({
+    services,
+    summary: {
+      services: counts(0, changed, 0),
+      networks: counts(),
+      volumes: counts(),
+      secrets: counts(),
+      configs: counts(),
+      imagesNew: 0,
+      imagesPinned: 1,
+      ownershipOnly: only,
+    },
+    adoption: { pending: true, ownershipOnly: only },
+    ...over,
+  });
+}
+
+describe("an adopted stack's first review", () => {
+  it("announces the restart after the warnings and before the Summary, plural-aware", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const title = await screen.findByText("Taking ownership restarts 2 services");
+    const alert = title.closest('[role="status"]') as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
+      ),
+    ).toBeTruthy();
+    const summary = screen.getByRole("table", { name: "Summary of changes" });
+    expect(alert.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says Taking ownership restarts 1 service for one", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    expect(await screen.findByText("Taking ownership restarts 1 service")).toBeTruthy();
+  });
+
+  it("adds Ownership labels only to the Summary and keeps those services out of Changed", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const table = await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.getByText("Ownership labels only: 2")).toBeTruthy();
+    const row = within(table).getByRole("row", { name: /^Services/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["0", "0", "0"]);
+  });
+
+  it("lists the services in a closed Ownership labels only group with their task counts", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    const toggle = within(group).getByRole("button", { name: "Ownership labels only" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(group).getByText(
+        "2 services will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const items = within(group).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("api");
+    expect(items[0]?.textContent).toContain("labels");
+    expect(items[0]?.textContent).toContain("2 tasks");
+    expect(items[1]?.textContent).toContain("3 tasks");
+  });
+
+  it("opens a service to the label rows alone, captioned Labels on {service}", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    fireEvent.click(within(group).getByRole("button", { name: /api/ }));
+    const table = await within(group).findByRole("table", { name: "Labels on api" });
+    const rows = within(table).getAllByRole("row");
+    // The header, the group heading and the one label row.
+    expect(rows).toHaveLength(3);
+    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain(STACK_ID);
+    expect(table.querySelector(".break-all")).toBeTruthy();
+  });
+
+  it("keeps a service with a real change as well in the normal list, its labels one row among the others", async () => {
+    const both = {
+      ...labelsOnly("web"),
+      ownershipOnly: false,
+      current: labelled("web", 2, false),
+      next: labelled("web", 4, true),
+      settings: 2,
+    };
+    review = () => Response.json(adoptedBody([both, labelsOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    expect(within(group).queryByText("web")).toBeNull();
+    expect(within(group).getAllByRole("button", { name: /api/ })).toHaveLength(1);
+    const list = screen.getByText("web", { selector: '[data-slot="service-name"]' });
+    expect(group.contains(list)).toBe(false);
+    // Changed counts the one real change; the label-only service is counted apart.
+    expect(screen.getByText("Taking ownership restarts 1 service")).toBeTruthy();
+    expect(screen.getByText("Ownership labels only: 1")).toBeTruthy();
+    // Its rows hold the replicas and the label.
+    const table = await screen.findByRole("table", { name: "Changes to web" });
+    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain("Replicas");
+  });
+
+  it("cuts a long service name and wraps nothing else out of its row", async () => {
+    const long = "a".repeat(80);
+    review = () => Response.json(adoptedBody([labelsOnly(long)]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    const name = within(group).getByText(long);
+    expect(name.className).toContain("truncate");
+    expect(name.className).toContain("font-mono");
+  });
+
+  it("words the group and the warning for containers on a standalone host", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    expect(await screen.findByText("Taking ownership restarts 2 containers")).toBeTruthy();
+    const group = screen.getByRole("region", { name: "Ownership labels only" });
+    expect(
+      within(group).getByText(
+        "2 containers will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("omits the group, the warning and the Summary line when no service is ownership-only", async () => {
+    review = () => Response.json(adoptedBody([changedWeb()]));
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByRole("region", { name: "Ownership labels only" })).toBeNull();
+    expect(screen.queryByText(/Taking ownership restarts/)).toBeNull();
+    expect(screen.queryByText(/Ownership labels only:/)).toBeNull();
+  });
+
+  it("shows neither while the review loads, and no spinner of its own", async () => {
+    review = () => new Promise<Response>(() => {});
+    mount();
+    expect(await screen.findByText("Checking the stack…")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Ownership labels only" })).toBeNull();
+    expect(screen.queryByText(/Taking ownership restarts/)).toBeNull();
+    expect(screen.getByTestId("summary-skeleton")).toBeTruthy();
+  });
+
+  it("lets the deploy go ahead: taking ownership is a change to make", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    await screen.findByText("Taking ownership restarts 1 service");
+    await waitFor(() => expect(deployButton().getAttribute("aria-disabled")).toBeNull());
+  });
+});
