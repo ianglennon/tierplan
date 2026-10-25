@@ -30,6 +30,7 @@ import { BlockingList } from "@/features/stack-review/blocking-list";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
+import { RevertsDriftSection } from "@/features/stack-review/reverts-drift-section";
 import { ReviewSummary } from "@/features/stack-review/review-summary";
 import { ServiceDiffList } from "@/features/stack-review/service-diff-list";
 import { WarningsList } from "@/features/stack-review/warnings-list";
@@ -438,6 +439,13 @@ export function ReviewPage({
                 {t("stackOwnership.restart.body", ownershipContext)}
               </AlertDescription>
             </Alert>
+          ) : null}
+          {data && !restore ? (
+            <RevertsDriftSection
+              reverts={data.revertsDrift ?? []}
+              unavailable={data.revertsDriftUnavailable}
+              mode={rollback ? "rollback" : update ? "update" : "deploy"}
+            />
           ) : null}
           <ReviewSummary summary={data?.summary} />
           <ImagePinTable

@@ -90,6 +90,11 @@ export function ReviewSummary({ summary }: ReviewSummaryProps) {
               {t("stackOwnership.summary.line", { count: summary.ownershipOnly })}
             </p>
           ) : null}
+          {summary.revertsDrift > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {t("stackRevertsDrift.summary", { count: summary.revertsDrift })}
+            </p>
+          ) : null}
         </>
       ) : (
         <div data-testid="summary-skeleton" aria-hidden="true" className="flex flex-col gap-2">

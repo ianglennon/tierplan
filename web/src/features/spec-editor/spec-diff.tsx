@@ -91,7 +91,7 @@ function humanize(name: string): string {
 
 // settingLabel is the human name of a setting: a known setting's own label, a list entry as
 // "Port 80/tcp" followed by what about it changed, or the last part of an unknown path in words.
-function settingLabel(t: Translate, path: string): string {
+export function settingLabel(t: Translate, path: string): string {
   const tokens = tokensOf(path);
   const shape = tokens.map((tk) => tk.name).join("/");
   const known = `specEditor.labels.${shape}`;
