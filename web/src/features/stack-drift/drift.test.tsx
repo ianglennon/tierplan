@@ -197,12 +197,56 @@ describe("the summary of drift", () => {
     ).toEqual(["2", "1", "1"]);
   });
 
-  it("counts containers and not services for a standalone host", () => {
-    mount(<DriftSummary services={SERVICES ?? []} target="standalone" />);
+  it("has no Containers row for a swarm, whose replicas are not containers a person manages", () => {
+    mount(<DriftSummary services={SERVICES ?? []} target="swarm" />);
 
     const table = screen.getByRole("table", { name: "Summary of drift" });
-    expect(within(table).getByRole("rowheader", { name: "Containers" })).toBeTruthy();
-    expect(within(table).queryByRole("rowheader", { name: "Services" })).toBeNull();
+    expect(within(table).queryByRole("rowheader", { name: "Containers" })).toBeNull();
+  });
+});
+
+// What a standalone host's drift says (plan 08-20): a service is run by containers, and the page counts both. Next is
+// what runs now, so a changed service's containers are its scale there, a missing service's are the scale it was
+// deployed with (Current), and an extra service holds the containers that run it as its scale.
+const CONTAINERS = [
+  ...(service("web", "changed", {
+    current: { image: "nginx:1@sha256:a" },
+    next: { image: "nginx:1@sha256:a", scale: 2 },
+    settings: 1,
+  }) ?? []),
+  ...(service("worker", "missing", { current: { image: "busybox:1", scale: 3 }, next: null }) ??
+    []),
+  ...(service("ghost", "extra", { current: null, next: { scale: 4 } }) ?? []),
+];
+
+describe("the summary of drift of a standalone host", () => {
+  it("has a Services row and a Containers row, each with its own count of Changed, Missing and Extra", () => {
+    mount(<DriftSummary services={CONTAINERS ?? []} target="standalone" />);
+
+    const table = screen.getByRole("table", { name: "Summary of drift" });
+    const cells = (name: string) =>
+      within(within(table).getByRole("row", { name }))
+        .getAllByRole("cell")
+        .map((c) => c.textContent);
+    expect(
+      within(table)
+        .getAllByRole("rowheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Services", "Containers"]);
+    expect(cells("Services 1 1 1")).toEqual(["1", "1", "1"]);
+    expect(cells("Containers 2 3 4")).toEqual(["2", "3", "4"]);
+  });
+
+  it("counts one container for a service that says nothing of its scale", () => {
+    const bare = service("web", "changed", { current: {}, next: {} }) ?? [];
+    mount(<DriftSummary services={bare} target="standalone" />);
+
+    const row = screen.getByRole("row", { name: /Containers/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["1", "0", "0"]);
   });
 });
 
@@ -506,6 +550,58 @@ describe("the drift page", () => {
     const cell = await screen.findByText(long);
     expect(cell.className).toContain("break-all");
     expect(cell.className).toContain("font-mono");
+  });
+});
+
+describe("the drift of a standalone stack", () => {
+  beforeEach(() => {
+    detail = { ...detail, target: "standalone" };
+  });
+
+  it("counts the containers of each service in its list row and not in a swarm's", () => {
+    mount(<DriftServiceList services={CONTAINERS ?? []} target="standalone" />);
+
+    const items = screen.getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      expect.stringContaining("Changedweb1 setting differs2 containers"),
+      expect.stringContaining("Missingworker3 containers"),
+      expect.stringContaining("Extraghost4 containers"),
+    ]);
+    cleanup();
+
+    mount(<DriftServiceList services={CONTAINERS ?? []} />);
+    expect(screen.queryByText(/containers?$/)).toBeNull();
+  });
+
+  it("says one container in the singular", () => {
+    const one = service("web", "changed", { current: {}, next: {} }) ?? [];
+    mount(<DriftServiceList services={one} target="standalone" />);
+
+    expect(screen.getByRole("listitem").textContent).toContain("1 container");
+    expect(screen.getByRole("listitem").textContent).not.toContain("1 containers");
+  });
+
+  it("draws the Containers row and the container counts on the drift page", async () => {
+    fresh = drift({ services: CONTAINERS, count: 3 });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    const list = await screen.findByRole("list", { name: "Services that drifted" });
+    expect(within(list).getByText("3 containers")).toBeTruthy();
+    const summary = screen.getByRole("table", { name: "Summary of drift" });
+    expect(within(summary).getByRole("rowheader", { name: "Containers" })).toBeTruthy();
+    expect(within(summary).getByRole("rowheader", { name: "Services" })).toBeTruthy();
+  });
+
+  it("says a stopped stack has its containers stopped and not its services scaled down", async () => {
+    fresh = drift({ state: "stopped", count: 0, services: [] });
+    mount(<DriftPage envId={ENV} stackId="s1" />);
+
+    expect(await screen.findByText("Stopped stacks don't drift.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "tracer was stopped on purpose, so its containers are stopped. Start it to check it again.",
+      ),
+    ).toBeTruthy();
   });
 });
 

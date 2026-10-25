@@ -17,6 +17,8 @@ const OPEN_BY_DEFAULT = 3;
 
 interface DriftServiceListProps {
   services: StackDriftService[];
+  // A standalone host's services are run by containers, which the rows count.
+  target?: "swarm" | "standalone";
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -110,7 +112,8 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
 // changed and missing ones by name, then the extra ones. Each changed service opens to the settings that differ, all
 // of them open when three or fewer services changed. Masked values never appear: the server sends them hidden, and a
 // change to a hidden one is only a path.
-export function DriftServiceList({ services }: DriftServiceListProps) {
+export function DriftServiceList({ services, target = "swarm" }: DriftServiceListProps) {
+  void target;
   const t = useT();
   if (services.length === 0) return null;
   const changed = services.filter((s) => s.change === "changed").length;
