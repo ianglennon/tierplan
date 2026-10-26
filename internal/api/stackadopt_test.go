@@ -587,7 +587,7 @@ func pastedBody(t *testing.T, fields map[string]any) string {
 	return string(b)
 }
 
-// TestAdoptPasteRoute: a pasted compose file is checked by a Viewer too, shown with its variables and its differences,
+// TestAdoptPasteRoute: a pasted compose file is checked by a caller who may reveal secrets, shown with its variables and its differences,
 // refused when it has an error, and adopted exactly as written by an Env Admin, whatever a check said before (T-08-56,
 // T-08-57).
 func TestAdoptPasteRoute(t *testing.T) {
@@ -596,13 +596,12 @@ func TestAdoptPasteRoute(t *testing.T) {
 	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
-	viewer := f.caller(t, e, "viewer-1", "viewer")
 	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 2, 2, nil), foreignSecretService("legacy", "db", 1, 1, nil))
 	vars := []map[string]any{{"name": "TAG", "value": "1.27", "secret": false}, {"name": "TOKEN", "value": "tok-value-9876", "secret": true}}
 	writesBefore := len(f.fake.Writes())
 
-	// A Viewer may check a pasted file; the answer carries the variables and never a secret value.
-	rec := viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted, "vars": vars}))
+	// An Env Admin may check a pasted file; the answer carries the variables and never a secret value.
+	rec := admin.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted, "vars": vars}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("check of a pasted file: %d %s, want 200", rec.Code, rec.Body)
 	}
@@ -630,7 +629,7 @@ func TestAdoptPasteRoute(t *testing.T) {
 	}
 
 	// An unfilled variable is a problem and blocks; the variable says it is required.
-	rec = viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted}))
+	rec = admin.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": pasted}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("check without values: %d %s", rec.Code, rec.Body)
 	}
@@ -648,7 +647,7 @@ func TestAdoptPasteRoute(t *testing.T) {
 	}
 
 	// An include is refused, not read.
-	rec = viewer.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": "include:\n  - /etc/hostname\nservices:\n  app:\n    image: nginx:1.27\n"}))
+	rec = admin.do(http.MethodPost, adoptCheckPath("legacy"), pastedBody(t, map[string]any{"compose": "include:\n  - /etc/hostname\nservices:\n  app:\n    image: nginx:1.27\n"}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("check of an include: %d %s", rec.Code, rec.Body)
 	}
@@ -691,5 +690,52 @@ func TestAdoptPasteRoute(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(f.stackAudits(t)), "tok-value-9876") {
 		t.Errorf("the audit trail holds the secret value: %+v", f.stackAudits(t))
+	}
+}
+
+// TestAdoptCheckPasteNeedsReveal: a pasted file is compared with what runs on the real values, so a caller who cannot
+// reveal secrets would learn from the answer whether a guess at DB_PASSWORD is right (T-08-52, WR-04). Paste mode is
+// refused 403 secret_reveal_required for a Viewer and for an Operator without secrets.reveal, before anything is
+// compared; the rebuild, which takes no input from the caller, is still open to them; an Env Admin gets the comparison.
+func TestAdoptCheckPasteNeedsReveal(t *testing.T) {
+	t.Parallel()
+	const pasted = "services:\n  app:\n    image: nginx:1.27\n    environment:\n      DB_PASSWORD: guess\n"
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	reconfigureSwarm(t, f, e, foreignSecretService("legacy", "app", 2, 2, nil))
+	body := pastedBody(t, map[string]any{"compose": pasted})
+
+	for name, c := range map[string]*roleCaller{"viewer": viewer, "operator": operator} {
+		rec := c.do(http.MethodPost, adoptCheckPath("legacy"), body)
+		if rec.Code != http.StatusForbidden || problemType(t, rec) != "secret_reveal_required" {
+			t.Errorf("paste check as %s: %d %s, want 403 secret_reveal_required", name, rec.Code, rec.Body)
+		}
+		for _, field := range []string{`"matches"`, `"gapCount"`, `"clean"`, `"hiddenChanges"`} {
+			if strings.Contains(rec.Body.String(), field) {
+				t.Errorf("the refusal for %s carries %s, which is a comparison: %s", name, field, rec.Body)
+			}
+		}
+		// The rebuild takes nothing from the caller and is masked: it stays open.
+		if rec := c.do(http.MethodPost, adoptCheckPath("legacy"), ""); rec.Code != http.StatusOK {
+			t.Errorf("rebuild check as %s: %d %s, want 200", name, rec.Code, rec.Body)
+		}
+	}
+
+	rec := admin.do(http.MethodPost, adoptCheckPath("legacy"), body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("paste check as an env admin: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var got struct {
+		Source  string            `json:"source"`
+		Blocked bool              `json:"blocked"`
+		Gaps    []json.RawMessage `json:"gaps"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "paste" || got.Blocked || len(got.Gaps) == 0 {
+		t.Errorf("answer = %+v, want a pasted file compared with what runs and differing from it", got)
 	}
 }
