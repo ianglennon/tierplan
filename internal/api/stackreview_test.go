@@ -1409,10 +1409,11 @@ func TestReviewAnswerListsWhatTheDeployWouldRevertAndNeverBlocksIt(t *testing.T)
 	}
 }
 
-// reviewLiveEdit is what somebody outside Bayplan did to the stack's service: a new key and a new password on the command line.
+// reviewLiveKey and reviewLivePW are what somebody outside Bayplan put on the stack's service: a new key and a new password
+// on the command line. They are made-up values the test must never find in an answer.
 const (
 	reviewLiveKey = "key-live-77aa"
-	reviewLivePW  = "pw-live-3a9c"
+	reviewLivePW  = "pw-live-3a9c" //nolint:gosec // a made-up value
 )
 
 // reviewRedactFixture deploys two revisions of a stack that carries values, then changes the running service by hand.
