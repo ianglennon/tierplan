@@ -70,6 +70,28 @@ type Discovered struct {
 // of its target (D-48, D-53).
 func (d Discovered) Adoptable() bool { return d.Owner == "" && d.NameReason == "" }
 
+// HoldingName is the one of own that holds name on target, and whether there is one. Swarm looks object names up
+// regardless of case, so on a swarm two names that differ only in case are one; a standalone host compares exactly.
+// Create and adopt share this rule, so neither can take a name the other would refuse (T-08-95).
+func HoldingName(own []Stack, target stacks.Target, name string) (Stack, bool) {
+	i := slices.IndexFunc(own, func(s Stack) bool {
+		if target == stacks.TargetSwarm {
+			return strings.EqualFold(s.Name, name)
+		}
+		return s.Name == name
+	})
+	if i < 0 {
+		return Stack{}, false
+	}
+	return own[i], true
+}
+
+// nameClashReason is the sentence for an outside stack whose name is a case variant of a managed one on a swarm: it
+// is listed, not adoptable.
+func nameClashReason(name, managed string) string {
+	return "Bayplan can't adopt " + name + ": the stack " + managed + " is already managed here, and a swarm treats names that differ only in case as the same."
+}
+
 // NameNotAdoptableReason is the sentence for a stack whose name breaks the stack-name rule of target, built from
 // stacks.NameRuleText exactly as the create refusal is, so create and adopt cannot word the rule differently
 // (D-53). It is empty when the name follows the rule.
@@ -105,7 +127,9 @@ type group struct {
 // hold. On a swarm a stack is the services that share a com.docker.stack.namespace, on a standalone host the
 // containers that share a com.docker.compose.project, one-off containers (docker compose run) left out;
 // unlabelled services and loose containers are not stacks. A group named like one of managed is that stack,
-// not a second one, which also keeps a stack Bayplan is deploying for the first time out of the list.
+// not a second one, which also keeps a stack Bayplan is deploying for the first time out of the list. On a swarm a
+// group whose name differs from a managed one only in case is not that stack (swarm tells them apart by their labels)
+// but cannot be adopted beside it: it stays in the list, read-only, with the reason (T-08-95).
 //
 // It is a pure function of its arguments and reads no engine: the same data gives the same stacks in the
 // same order, by name. A label ID is only ever a flag (OrphanID), never a key to a stored stack.
@@ -162,6 +186,11 @@ func Discover(h Held, managed []Stack, target stacks.Target, self SelfMarks) []D
 		d.State, _, _ = DeriveState(StateInput{Deployed: true, Services: rows})
 		d.OrphanID, d.Portainer, d.Owner = flagsOf(name, g, self)
 		d.NameReason = NameNotAdoptableReason(target, name)
+		if d.NameReason == "" {
+			if m, clash := HoldingName(managed, target, name); clash {
+				d.NameReason = nameClashReason(name, m.Name)
+			}
+		}
 		out = append(out, d)
 	}
 	slices.SortFunc(out, func(a, b Discovered) int { return strings.Compare(a.Name, b.Name) })
@@ -200,9 +229,10 @@ func flagsOf(name string, g *group, self SelfMarks) (orphan string, portainer bo
 
 // DiscoverNamed looks for one stack the environment holds that Bayplan did not make, live: one read of the
 // cluster for a swarm, one list of the project's containers for a standalone host, never the lists' cache.
-// The bool is false when nothing carries the name. A name that a stack of Bayplan's holds is that stack's
-// and the caller says so before it asks; managed is not consulted here. It is a read.
-func (d Deps) DiscoverNamed(ctx context.Context, envID string, target stacks.Target, name string, self SelfMarks) (Discovered, bool, error) {
+// The bool is false when nothing carries the name. A name that a stack of Bayplan's holds exactly is that stack's
+// and the caller says so before it asks; managed is only used for what Discover does with it: on a swarm a case
+// variant of a managed name is found, with the reason it cannot be adopted. It is a read.
+func (d Deps) DiscoverNamed(ctx context.Context, envID string, target stacks.Target, name string, managed []Stack, self SelfMarks) (Discovered, bool, error) {
 	var h Held
 	switch target {
 	case stacks.TargetSwarm:
@@ -238,7 +268,7 @@ func (d Deps) DiscoverNamed(ctx context.Context, envID string, target stacks.Tar
 	default:
 		return Discovered{}, false, errors.New("stackops: unknown stack target " + string(target))
 	}
-	for _, found := range Discover(h, nil, target, self) {
+	for _, found := range Discover(h, managed, target, self) {
 		if found.Name == name {
 			return found, true, nil
 		}

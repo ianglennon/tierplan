@@ -230,7 +230,7 @@ func (d StacksDeps) findUnmanaged(ctx context.Context, envID, name string) (foun
 	if swarm {
 		target = stacks.TargetSwarm
 	}
-	found, ok, err := d.ops().DiscoverNamed(ctx, envID, target, name, d.selfMarks(row.Kind))
+	found, ok, err := d.ops().DiscoverNamed(ctx, envID, target, name, own, d.selfMarks(row.Kind))
 	if err != nil {
 		return foundUnmanaged{}, snapshotProblem(d.Log, envID, err)
 	}

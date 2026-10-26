@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -102,7 +101,7 @@ func registerStackAdopt(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 			"Adopting never fails on the host-access policy: it only records what already runs. " +
 			"With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, " +
 			"stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. " +
-			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; " +
+			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackSaveBody,
@@ -135,12 +134,13 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 	if err != nil {
 		return nil, stackInternal(d, "list", env.ID, err)
 	}
-	if i := slices.IndexFunc(own, func(s stackops.Stack) bool { return s.Name == in.Name }); i >= 0 {
-		return nil, stackAlreadyManaged(in.Name, own[i].ID)
-	}
 	target, err := d.stackTargetOf(ctx, env.ID)
 	if err != nil {
 		return nil, err
+	}
+	// The rule create holds a name to: on a swarm a case variant of a managed name is that stack's (T-08-95).
+	if held, taken := stackops.HoldingName(own, target, in.Name); taken {
+		return nil, stackAlreadyManaged(in.Name, held.ID)
 	}
 	row, err := d.Store.RQ.GetEnvironment(ctx, env.ID)
 	if err != nil {
@@ -201,8 +201,12 @@ func adoptProblem(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, 
 		if lerr != nil {
 			return stackInternal(d, "list", envID, lerr)
 		}
-		if i := slices.IndexFunc(now, func(s stackops.Stack) bool { return s.Name == name }); i >= 0 {
-			return stackAlreadyManaged(name, now[i].ID)
+		target, terr := d.stackTargetOf(ctx, envID)
+		if terr != nil {
+			return terr
+		}
+		if held, taken := stackops.HoldingName(now, target, name); taken {
+			return stackAlreadyManaged(name, held.ID)
 		}
 		return stackInternal(d, "adopt", envID, err)
 	case errors.As(err, &refused):
@@ -281,7 +285,7 @@ func registerStackAdoptCheck(r *httpx.Router, d StacksDeps, lim *streamLimiter) 
 			"a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. " +
 			"The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. " +
 			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. " +
-			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; " +
+			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,

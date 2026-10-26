@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
@@ -94,12 +93,8 @@ func (d StacksDeps) stackTargetOf(ctx context.Context, envID string) (stacks.Tar
 // stackNameTaken reports whether one of the environment's managed stacks holds name. Swarm looks object
 // names up regardless of case, so on a swarm two names that differ only in case are one (T-08-95).
 func stackNameTaken(own []stackops.Stack, target stacks.Target, name string) bool {
-	return slices.ContainsFunc(own, func(s stackops.Stack) bool {
-		if target == stacks.TargetSwarm {
-			return strings.EqualFold(s.Name, name)
-		}
-		return s.Name == name
-	})
+	_, taken := stackops.HoldingName(own, target, name)
+	return taken
 }
 
 // StacksDeps are the dependencies of the stack routes.

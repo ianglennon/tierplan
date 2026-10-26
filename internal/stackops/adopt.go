@@ -236,10 +236,10 @@ type adoptPrepared struct {
 // the real values (D-15, D-47). It refuses a name Bayplan already holds (ErrNameTaken), a name nothing carries
 // (ErrUnmanagedGone) and a stack that is not adoptable (*NotAdoptableError), and sends nothing to the engine.
 func (d Deps) prepareAdoption(ctx context.Context, in AdoptInput) (adoptPrepared, error) {
-	if slices.ContainsFunc(in.Managed, func(s Stack) bool { return s.Name == in.Name }) {
+	if _, taken := HoldingName(in.Managed, in.Target, in.Name); taken {
 		return adoptPrepared{}, ErrNameTaken
 	}
-	found, ok, err := d.DiscoverNamed(ctx, in.EnvID, in.Target, in.Name, in.Self)
+	found, ok, err := d.DiscoverNamed(ctx, in.EnvID, in.Target, in.Name, in.Managed, in.Self)
 	if err != nil {
 		return adoptPrepared{}, err
 	}
