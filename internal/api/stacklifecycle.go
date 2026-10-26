@@ -26,9 +26,12 @@ const (
 
 	problemNothingRunning = "nothing_running"
 	problemNotStopped     = "not_stopped"
+	// problemStackStopped is the refusal of an operation that needs what runs when the stack is stopped.
+	problemStackStopped = "stack_stopped"
 
 	nothingRunning = "Nothing is running."
 	notStopped     = "This stack isn't stopped."
+	stackStopped   = "This stack is stopped, so there's nothing running to keep. Start it first."
 )
 
 // StackLifecycleInput is the path of the stop and start routes. They have no body: a stop parks what runs and a

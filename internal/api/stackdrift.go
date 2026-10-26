@@ -119,7 +119,7 @@ func registerStackDrift(r *httpx.Router, d StacksDeps, lim *streamLimiter) {
 			"The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. " +
 			"The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. " +
 			"draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. " +
-			"While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision. " +
+			"While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision, and a stack that is stopped is 409 stack_stopped (its services run no replicas, so there is nothing running to keep; start it first). " +
 			"A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. " +
 			"Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.",
 		Tags: []string{"stacks"}, MaxBodyBytes: 1 << 10,
@@ -177,6 +177,8 @@ func acceptStackDrift(ctx context.Context, d StacksDeps, in *StackDriftAcceptInp
 		return nil, draftConflict(conflict)
 	case errors.Is(err, stackops.ErrNoDeployedRevision):
 		return nil, httpx.Problem(http.StatusConflict, problemNoDeployedRevision, noDeployedRevision)
+	case errors.Is(err, stackops.ErrStackStopped):
+		return nil, httpx.Problem(http.StatusConflict, problemStackStopped, stackStopped)
 	case errors.As(err, &failed):
 		return nil, rebuildNotAccepted(failed.Reason)
 	case errors.Is(err, stackops.ErrRebuildTarget):

@@ -18,6 +18,11 @@ import (
 // rebuild, and nothing to restore.
 var ErrNoDeployedRevision = errors.New("stackops: the stack has no deployed revision")
 
+// ErrStackStopped is a stack a person stopped. Its replicated services run no replicas and its global and job
+// services are gone from the engine, so a rebuild from what runs would write replicas 0 and drop them; a stopped
+// stack is not drift (D-21), and there is nothing running to keep.
+var ErrStackStopped = errors.New("stackops: the stack is stopped")
+
 // AcceptLiveInput says which stack's draft is rebuilt from what runs. DraftVersion is the version of the draft the
 // person saw (0 for a stack that has none), so a draft that moved since is not overwritten unseen.
 type AcceptLiveInput struct {
@@ -43,8 +48,12 @@ type AcceptLiveResult struct {
 //
 // Nothing is written to any engine: the rebuild only reads. A rebuild that fails, or whose file does not pass the
 // check every stack passes against the revision's own variables and files, leaves the draft as it was. A draft that
-// has moved since DraftVersion is a *DraftConflictError.
+// has moved since DraftVersion is a *DraftConflictError. A stack that is stopped is refused with ErrStackStopped
+// before anything is read.
 func (d Deps) AcceptLive(ctx context.Context, repo Repo, in AcceptLiveInput) (AcceptLiveResult, error) {
+	if in.Stack.Stopped {
+		return AcceptLiveResult{}, ErrStackStopped
+	}
 	deployed, ok, err := repo.LatestGoodRevision(ctx, in.Stack.ID)
 	if err != nil {
 		return AcceptLiveResult{}, err

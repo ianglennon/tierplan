@@ -145,6 +145,8 @@ function refusal(
       return t("stackConverge.lock.reason", { env: envName });
     case "no_deployed_revision":
       return t("stackAcceptLive.errors.none");
+    case "stack_stopped":
+      return t("stackAcceptLive.errors.stopped");
     default:
       return err.status === 0
         ? t("stackAcceptLive.errors.lost")
