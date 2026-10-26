@@ -48,7 +48,7 @@ type AdoptStackRequest struct {
 
 // AdoptCheckRequest is the body of the adopt check route. It may be left out, which is the rebuild.
 type AdoptCheckRequest struct {
-	Source  string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs"`
+	Source  string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values"`
 	Compose string         `json:"compose,omitempty" maxLength:"1048576" doc:"For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB)"`
 	Vars    []DraftVarBody `json:"vars,omitempty" maxItems:"500" doc:"For source paste, the values of the variables the pasted file uses"`
 }
@@ -279,10 +279,11 @@ func registerStackAdoptCheck(r *httpx.Router, d StacksDeps, lim *streamLimiter) 
 			"The fingerprint it answers is the one to send with the adoption. " +
 			"With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; " +
 			"a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. " +
+			"The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. " +
 			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. " +
 			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
-			"One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer).",
+			"One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *AdoptCheckInput) (*AdoptCheckOutput, error) {
@@ -294,6 +295,19 @@ func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Ad
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
+	}
+	var body AdoptCheckRequest
+	if in.Body != nil {
+		body = *in.Body
+	}
+	// A pasted file is compared with what runs on the real values, so what the answer says (clean, matches, the
+	// number of gaps, the paths of the hidden changes) would tell a caller whether a guess at a secret value is
+	// right. Only a caller who may see the values may supply one side of that comparison (T-08-52). The rebuild
+	// takes nothing from the caller and is masked, so it stays open.
+	reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
+	if body.Source == stackops.AdoptSourcePaste && !reveal {
+		return nil, httpx.Problem(http.StatusForbidden, problemSecretRevealRequired,
+			"Checking a pasted file compares it with the values that run, which needs the reveal secrets permission. Ask an administrator, or check the file that was rebuilt from what runs.")
 	}
 	release, ok := lim.acquire(string(p.Type) + ":" + p.ID)
 	if !ok {
@@ -317,10 +331,6 @@ func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Ad
 	if err != nil {
 		return nil, stackInternal(d, "adopt check: read the environment", env.ID, err)
 	}
-	var body AdoptCheckRequest
-	if in.Body != nil {
-		body = *in.Body
-	}
 	pasted, err := pastedCopyOf(body.Source, body.Compose, body.Vars)
 	if err != nil {
 		return nil, err
@@ -328,7 +338,7 @@ func checkAdoption(ctx context.Context, d StacksDeps, lim *streamLimiter, in *Ad
 	res, err := d.ops().AdoptCheck(ctx, stackops.AdoptInput{
 		EnvID: env.ID, Name: in.Name, Target: target, Caller: stackops.Caller{Principal: p, Actor: p.Name}, Managed: own, Self: d.selfMarks(row.Kind),
 		Source: body.Source, Pasted: pasted,
-	}, redact.CanReveal(ctx, d.Checker, p, env.ID))
+	}, reveal)
 	if err != nil {
 		return nil, adoptProblem(ctx, d, repo, env.ID, in.Name, err)
 	}

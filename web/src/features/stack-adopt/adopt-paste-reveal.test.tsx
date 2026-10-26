@@ -112,9 +112,7 @@ function mount() {
 
 // Only the requests to this exact path count: the SPA sends others on its own.
 const pasteChecks = () =>
-  sent.filter(
-    (s) => s.method === "POST" && s.path === ADOPT_CHECK && s.body?.source === "paste",
-  );
+  sent.filter((s) => s.method === "POST" && s.path === ADOPT_CHECK && s.body?.source === "paste");
 
 describe("the paste source without secrets.reveal", () => {
   it.each([

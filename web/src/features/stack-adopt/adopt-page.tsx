@@ -136,6 +136,8 @@ function refusalText(t: Translate, err: AdoptRequestError, name: string, envName
       return t("stackAdoptPaste.error.invalid", { reason: err.detail });
     case "secret_too_short":
       return t("stackAdoptPaste.error.secretShort");
+    case "secret_reveal_required":
+      return t("stackAdoptPaste.error.needsReveal");
   }
   if (err.status === 0) return t("stackAdopt.error.lost");
   if (err.status === 403) return t("stackAdopt.error.permission", { env: envName });
@@ -145,6 +147,7 @@ function refusalText(t: Translate, err: AdoptRequestError, name: string, envName
 // The refusals of the check that are not a failure to check: the page words them as it words the adoption's own, or
 // leaves them to the notes it already shows.
 const CHECK_REFUSALS = [
+  "secret_reveal_required",
   "stack_already_managed",
   "stack_not_adoptable",
   "unmanaged_stack_not_found",
@@ -165,6 +168,9 @@ function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const needs = useNeeds("stacks.create", envId);
+  // A pasted file is compared with the values that run, which the server answers only to a caller who may reveal them.
+  // The reason is absent until /api/me is read, so the choice is not off while the page is still learning who this is.
+  const reveal = useNeeds("secrets.reveal", envId);
   const query = useQuery(unmanagedStackQuery(envId, name));
   const check = useQuery(adoptCheckQuery(envId, name));
   const adopt = useAdoptStack(envId, name);
@@ -280,7 +286,10 @@ function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
   const off = reason !== undefined;
   // The notes under the title come from the newest check there is, the pasted file's or the rebuild's.
   const notes = (paste ? pastedCheck.data : undefined) ?? check.data;
-  const checkRefusal = checkError?.type === "stack_already_managed" ? checkError : null;
+  const checkRefusal =
+    checkError?.type === "stack_already_managed" || checkError?.type === "secret_reveal_required"
+      ? checkError
+      : null;
   const checkFailure =
     checkError && !CHECK_REFUSALS.includes(checkError.type ?? "") ? checkError : null;
 
@@ -369,6 +378,7 @@ function AdoptPageBody({ envId, name, onAdopted }: AdoptPageProps) {
 
       <AdoptSource
         source={source}
+        pasteOff={reveal.allowed ? undefined : reveal.reason}
         onSourceChange={(next) => {
           setSource(next);
           setRefusal(null);

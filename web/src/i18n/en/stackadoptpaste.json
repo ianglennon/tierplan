@@ -52,6 +52,7 @@
       "fill_other": "Fill in {{count}} variables first."
     },
     "error": {
+      "needsReveal": "Checking your own file compares it with the values that run, which needs the reveal secrets permission. Rebuild from the running services instead.",
       "invalid": "The pasted file doesn't pass the check: {{reason}}",
       "secretShort": "A secret value is at least 4 characters. Use a longer value, or turn Secret off."
     }

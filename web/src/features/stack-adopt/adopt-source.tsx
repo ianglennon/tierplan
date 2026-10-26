@@ -15,13 +15,16 @@ export type AdoptSourceKind = "rebuild" | "paste";
 interface AdoptSourceProps {
   source: AdoptSourceKind;
   onSourceChange: (source: AdoptSourceKind) => void;
+  // Why the original-file choice is off, when it is: a pasted file is compared with the values that run, which takes
+  // secrets.reveal. Absent when the choice is on.
+  pasteOff?: string;
   // What goes under the choice: the paste field and its variables, when the person has the original file.
   children?: ReactNode;
 }
 
 // AdoptSource is the "Start from" group of the Adopt page (UI-SPEC "Adopt page", D-12, D-20): "Rebuild from the running
 // services" (the default, always available) and "I have the original compose file". Arrow keys move between the two.
-export function AdoptSource({ source, onSourceChange, children }: AdoptSourceProps) {
+export function AdoptSource({ source, onSourceChange, pasteOff, children }: AdoptSourceProps) {
   const t = useT();
   const ids = useId();
   return (
@@ -31,24 +34,33 @@ export function AdoptSource({ source, onSourceChange, children }: AdoptSourcePro
         onValueChange={(next) => onSourceChange(next === "paste" ? "paste" : "rebuild")}
         aria-label={t("stackAdoptPaste.source.title")}
       >
-        {(["rebuild", "paste"] as const).map((value) => (
-          <div key={value} className="flex items-start gap-2 max-md:min-h-11">
-            <RadioGroupItem
-              value={value}
-              id={`${ids}-${value}`}
-              aria-describedby={`${ids}-${value}-help`}
-              className="mt-0.5"
-            />
-            <div className="flex min-w-0 flex-col gap-0.5">
-              <Label htmlFor={`${ids}-${value}`}>
-                {t(`stackAdoptPaste.source.${value}.label`)}
-              </Label>
-              <p id={`${ids}-${value}-help`} className="text-sm text-muted-foreground">
-                {t(`stackAdoptPaste.source.${value}.help`)}
-              </p>
+        {(["rebuild", "paste"] as const).map((value) => {
+          const off = value === "paste" && pasteOff !== undefined;
+          return (
+            <div key={value} className="flex items-start gap-2 max-md:min-h-11">
+              <RadioGroupItem
+                value={value}
+                id={`${ids}-${value}`}
+                aria-describedby={`${ids}-${value}-help${off ? ` ${ids}-${value}-off` : ""}`}
+                disabled={off}
+                className="mt-0.5"
+              />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <Label htmlFor={`${ids}-${value}`}>
+                  {t(`stackAdoptPaste.source.${value}.label`)}
+                </Label>
+                <p id={`${ids}-${value}-help`} className="text-sm text-muted-foreground">
+                  {t(`stackAdoptPaste.source.${value}.help`)}
+                </p>
+                {off ? (
+                  <p id={`${ids}-${value}-off`} className="text-sm text-muted-foreground">
+                    {pasteOff}
+                  </p>
+                ) : null}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </RadioGroup>
       {children}
     </SettingsCard>
