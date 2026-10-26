@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -1402,5 +1404,114 @@ func TestReviewAnswerListsWhatTheDeployWouldRevertAndNeverBlocksIt(t *testing.T)
 	_, code, body = operator.reviewStack(st.ID, `{}`)
 	if after := revertsOf(t, body); code != http.StatusOK || len(after.RevertsDrift) != 0 {
 		t.Errorf("review after the deploy = %d %+v, want nothing left to revert", code, after)
+	}
+}
+
+// reviewLiveEdit is what somebody outside Bayplan did to the stack's service: a new key and a new password on the command line.
+const (
+	reviewLiveKey = "key-live-77aa"
+	reviewLivePW  = "pw-live-3a9c"
+)
+
+// reviewRedactFixture deploys two revisions of a stack that carries values, then changes the running service by hand.
+func reviewRedactFixture(t *testing.T) (f *envFix, st stackSummaryRef, operator, revealer *roleCaller) {
+	t.Helper()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator = f.caller(t, e, "operator-1", "operator")
+	revealer = f.revealCaller(t, e, "revealer-1")
+	s := newStack(t, admin, "rvr")
+	f.deployGood(t, operator, s.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	f.deployGood(t, operator, s.ID, liveValuesCompose("nginx:1.28-alpine", "two"))
+	f.editLiveService(t, e, "rvr", "web", func(spec *swarm.ServiceSpec) {
+		setEnv("API_KEY", reviewLiveKey)(spec)
+		spec.TaskTemplate.ContainerSpec.Args = []string{"nginx", "--pw=" + reviewLivePW}
+	})
+	return f, stackSummaryRef{ID: s.ID}, operator, revealer
+}
+
+// stackSummaryRef is the one field of a created stack the review tests use.
+type stackSummaryRef struct{ ID string }
+
+// TestReviewMasksLiveValuesForACallerWithoutSecretsRevealInEveryMode: a review of a deploy, a roll back or a restore
+// lists the running service's settings and the outside changes a deploy would put back. A caller who holds
+// stacks.deploy and not secrets.reveal gets neither the running values nor the revision's, as the drift and the History
+// changes routes already answer (D-39, D-47); one who holds it gets them all.
+func TestReviewMasksLiveValuesForACallerWithoutSecretsRevealInEveryMode(t *testing.T) {
+	t.Parallel()
+	_, st, operator, revealer := reviewRedactFixture(t)
+	secrets := append(slices.Clone(liveValues), reviewLiveKey, reviewLivePW)
+
+	for _, mode := range []string{`{}`, `{"mode":"rollback","revision":1}`, `{"mode":"restore"}`} {
+		_, code, masked := operator.reviewStack(st.ID, mode)
+		if code != http.StatusOK {
+			t.Fatalf("review %s as an operator: %d %s", mode, code, masked)
+		}
+		// The rendered YAML and the files are the stack's own text, which anyone who may read the stack reads; the
+		// running settings and the outside changes are not, so no value may be in those sections.
+		var sections map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(masked), &sections); err != nil {
+			t.Fatalf("decode %s: %v", masked, err)
+		}
+		for _, name := range []string{"services", "revertsDrift"} {
+			for _, v := range secrets {
+				if strings.Contains(string(sections[name]), v) {
+					t.Errorf("review %s: the value %q reached a caller without secrets.reveal in %s: %s", mode, v, name, sections[name])
+				}
+			}
+		}
+		for _, v := range []string{reviewLiveKey, reviewLivePW} {
+			if strings.Contains(masked, v) {
+				t.Errorf("review %s: the running value %q reached a caller without secrets.reveal: %s", mode, v, masked)
+			}
+		}
+		_, code, full := revealer.reviewStack(st.ID, mode)
+		if code != http.StatusOK {
+			t.Fatalf("review %s as a revealer: %d %s", mode, code, full)
+		}
+		if !strings.Contains(full, reviewLiveKey) || !strings.Contains(full, reviewLivePW) {
+			t.Errorf("review %s: a caller with secrets.reveal lacks the running values: %s", mode, full)
+		}
+	}
+
+	// The outside changes a deploy would put back are rows with their paths; the values are withheld.
+	_, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	rows := revertsOf(t, body).RevertsDrift
+	if len(rows) < 2 {
+		t.Fatalf("reverts = %+v, want the key and the command", rows)
+	}
+	for _, r := range rows {
+		if r.Live == reviewLiveKey || r.Live == reviewLivePW || strings.Contains(r.Live, "pw-live") || strings.Contains(r.Desired, "key-two") || strings.Contains(r.Desired, "pw-two") {
+			t.Errorf("row %+v carries a value", r)
+		}
+	}
+	hiddenKey := false
+	for _, r := range rows {
+		hiddenKey = hiddenKey || r.Path == "TaskTemplate.ContainerSpec.Env[API_KEY]" && r.Live == "<hidden>" && r.Desired == "<hidden>"
+	}
+	if !hiddenKey {
+		t.Errorf("reverts = %+v, want the API_KEY row with both sides <hidden>", rows)
+	}
+}
+
+// TestAReviewTheCallerSawMaskedStillDeploys: the deploy takes the draft version and the pins of the review, neither of
+// which is derived from the masked body.
+func TestAReviewTheCallerSawMaskedStillDeploys(t *testing.T) {
+	t.Parallel()
+	f, st, operator, _ := reviewRedactFixture(t)
+	rv, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	if strings.Contains(body, reviewLiveKey) {
+		t.Fatalf("the review was not masked: %s", body)
+	}
+	version := draftVersion(t, operator, st.ID)
+	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("deploy of a masked review = %+v, want done", job)
 	}
 }
