@@ -59,6 +59,8 @@ function drifted(over: Json = {}): Json {
 }
 
 let checked: Json;
+// When set, the read of the draft waits for it, so a test can act while the page is reading the draft.
+let draftGate: Promise<void> | null;
 
 beforeEach(() => {
   detail = {
@@ -98,6 +100,7 @@ beforeEach(() => {
       services: 1,
     });
   posts = [];
+  draftGate = null;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   for (const fn of Object.values(toasts)) fn.mockReset();
@@ -112,7 +115,10 @@ beforeEach(() => {
       }
       if (path === `/api/env/${ENV}/stacks/s1`) return Response.json(detail);
       if (path === `/api/env/${ENV}/stacks/s1/drift`) return Response.json(checked);
-      if (path === `/api/env/${ENV}/stacks/s1/draft`) return Response.json(draft);
+      if (path === `/api/env/${ENV}/stacks/s1/draft`) {
+        if (draftGate) await draftGate;
+        return Response.json(draft);
+      }
       if (path === `/api/env/${ENV}/stacks/s1/drift/accept` && req.method === "POST") {
         posts.push({ path, body: (await req.json()) as Json });
         return acceptAnswer();
@@ -195,6 +201,27 @@ describe("Accept live into draft", () => {
 
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]?.body).toEqual({ draftVersion: 7 });
+  });
+
+  it("sends one accept for two quick clicks, even while the draft is still being read", async () => {
+    let release = () => {};
+    draftGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mount();
+    const accept = await ready();
+
+    fireEvent.click(accept);
+    fireEvent.click(accept);
+    release();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/editor?pane=files"),
+    );
+    expect(posts.filter((p) => p.path === `/api/env/${ENV}/stacks/s1/drift/accept`)).toHaveLength(
+      1,
+    );
+    expect(toasts.error).not.toHaveBeenCalled();
   });
 
   it("says why the rebuild failed, and that the draft was not changed, and stays on the page", async () => {
@@ -379,13 +406,26 @@ describe("Accept live when a saved draft exists", () => {
     expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
   });
 
-  it("does not ask when the stack's draft holds nothing that was not deployed", async () => {
+  it("asks when the fresh read finds a saved draft although the cached stack says it has none", async () => {
+    // A colleague saved a draft after the stack was last polled: the stack still reads hasDraft false.
     detail = { ...detail, hasDraft: false };
+    mount();
+
+    const dialog = await openConfirm();
+
+    expect(dialog.textContent).toMatch(/The saved draft by ada, /);
+    expect(posts).toHaveLength(0);
+  });
+
+  it("does not ask when the draft read finds no saved draft", async () => {
+    detail = { ...detail, hasDraft: true };
+    draft = { ...draft, isDraft: false, version: 0 };
     mount();
 
     fireEvent.click(await ready());
 
     await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]?.body).toEqual({ draftVersion: 0 });
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });
