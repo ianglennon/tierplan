@@ -553,7 +553,9 @@ func (s *Service) Disconnected(sess *tunnel.Session, code string) {
 // for each agent keyed by the agent's ID, so Monitor.Watch never announces one: a worker that follows environments by ID
 // (the background drift check of stacks) learns of an agent environment here. Register it before the first agent
 // connects: an environment that already has one is not announced. The callbacks run on the goroutine that reports the
-// session, after the service's lock is released.
+// session, after the service's lock is released. They arrive in the order the sessions began and ended, because the hub
+// holds its lifecycle lock across each Observer call (tunnel.Hub.life); removing the environment announces it stopped
+// itself (Remove), once.
 func (s *Service) WatchAgentEnvironments(started, stopped func(envID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -832,9 +834,18 @@ func (s *Service) Remove(ctx context.Context, actor audit.Actor, id, ip, ua stri
 	s.mu.Lock()
 	agents := s.connected[id]
 	delete(s.connected, id)
+	watchers := slices.Clone(s.envWatchers)
 	s.mu.Unlock()
 	for agentID := range agents {
 		s.mon.Stop(AgentTarget(agentID))
+	}
+	// The kicked sessions reach Disconnected after the map above is gone, and take its "a newer session has taken
+	// its place" branch, which announces nothing. An environment that was announced started (it had a connected
+	// agent) is announced stopped here, once, or its watchers would keep following an environment that is gone.
+	if len(agents) > 0 {
+		for _, w := range watchers {
+			w.stopped(id)
+		}
 	}
 	if s.agents != nil {
 		s.agents.Forget(id)
