@@ -6,6 +6,7 @@ package agents_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -296,14 +297,27 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 	}
 
 	// Every agent row has the right role and node name and a real certificate.
-	agents := f.srv.Agents(f.env.ID)
+	// The drift worker reads the cluster when an agent connects, so the leading
+	// manager is known and its agent reports the role "leader" (internal/api/agents.go);
+	// the other managers stay "manager". Wait on that, then require exactly one.
+	var agents []servertest.Agent
+	f.srv.WaitFor("exactly one agent to report the leader role", 30*time.Second, func() (bool, string) {
+		agents = f.srv.Agents(f.env.ID)
+		leaders := 0
+		for _, a := range agents {
+			if a.Role == "leader" {
+				leaders++
+			}
+		}
+		return len(agents) == 4 && leaders == 1, fmt.Sprintf("%+v", agents)
+	})
 	if len(agents) != 4 {
 		t.Fatalf("agents = %d, want 4: %+v", len(agents), agents)
 	}
 	for _, n := range f.sw.Nodes() {
-		wantRole := "worker"
+		wantRoles := []string{"worker"}
 		if n.Manager {
-			wantRole = "manager"
+			wantRoles = []string{"manager", "leader"}
 		}
 		var a *servertest.Agent
 		for i := range agents {
@@ -315,8 +329,8 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 			t.Errorf("no agent row for node %s: %+v", n.Hostname, agents)
 			continue
 		}
-		if a.Role != wantRole || !a.Connected || a.Status != "active" {
-			t.Errorf("agent of %s = role %q connected %v status %q, want %s, connected, active", n.Hostname, a.Role, a.Connected, a.Status, wantRole)
+		if !slices.Contains(wantRoles, a.Role) || !a.Connected || a.Status != "active" {
+			t.Errorf("agent of %s = role %q connected %v status %q, want one of %v, connected, active", n.Hostname, a.Role, a.Connected, a.Status, wantRoles)
 		}
 		if a.CertFingerprint == "" || a.AgentVersion == "" || a.EngineVersion != got.Engine.Version {
 			t.Errorf("agent of %s = fingerprint %q agentVersion %q engineVersion %q", n.Hostname, a.CertFingerprint, a.AgentVersion, a.EngineVersion)
