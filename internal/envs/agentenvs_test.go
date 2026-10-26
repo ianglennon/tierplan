@@ -4,9 +4,13 @@
 package envs
 
 import (
+	"context"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/tunnel"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -51,6 +55,84 @@ func TestServiceAnnouncesAnAgentEnvironmentOnItsFirstAgentAndWhenItsLastOneLeave
 	}
 	if len(stopped) != 0 || len(started) != 0 {
 		t.Errorf("announced %d more stops and %d more starts than the one of each", len(stopped), len(started))
+	}
+}
+
+// Removing an agent environment kicks its sessions asynchronously and forgets them at once, so the later Disconnected
+// of each finds nothing to end. The removal announces the stop itself, once, or the drift worker of the environment
+// would keep its timer and its event subscription until the server restarted (WR-05).
+func TestRemovingAnAgentEnvironmentAnnouncesItStoppedOnce(t *testing.T) {
+	r := newSwarmRigBare(t, managerNodes(), nil)
+	env := r.env
+	started, stopped := make(chan string, 8), make(chan string, 8)
+	r.svc.WatchAgentEnvironments(func(id string) { started <- id }, func(id string) { stopped <- id })
+
+	r.connect(t, env, managerConfig(1, r.nodes, nil), managerFacts(1))
+	r.srv.Events.WaitLen(t, 1)
+	if got := announced(t, started, "the start"); got != env.ID {
+		t.Fatalf("started = %q, want the environment %s", got, env.ID)
+	}
+
+	if err := r.svc.Remove(context.Background(), admin, env.ID, "203.0.113.5", "test", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := announced(t, stopped, "the stop"); got != env.ID {
+		t.Fatalf("stopped = %q, want the removed environment %s", got, env.ID)
+	}
+	// The kicked session's own Disconnected, which finds the environment gone, must not announce it again.
+	r.srv.Events.WaitLen(t, 2)
+	if len(stopped) != 0 || len(started) != 0 {
+		t.Errorf("announced %d more stops and %d more starts after the removal", len(stopped), len(started))
+	}
+}
+
+// A quick reconnect of the only agent of an environment is announced as started, stopped, started: the hub holds its
+// lifecycle lock across each Observer call (tunnel.Hub.life), so the service hears Connected and Disconnected in the
+// order the sessions began and ended, and a watcher that tracks the announcements (as the drift monitor does) ends with
+// a worker for a connected environment and none for a disconnected one (WR-06).
+func TestAQuickReconnectIsAnnouncedInOrderAndLeavesOneWorker(t *testing.T) {
+	r := newSwarmRigBare(t, managerNodes(), nil)
+	env := r.env
+	var mu sync.Mutex
+	var order []string
+	running := map[string]bool{}
+	note := func(kind string, on bool) func(string) {
+		return func(id string) {
+			mu.Lock()
+			defer mu.Unlock()
+			order = append(order, kind)
+			running[id] = on
+		}
+	}
+	r.svc.WatchAgentEnvironments(note("start", true), note("stop", false))
+	state := func() (string, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Join(order, ","), running[env.ID]
+	}
+
+	a1 := r.connect(t, env, managerConfig(1, r.nodes, nil), managerFacts(1))
+	r.srv.Events.WaitLen(t, 1)
+	const cycles = 5
+	n := 1
+	for range cycles {
+		r.srv.Hub.Kick(a1.id, tunnel.DisconnectClosed)
+		n++
+		r.srv.Events.WaitLen(t, n)
+		r.reconnect(t, a1)
+		n++
+		r.srv.Events.WaitLen(t, n)
+	}
+	got, up := state()
+	if want := strings.Repeat("start,stop,", cycles) + "start"; got != want || !up {
+		t.Fatalf("announced %q (running %v), want %q with the environment running", got, up, want)
+	}
+
+	r.svc.mu.Lock()
+	connected := len(r.svc.connected[env.ID])
+	r.svc.mu.Unlock()
+	if connected != 1 {
+		t.Fatalf("the service holds %d sessions of the environment, want 1", connected)
 	}
 }
 
