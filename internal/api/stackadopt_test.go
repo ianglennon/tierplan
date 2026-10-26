@@ -739,3 +739,62 @@ func TestAdoptCheckPasteNeedsReveal(t *testing.T) {
 		t.Errorf("answer = %+v, want a pasted file compared with what runs and differing from it", got)
 	}
 }
+
+// TestAdoptComparesStackNamesLikeCreate: swarm looks object names up regardless of case, so create refuses a case
+// variant of a managed name; adopting an outside Foo beside a managed foo is refused the same way (409
+// stack_already_managed with foo's ID), by the adoption and by its check, and the outside Foo stays listed, read-only,
+// with the reason (T-08-95, WR-07).
+func TestAdoptComparesStackNamesLikeCreate(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	managed := newStack(t, admin, "foo")
+	reconfigureSwarm(t, f, e, foreignSecretService("Foo", "app", 1, 1, nil), foreignSecretService("other", "app", 1, 1, nil))
+
+	holder := func(t *testing.T, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_already_managed" {
+			t.Fatalf("%d %s, want 409 stack_already_managed", rec.Code, rec.Body)
+		}
+		var problem struct {
+			Errors []struct{ Location, Message string } `json:"errors"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+			t.Fatal(err)
+		}
+		if len(problem.Errors) != 1 || problem.Errors[0].Location != "stackId" || problem.Errors[0].Message != managed.ID {
+			t.Errorf("errors = %+v, want the managed stack's ID %s as stackId", problem.Errors, managed.ID)
+		}
+	}
+	t.Run("the adoption", func(t *testing.T) {
+		holder(t, admin.do(http.MethodPost, adoptPath("Foo"), adoptBody("anything")))
+	})
+	t.Run("the check", func(t *testing.T) {
+		holder(t, viewer.do(http.MethodPost, adoptCheckPath("Foo"), ""))
+	})
+
+	t.Run("the list and the page keep it read-only", func(t *testing.T) {
+		by := map[string]stackAnswer{}
+		for _, it := range listWith(t, admin, "").Items {
+			by[it.Name] = it
+		}
+		if !by["foo"].Managed {
+			t.Errorf("foo = %+v, want the managed stack", by["foo"])
+		}
+		u := by["Foo"].Unmanaged
+		if by["Foo"].Managed || u == nil || u.Adoptable || !strings.Contains(u.Reason, "foo") {
+			t.Fatalf("Foo = %+v, want listed unmanaged, not adoptable, with a reason naming foo", by["Foo"])
+		}
+		if o := by["other"].Unmanaged; o == nil || !o.Adoptable {
+			t.Errorf("other = %+v, want it adoptable", by["other"])
+		}
+		rec := viewer.do(http.MethodGet, unmanagedPath("Foo", ""), "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET Foo: %d %s, want 200", rec.Code, rec.Body)
+		}
+		if got := answerOf[unmanagedAnswer](t, rec); got.Adoptable || got.Reason != u.Reason {
+			t.Errorf("GET Foo = adoptable %v reason %q, want not adoptable with the list's reason", got.Adoptable, got.Reason)
+		}
+	})
+}

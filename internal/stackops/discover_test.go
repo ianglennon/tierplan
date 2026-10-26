@@ -106,6 +106,51 @@ func TestDiscoverSkipsManagedNames(t *testing.T) {
 	}
 }
 
+// TestDiscoverFoldsCaseOnASwarm: swarm looks object names up regardless of case, so an outside Foo beside a managed
+// foo is not a second stack to adopt (T-08-95, WR-07). It is still listed, read-only with the reason, and not dropped;
+// a name that differs by more than case is untouched, and a standalone host compares exactly.
+func TestDiscoverFoldsCaseOnASwarm(t *testing.T) {
+	t.Parallel()
+	managed := []stackops.Stack{{ID: "stack-foo", Name: "foo", Target: stacks.TargetSwarm}}
+	h := stackops.Held{Services: []dockerx.ServiceRow{
+		foreignService("Foo", "Foo_app", 1, 1, nil),
+		foreignService("foo", "foo_app", 0, 1, nil),
+		foreignService("other", "other_app", 1, 1, nil),
+	}}
+
+	got := stackops.Discover(h, managed, stacks.TargetSwarm, stackops.SelfMarks{})
+
+	by := map[string]stackops.Discovered{}
+	for _, d := range got {
+		by[d.Name] = d
+	}
+	if _, ok := by["foo"]; ok {
+		t.Errorf("Discover lists foo, which is the managed stack: %+v", got)
+	}
+	clash, ok := by["Foo"]
+	if !ok {
+		t.Fatalf("Discover = %+v, want Foo listed read-only, not dropped", got)
+	}
+	if clash.Adoptable() || !strings.Contains(clash.NameReason, "foo") || !strings.Contains(clash.NameReason, "case") {
+		t.Errorf("Foo = adoptable %v reason %q, want it not adoptable, naming the managed stack and the case rule", clash.Adoptable(), clash.NameReason)
+	}
+	if clash.Total != 1 || len(clash.Rows) != 1 {
+		t.Errorf("Foo = %+v, want its one service shown", clash)
+	}
+	if other := by["other"]; !other.Adoptable() || other.NameReason != "" {
+		t.Errorf("other = %+v, want it adoptable", other)
+	}
+
+	// A standalone host compares exactly: a project that differs in case is not the managed one and gets no clash reason.
+	standalone := stackops.Held{Containers: []dockerx.ContainerRow{foreignContainer("c1", "Foo", "web", "running", nil)}}
+	managedHere := []stackops.Stack{{ID: "stack-foo", Name: "foo", Target: stacks.TargetStandalone}}
+	for _, d := range stackops.Discover(standalone, managedHere, stacks.TargetStandalone, stackops.SelfMarks{}) {
+		if strings.Contains(d.NameReason, "already managed") {
+			t.Errorf("%s on a standalone host = reason %q, want no case clash there", d.Name, d.NameReason)
+		}
+	}
+}
+
 func TestDiscoverFlagsOrphanPortainerSelfAgent(t *testing.T) {
 	t.Parallel()
 	t.Run("an orphan Bayplan ID is the smallest one and never a link", func(t *testing.T) {
