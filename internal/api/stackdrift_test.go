@@ -598,3 +598,29 @@ func TestAcceptLiveRouteIsRefusedWhileAnOperationRunsAndWithoutADeployedRevision
 	}
 	f.awaitDeploy(t, jobID)
 }
+
+// A stopped stack's services run no replicas and the global and job services are gone from the engine, so rebuilding
+// the draft from what runs would write replicas 0 and drop them. Accept live is refused before any engine is read, and the
+// draft stays as it was (WR-01, D-21).
+func TestAcceptLiveRouteIsRefusedForAStoppedStack(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "parked")
+	f.deployGood(t, operator, st.ID, composeWebAndApi)
+	f.lifecycle(t, operator, stopPath(st.ID))
+	version := draftVersion(t, operator, st.ID)
+	writes := len(f.fake.Writes())
+
+	rec := operator.do(http.MethodPost, acceptURL(st.ID), `{"draftVersion":`+itoaT(version)+`}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_stopped" {
+		t.Fatalf("accept on a stopped stack: %d %s, want 409 stack_stopped", rec.Code, rec.Body)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d", writes, n)
+	}
+	if after := draftVersion(t, operator, st.ID); after != version {
+		t.Errorf("draft version went from %d to %d: the draft was rewritten", version, after)
+	}
+}

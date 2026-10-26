@@ -222,6 +222,25 @@ describe("Accept live into draft", () => {
     expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
   });
 
+  it("says a stopped stack has nothing running to keep when the server refuses with stack_stopped", async () => {
+    acceptAnswer = () =>
+      Response.json(
+        { type: "stack_stopped", title: "Conflict", status: 409, detail: "x" },
+        { status: 409 },
+      );
+    mount();
+
+    fireEvent.click(await ready());
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "This stack is stopped, so there's nothing running to keep. Start it first.",
+      ),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+    expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
+  });
+
   // heldBack waits for the button to say why it is held back: until the page has learnt what the user may do it says
   // Needs Operator, whoever they are.
   async function heldBack(reason: string): Promise<void> {
