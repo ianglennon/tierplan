@@ -39,6 +39,47 @@ func RedactChanges(changes []stacks.ServiceChange, target stacks.Target) []stack
 	return out
 }
 
+// withheldPaths are the paths of the settings RedactChanges withholds, by target, as stacks.ChangedPaths names them:
+// the leaves under them (Env[NAME], Command[0], Options.key ...) are withheld too.
+var withheldPaths = map[stacks.Target][]string{
+	stacks.TargetSwarm: {
+		"TaskTemplate.ContainerSpec.Env", "TaskTemplate.ContainerSpec.Command", "TaskTemplate.ContainerSpec.Args",
+		"TaskTemplate.ContainerSpec.Healthcheck.Test", "TaskTemplate.LogDriver.Options",
+	},
+	stacks.TargetStandalone: {"environment", "command", "entrypoint", "healthcheck.test", "logging.options"},
+}
+
+// RedactReverts withholds the values of the rows of a review's "reverts drift" part that sit at a path RedactChanges
+// withholds (an environment value, a command line, a health check command, a log option): Live and Desired are
+// replaced by redact.Placeholder, a side that is empty (one the deploy or the engine does not have) stays empty, and the
+// path, the service and the cause stay. It is for a caller who may not reveal secrets (D-47). The input is not modified.
+func RedactReverts(rows []DriftRevert, target stacks.Target) []DriftRevert {
+	prefixes := withheldPaths[stacks.TargetSwarm]
+	if target == stacks.TargetStandalone {
+		prefixes = withheldPaths[stacks.TargetStandalone]
+	}
+	out := slices.Clone(rows)
+	for i, r := range out {
+		if r.Change != RevertChanged || !underAny(r.Path, prefixes) {
+			continue
+		}
+		if r.Live != "" {
+			out[i].Live = redact.Placeholder
+		}
+		if r.Desired != "" {
+			out[i].Desired = redact.Placeholder
+		}
+	}
+	return out
+}
+
+// underAny reports whether path is one of prefixes or a leaf below one of them.
+func underAny(path string, prefixes []string) bool {
+	return slices.ContainsFunc(prefixes, func(p string) bool {
+		return path == p || strings.HasPrefix(path, p+".") || strings.HasPrefix(path, p+"[")
+	})
+}
+
 // withheldSlot is one value of a spec that was replaced: the JSON it held and the JSON that replaced it.
 type withheldSlot struct{ was, now string }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/redact"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -182,6 +183,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 		Description: "Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. " +
 			"It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. " +
 			"A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. " +
+			"A caller who does not hold secrets.reveal gets, in every mode, every environment value, command, argument, health check command and log option of the running service and of the next spec as <hidden> (the names and paths stay), and the live and desired text of a revertsDrift row at such a path as <hidden>, as the drift route does. " +
 			"Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. " +
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
@@ -281,6 +283,13 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 			Severity: stacks.SeverityError, Code: problemOperationLocked,
 			Message: "Another stack operation is running on " + env.Name + ": " + h.StackName + ", started " + rfc3339(h.Started) + ".",
 		})
+	}
+	// The running service's settings, and what was changed outside the stack, are withheld from a caller who may not
+	// reveal secrets, in every mode, as the drift and the History changes routes withhold them (D-47). Only the
+	// answer is masked: the draft version and the pins the deploy takes from a review are not derived from it.
+	if !redact.CanReveal(ctx, d.Checker, p, env.ID) {
+		rv.Services = stackops.RedactChanges(rv.Services, st.Target)
+		rv.RevertsDrift = stackops.RedactReverts(rv.RevertsDrift, st.Target)
 	}
 	body := stackReviewBody(rv)
 	if ri.Deployed != nil {

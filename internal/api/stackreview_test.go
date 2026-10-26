@@ -291,8 +291,10 @@ func TestReviewHidesASecretThatChangedAndNamesItsPath(t *testing.T) {
 	}
 	for _, side := range []map[string]any{rv.Services[0].Current, rv.Services[0].Next} {
 		b, _ := json.Marshal(side)
-		if !strings.Contains(string(b), `API_KEY=\u003chidden\u003e`) || !strings.Contains(string(b), "MODE=prod") {
-			t.Errorf("a side = %s, want API_KEY hidden and MODE shown", b)
+		// An Operator holds no secrets.reveal, so every value of the running service is withheld, not only the stack's
+		// secret ones (D-47); the names stay.
+		if !strings.Contains(string(b), `API_KEY=\u003chidden\u003e`) || !strings.Contains(string(b), `MODE=\u003chidden\u003e`) || strings.Contains(string(b), "MODE=prod") {
+			t.Errorf("a side = %s, want every environment value hidden and the names shown", b)
 		}
 	}
 }
