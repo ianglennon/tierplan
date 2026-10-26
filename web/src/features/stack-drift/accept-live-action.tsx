@@ -4,7 +4,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { GitPullRequestArrow } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { AcceptLiveError, useAcceptLive } from "@/api/stack-drift";
 import { draftQuery, stackQuery } from "@/api/stacks";
@@ -47,6 +47,11 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
   const accept = useAcceptLive(envId, stackId);
   const name = stack.data?.name ?? stackId;
   const [confirming, setConfirming] = useState<SavedDraft | null>(null);
+  // Set from the click until the draft has been read and the question answered or the rebuild done. The mutation is
+  // not pending while the draft is being read, so its flag alone lets a second click start a second run, whose
+  // rebuild the first one has made a conflict.
+  const [reading, setReading] = useState(false);
+  const busy = useRef(false);
 
   // rebuild asks the server to replace the draft, which it does only if the draft is still at version.
   async function rebuild(version: number) {
@@ -67,18 +72,24 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
   }
 
   async function run() {
-    if (accept.isPending) return;
+    if (busy.current || accept.isPending) return;
+    busy.current = true;
+    setReading(true);
     try {
       // The draft as it is now: what the dialog names and the version the request carries are the same read, so the
-      // server refuses the rebuild if the draft moves after it.
+      // server refuses the rebuild if the draft moves after it. Only this read decides whether a draft is there to
+      // replace: the stack the page holds can be as old as its last poll.
       const draft = await queryClient.fetchQuery({ ...draftQuery(envId, stackId), staleTime: 0 });
-      if (stack.data?.hasDraft && draft.isDraft) {
+      if (draft.isDraft) {
         setConfirming({ version: draft.version, savedBy: draft.savedBy, savedAt: draft.savedAt });
         return;
       }
       await rebuild(draft.version);
     } catch (e) {
       toastError(refusal(e instanceof AcceptLiveError ? e : new AcceptLiveError(0), t, envName));
+    } finally {
+      busy.current = false;
+      setReading(false);
     }
   }
 
@@ -89,7 +100,8 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
       : drifted
         ? undefined
         : t("stackAcceptLive.noDrift");
-  const label = accept.isPending ? t("stackAcceptLive.working") : t("stackAcceptLive.action");
+  const working = accept.isPending || reading;
+  const label = working ? t("stackAcceptLive.working") : t("stackAcceptLive.action");
   if (reason) {
     return (
       <NeedsTooltip reason={reason}>
@@ -106,7 +118,7 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
         type="button"
         variant="outline"
         className="max-md:h-11"
-        disabled={accept.isPending}
+        disabled={working}
         onClick={() => void run()}
       >
         <GitPullRequestArrow aria-hidden="true" />

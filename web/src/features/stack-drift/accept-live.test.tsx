@@ -193,11 +193,14 @@ describe("Accept live into draft", () => {
     expect(toasts.error).not.toHaveBeenCalled();
   });
 
-  it("sends the version of the draft as it is now", async () => {
+  it("sends the version of the draft as it is now, after the confirm a saved draft asks for", async () => {
     draft = { ...draft, isDraft: true, version: 7 };
     mount();
 
     fireEvent.click(await ready());
+    const dialog = await screen.findByRole("alertdialog", { name: "Replace the draft?" });
+    expect(posts).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Replace draft" }));
 
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]?.body).toEqual({ draftVersion: 7 });
