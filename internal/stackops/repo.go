@@ -341,8 +341,12 @@ func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, erro
 	}); err != nil {
 		return Stack{}, Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
-	if n, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(rawPlatforms), ID: revID.String()}); err != nil || n != 1 {
-		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %v (%d rows)", err, n)
+	n, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(rawPlatforms), ID: revID.String()})
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %w", err)
+	}
+	if n != 1 {
+		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %d rows changed, want 1", n)
 	}
 	if err := r.writeContent(ctx, q, revID.String(), rec.Copy); err != nil {
 		return Stack{}, Snapshot{}, err
