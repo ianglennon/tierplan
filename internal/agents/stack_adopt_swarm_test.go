@@ -477,3 +477,233 @@ func sharedStackAdoptRoundTrip(t *testing.T, f *swarmFix) {
 		})
 	}
 }
+
+// mountLabels are the labels on the volume options of each mount of a service, by mount target.
+func mountLabels(t *testing.T, f *swarmFix, service string) map[string]map[string]string {
+	t.Helper()
+	var mounts []struct {
+		Target        string
+		VolumeOptions *struct{ Labels map[string]string }
+	}
+	raw := serviceField(t, f, service, "{{json .Spec.TaskTemplate.ContainerSpec.Mounts}}")
+	if err := json.Unmarshal([]byte(raw), &mounts); err != nil {
+		t.Fatalf("read the mounts of %s from %q: %v", service, raw, err)
+	}
+	out := map[string]map[string]string{}
+	for _, m := range mounts {
+		if m.VolumeOptions != nil {
+			out[m.Target] = m.VolumeOptions.Labels
+		}
+	}
+	return out
+}
+
+// servicePlatforms is the JSON of a service's placement platforms, "" when it has none.
+func servicePlatforms(t *testing.T, f *swarmFix, service string) string {
+	t.Helper()
+	got := serviceField(t, f, service, "{{with .Spec.TaskTemplate.Placement}}{{json .Platforms}}{{end}}")
+	if got == "null" || got == "[]" {
+		return ""
+	}
+	return got
+}
+
+// removeVolumeOn removes a named volume of the node and waits until it is gone. A volume that is not there is
+// done, so the case and its cleanup can both call it.
+func removeVolumeOn(t *testing.T, node *dockertest.Node, name string) {
+	t.Helper()
+	testsupport.Poll(t, stackGoneWait, "the volume "+name+" to be removed from "+node.Hostname, func() (bool, string) {
+		out, err := node.Sh(execCtx(t, time.Minute), "docker volume rm "+name+" 2>&1")
+		if err == nil || strings.Contains(out, "No such volume") || strings.Contains(out, "not found") { // the wording differs by engine
+			return true, ""
+		}
+		return false, strings.TrimSpace(out)
+	})
+}
+
+// sharedStackAdoptResolvedRoundTrip is the real-engine oracle of the stack the UAT adopted (G-08-4, D-20, D-18,
+// ROADMAP SC3): `docker stack deploy` with its default --resolve-image=always, which writes each service's
+// platforms into its placement, and a named volume, which writes the namespace label on the mount's volume
+// options. On a real swarm:
+//
+//   - the precondition holds, or the case fails: the CLI wrote platforms on every service, and no label of
+//     Bayplan's is on the volume mount;
+//   - the adopt check (rebuild) is clean, with every service ownership-only;
+//   - the stack's own file, pasted with ${TAG} in the image, matches what runs;
+//   - adopting writes nothing to the engine and drift reads none;
+//   - the first review lists the ownership labels alone, nothing under the placement;
+//   - the first deploy keeps every service's platforms and the volume (its CreatedAt does not move), gives every
+//     service and the volume's mount Bayplan's stack ID, and the second review is empty;
+//   - a roll back to the adopted revision keeps the platforms;
+//   - removal through Bayplan leaves nothing under the namespace, and the case removes the volume.
+func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
+	f.stackEnvReady(t)
+	mgr := f.sw.Managers[0]
+	addr := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
+	// The image is pushed as a manifest list, as an image of Docker Hub is: only for a list does the engine learn
+	// the image's platforms and write them into a service's placement under --resolve-image=always.
+	image := addr + "/adoptr/app:1"
+	dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, addr+"/adoptr/app:single", nil)
+	sh(t, mgr, "docker manifest create --insecure "+image+" "+addr+"/adoptr/app:single && docker manifest push --insecure --purge "+image)
+
+	const stack, volume = "adoptr", "adoptr_data"
+	services := []string{"adoptr_web", "adoptr_api"}
+	// The stack and its volume do not outlive the case on any path. Cleanups run last in, first out.
+	t.Cleanup(func() { removeVolumeOn(t, mgr, volume) })
+	t.Cleanup(func() { removeStackCLI(t, f, stack) })
+
+	// The stack as an admin makes it with the CLI's defaults, and as it settles.
+	cliFile := readCorpus(t, "adopt-resolved.yaml", map[string]string{"IMAGE": image, "NODE": mgr.Hostname})
+	if err := deployWithCLIResolving(execCtx(t, 5*time.Minute), mgr, stack, paritySource{Compose: cliFile}); err != nil {
+		t.Fatal(err)
+	}
+	waitStackConverged(t, f, stack)
+
+	// The precondition the oracle stands on: the CLI wrote platforms, and Bayplan has written nothing on the mount.
+	platforms := map[string]string{}
+	for _, svc := range services {
+		if platforms[svc] = servicePlatforms(t, f, svc); platforms[svc] == "" {
+			t.Fatalf("docker stack deploy --resolve-image=always wrote no placement platforms on %s; its image %q, placement %s", svc,
+				serviceField(t, f, svc, "{{.Spec.TaskTemplate.ContainerSpec.Image}}"), serviceField(t, f, svc, "{{json .Spec.TaskTemplate.Placement}}"))
+		}
+	}
+	for target, labels := range mountLabels(t, f, "adoptr_api") {
+		for k := range labels {
+			if strings.HasPrefix(k, "bayplan.") {
+				t.Fatalf("the CLI-made mount %s carries %s before adoption", target, k)
+			}
+		}
+	}
+	before := readEngineObjects(t, mgr, stack)
+	if len(before.versions) != len(services) {
+		t.Fatalf("docker stack deploy made services %v, want %v", before.versions, services)
+	}
+	createdAt := strings.TrimSpace(sh(t, mgr, "docker volume inspect "+volume+" --format '{{.CreatedAt}}'"))
+
+	waitUnmanaged(t, f, stack)
+
+	// The rebuild check is clean: the first deploy changes the ownership labels and nothing else.
+	chk := adoptCheck(t, f, stack)
+	if !chk.Clean || chk.GapCount != 0 || len(chk.Gaps) != 0 {
+		for _, g := range chk.Gaps {
+			var diffs []string
+			leafDiff("", g.Current, g.Next, &diffs)
+			t.Errorf("the adopt check finds a gap in %s:\n  %s\n  hidden changes: %v", g.Name, strings.Join(diffs, "\n  "), g.HiddenChanges)
+		}
+		t.Fatalf("the adopt check of %s: clean %v, %d gaps; want clean with none", stack, chk.Clean, chk.GapCount)
+	}
+	if len(chk.OwnershipOnly) != len(services) {
+		t.Errorf("the adopt check lists %d services as ownership-only (%v), want all %d", len(chk.OwnershipOnly), chk.OwnershipOnly, len(services))
+	}
+	if chk.Fingerprint == "" {
+		t.Fatalf("the adopt check of %s answered no fingerprint", stack)
+	}
+
+	// The stack's own file, pasted with ${TAG}, matches what runs.
+	pasted := readCorpus(t, "adopt-resolved.yaml", map[string]string{"IMAGE": addr + "/adoptr/app:${TAG}", "NODE": mgr.Hostname})
+	code, body := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/unmanaged-stacks/"+stack+"/adopt-check", map[string]any{
+		"source": "paste", "compose": pasted, "vars": []map[string]any{{"name": "TAG", "value": "1", "secret": false}},
+	})
+	var paste struct {
+		Matches bool `json:"matches"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &paste) != nil {
+		t.Fatalf("POST the paste check of %s = %d %s", stack, code, body)
+	}
+	if !paste.Matches {
+		t.Errorf("the paste check of the stack's own file does not match what runs: %s", body)
+	}
+	readEngineObjects(t, mgr, stack).requireSame(t, "after the checks", before, true)
+
+	// Adopting writes nothing; drift reads none.
+	id := adopt(t, f, stack, chk.Fingerprint)
+	removed := false
+	t.Cleanup(func() {
+		if !removed {
+			removeStackBayplan(t, f, id, stack, engineObjects{})
+		}
+	})
+	readEngineObjects(t, mgr, stack).requireSame(t, "after adopting", before, true)
+	if d := driftOf(t, f, id, true); d.Count != 0 || len(d.Services) != 0 {
+		t.Errorf("the freshly adopted stack drifts: %+v", d)
+	}
+
+	// The first review: the ownership labels alone, nothing under the placement.
+	rv := reviewAdopted(t, f, id)
+	if rv.Adoption == nil || !rv.Adoption.Pending || rv.Adoption.OwnershipOnly != len(services) {
+		t.Errorf("the first review's adoption = %+v, want pending with %d services recreated for the labels", rv.Adoption, len(services))
+	}
+	if len(rv.Services) != len(services) {
+		t.Errorf("the first review lists %d services, want %d", len(rv.Services), len(services))
+	}
+	for _, sc := range rv.Services {
+		var diffs []string
+		leafDiff("", sc.Current, sc.Next, &diffs)
+		if sc.Change != "changed" || !sc.OwnershipOnly {
+			t.Errorf("the first review lists %s %s (ownership only: %v):\n  %s", sc.Change, sc.Name, sc.OwnershipOnly, strings.Join(diffs, "\n  "))
+		}
+		for _, d := range diffs {
+			if strings.Contains(d, "Placement") || strings.Contains(d, "latform") {
+				t.Errorf("the first review of %s changes the placement: %s", sc.Name, d)
+			}
+		}
+	}
+
+	// The first deploy keeps the platforms and the volume, and takes ownership of both.
+	f.deployStackBayplan(t, id)
+	waitStackConverged(t, f, stack)
+	readEngineObjects(t, mgr, stack).requireSame(t, "after the first deploy", before, false)
+	for _, svc := range services {
+		if got := servicePlatforms(t, f, svc); got != platforms[svc] {
+			t.Errorf("%s has the platforms %s after the first deploy, want %s", svc, got, platforms[svc])
+		}
+		if got := serviceField(t, f, svc, `{{index .Spec.Labels "bayplan.stack.id"}}`); got != id {
+			t.Errorf("%s carries bayplan.stack.id %q after the first deploy, want %s", svc, got, id)
+		}
+	}
+	for target, labels := range mountLabels(t, f, "adoptr_api") {
+		if labels["bayplan.stack.id"] != id {
+			t.Errorf("the mount %s has the labels %v after the first deploy, want bayplan.stack.id %s", target, labels, id)
+		}
+	}
+	if got := strings.TrimSpace(sh(t, mgr, "docker volume inspect "+volume+" --format '{{.CreatedAt}}'")); got != createdAt {
+		t.Errorf("the volume %s was created at %s, now %s: the first deploy replaced it", volume, createdAt, got)
+	}
+
+	// The second review lists no change.
+	rv = reviewAdopted(t, f, id)
+	for _, sc := range rv.Services {
+		var diffs []string
+		leafDiff("", sc.Current, sc.Next, &diffs)
+		t.Errorf("the second review lists %s %s:\n  %s", sc.Change, sc.Name, strings.Join(diffs, "\n  "))
+	}
+	for kind, n := range map[string]struct{ Added, Changed, Removed int }{
+		"services": rv.Summary.Services, "networks": rv.Summary.Networks, "volumes": rv.Summary.Volumes,
+		"secrets": rv.Summary.Secrets, "configs": rv.Summary.Configs,
+	} {
+		if n.Added+n.Changed+n.Removed != 0 {
+			t.Errorf("the second review's summary counts %s %+v, want none", kind, n)
+		}
+	}
+
+	// A roll back to the adopted revision keeps the platforms.
+	code, body = f.srv.Do(http.MethodPost, f.stackAPI()+"/"+id+"/rollback", map[string]any{"revision": 1, "expectedDeployed": 2})
+	var started struct {
+		JobID string `json:"jobId"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the roll back to #1 = %d %s", code, body)
+	}
+	waitJob(t, f, id, started.JobID, "roll back")
+	waitStackConverged(t, f, stack)
+	for _, svc := range services {
+		if got := servicePlatforms(t, f, svc); got != platforms[svc] {
+			t.Errorf("%s has the platforms %s after the roll back, want %s", svc, got, platforms[svc])
+		}
+	}
+
+	// Removal leaves nothing under the namespace; the named volume is the case's to remove.
+	removed = true
+	removeStackBayplan(t, f, id, stack, engineObjects{})
+	removeVolumeOn(t, mgr, volume)
+}

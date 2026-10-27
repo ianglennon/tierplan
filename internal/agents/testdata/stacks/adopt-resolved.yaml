@@ -1,0 +1,22 @@
+# The resolved adoption corpus file (plan 08-38, G-08-4): the stack the UAT adopted. docker stack deploy with its
+# default --resolve-image=always asks the registry for each image, writes image@digest and stores the image's
+# platforms in the service's placement. {{IMAGE}} is the fixture registry's image by tag, so that lookup happens.
+# {{NODE}} pins the api service to one manager, so the node its named volume lives on is known.
+services:
+  web:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+  api:
+    image: {{IMAGE}}
+    command: ["sleep", "3600"]
+    stop_grace_period: 1s
+    volumes:
+      - data:/data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == {{NODE}}
+
+volumes:
+  data: {}
