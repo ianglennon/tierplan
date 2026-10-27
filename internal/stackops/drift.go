@@ -151,13 +151,14 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 	for _, s := range live.Services {
 		byName[s.Name] = s
 	}
+	// The platforms of an image are not in the revision (no compose file says them): a service that still runs the
+	// pinned digest keeps those it runs, and one on another digest borrows none (G-08-4, T-08-97).
+	carryPlatforms(restored, byName)
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		if p, ok := restored[sp.Name]; ok && spec.TaskTemplate.ContainerSpec != nil {
-			cs := *spec.TaskTemplate.ContainerSpec
-			cs.Image = p.Ref
-			spec.TaskTemplate.ContainerSpec = &cs
+		if p, ok := restored[sp.Name]; ok {
+			spec = withPin(spec, p)
 		}
 		if existing, ok := byName[sp.Name]; ok {
 			// The counter that makes the swarm replace tasks moves without a person changing the stack: it is

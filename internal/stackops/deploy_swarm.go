@@ -385,6 +385,9 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	} else {
 		pinned = d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
 	}
+	// A service keeps the platforms of the image it runs; they belong to the image, so a pin that names another one
+	// borrows none (G-08-4, T-08-97).
+	carryPlatforms(pinned.Pins, byName)
 	res.Pins, res.Problems = pinned.Pins, placeProblems(in.Files, pinned.Problems)
 	if pinned.Blocked() {
 		msg := ""
@@ -440,8 +443,8 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		prog.start(idService + sp.Name)
 		// The image is the pinned one, never the text; an update keeps the counter that makes
 		// the swarm replace tasks, so a redeploy that changed nothing replaces nothing.
-		if p, ok := pinned.Pins[sp.Name]; ok && sp.Spec.TaskTemplate.ContainerSpec != nil {
-			sp.Spec.TaskTemplate.ContainerSpec.Image = p.Ref
+		if p, ok := pinned.Pins[sp.Name]; ok {
+			sp.Spec = withPin(sp.Spec, p)
 		}
 		if update {
 			sp.Spec.TaskTemplate.ForceUpdate = liveForceUpdate(existing.Spec)

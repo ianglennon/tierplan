@@ -378,6 +378,8 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		}
 	}
 	pinned := d.ResolvePins(ctx, in.EnvID, plan.Services, byName, stored, update)
+	// A service keeps the platforms of the image it runs, as a deploy sends them (G-08-4).
+	carryPlatforms(pinned.Pins, byName)
 	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (no manager is connected, the agent refused).
@@ -403,10 +405,8 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		if p, ok := pinned.Pins[sp.Name]; ok && spec.TaskTemplate.ContainerSpec != nil {
-			cs := *spec.TaskTemplate.ContainerSpec
-			cs.Image = p.Ref
-			spec.TaskTemplate.ContainerSpec = &cs
+		if p, ok := pinned.Pins[sp.Name]; ok {
+			spec = withPin(spec, p)
 		}
 		if existing, ok := byName[sp.Name]; ok {
 			// The counter that makes the swarm replace tasks is carried over, as a deploy does.
