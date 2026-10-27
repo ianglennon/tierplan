@@ -1740,3 +1740,131 @@ func TestADeployThatLooksAnImageUpSendsThePlatformsOfTheImage(t *testing.T) {
 		}
 	})
 }
+
+// reviewedDeploy is a deploy of the compose text that follows a review: it carries exactly the images the review chose.
+func reviewedDeploy(t *testing.T, rig *swarmRig, name, compose string, rv stackops.Review) stackops.SwarmDeployInput {
+	t.Helper()
+	_, in := stackInput(t, name, compose, nil)
+	in.Pins, in.RevisionID = &memPins{}, "rev-1"
+	in.Reviewed = rv.Pins
+	return in
+}
+
+// TestAReviewedDeploySendsThePlatformsItsReviewFound (G-08-4, user decision 2026-10-27): the deploy the UI starts after a
+// review carries references only. It sends each looked-up image with the platforms the review showed, read from the
+// server's memo of the review's answers and so without a second registry call; when the server no longer holds them (it
+// restarted between the two), it asks the registry once for the platforms of the reviewed digest, and a registry that
+// cannot answer stops the deploy for that service as any lookup a deploy needs does (P7 D-18).
+func TestAReviewedDeploySendsThePlatformsItsReviewFound(t *testing.T) {
+	t.Parallel()
+	want := []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}
+	compose := pinCompose("nginx:1.27")
+
+	t.Run("the memo of the review answers", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		rig.deps.Platforms = stackops.NewPlatformMemo()
+		rv := rig.review(t, "site", compose, nil)
+		reviewed := rig.fake.DistributionRefs()
+		if len(reviewed) != 1 {
+			t.Fatalf("review lookups = %v, want 1", reviewed)
+		}
+
+		res, job := rig.deploy(t, reviewedDeploy(t, rig, "site", compose, rv))
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		creates := rig.fake.ServiceCreates()
+		if len(creates) != 1 {
+			t.Fatalf("service creates = %d, want 1", len(creates))
+		}
+		if pl := creates[0].Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, want) {
+			t.Errorf("created with placement %+v, want the platforms the review found %v", pl, want)
+		}
+		if refs := rig.fake.DistributionRefs(); !slices.Equal(refs, reviewed) {
+			t.Errorf("distribution lookups = %v, want only the review's %v: the deploy asks no registry while the server holds the answer", refs, reviewed)
+		}
+	})
+
+	t.Run("no memo: one lookup of the reviewed digest", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		rv := rig.review(t, "site", compose, nil)
+		before := len(rig.fake.DistributionRefs())
+		pin := rv.Pins["site_web"]
+		if !strings.Contains(pin, "@sha256:") {
+			t.Fatalf("reviewed pins = %v, want a pinned reference", rv.Pins)
+		}
+
+		res, job := rig.deploy(t, reviewedDeploy(t, rig, "site", compose, rv))
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		extra := rig.fake.DistributionRefs()[before:]
+		if len(extra) != 1 || !strings.HasSuffix(extra[0], pin[strings.Index(pin, "@"):]) || !strings.HasPrefix(extra[0], "docker.io/library/nginx:1.27@") {
+			t.Errorf("the deploy's lookups = %v, want exactly one, for the reviewed reference %s", extra, pin)
+		}
+		creates := rig.fake.ServiceCreates()
+		if len(creates) != 1 {
+			t.Fatalf("service creates = %d, want 1", len(creates))
+		}
+		if pl := creates[0].Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, want) {
+			t.Errorf("created with placement %+v, want the platforms %v", pl, want)
+		}
+	})
+
+	t.Run("no memo and a registry that cannot answer", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name          string
+			status        int
+			message, code string
+		}{
+			{"unreachable", 500, "dial tcp: lookup registry.example: no such host", stackops.CodeRegistryUnreachable},
+			{"unresolved", 404, "manifest unknown", stackops.CodeImageUnresolved},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				rig := newSwarmRig(t, nil)
+				rv := rig.review(t, "site", compose, nil)
+				pin := rv.Pins["site_web"]
+				rig.fake.SetDistributionFailure("docker.io/library/nginx:1.27"+pin[strings.Index(pin, "@"):], tc.status, tc.message)
+				writes := len(rig.fake.Writes())
+
+				res, job := rig.deploy(t, reviewedDeploy(t, rig, "site", compose, rv))
+				if res.OK() || res.Code != tc.code || res.FailedService != "site_web" {
+					t.Fatalf("deploy = %+v, want code %s at service site_web", res, tc.code)
+				}
+				if it := itemByID(t, job, stackops.ItemLookup); it.State != jobs.ItemFailed {
+					t.Errorf("lookup item = %+v, want it failed", it)
+				}
+				if got := writesNamed(rig.fake, "/services"); len(got) != 0 || len(rig.fake.Writes()) != writes {
+					t.Errorf("the deploy wrote %v after a failed lookup, want nothing", rig.fake.Writes()[writes:])
+				}
+			})
+		}
+	})
+}
+
+// TestAReviewedDeployOfKeptDigestsAsksNoRegistry (G-08-4): an adopted CLI stack's first deploy keeps the digests its
+// services run, so it asks no registry for platforms, memo or not, and sends the platforms they run with.
+func TestAReviewedDeployOfKeptDigestsAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	amd, arm := swarm.Platform{OS: "linux", Architecture: "amd64"}, swarm.Platform{OS: "linux", Architecture: "arm64"}
+	a := adoptCorpus(t, livePlatforms(amd, arm))
+	rv := a.review(t)
+	before := len(a.rig.fake.DistributionRefs())
+
+	res, job := a.rig.deploy(t, a.deployInput(t, rv))
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	if n := len(a.rig.fake.DistributionRefs()); n != before {
+		t.Errorf("distribution lookups = %d, want still %d: kept digests never ask the registry", n, before)
+	}
+	for _, u := range a.rig.fake.ServiceUpdates() {
+		if pl := u.Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{amd, arm}) {
+			t.Errorf("service %s was updated with placement %+v, want the platforms it runs", u.Spec.Name, pl)
+		}
+	}
+}
