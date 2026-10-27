@@ -247,3 +247,27 @@ func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
 		}
 	}
 }
+
+// TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget: the live mount's target is written so that every path inside
+// it reads like Bayplan's label path. The paths alone would call a change of its source ownership-only; the two
+// specs, with every ownership label stripped, still differ, so the service stays a gap (T-08-55, T-08-96).
+func TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget(t *testing.T) {
+	t.Parallel()
+	const target = "/x].VolumeOptions.Labels.bayplan.y"
+	mountOf := func(source string) string {
+		return `{"Name":"shop_api","TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"` + source + `","Target":"` + target + `"}]}}}`
+	}
+	running, desired := specOf(t, mountOf("shop_data")), specOf(t, mountOf("shop_other"))
+	d := map[string]swarm.ServiceSpec{"shop_api": desired}
+	l := map[string]swarm.ServiceSpec{"shop_api": running}
+
+	rows := stacks.DiffServices(d, l, stacks.Masker{})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v, want one changed service", rows)
+	}
+	stacks.MarkOwnershipOnly(rows, d, l)
+
+	if rows[0].OwnershipOnly {
+		t.Errorf("a changed mount source was marked ownership-only because its target reads like a label path")
+	}
+}
