@@ -710,9 +710,9 @@ must not infer an adopted stack's ownership from `bayplan.stack.id` labels alone
   adoption and its first good deploy, a service or container of the stack's namespace or project counts as its own if
   it has no ID or the old one recorded at adoption; afterwards only its own ID counts.
 - **On a standalone host, a container added to the stack's project from the host's CLI counts with the stack.** A
-  container of the project with no `bayplan.stack.id` is the stack's once the stack owns at least one container of the
-  project (drift, the stack's page, restore and Remove). Another stack's ID never counts, and a project the stack
-  holds no container of stays a name clash and is not taken over.
+  container of the project with no `bayplan.stack.id` is the stack's once the stack owns another container of the
+  same service (drift, the stack's page, restore and Remove). Another stack's ID never counts, and a project the stack
+  holds no container of, or a service it runs no container of, stays a name clash and is not taken over.
 - The one place that decides this is `Ownership` in `internal/stackops` (`OwnershipOf(stack)`). A guard test fails on
   code elsewhere that decides ownership by a Bayplan ID label. Ask it, do not copy the rule.
 
