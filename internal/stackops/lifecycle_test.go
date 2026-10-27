@@ -790,3 +790,35 @@ func TestStopStartAdoptedStack(t *testing.T) {
 		t.Errorf("stop after the first deploy touched %+v: a service with no ID is another owner's", res)
 	}
 }
+
+// TestStartSendsThePlatformsTheDeployedRevisionStoredAndAsksNoRegistry (G-08-4, T-07-93): a start that makes a service
+// again sends the platforms the last good revision recorded for it, which here differ from the ones the service had, and
+// asks no registry.
+func TestStartSendsThePlatformsTheDeployedRevisionStoredAndAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	rig := newSwarmRig(t, nil)
+	st, store := rig.deployedStack(t, "globals", withGlobal, nil)
+	store.rev.Platforms = map[string][]swarm.Platform{"globals_agent": {arm}}
+	if res, _ := rig.stop(t, st, store); !res.OK() {
+		t.Fatalf("stop = %+v", res)
+	}
+	creates, lookups := len(rig.fake.ServiceCreates()), len(rig.fake.DistributionRefs())
+
+	res, job := rig.start(t, st, store)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("start = %+v %v, want it done", res, itemStates(job))
+	}
+	made := rig.fake.ServiceCreates()[creates:]
+	if len(made) != 1 {
+		t.Fatalf("start created %d services, want 1", len(made))
+	}
+	pl := made[0].Spec.TaskTemplate.Placement
+	if pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{arm}) {
+		t.Errorf("recreated placement = %+v, want the platforms the revision stored, [linux/arm64]", pl)
+	}
+	if n := len(rig.fake.DistributionRefs()); n != lookups {
+		t.Errorf("a start asked a registry %d times", n-lookups)
+	}
+}

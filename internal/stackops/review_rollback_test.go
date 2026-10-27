@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
@@ -290,5 +292,72 @@ func TestRestoreReviewOfWhatIsDeployedFindsNothingToDo(t *testing.T) {
 	}
 	if len(rv.Services) != 0 || len(rv.Objects) != 0 || len(rv.Problems) != 0 {
 		t.Errorf("review = services %+v objects %v problems %+v, want no drift to restore", rv.Services, objectsOf(rv), rv.Problems)
+	}
+}
+
+// platformsRows are the Placement.Platforms paths a review lists, by service.
+func platformsRows(t *testing.T, rv stackops.Review) []string {
+	t.Helper()
+	var out []string
+	for _, p := range gapPaths(t, rv.Services) {
+		if strings.Contains(p, "Placement.Platforms") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// TestRollbackAndRestoreReviewsShowThePlatformsTheRevisionStored (G-08-4, D-05, D-23, T-08-112): the review reads the
+// platforms the revision stored, so it lists the platforms change a roll back or a restore would make, and nothing when
+// what runs already matches. The platforms it stored differ from the ones that run here, so the running ones are not what
+// the review reads.
+func TestRollbackAndRestoreReviewsShowThePlatformsTheRevisionStored(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+
+	review := func(t *testing.T, mode string, runs, stored []swarm.Platform) (stackops.Review, int) {
+		t.Helper()
+		rig := newDriftRig(t)
+		for _, svc := range []string{"web", "api", "gone"} {
+			rig.editLive(t, svc, setLivePlatforms(runs...))
+		}
+		target := rig.store.rev
+		target.Platforms = map[string][]swarm.Platform{}
+		for _, svc := range []string{"web", "api", "gone"} {
+			target.Platforms[rig.st.Name+"_"+svc] = slices.Clone(stored)
+		}
+		in := rig.reviewInput(t, rig.st.Name, driftCompose, nil)
+		in.Stack = rig.st
+		in.Mode, in.Target, in.TargetPins, in.Copy = mode, &target, rig.store.pins, target.Copy
+		lookups := len(rig.fake.DistributionRefs())
+		rv, err := rig.deps.Review(testsupport.Context(t), in)
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		if len(rv.Problems) != 0 {
+			t.Fatalf("problems = %+v", rv.Problems)
+		}
+		return rv, len(rig.fake.DistributionRefs()) - lookups
+	}
+
+	for _, mode := range []string{stackops.ReviewModeRollback, stackops.ReviewModeRestore} {
+		t.Run(mode+" lists the platforms change it would make", func(t *testing.T) {
+			t.Parallel()
+			rv, lookups := review(t, mode, []swarm.Platform{amd, arm}, []swarm.Platform{arm})
+			if got := platformsRows(t, rv); len(got) != 3 {
+				t.Errorf("platforms rows = %v, want one for each of the three services: the revision stored arm64 alone", got)
+			}
+			if lookups != 0 {
+				t.Errorf("the review asked a registry %d times", lookups)
+			}
+		})
+		t.Run(mode+" reads empty when what runs already matches", func(t *testing.T) {
+			t.Parallel()
+			rv, _ := review(t, mode, []swarm.Platform{arm}, []swarm.Platform{arm})
+			if len(rv.Services) != 0 {
+				t.Errorf("services = %v, want nothing to change: what runs has the platforms the revision stored", changesOf(rv))
+			}
+		})
 	}
 }
