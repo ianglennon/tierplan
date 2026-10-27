@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -524,11 +525,11 @@ func (f *saFix) driftNow(t *testing.T, stackID string) (saDrift, string) {
 	return d, string(body)
 }
 
-// TestStandaloneDriftThroughAnAgent proves drift on a real standalone host (STK-14, D-21, D-23): a stack deployed
-// by Bayplan reads no drift; a second container of its service made with the Compose CLI alone (up --scale) is
-// drift, and putting the stack back with a restore ends it, removing that container. The container made outside
-// carries the stack's ID label, the one thing a person copying a container of the stack would also carry: a
-// container of the project without it is another owner's by design and is not the stack's to report.
+// TestStandaloneDriftThroughAnAgent proves drift on a real standalone host (STK-14, D-21, D-22, D-23, G-08-6): a
+// stack deployed by Bayplan reads no drift; a second container of its service made from the person's own file with
+// the Compose CLI alone (up --scale web=2 --no-recreate, no label of Bayplan's on it) is the stack's: drift, a second
+// container of web on the stack's page, gone again after a restore. After a second such scale, a Remove through
+// Bayplan lists that container, waits for it and leaves no container of the project.
 func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
 	image := f.registry + "/bp/app:1"
@@ -548,10 +549,15 @@ func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 		t.Fatalf("drift right after the deploy = %s, want none against revision 1", raw)
 	}
 
-	// A person adds a second container of web with the Compose CLI alone; the first is left as it is.
-	composeUp(t, f, name, compose("    labels:\n      bayplan.stack.id: "+id+"\n"), "--scale", "web=2", "--no-recreate")
+	// A person adds a second container of web from their own file with the Compose CLI alone, as UAT test 6 Part G
+	// does: the file carries no label of Bayplan's, and the first container is left as it is.
+	composeUp(t, f, name, compose(""), "--scale", "web=2", "--no-recreate")
 	if got := f.containers(t, name)["web"]; len(got) != 2 {
 		t.Fatalf("containers of web after up --scale web=2 = %v, want two", got)
+	}
+	if out := strings.TrimSpace(sh(t, f.host, `docker ps -a --filter label=com.docker.compose.project=`+name+
+		` --filter label=bayplan.stack.id --format '{{.Names}}'`)); out != name+"-web-1" {
+		t.Fatalf("containers of the project that carry bayplan.stack.id = %q, want only %s-web-1: the added one carries none", out, name)
 	}
 	testsupport.Poll(t, 2*time.Minute, "a fresh drift check to find web changed", func() (bool, string) {
 		d, raw := f.driftNow(t, id)
@@ -565,6 +571,9 @@ func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 		}
 		return false, raw
 	})
+	if got := f.overviewContainers(t, id, "web"); len(got) != 2 {
+		t.Errorf("the stack's page lists %v under web, want the two containers", got)
+	}
 
 	// A restore puts the deployed revision back: the second container goes, the first is the one it was.
 	jobID, revision := f.rollback(t, id, map[string]any{"mode": "restore", "revision": 1, "expectedDeployed": 1})
@@ -582,5 +591,62 @@ func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 	if after := f.states(t, name); after["web"].ID != first["web"].ID {
 		t.Errorf("web after the restore is container %s, want the first one, %s, left alone", after["web"].ID, first["web"].ID)
 	}
+
+	// Scaled again from the person's file, the stack is removed through Bayplan: the dialog lists the added container,
+	// and nothing of the project is left.
+	composeUp(t, f, name, compose(""), "--scale", "web=2", "--no-recreate")
+	if got := f.containers(t, name)["web"]; len(got) != 2 {
+		t.Fatalf("containers of web after the second up --scale web=2 = %v, want two", got)
+	}
+	code, body := f.srv.Do(http.MethodGet, f.api()+"/"+id+"/removal-preview", nil)
+	var preview struct {
+		Containers []string `json:"containers"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &preview) != nil {
+		t.Fatalf("GET the removal preview = %d %s", code, body)
+	}
+	if !slices.Equal(preview.Containers, []string{name + "-web-1", name + "-web-2"}) {
+		t.Errorf("the removal preview lists %v, want both containers of web, the added one too", preview.Containers)
+	}
+	code, body = f.srv.Do(http.MethodPost, f.api()+"/"+id+"/remove", map[string]any{
+		"confirmName": name, "keepDefinition": false, "volumes": []map[string]string{},
+	})
+	var started struct {
+		JobID string `json:"jobId"`
+	}
+	if code != http.StatusAccepted || json.Unmarshal(body, &started) != nil || started.JobID == "" {
+		t.Fatalf("POST the removal = %d %s", code, body)
+	}
+	f.waitJob(t, id, started.JobID, "removal")
+	testsupport.Poll(t, 2*time.Minute, "the host to hold no container of the removed project", func() (bool, string) {
+		out := strings.TrimSpace(sh(t, f.host, `docker ps -a --filter label=com.docker.compose.project=`+name+` --format '{{.Names}} {{.State}}'`))
+		return out == "", out
+	})
 	f.noDenials(t)
+}
+
+// overviewContainers are the names of the containers the stack's page lists under one service.
+func (f *saFix) overviewContainers(t *testing.T, stackID, service string) []string {
+	t.Helper()
+	code, body := f.srv.Do(http.MethodGet, f.api()+"/"+stackID+"/services", nil)
+	var out struct {
+		Items []struct {
+			Short      string `json:"short"`
+			Containers []struct {
+				Name string `json:"name"`
+			} `json:"containers"`
+		} `json:"items"`
+	}
+	if code != http.StatusOK || json.Unmarshal(body, &out) != nil {
+		t.Fatalf("GET the services of stack %s = %d %s", stackID, code, body)
+	}
+	var names []string
+	for _, it := range out.Items {
+		if it.Short == service {
+			for _, c := range it.Containers {
+				names = append(names, c.Name)
+			}
+		}
+	}
+	return names
 }
