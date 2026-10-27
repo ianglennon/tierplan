@@ -2094,6 +2094,36 @@ func TestAReviewedDeploySendsThePlatformsItsReviewFound(t *testing.T) {
 	})
 }
 
+// TestAReviewedDeployOfAnImageWithNoPlatformsAsksNoRegistryAgain (WR-01): a digest whose lookup found no platform is
+// remembered as that answer, so the deploy that follows the review asks no registry for it and sends no platform.
+func TestAReviewedDeployOfAnImageWithNoPlatformsAsksNoRegistryAgain(t *testing.T) {
+	t.Parallel()
+	compose := pinCompose("nginx:1.27")
+	rig := newSwarmRig(t, nil)
+	rig.deps.Platforms = stackops.NewPlatformMemo()
+	rig.fake.SetDistributionNoPlatforms("docker.io/library/nginx:1.27")
+	rv := rig.review(t, "site", compose, nil)
+	reviewed := rig.fake.DistributionRefs()
+	if len(reviewed) != 1 {
+		t.Fatalf("review lookups = %v, want 1", reviewed)
+	}
+
+	res, job := rig.deploy(t, reviewedDeploy(t, rig, "site", compose, rv))
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	if refs := rig.fake.DistributionRefs(); !slices.Equal(refs, reviewed) {
+		t.Errorf("distribution lookups = %v, want only the review's %v: an answer of none is remembered too", refs, reviewed)
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 {
+		t.Fatalf("service creates = %d, want 1", len(creates))
+	}
+	if pl := creates[0].Spec.TaskTemplate.Placement; pl != nil && len(pl.Platforms) != 0 {
+		t.Errorf("created with platforms %+v, want none", pl.Platforms)
+	}
+}
+
 // TestAReviewedDeployOfKeptDigestsAsksNoRegistry (G-08-4): an adopted CLI stack's first deploy keeps the digests its
 // services run, so it asks no registry for platforms, memo or not, and sends the platforms they run with.
 func TestAReviewedDeployOfKeptDigestsAsksNoRegistry(t *testing.T) {

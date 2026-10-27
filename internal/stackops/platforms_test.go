@@ -206,3 +206,27 @@ func TestAPlatformMemoIsKeyedByRepositoryAndDigest(t *testing.T) {
 		}
 	})
 }
+
+// TestAPlatformMemoRemembersAnEmptyAnswer (WR-01): a digest whose lookup found no platform is held as that answer, which
+// is not the same as a digest never looked up, and a later answer that does name platforms conflicts with it.
+func TestAPlatformMemoRemembersAnEmptyAnswer(t *testing.T) {
+	t.Parallel()
+	amd := []swarm.Platform{{OS: "linux", Architecture: "amd64"}}
+	m := NewPlatformMemo()
+	m.remember("nginx:1.27", platformsDigestA, nil)
+	got, ok := m.recall("nginx:1.27", platformsDigestA)
+	if !ok || len(got) != 0 {
+		t.Errorf("recall = %v %v, want an empty answer that is held", got, ok)
+	}
+	if _, ok := m.recall("nginx:1.27", platformsDigestB); ok {
+		t.Error("the memo answered for a digest it never saw")
+	}
+	m.remember("nginx:1.27", platformsDigestA, []swarm.Platform{})
+	if _, ok := m.recall("nginx:1.27", platformsDigestA); !ok {
+		t.Error("an equal empty write dropped the entry")
+	}
+	m.remember("nginx:1.27", platformsDigestA, amd)
+	if got, ok := m.recall("nginx:1.27", platformsDigestA); ok {
+		t.Errorf("an answer that conflicts with the empty one left %v, want the entry dropped", got)
+	}
+}
