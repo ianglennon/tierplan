@@ -134,9 +134,11 @@ func specPlatforms(spec json.RawMessage) []swarm.Platform {
 const platformMemoLimit = 4096
 
 // PlatformMemo remembers the platforms of the images Bayplan looked up, by the repository the image was looked up in and
-// the sha256 digest of its manifest. A digest names one manifest, but only a registry that tells the truth keeps it so, and
-// the memo is one for the whole server, so an answer is held only for the repository it came from: a lookup of one
-// repository never answers for another that names the same digest (CR-01). A second answer that differs from the one held
+// the sha256 digest of its manifest, within the environment that looked it up. A digest names one manifest, but only a
+// registry that tells the truth keeps it so, and the memo is one for the whole server, so an answer is held only for the
+// repository it came from: a lookup of one repository never answers for another that names the same digest (CR-01). Each
+// environment has its own registry credentials and mirrors, so one environment's answer is never recalled for another
+// (T-08-114). A second answer that differs from the one held
 // for a key drops the entry, so the digest is looked up again and no registry can overwrite what another one said. A
 // review fills the memo through lookupImage and the deploy that follows reads it, so that deploy needs no second registry
 // call and takes no platform from the browser (T-08-98). It holds repositories, digests and os/arch pairs only (T-08-100).
@@ -150,26 +152,27 @@ type PlatformMemo struct {
 // only costs one lookup.
 func NewPlatformMemo() *PlatformMemo { return &PlatformMemo{byKey: map[string][]swarm.Platform{}} }
 
-// memoKey is the key of the answer for the image written as text with the manifest digest: the normalised repository
-// (no tag, no digest, the registry host always spelled out) and the digest. It is empty when digest is not a sha256
-// digest or text does not parse as an image reference, and nothing is kept or recalled for an empty key.
-func memoKey(text, digest string) string {
-	if !digestRe.MatchString(digest) {
+// memoKey is the key of the answer for the image written as text with the manifest digest in the environment envID: the
+// environment, the normalised repository (no tag, no digest, the registry host always spelled out) and the digest. It is
+// empty when envID is empty, digest is not a sha256 digest or text does not parse as an image reference, and nothing is
+// kept or recalled for an empty key.
+func memoKey(envID, text, digest string) string {
+	if envID == "" || !digestRe.MatchString(digest) {
 		return ""
 	}
 	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(text))
 	if err != nil {
 		return ""
 	}
-	return reference.TrimNamed(named).String() + "@" + digest
+	return envID + "\x00" + reference.TrimNamed(named).String() + "@" + digest
 }
 
-// remember keeps the platforms of a digest as looked up in the repository of text. A lookup that found none is kept as
+// remember keeps the platforms of a digest as looked up in the repository of text from the environment envID. A lookup that found none is kept as
 // that answer too, so a deploy that follows the review does not ask the registry again for a digest that names no
 // platform. An answer that differs from the one held for the same repository and digest drops the entry instead of
 // replacing it.
-func (m *PlatformMemo) remember(text, digest string, platforms []swarm.Platform) {
-	key := memoKey(text, digest)
+func (m *PlatformMemo) remember(envID, text, digest string, platforms []swarm.Platform) {
+	key := memoKey(envID, text, digest)
 	if m == nil || key == "" {
 		return
 	}
@@ -187,9 +190,9 @@ func (m *PlatformMemo) remember(text, digest string, platforms []swarm.Platform)
 	m.byKey[key] = append([]swarm.Platform{}, platforms...)
 }
 
-// recall returns the platforms remembered for a digest in the repository of text.
-func (m *PlatformMemo) recall(text, digest string) ([]swarm.Platform, bool) {
-	key := memoKey(text, digest)
+// recall returns the platforms remembered for a digest in the repository of text, as looked up from the environment envID.
+func (m *PlatformMemo) recall(envID, text, digest string) ([]swarm.Platform, bool) {
+	key := memoKey(envID, text, digest)
 	if m == nil || key == "" {
 		return nil, false
 	}
@@ -218,7 +221,7 @@ func (d Deps) reviewedPlatforms(ctx context.Context, envID string, items []pinIt
 		if !digestRe.MatchString(digest) {
 			continue
 		}
-		platforms, held := d.Platforms.recall(it.AsWritten, digest)
+		platforms, held := d.Platforms.recall(envID, it.AsWritten, digest)
 		if !held {
 			res := d.lookupPlatforms(ctx, envID, it.AsWritten, pin.Ref, read)
 			switch {
@@ -228,7 +231,7 @@ func (d Deps) reviewedPlatforms(ctx context.Context, envID string, items []pinIt
 				return res.failure, it.Name, imageProblem(res, it).Message
 			}
 			platforms = res.platforms
-			d.Platforms.remember(it.AsWritten, digest, platforms)
+			d.Platforms.remember(envID, it.AsWritten, digest, platforms)
 		}
 		pin.Platforms = platforms
 		pins[it.Name] = pin
