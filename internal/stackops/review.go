@@ -378,7 +378,9 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		}
 	}
 	pinned := d.ResolvePins(ctx, in.EnvID, plan.Services, byName, stored, update)
-	// A service keeps the platforms of the image it runs, as a deploy sends them (G-08-4).
+	// A service is sent the platforms the last good revision recorded for its digest, else the ones of the image it runs,
+	// as a deploy sends them (G-08-4).
+	storedPlatforms(pinned.Pins, stored)
 	carryPlatforms(pinned.Pins, byName)
 	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
