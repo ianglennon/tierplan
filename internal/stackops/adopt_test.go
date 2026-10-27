@@ -5,8 +5,10 @@ package stackops_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
+	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
@@ -805,3 +808,161 @@ func TestAdoptPasteIsCheckedAgainAtCommit(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// Adoption records the platforms the services run with (G-08-4, D-14): revision 1 holds them beside its pins, so a roll
+// back to it after the images moved on puts them back.
+
+// platformsRig is the swarm of pastedShop whose web service runs two platforms and whose worker runs one.
+func platformsRig(t *testing.T) *swarmRig {
+	t.Helper()
+	return composeRig(t, []byte(pastedShop), func(short string, spec *swarm.ServiceSpec) {
+		switch short {
+		case "web":
+			setLivePlatforms(swarm.Platform{OS: "linux", Architecture: "amd64"}, swarm.Platform{OS: "linux", Architecture: "arm64"})(spec)
+		case "worker":
+			setLivePlatforms(swarm.Platform{OS: "linux", Architecture: "arm64"})(spec)
+		}
+	})
+}
+
+var (
+	platformAMD = swarm.Platform{OS: "linux", Architecture: "amd64"}
+	platformARM = swarm.Platform{OS: "linux", Architecture: "arm64"}
+)
+
+func TestAdoptStoresThePlatformsTheServicesRunWith(t *testing.T) {
+	t.Parallel()
+	rig := platformsRig(t)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+
+	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+
+	rev, err := repo.Revision(ctx, st.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]swarm.Platform{"shop_web": {platformAMD, platformARM}, "shop_worker": {platformARM}}
+	if !reflect.DeepEqual(rev.Platforms, want) {
+		t.Errorf("revision 1 platforms = %v, want %v", rev.Platforms, want)
+	}
+}
+
+func TestAdoptWithoutPlatformsStoresNone(t *testing.T) {
+	t.Parallel()
+	rig := composeRig(t, []byte(pastedShop), nil)
+	repo := adoptRepo(t, rig)
+
+	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+
+	rev, err := repo.Revision(testsupport.Context(t), st.ID, 1)
+	if err != nil || len(rev.Platforms) != 0 {
+		t.Errorf("revision 1 = platforms %v, %v, want none for services that run none", rev.Platforms, err)
+	}
+}
+
+// TestAdoptPasteKeepsPlatformsOnlyWhereTheImageIsTheOneRunning: a pasted file that names another image for a service
+// has no platforms recorded for it (D-12); the service whose image is the one running keeps its own.
+func TestAdoptPasteKeepsPlatformsOnlyWhereTheImageIsTheOneRunning(t *testing.T) {
+	t.Parallel()
+	rig := platformsRig(t)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+	fp, err := rig.deps.AdoptFingerprint(ctx, rig.envID, stacks.TargetSwarm, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pasted := composeOnly("services:\n  web:\n    image: nginx:1.28\n  worker:\n    image: busybox:1\n")
+
+	st, err := rig.deps.AdoptCommit(ctx, repo, stackops.AdoptInput{
+		EnvID: rig.envID, Name: "shop", Target: stacks.TargetSwarm, Fingerprint: fp, Caller: stackops.Caller{Actor: "ada"},
+		Source: stackops.AdoptSourcePaste, Pasted: &pasted,
+	})
+	if err != nil {
+		t.Fatalf("AdoptCommit with a pasted file: %v", err)
+	}
+
+	rev, err := repo.Revision(ctx, st.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]swarm.Platform{"shop_worker": {platformARM}}
+	if !reflect.DeepEqual(rev.Platforms, want) {
+		t.Errorf("revision 1 platforms = %v, want %v: none for web, whose pasted image is not the one running", rev.Platforms, want)
+	}
+}
+
+// TestRollbackReviewOfTheAdoptedRevisionShowsItsPlatformsComingBack: the services move to another digest that runs on no
+// platform in particular, and the review of a roll back to revision 1 lists the platforms it stored.
+func TestRollbackReviewOfTheAdoptedRevisionShowsItsPlatformsComingBack(t *testing.T) {
+	t.Parallel()
+	rig := platformsRig(t)
+	repo := adoptRepo(t, rig)
+	ctx := testsupport.Context(t)
+	st, err := rig.adopt(t, repo, stacks.TargetSwarm, "shop", stackops.SelfMarks{})
+	if err != nil {
+		t.Fatalf("AdoptCommit: %v", err)
+	}
+
+	owned := rig.ownedNow(t, st)
+	newDigest := "sha256:" + strings.Repeat("c", 64)
+	for _, name := range []string{"shop_web", "shop_worker"} {
+		svc, ok := owned[name]
+		if !ok {
+			t.Fatalf("the swarm holds no service %s", name)
+		}
+		var spec swarm.ServiceSpec
+		if err := json.Unmarshal(svc.Spec, &spec); err != nil {
+			t.Fatal(err)
+		}
+		cs := *spec.TaskTemplate.ContainerSpec
+		cs.Image = withoutPinDigest(cs.Image) + "@" + newDigest
+		spec.TaskTemplate.ContainerSpec = &cs
+		spec.TaskTemplate.Placement = nil
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = rig.deps.Aggregator.WriteOnManager(ctx, rig.envID, func(c *dockerx.Client) error {
+			_, e := c.ServiceUpdate(ctx, svc.ID, svc.Version, raw, "")
+			return e
+		})
+		if err != nil {
+			t.Fatalf("update %s: %v", name, err)
+		}
+	}
+
+	rev, err := repo.Revision(ctx, st.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins, err := repo.RevisionPins(ctx, rev.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := rig.reviewInput(t, st.Name, pastedShop, nil)
+	in.Stack = st
+	in.Mode, in.Target, in.TargetPins, in.Copy = stackops.ReviewModeRollback, &rev, pins, rev.Copy
+	rv, err := rig.deps.Review(ctx, in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	if got := platformsRows(t, rv); len(got) != 2 {
+		t.Errorf("platforms rows = %v, want one for each service: the adopted revision stored them and the services run none now", got)
+	}
+}
+
+// withoutPinDigest is an image reference without the digest that pins it.
+func withoutPinDigest(ref string) string {
+	if i := strings.LastIndex(ref, "@"); i > 0 {
+		return ref[:i]
+	}
+	return ref
+}
