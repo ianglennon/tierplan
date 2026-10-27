@@ -1219,6 +1219,51 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	}
 }
 
+// A roll back revision starts with the platforms of the revision it restores, as it starts with its pins, so a roll back
+// that stops before its lookup step still holds a record of what it was about to send (G-08-4, 08-33 note).
+func TestCopyRevisionTakesThePlatformsOfTheRevisionItCopies(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {a: {image: x}}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := goodRevision(t, f, st.ID, "ada")
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	want := map[string][]swarm.Platform{"web_a": {amd}}
+	if err := f.repo.SetPlatforms(ctx, good.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	target, err := f.repo.Revision(ctx, st.ID, good.Seq)
+	if err != nil || !reflect.DeepEqual(target.Platforms, want) {
+		t.Fatalf("target = %+v, %v, want platforms %v", target, err, want)
+	}
+	cp, err := f.repo.CopyRevision(ctx, target, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatalf("CopyRevision: %v", err)
+	}
+	if !reflect.DeepEqual(cp.Platforms, want) {
+		t.Errorf("copy answers platforms %v, want %v", cp.Platforms, want)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, cp.Seq)
+	if err != nil || !reflect.DeepEqual(read.Platforms, want) {
+		t.Errorf("stored copy platforms = %v, %v, want %v", read.Platforms, err, want)
+	}
+	// A revision with no record copies to none.
+	plain, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp2, err := f.repo.CopyRevision(ctx, plain, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read2, err := f.repo.Revision(ctx, st.ID, cp2.Seq); err != nil || len(read2.Platforms) != 0 {
+		t.Errorf("copy of an unrecorded revision has platforms %v, %v, want none", read2.Platforms, err)
+	}
+}
+
 func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 	t.Parallel()
 	f := newRepo(t)
