@@ -234,8 +234,8 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string, read reader) 
 	switch {
 	case err == nil:
 		res.ref, res.platforms = resolved.Ref, dockerx.SwarmPlatforms(resolved.Platforms)
-		// A digest names one manifest, so what this lookup learned about it holds for the deploy that follows a review.
-		d.Platforms.remember(resolved.Digest, res.platforms)
+		// What this lookup learned about the digest in this repository holds for the deploy that follows a review.
+		d.Platforms.remember(text, resolved.Digest, res.platforms)
 	case local != nil:
 		res.ref, res.local = local.ID, true
 	default:

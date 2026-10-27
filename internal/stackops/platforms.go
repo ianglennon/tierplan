@@ -111,42 +111,68 @@ func specPlatforms(spec json.RawMessage) []swarm.Platform {
 // platformMemoLimit is how many digests a PlatformMemo holds before it starts again.
 const platformMemoLimit = 4096
 
-// PlatformMemo remembers the platforms of the images Bayplan looked up, by the sha256 digest of the manifest. A digest
-// names one manifest, so its platforms never change and nothing in the memo can go stale. A review fills it through
-// lookupImage and the deploy that follows reads it, so that deploy needs no second registry call and takes no platform
-// from the browser (T-08-98). It holds digests and os/arch pairs only (T-08-100). A nil *PlatformMemo remembers nothing
-// and recalls nothing. It is safe for concurrent use.
+// PlatformMemo remembers the platforms of the images Bayplan looked up, by the repository the image was looked up in and
+// the sha256 digest of its manifest. A digest names one manifest, but only a registry that tells the truth keeps it so, and
+// the memo is one for the whole server, so an answer is held only for the repository it came from: a lookup of one
+// repository never answers for another that names the same digest (CR-01). A second answer that differs from the one held
+// for a key drops the entry, so the digest is looked up again and no registry can overwrite what another one said. A
+// review fills the memo through lookupImage and the deploy that follows reads it, so that deploy needs no second registry
+// call and takes no platform from the browser (T-08-98). It holds repositories, digests and os/arch pairs only (T-08-100).
+// A nil *PlatformMemo remembers nothing and recalls nothing. It is safe for concurrent use.
 type PlatformMemo struct {
-	mu       sync.Mutex
-	byDigest map[string][]swarm.Platform
+	mu    sync.Mutex
+	byKey map[string][]swarm.Platform
 }
 
-// NewPlatformMemo returns an empty memo that holds at most 4096 digests and starts empty again when it is full; a miss
+// NewPlatformMemo returns an empty memo that holds at most 4096 answers and starts empty again when it is full; a miss
 // only costs one lookup.
-func NewPlatformMemo() *PlatformMemo { return &PlatformMemo{byDigest: map[string][]swarm.Platform{}} }
+func NewPlatformMemo() *PlatformMemo { return &PlatformMemo{byKey: map[string][]swarm.Platform{}} }
 
-// remember keeps the platforms of a digest. A lookup that found none is not kept: a miss costs one lookup, and an
-// answer of none is no fact worth holding.
-func (m *PlatformMemo) remember(digest string, platforms []swarm.Platform) {
-	if m == nil || !digestRe.MatchString(digest) || len(platforms) == 0 {
+// memoKey is the key of the answer for the image written as text with the manifest digest: the normalised repository
+// (no tag, no digest, the registry host always spelled out) and the digest. It is empty when digest is not a sha256
+// digest or text does not parse as an image reference, and nothing is kept or recalled for an empty key.
+func memoKey(text, digest string) string {
+	if !digestRe.MatchString(digest) {
+		return ""
+	}
+	named, err := reference.ParseNormalizedNamed(strings.TrimSpace(text))
+	if err != nil {
+		return ""
+	}
+	return reference.TrimNamed(named).String() + "@" + digest
+}
+
+// remember keeps the platforms of a digest as looked up in the repository of text. A lookup that found none is not kept:
+// a miss costs one lookup, and an answer of none is no fact worth holding. An answer that differs from the one held for
+// the same repository and digest drops the entry instead of replacing it.
+func (m *PlatformMemo) remember(text, digest string, platforms []swarm.Platform) {
+	key := memoKey(text, digest)
+	if m == nil || key == "" || len(platforms) == 0 {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, held := m.byDigest[digest]; !held && len(m.byDigest) >= platformMemoLimit {
-		m.byDigest = map[string][]swarm.Platform{}
+	if held, ok := m.byKey[key]; ok {
+		if !slices.Equal(held, platforms) {
+			delete(m.byKey, key)
+		}
+		return
 	}
-	m.byDigest[digest] = slices.Clone(platforms)
+	if len(m.byKey) >= platformMemoLimit {
+		m.byKey = map[string][]swarm.Platform{}
+	}
+	m.byKey[key] = slices.Clone(platforms)
 }
 
-// recall returns the platforms remembered for a digest.
-func (m *PlatformMemo) recall(digest string) ([]swarm.Platform, bool) {
-	if m == nil {
+// recall returns the platforms remembered for a digest in the repository of text.
+func (m *PlatformMemo) recall(text, digest string) ([]swarm.Platform, bool) {
+	key := memoKey(text, digest)
+	if m == nil || key == "" {
 		return nil, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	platforms, ok := m.byDigest[digest]
+	platforms, ok := m.byKey[key]
 	if !ok {
 		return nil, false
 	}
@@ -169,7 +195,7 @@ func (d Deps) reviewedPlatforms(ctx context.Context, envID string, items []pinIt
 		if !digestRe.MatchString(digest) {
 			continue
 		}
-		platforms, held := d.Platforms.recall(digest)
+		platforms, held := d.Platforms.recall(it.AsWritten, digest)
 		if !held {
 			res := d.lookupPlatforms(ctx, envID, it.AsWritten, pin.Ref, read)
 			switch {
@@ -179,7 +205,7 @@ func (d Deps) reviewedPlatforms(ctx context.Context, envID string, items []pinIt
 				return res.failure, it.Name, imageProblem(res, it).Message
 			}
 			platforms = res.platforms
-			d.Platforms.remember(digest, platforms)
+			d.Platforms.remember(it.AsWritten, digest, platforms)
 		}
 		pin.Platforms = platforms
 		pins[it.Name] = pin
