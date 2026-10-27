@@ -271,3 +271,21 @@ func TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget(t *testing.T) {
 		t.Errorf("a changed mount source was marked ownership-only because its target reads like a label path")
 	}
 }
+
+// TestMarkOwnershipOnlyWhenTheRunningServiceHasNoLabelsAtAll: a service with no label anywhere, and its twin with only
+// Bayplan's ID on the service, the containers and a mount, differ in nothing else: an emptied label map is an absent
+// one.
+func TestMarkOwnershipOnlyWhenTheRunningServiceHasNoLabelsAtAll(t *testing.T) {
+	t.Parallel()
+	running := specOf(t, `{"Name":"shop_api","TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{}}]}}}`)
+	desired := specOf(t, `{"Name":"shop_api","Labels":{"bayplan.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"bayplan.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"bayplan.stack.id":"id-1"}}}]}}}`)
+	d := map[string]swarm.ServiceSpec{"shop_api": desired}
+	l := map[string]swarm.ServiceSpec{"shop_api": running}
+
+	rows := stacks.DiffServices(d, l, stacks.Masker{})
+	stacks.MarkOwnershipOnly(rows, d, l)
+
+	if len(rows) != 1 || !rows[0].OwnershipOnly {
+		t.Errorf("rows = %+v, want one ownership-only service", rows)
+	}
+}

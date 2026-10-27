@@ -527,6 +527,10 @@ func OwnershipOnlyPaths(paths []PathChange) bool {
 // MarkOwnershipOnly sets OwnershipOnly on each changed service of changes whose differences from the running
 // service, both normalised as DiffServices compares them, are all Bayplan ownership labels. desired and running are
 // the maps DiffServices was given; the decision is made on the raw values, before anything is masked.
+//
+// The paths are read first, and then confirmed on the specs themselves: the two normalised specs must be equal once
+// every ownership label is stripped from both. A path is only text, and a mount whose target is written to read like
+// a label path cannot make a real change look like one (T-08-55, T-08-96).
 func MarkOwnershipOnly(changes []ServiceChange, desired, running map[string]swarm.ServiceSpec) {
 	for i, c := range changes {
 		if c.Change != ChangeChanged {
@@ -537,6 +541,14 @@ func MarkOwnershipOnly(changes []ServiceChange, desired, running map[string]swar
 		if !nok || !cok {
 			continue
 		}
-		changes[i].OwnershipOnly = OwnershipOnlyPaths(ChangedPaths(NormalizeSpec(cur), NormalizeSpec(next)))
+		nc, nn := NormalizeSpec(cur), NormalizeSpec(next)
+		changes[i].OwnershipOnly = OwnershipOnlyPaths(ChangedPaths(nc, nn)) && sameWithoutOwnership(nc, nn)
 	}
+}
+
+// sameWithoutOwnership reports whether two normalised specs have no difference left once every ownership label is
+// stripped from both. It reads the specs themselves, as the differences are listed, so an emptied label map and an
+// absent one are the same thing.
+func sameWithoutOwnership(a, b swarm.ServiceSpec) bool {
+	return len(ChangedPaths(NormalizeSpec(StripOwnership(a)), NormalizeSpec(StripOwnership(b)))) == 0
 }
