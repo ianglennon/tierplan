@@ -110,31 +110,31 @@ func TestAPlatformMemo(t *testing.T) {
 	amd := []swarm.Platform{{OS: "linux", Architecture: "amd64"}}
 
 	var none *PlatformMemo
-	none.remember("nginx:1.27", platformsDigestA, amd)
-	if got, ok := none.recall("nginx:1.27", platformsDigestA); ok || got != nil {
+	none.remember("env-a", "nginx:1.27", platformsDigestA, amd)
+	if got, ok := none.recall("env-a", "nginx:1.27", platformsDigestA); ok || got != nil {
 		t.Errorf("a nil memo recalled %v %v, want nothing", got, ok)
 	}
 
 	m := NewPlatformMemo()
-	m.remember("nginx:1.27", platformsDigestA, amd)
-	got, ok := m.recall("nginx:1.27", platformsDigestA)
+	m.remember("env-a", "nginx:1.27", platformsDigestA, amd)
+	got, ok := m.recall("env-a", "nginx:1.27", platformsDigestA)
 	if !ok || !slices.Equal(got, amd) {
 		t.Fatalf("recall = %v %v, want %v", got, ok, amd)
 	}
 	got[0].OS = "windows"
-	if again, _ := m.recall("nginx:1.27", platformsDigestA); again[0].OS != "linux" {
+	if again, _ := m.recall("env-a", "nginx:1.27", platformsDigestA); again[0].OS != "linux" {
 		t.Errorf("a caller changed the memo through the slice it was given: %v", again)
 	}
-	if _, ok := m.recall("nginx:1.27", platformsDigestB); ok {
+	if _, ok := m.recall("env-a", "nginx:1.27", platformsDigestB); ok {
 		t.Error("the memo answered for a digest it never saw")
 	}
-	m.remember("nginx:1.27", "not-a-digest", amd)
-	if _, ok := m.recall("nginx:1.27", "not-a-digest"); ok {
+	m.remember("env-a", "nginx:1.27", "not-a-digest", amd)
+	if _, ok := m.recall("env-a", "nginx:1.27", "not-a-digest"); ok {
 		t.Error("the memo kept an answer for a key that is not a sha256 digest")
 	}
 
 	for i := 0; i < platformMemoLimit+5; i++ {
-		m.remember("nginx:1.27", fmt.Sprintf("sha256:%064d", i), amd)
+		m.remember("env-a", "nginx:1.27", fmt.Sprintf("sha256:%064d", i), amd)
 	}
 	m.mu.Lock()
 	size := len(m.byKey)
@@ -155,15 +155,15 @@ func TestAPlatformMemoIsKeyedByRepositoryAndDigest(t *testing.T) {
 	t.Run("two repositories with one digest do not cross", func(t *testing.T) {
 		t.Parallel()
 		m := NewPlatformMemo()
-		m.remember("nginx:1.27-alpine", platformsDigestA, amd)
-		m.remember("evil.example/x:t", platformsDigestA, odd)
-		if got, ok := m.recall("nginx:1.27-alpine", platformsDigestA); !ok || !slices.Equal(got, amd) {
+		m.remember("env-a", "nginx:1.27-alpine", platformsDigestA, amd)
+		m.remember("env-a", "evil.example/x:t", platformsDigestA, odd)
+		if got, ok := m.recall("env-a", "nginx:1.27-alpine", platformsDigestA); !ok || !slices.Equal(got, amd) {
 			t.Errorf("nginx recalled %v %v, want %v", got, ok, amd)
 		}
-		if got, ok := m.recall("evil.example/x:t", platformsDigestA); !ok || !slices.Equal(got, odd) {
+		if got, ok := m.recall("env-a", "evil.example/x:t", platformsDigestA); !ok || !slices.Equal(got, odd) {
 			t.Errorf("evil.example/x recalled %v %v, want %v", got, ok, odd)
 		}
-		if got, ok := m.recall("other.example/nginx:1.27-alpine", platformsDigestA); ok {
+		if got, ok := m.recall("env-a", "other.example/nginx:1.27-alpine", platformsDigestA); ok {
 			t.Errorf("a repository that was never looked up recalled %v", got)
 		}
 	})
@@ -171,9 +171,9 @@ func TestAPlatformMemoIsKeyedByRepositoryAndDigest(t *testing.T) {
 	t.Run("one repository is one key whatever its tag or spelling", func(t *testing.T) {
 		t.Parallel()
 		m := NewPlatformMemo()
-		m.remember("nginx:1.27", platformsDigestA, amd)
+		m.remember("env-a", "nginx:1.27", platformsDigestA, amd)
 		for _, text := range []string{"nginx", "docker.io/library/nginx:latest", "library/nginx@" + platformsDigestA, "nginx:1.27@" + platformsDigestA} {
-			if got, ok := m.recall(text, platformsDigestA); !ok || !slices.Equal(got, amd) {
+			if got, ok := m.recall("env-a", text, platformsDigestA); !ok || !slices.Equal(got, amd) {
 				t.Errorf("recall(%q) = %v %v, want %v", text, got, ok, amd)
 			}
 		}
@@ -182,17 +182,17 @@ func TestAPlatformMemoIsKeyedByRepositoryAndDigest(t *testing.T) {
 	t.Run("a conflicting write drops the entry", func(t *testing.T) {
 		t.Parallel()
 		m := NewPlatformMemo()
-		m.remember("nginx:1.27", platformsDigestA, amd)
-		m.remember("nginx:1.28", platformsDigestA, amd)
-		if got, ok := m.recall("nginx", platformsDigestA); !ok || !slices.Equal(got, amd) {
+		m.remember("env-a", "nginx:1.27", platformsDigestA, amd)
+		m.remember("env-a", "nginx:1.28", platformsDigestA, amd)
+		if got, ok := m.recall("env-a", "nginx", platformsDigestA); !ok || !slices.Equal(got, amd) {
 			t.Fatalf("an equal write changed the entry: %v %v", got, ok)
 		}
-		m.remember("nginx:1.29", platformsDigestA, odd)
-		if got, ok := m.recall("nginx", platformsDigestA); ok {
+		m.remember("env-a", "nginx:1.29", platformsDigestA, odd)
+		if got, ok := m.recall("env-a", "nginx", platformsDigestA); ok {
 			t.Errorf("a conflicting write left %v, want the entry dropped (a miss)", got)
 		}
-		m.remember("nginx:1.30", platformsDigestA, amd)
-		if got, ok := m.recall("nginx", platformsDigestA); !ok || !slices.Equal(got, amd) {
+		m.remember("env-a", "nginx:1.30", platformsDigestA, amd)
+		if got, ok := m.recall("env-a", "nginx", platformsDigestA); !ok || !slices.Equal(got, amd) {
 			t.Errorf("after the drop a new answer is kept as the first one: %v %v", got, ok)
 		}
 	})
@@ -200,11 +200,36 @@ func TestAPlatformMemoIsKeyedByRepositoryAndDigest(t *testing.T) {
 	t.Run("a text that is not a reference is not kept", func(t *testing.T) {
 		t.Parallel()
 		m := NewPlatformMemo()
-		m.remember("NOT A REF", platformsDigestA, amd)
-		if got, ok := m.recall("NOT A REF", platformsDigestA); ok {
+		m.remember("env-a", "NOT A REF", platformsDigestA, amd)
+		if got, ok := m.recall("env-a", "NOT A REF", platformsDigestA); ok {
 			t.Errorf("recalled %v for a text that is not a reference", got)
 		}
 	})
+}
+
+// TestAPlatformMemoIsScopedToTheEnvironment (T-08-114): the memo is one for the whole server, so an answer one
+// environment's lookup gave is never recalled for another environment, whose registry credential and mirror may differ;
+// and a lookup with no environment keeps nothing.
+func TestAPlatformMemoIsScopedToTheEnvironment(t *testing.T) {
+	t.Parallel()
+	amd := []swarm.Platform{{OS: "linux", Architecture: "amd64"}}
+	odd := []swarm.Platform{{OS: "plan9", Architecture: "mips"}}
+	m := NewPlatformMemo()
+	m.remember("env-a", "nginx:1.27", platformsDigestA, amd)
+	if got, ok := m.recall("env-b", "nginx:1.27", platformsDigestA); ok {
+		t.Errorf("environment env-b recalled %v from env-a's lookup, want a miss", got)
+	}
+	m.remember("env-b", "nginx:1.27", platformsDigestA, odd)
+	if got, ok := m.recall("env-a", "nginx:1.27", platformsDigestA); !ok || !slices.Equal(got, amd) {
+		t.Errorf("env-a recalled %v %v after env-b's answer, want %v kept", got, ok, amd)
+	}
+	if got, ok := m.recall("env-b", "nginx:1.27", platformsDigestA); !ok || !slices.Equal(got, odd) {
+		t.Errorf("env-b recalled %v %v, want %v", got, ok, odd)
+	}
+	m.remember("", "nginx:1.28", platformsDigestB, amd)
+	if got, ok := m.recall("", "nginx:1.28", platformsDigestB); ok {
+		t.Errorf("a lookup with no environment kept %v", got)
+	}
 }
 
 // TestAPlatformMemoRemembersAnEmptyAnswer (WR-01): a digest whose lookup found no platform is held as that answer, which
@@ -213,20 +238,20 @@ func TestAPlatformMemoRemembersAnEmptyAnswer(t *testing.T) {
 	t.Parallel()
 	amd := []swarm.Platform{{OS: "linux", Architecture: "amd64"}}
 	m := NewPlatformMemo()
-	m.remember("nginx:1.27", platformsDigestA, nil)
-	got, ok := m.recall("nginx:1.27", platformsDigestA)
+	m.remember("env-a", "nginx:1.27", platformsDigestA, nil)
+	got, ok := m.recall("env-a", "nginx:1.27", platformsDigestA)
 	if !ok || len(got) != 0 {
 		t.Errorf("recall = %v %v, want an empty answer that is held", got, ok)
 	}
-	if _, ok := m.recall("nginx:1.27", platformsDigestB); ok {
+	if _, ok := m.recall("env-a", "nginx:1.27", platformsDigestB); ok {
 		t.Error("the memo answered for a digest it never saw")
 	}
-	m.remember("nginx:1.27", platformsDigestA, []swarm.Platform{})
-	if _, ok := m.recall("nginx:1.27", platformsDigestA); !ok {
+	m.remember("env-a", "nginx:1.27", platformsDigestA, []swarm.Platform{})
+	if _, ok := m.recall("env-a", "nginx:1.27", platformsDigestA); !ok {
 		t.Error("an equal empty write dropped the entry")
 	}
-	m.remember("nginx:1.27", platformsDigestA, amd)
-	if got, ok := m.recall("nginx:1.27", platformsDigestA); ok {
+	m.remember("env-a", "nginx:1.27", platformsDigestA, amd)
+	if got, ok := m.recall("env-a", "nginx:1.27", platformsDigestA); ok {
 		t.Errorf("an answer that conflicts with the empty one left %v, want the entry dropped", got)
 	}
 }
