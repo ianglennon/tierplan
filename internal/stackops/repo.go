@@ -720,12 +720,25 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 	if err := r.writeContent(ctx, q, id.String(), from.Copy); err != nil {
 		return Snapshot{}, err
 	}
+	// The copy starts with the platforms of the revision it copies, as it starts with its pins (G-08-4). The record
+	// is the one the snapshot given carries, which a Repo read from the stored row (a record that did not read is none).
+	recorded := from.Platforms
+	if len(recorded) > 0 {
+		raw, err := json.Marshal(recorded)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("encode platforms: %w", err)
+		}
+		if _, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: id.String()}); err != nil {
+			return Snapshot{}, fmt.Errorf("copy platforms: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
 	}
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
 		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Copy: from.Copy,
+		Platforms: recorded,
 	}, nil
 }
 
