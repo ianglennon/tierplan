@@ -169,7 +169,9 @@ func TestOverviewOfAStandaloneStackLeavesOutAnotherProjectsContainers(t *testing
 		Labels: map[string]string{stacks.LabelComposeProject: "other", stacks.LabelComposeService: "web"},
 	}, dockertest.FakeContainer{
 		ID: "foreign-1", Names: []string{"/demo-foreign-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{stacks.LabelComposeProject: "demo", stacks.LabelComposeService: "foreign"},
+		// Another stack's container in the project. A container with no ID beside the stack's own is the host CLI's
+		// addition and is listed since G-08-6 (TestStandaloneRowsCountAContainerTheHostCLIAdded); this one is not.
+		Labels: map[string]string{stacks.LabelComposeProject: "demo", stacks.LabelComposeService: "foreign", stacks.LabelStackID: "stack-other"},
 	})
 	rig := hostRig(t, h)
 

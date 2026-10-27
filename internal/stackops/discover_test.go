@@ -270,7 +270,9 @@ func TestManagedRowsUnchanged(t *testing.T) {
 	host := stackops.StandaloneRows(stackops.Stack{ID: "stack-shop", Name: "shop", Target: stacks.TargetStandalone}, []dockerx.ContainerRow{
 		foreignContainer("c1", "shop", "web", "running", owned),
 		foreignContainer("c2", "shop", "web", "running", map[string]string{stacks.LabelStackID: "stack-shop", stacks.LabelComposeOneoff: "true"}),
-		foreignContainer("c3", "shop", "db", "exited", nil),
+		// Another stack's ID is never the stack's. (A container with no ID beside the stack's own is the host CLI's
+		// addition and is listed since G-08-6: see TestStandaloneRowsCountAContainerTheHostCLIAdded.)
+		foreignContainer("c3", "shop", "db", "exited", map[string]string{stacks.LabelStackID: "stack-other"}),
 		foreignContainer("c4", "other", "web", "running", owned),
 	})
 	if len(host) != 1 || host[0].Name != "web" || len(host[0].Containers) != 1 || host[0].State != stackops.ServiceRunning {

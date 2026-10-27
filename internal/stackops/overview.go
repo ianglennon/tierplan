@@ -203,12 +203,15 @@ func standaloneRollup(cs []ContainerRow) string {
 }
 
 // StandaloneRows are the services a stack owns among the containers of a host, by Ownership: for a managed
-// stack those of its Compose project that carry its ID, for a discovered one every container of the project;
-// one-off containers (`compose run`) are left out. A service is the containers that
-// share the service label, so a service with none has no row.
+// stack those of its Compose project that carry its ID, and those the host CLI added to the project without
+// Bayplan's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6); for a
+// discovered one every container of the project. Another stack's containers and a project the stack owns none of
+// stay out, and so do one-off containers (`compose run`). A service is the containers that share the service
+// label, so a service with none has no row.
 func StandaloneRows(stack Stack, all []dockerx.ContainerRow) []ServiceRow {
 	own := OwnershipOf(stack)
-	return standaloneRowsWhere(all, func(c dockerx.ContainerRow) bool { return own.OwnsWorkload(c.Labels) })
+	mine, unlabelled, _ := SplitProject(own, all, func(c dockerx.ContainerRow) map[string]string { return c.Labels })
+	return standaloneRowsWhere(append(mine, unlabelled...), func(dockerx.ContainerRow) bool { return true })
 }
 
 // standaloneRowsWhere draws the rows of the services of the containers that keep accepts, one-off containers
