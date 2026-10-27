@@ -8946,7 +8946,7 @@ export interface components {
              * @enum {string}
              */
             mode?: "deploy" | "update";
-            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
+            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry for a digest. The platforms of a looked-up image are the ones its review found, which the server remembers by digest and reads again for that digest only when it no longer holds them; a request never says a platform. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
             pins?: {
                 [key: string]: string;
             };

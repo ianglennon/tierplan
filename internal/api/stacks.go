@@ -117,6 +117,10 @@ type StacksDeps struct {
 	// ten minutes; BAYPLAN_STACK_CONVERGE_TIMEOUT).
 	Clock           stackops.Clock
 	ConvergeTimeout time.Duration
+	// Platforms is the server's one memo of the platforms its image lookups found, by digest: a review fills it and the
+	// deploy that follows reads it, so that deploy asks no registry again (G-08-4). Nil is no memo: a reviewed deploy asks
+	// the registry once for each looked-up digest.
+	Platforms *stackops.PlatformMemo
 	// CheckDeadline bounds one check of a stack's working copy. Zero is five seconds.
 	CheckDeadline time.Duration
 	// OnCheck, when set, is called once a check holds its slot and before it runs. Tests use it to
@@ -193,7 +197,7 @@ func (d StacksDeps) revisionsKept() int {
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
 	}
 }
 
