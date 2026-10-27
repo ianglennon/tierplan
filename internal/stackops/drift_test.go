@@ -384,3 +384,78 @@ func TestDriftOfAServiceOnAnotherDigestBorrowsNoPlatforms(t *testing.T) {
 		t.Errorf("differences = %v, want the image and the platforms of what runs (none lent to the desired side)", paths)
 	}
 }
+
+// setLivePlatforms is an edit of a deployed service that sets the platforms it runs with.
+func setLivePlatforms(platforms ...swarm.Platform) func(*swarm.ServiceSpec) {
+	return func(s *swarm.ServiceSpec) {
+		pl := swarm.Placement{}
+		if s.TaskTemplate.Placement != nil {
+			pl = *s.TaskTemplate.Placement
+		}
+		pl.Platforms = slices.Clone(platforms)
+		s.TaskTemplate.Placement = &pl
+	}
+}
+
+// recordPlatforms is what the deployed revision stored for every service of the drift stack.
+func (r *driftRig) recordPlatforms(platforms ...swarm.Platform) {
+	r.store.rev.Platforms = map[string][]swarm.Platform{}
+	for _, svc := range []string{"web", "api", "gone"} {
+		r.store.rev.Platforms[r.st.Name+"_"+svc] = slices.Clone(platforms)
+	}
+}
+
+// TestDriftComparesTheDeployedRevisionsRecordedPlatforms (G-08-4, D-21, T-08-112): the revision recorded the platforms it
+// deployed with, so platforms changed outside Bayplan are a difference even though the service runs the pinned digest.
+// What the record and what runs agree on is none, and a revision from before platforms were recorded is never drift by
+// itself.
+func TestDriftComparesTheDeployedRevisionsRecordedPlatforms(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+
+	t.Run("platforms changed outside Bayplan are a changed service", func(t *testing.T) {
+		t.Parallel()
+		rig := newDriftRig(t)
+		rig.recordPlatforms(amd)
+		delete(rig.store.rev.Platforms, rig.st.Name+"_api")
+		delete(rig.store.rev.Platforms, rig.st.Name+"_gone")
+		rig.editLive(t, "web", setLivePlatforms(amd, arm))
+
+		res := rig.drift(t)
+		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"changed web"}) {
+			t.Fatalf("drift = %s %v, want drifted with web changed (it runs more platforms than the revision recorded)", res.State, driftNames(res))
+		}
+		var platforms bool
+		for _, p := range gapPaths(t, []stacks.ServiceChange{res.Services[0].Diff}) {
+			platforms = platforms || strings.Contains(p, "Placement.Platforms")
+		}
+		if !platforms {
+			t.Errorf("differences = %v, want a Placement.Platforms path", gapPaths(t, []stacks.ServiceChange{res.Services[0].Diff}))
+		}
+	})
+
+	t.Run("platforms the revision recorded are none", func(t *testing.T) {
+		t.Parallel()
+		rig := newDriftRig(t)
+		rig.recordPlatforms(arm)
+		for _, svc := range []string{"web", "api", "gone"} {
+			rig.editLive(t, svc, setLivePlatforms(arm))
+		}
+		if res := rig.drift(t); res.State != stackops.DriftNone || len(res.Services) != 0 {
+			t.Fatalf("drift = %s %v, want none: what runs is what the revision recorded", res.State, driftNames(res))
+		}
+	})
+
+	t.Run("a revision with no record against platforms that run is none", func(t *testing.T) {
+		t.Parallel()
+		rig := newDriftRig(t)
+		rig.store.rev.Platforms = nil
+		for _, svc := range []string{"web", "api", "gone"} {
+			rig.editLive(t, svc, setLivePlatforms(amd, arm))
+		}
+		if res := rig.drift(t); res.State != stackops.DriftNone || len(res.Services) != 0 {
+			t.Fatalf("drift = %s %v, want none: a revision recorded before this version is not drift by itself", res.State, driftNames(res))
+		}
+	})
+}

@@ -337,3 +337,32 @@ func TestThreeWayRules(t *testing.T) {
 		t.Errorf("reverts = %q, want %q", got, want)
 	}
 }
+
+// TestRevertsDriftListsAPlatformsChangeMadeOutside (G-08-4, D-25, T-08-112): the platforms the deployed revision recorded
+// come from the pins of its last good revision, so a deploy that would put back platforms changed outside Bayplan lists
+// them as it lists any other outside change.
+func TestRevertsDriftListsAPlatformsChangeMadeOutside(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	rig := newDriftRig(t)
+	rig.editLive(t, "web", setLivePlatforms(amd, arm))
+	in := rig.revertsInput(t, driftCompose)
+	good := stackops.LivePins(rig.store.pins)
+	web := good[rig.st.Name+"_web"]
+	web.Platforms = []swarm.Platform{amd}
+	good[rig.st.Name+"_web"] = web
+	in.Pins = &memPins{good: good}
+
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	var found bool
+	for _, r := range rv.RevertsDrift {
+		found = found || (r.Service == "web" && strings.Contains(r.Path, "Placement.Platforms"))
+	}
+	if !found || rv.RevertsDriftUnavailable {
+		t.Fatalf("reverts = %q unavailable = %v, want a Placement.Platforms row for web: the deploy puts back what the revision recorded", revertRows(rv), rv.RevertsDriftUnavailable)
+	}
+}
