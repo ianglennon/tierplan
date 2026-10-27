@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
+	"modernc.org/sqlite"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -1489,6 +1490,33 @@ func TestAdoptWritesOneTransaction(t *testing.T) {
 	list, err := f.repo.Stacks(ctx, f.envID)
 	if err != nil || len(list) != 1 {
 		t.Errorf("Stacks = %+v, %v, want the one adopted stack", list, err)
+	}
+}
+
+// TestAdoptKeepsTheCauseWhenStoringThePlatformsFails (IN-04): the error of a refused platforms write keeps its chain, so a
+// caller can still tell what the database said (a cancelled context, a busy database) and nothing is stored.
+func TestAdoptKeepsTheCauseWhenStoringThePlatformsFails(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	if _, err := f.repo.Store.Write.ExecContext(ctx, `CREATE TRIGGER refuse_platforms BEFORE UPDATE OF platforms ON stack_snapshots
+		BEGIN SELECT RAISE(ABORT, 'platforms refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}},
+	})
+	if err == nil {
+		t.Fatal("Adopt = nil, want the refused platforms write")
+	}
+	var sqlErr *sqlite.Error
+	if !errors.As(err, &sqlErr) {
+		t.Errorf("Adopt error %q does not wrap the database error, want it wrapped with %%w", err)
+	}
+	var n int
+	if err := f.repo.Store.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM stacks WHERE name = 'legacy'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("stacks named legacy = %d, %v, want none stored after the failure", n, err)
 	}
 }
 
