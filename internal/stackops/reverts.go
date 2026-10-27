@@ -290,10 +290,15 @@ func (d Deps) addRevertsDrift(ctx context.Context, in ReviewInput, rv *Review, d
 		return
 	}
 	pins := make(map[string]string, len(stored))
+	platforms := make(map[string][]swarm.Platform, len(stored))
 	for name, p := range stored {
 		pins[name] = p.Image
+		if len(p.Platforms) > 0 {
+			platforms[name] = p.Platforms
+		}
 	}
-	deployed := Snapshot{Seq: in.Deployed.Seq, CreatedAt: in.Deployed.At, Copy: *in.Previous}
+	// The platforms the deployed revision recorded are what drift compares with what runs (T-08-112).
+	deployed := Snapshot{Seq: in.Deployed.Seq, CreatedAt: in.Deployed.At, Copy: *in.Previous, Platforms: platforms}
 	res, err := d.Drift(ctx, DriftInput{EnvID: in.EnvID, Stack: in.Stack, Deployed: &deployed, Pins: pins, Audit: in.Audit, Raw: true})
 	if err != nil {
 		unavailable(err)

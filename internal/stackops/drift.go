@@ -151,8 +151,11 @@ func (d Deps) Drift(ctx context.Context, in DriftInput) (DriftResult, error) {
 	for _, s := range live.Services {
 		byName[s.Name] = s
 	}
-	// The platforms of an image are not in the revision (no compose file says them): a service that still runs the
-	// pinned digest keeps those it runs, and one on another digest borrows none (G-08-4, T-08-97).
+	// The platforms of an image are not in the compose file: the revision recorded the ones it deployed with, and
+	// those are compared first, so platforms changed outside Bayplan are a difference (T-08-112). A service the record
+	// says nothing for (a revision from before platforms were recorded) keeps those it runs while it runs the pinned
+	// digest, and one on another digest borrows none (G-08-4, T-08-97).
+	withStoredPlatforms(restored, in.Deployed.Platforms)
 	carryPlatforms(restored, byName)
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
