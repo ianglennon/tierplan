@@ -1341,6 +1341,94 @@ func TestRollbackRedeploysTheLastGoodRevisionWithoutTheRegistry(t *testing.T) {
 	}
 }
 
+// setRevisionPlatforms records on a revision of a stack the platforms its services ran with, as its deploy would have.
+func (f *envFix) setRevisionPlatforms(t *testing.T, stackID string, seq int64, platforms map[string][]swarm.Platform) {
+	t.Helper()
+	repo := stackops.Repo{Store: f.st, Vault: f.v}
+	rev, err := repo.Revision(context.Background(), stackID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SetPlatforms(context.Background(), rev.ID, platforms); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The roll back sends the platforms its revision stored (G-08-4, P7 D-14, T-07-93, T-08-101): they differ from the ones the
+// service runs now, and no registry is asked.
+func TestRollbackSendsThePlatformsTheRevisionStored(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rbp")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	// The service runs both platforms (the fake registry answers them); revision 1 stored one.
+	f.setRevisionPlatforms(t, st.ID, 1, map[string][]swarm.Platform{"rbp_web": {amd}})
+	pin127 := f.revisions(t, st.ID)[0].Pins
+	lookups, updates := len(f.fake.DistributionRefs()), len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"revision":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back asks no registry", lookups, n)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	last := ups[len(ups)-1].Spec
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin127), &pins); err != nil {
+		t.Fatal(err)
+	}
+	if image := last.TaskTemplate.ContainerSpec.Image; image != pins["rbp_web"] {
+		t.Errorf("image = %q, want what revision 1 ran, %q", image, pins["rbp_web"])
+	}
+	if pl := last.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{amd}) {
+		t.Errorf("placement = %+v, want the platforms revision 1 stored, %v", pl, []swarm.Platform{amd})
+	}
+}
+
+// A restore is the same route in mode restore and sends the deployed revision's stored platforms (D-23).
+func TestRestoreSendsThePlatformsTheDeployedRevisionStored(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rsp")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	f.setRevisionPlatforms(t, st.ID, 2, map[string][]swarm.Platform{"rsp_web": {arm}})
+	lookups, updates := len(f.fake.DistributionRefs()), len(f.fake.ServiceUpdates())
+
+	rec := operator.do(http.MethodPost, rollbackPath(st.ID), `{"mode":"restore","revision":2}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body)
+	}
+	if job := f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("restore job = %+v, want it done", job)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a restore asks no registry", lookups, n)
+	}
+	ups := f.fake.ServiceUpdates()
+	if len(ups) != updates+1 {
+		t.Fatalf("service updates = %d, want one more than %d", len(ups), updates)
+	}
+	if pl := ups[len(ups)-1].Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{arm}) {
+		t.Errorf("placement = %+v, want the platforms the deployed revision stored, %v", pl, []swarm.Platform{arm})
+	}
+}
+
 // Rolling back a stack that uses env_file restores the file's variables: the revision is judged once, by the
 // check pipeline, and the service comes back with what the file gave it (review CR-05).
 func TestRollbackOfAStackThatUsesAnEnvFileRestoresTheFilesValues(t *testing.T) {
