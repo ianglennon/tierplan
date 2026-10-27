@@ -446,6 +446,9 @@ deletes everything the stack owns and needs a typed confirm of the stack's name.
 
 1. The dialog lists what will go: the services (or containers), the stack's own networks, its own secrets and
    configs, and the definition.
+   On a standalone host the containers include any that someone added to the stack's project from the host's CLI
+   (for example with `docker compose up --scale`), and Remove waits for them like the rest, so nothing of the project
+   is left.
 2. **Volumes are opt-in.** Each volume the stack owns is listed (per node on a swarm) with a checkbox, unticked.
    Only a ticked volume is deleted, and only if it carries this stack's label on that node. Unticked volumes stay
    on the host.
@@ -706,6 +709,10 @@ must not infer an adopted stack's ownership from `bayplan.stack.id` labels alone
 - **A `bayplan.stack.id` label alone never links an object to a stack.** Another ID is another stack's. Between the
   adoption and its first good deploy, a service or container of the stack's namespace or project counts as its own if
   it has no ID or the old one recorded at adoption; afterwards only its own ID counts.
+- **On a standalone host, a container added to the stack's project from the host's CLI counts with the stack.** A
+  container of the project with no `bayplan.stack.id` is the stack's once the stack owns at least one container of the
+  project (drift, the stack's page, restore and Remove). Another stack's ID never counts, and a project the stack
+  holds no container of stays a name clash and is not taken over.
 - The one place that decides this is `Ownership` in `internal/stackops` (`OwnershipOf(stack)`). A guard test fails on
   code elsewhere that decides ownership by a Bayplan ID label. Ask it, do not copy the rule.
 
@@ -725,6 +732,17 @@ image, so an old revision does not read as drift. A service the revision
 has and the engine does not is **Missing**; a service or container the stack owns that the revision does not declare
 is **Extra**.
 
+**A container added from the host's CLI counts with the stack.** On a standalone host, a container someone adds to the
+stack's Compose project from the host, such as `docker compose up -d --scale web=2 --no-recreate` run on your own copy
+of the file, carries none of Bayplan's labels, but it belongs to the stack's project. Bayplan counts it with the
+stack while the stack owns at least one other container of that project: a second container of `web` reads as
+**web Changed** with two containers, a container of a service the revision does not declare reads as **Extra**, and a
+restore removes it. The same container shows on the stack's page, in its **Resources** tab and in its logs, does not
+block a deploy, a restore, Stop or Start as a name clash, and is listed and removed by **Remove**. A container that
+carries **another Bayplan stack's ID** never counts as this stack's. A Compose project of the same name that the stack
+owns **no container of** is not taken over: it stays a name clash, so Bayplan never acts on a project it did not deploy
+or adopt.
+
 **What is not drift:**
 
 - Bayplan's own ownership labels (including the one on a named volume's mount), and the swarm's force-update counter. A **restart** or a **force update** does
@@ -732,9 +750,6 @@ is **Extra**.
 - Runtime state such as task churn and a service's update status.
 - A **stopped** stack. Stop scales it down on purpose, and it is not checked until it is started.
 - A stack that was never deployed.
-- A container someone added to the stack's Compose project **without the stack's `bayplan.stack.id` label**. It reads
-  as another owner's, not the stack's. A container that carries the label does count as Extra, and a restore
-  removes it.
 - Networks, volumes, secrets and configs are not compared on their own; only the services and containers are.
 
 If the deployed revision cannot be redeployed any more (for instance a file it needs is gone), the page says it
