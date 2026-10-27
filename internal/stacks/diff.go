@@ -494,14 +494,32 @@ func keyEntries(list []any, key func(any) (string, bool)) (map[string]any, bool)
 // its containers.
 var ownershipLabelPaths = []string{"Labels.bayplan.", "TaskTemplate.ContainerSpec.Labels.bayplan."}
 
-// ownershipLabelPath reports whether a path is a label of Bayplan's own bookkeeping.
+// mountsPath and mountLabelPath bound the path of Bayplan's label on a volume mount. The mounts are a keyed list, so
+// a path reads TaskTemplate.ContainerSpec.Mounts[<target>].VolumeOptions.Labels.bayplan.<name>.
+const (
+	mountsPath     = "TaskTemplate.ContainerSpec.Mounts["
+	mountLabelPath = "].VolumeOptions.Labels.bayplan."
+)
+
+// ownershipLabelPath reports whether a path is a label of Bayplan's own bookkeeping: on the service, on its
+// containers or on one of its volume mounts (the converter puts the stack's ID on the mount of a named volume).
 func ownershipLabelPath(path string) bool {
-	return slices.ContainsFunc(ownershipLabelPaths, func(prefix string) bool { return strings.HasPrefix(path, prefix) })
+	if slices.ContainsFunc(ownershipLabelPaths, func(prefix string) bool { return strings.HasPrefix(path, prefix) }) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, mountsPath)
+	if !ok {
+		return false
+	}
+	// The text after the closing bracket of the first key: a target that itself holds a bracket never reads as a
+	// label path here, which only ever leaves a service a gap.
+	i := strings.Index(rest, "]")
+	return i >= 0 && strings.HasPrefix(rest[i:], mountLabelPath)
 }
 
 // OwnershipOnlyPaths reports whether a service differs from its twin only in Bayplan's ownership labels: it has
-// at least one difference and every difference is a bayplan.* label of the service or of its containers. Any other
-// difference keeps the service a gap (T-08-55).
+// at least one difference and every difference is a bayplan.* label of the service, of its containers or of one of
+// its volume mounts. Any other difference keeps the service a gap (T-08-55).
 func OwnershipOnlyPaths(paths []PathChange) bool {
 	return len(paths) > 0 && !slices.ContainsFunc(paths, func(p PathChange) bool { return !ownershipLabelPath(p.Path) })
 }

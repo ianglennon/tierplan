@@ -53,6 +53,15 @@ func NormalizeSpec(s swarm.ServiceSpec) swarm.ServiceSpec {
 	if s.TaskTemplate.Placement == nil {
 		s.TaskTemplate.Placement = &swarm.Placement{}
 	}
+	// The platforms of a placement are a set the scheduler filters nodes by. docker stack deploy has the daemon
+	// resolve each image and stores every os/architecture it found once (the client writes arm with no
+	// architecture), in the order the registry listed them, so they are compared sorted and without repeats.
+	if pl := s.TaskTemplate.Placement; len(pl.Platforms) > 0 {
+		slices.SortStableFunc(pl.Platforms, func(a, b swarm.Platform) int {
+			return cmp.Or(cmp.Compare(a.OS, b.OS), cmp.Compare(a.Architecture, b.Architecture))
+		})
+		pl.Platforms = slices.Compact(pl.Platforms)
+	}
 	// A restart policy with no condition reads back as "any" (restartPolicyToGRPC), and one with no
 	// attempt limit reads back with a limit of 0, which is unlimited (the manager keeps the count as
 	// a plain number and hands it back as a pointer; seen on Engine 29, StackReviewEmptyAfterDeploy).

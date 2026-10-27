@@ -12,6 +12,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -28,11 +29,13 @@ const (
 )
 
 // Pin is how one service's image is pinned: the reference as written, the reference to send and
-// what decided it. Note is the sentence for a warning (a local image), empty otherwise.
+// what decided it. Note is the sentence for a warning (a local image), empty otherwise. Platforms are the image's
+// platforms, the way a swarm schedules by them (TaskTemplate.Placement.Platforms), empty when they are not known.
 type Pin struct {
 	Service, AsWritten, Ref string
 	Action                  stacks.PinAction
 	Note                    string
+	Platforms               []swarm.Platform
 }
 
 // PinOutcome is the answer of ResolvePins. Pins is by swarm service name. Problems holds a

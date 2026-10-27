@@ -79,13 +79,18 @@ func (d Deps) reviewAdoptPlan(ctx context.Context, in ReviewInput, rv *Review) (
 	for _, s := range live.Services {
 		byName[s.Name] = s
 	}
+	// The pins are the images that run, with the platforms docker stack deploy stored for them: they belong to the
+	// image, which a compose file cannot say, so the service keeps them while it runs that image (G-08-4).
+	pins := make(map[string]Pin, len(in.Rebuilt.Pins))
+	for name, ref := range in.Rebuilt.Pins {
+		pins[name] = Pin{Service: name, Ref: ref}
+	}
+	carryPlatforms(pins, byName)
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		if ref, ok := in.Rebuilt.Pins[sp.Name]; ok && spec.TaskTemplate.ContainerSpec != nil {
-			cs := *spec.TaskTemplate.ContainerSpec
-			cs.Image = ref
-			spec.TaskTemplate.ContainerSpec = &cs
+		if pin, ok := pins[sp.Name]; ok {
+			spec = withPin(spec, pin)
 		}
 		if existing, ok := byName[sp.Name]; ok {
 			// The counter that makes the swarm replace tasks is carried over, as a deploy does.
