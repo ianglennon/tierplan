@@ -386,7 +386,7 @@ func TestStandaloneRestoreReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameCla
 	if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) {
 		t.Fatalf("services = %v, want web changed (2 containers back to 1)", got)
 	}
-	if cur, next := string(rv.Services[0].Current), string(rv.Services[0].Next); !strings.Contains(cur, `"scale":2`) || !strings.Contains(next, `"scale":1`) {
-		t.Errorf("web current = %s next = %s, want its containers going from 2 back to 1", cur, next)
+	if cur, next := string(rv.Services[0].Current), string(rv.Services[0].Next); !strings.Contains(cur, `"scale":2`) || strings.Contains(next, `"scale"`) {
+		t.Errorf("web current = %s next = %s, want its containers going from 2 back to 1 (a compose service of one container states no scale)", cur, next)
 	}
 }

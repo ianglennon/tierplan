@@ -40,7 +40,9 @@ func (d Deps) ForeignStack(ctx context.Context, envID string, target stacks.Targ
 // ForeignStackOf is ForeignStack for a stack Bayplan holds, judged by the stack's own ownership rule (D-16): an
 // adopted stack that has not been deployed yet owns the workloads that carry no ID of its own, and the networks,
 // secrets and configs it recorded when it was adopted, so its first deploy is no name clash. On a standalone host it
-// owns the containers of its Compose project with no ID of its own and the networks and volumes recorded then.
+// owns the containers of its Compose project with no ID of its own and the networks and volumes recorded then. Once
+// deployed, a container with no ID in its project (what `docker compose up --scale` adds from the host) is no clash
+// beside a container the stack owns; another stack's ID, or a project it owns no container of, still is (G-08-6).
 func (d Deps) ForeignStackOf(ctx context.Context, envID string, st Stack) (bool, error) {
 	return d.foreignUnder(ctx, envID, OwnershipOf(st))
 }
@@ -85,9 +87,9 @@ func (d Deps) foreignProject(ctx context.Context, envID string, own Ownership) (
 		if e != nil {
 			return e
 		}
-		for _, r := range containers {
-			foreign = foreign || !own.OwnsWorkload(r.Labels)
-		}
+		// The stack's own containers and the ones the host CLI added to its project are no clash (SplitProject).
+		_, _, others := SplitProject(own, containers, func(r dockerx.ContainerRow) map[string]string { return r.Labels })
+		foreign = len(others) > 0
 		for _, r := range networks {
 			foreign = foreign || own.foreignNetwork(r.Name, r.Labels)
 		}
