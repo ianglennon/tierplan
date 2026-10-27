@@ -117,8 +117,8 @@ type StacksDeps struct {
 	// ten minutes; BAYPLAN_STACK_CONVERGE_TIMEOUT).
 	Clock           stackops.Clock
 	ConvergeTimeout time.Duration
-	// Platforms is the server's one memo of the platforms its image lookups found, by digest: a review fills it and the
-	// deploy that follows reads it, so that deploy asks no registry again (G-08-4). Nil is no memo: a reviewed deploy asks
+	// Platforms is the server's one memo of the platforms its image lookups found, by repository and digest (an answer of
+	// none too): a review fills it and the deploy that follows reads it, so that deploy asks no registry again (G-08-4). Nil is no memo: a reviewed deploy asks
 	// the registry once for each looked-up digest.
 	Platforms *stackops.PlatformMemo
 	// CheckDeadline bounds one check of a stack's working copy. Zero is five seconds.

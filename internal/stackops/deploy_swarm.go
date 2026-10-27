@@ -138,8 +138,9 @@ type SwarmDeployInput struct {
 	Update map[string]bool
 	// Reviewed, when not nil, are the images a review chose, by swarm service name: the deploy uses
 	// exactly these digests, after checking each against what it would decide itself (ReviewedPins), and
-	// asks no registry for a digest. The platforms of a looked-up image are the ones its review found, read
-	// again for that digest only when the server no longer holds them (Deps.Platforms). Nil means the deploy
+	// asks no registry to choose or change a digest. The platforms of a looked-up image are the ones its review found,
+	// asked of the registry again, once, only when the server no longer holds them (Deps.Platforms; an answer of none is
+	// held too), and a registry that cannot answer then stops the deploy (accepted 2026-10-27). Nil means the deploy
 	// looks the images up itself.
 	Reviewed map[string]string
 	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by

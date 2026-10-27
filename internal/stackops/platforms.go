@@ -142,12 +142,13 @@ func memoKey(text, digest string) string {
 	return reference.TrimNamed(named).String() + "@" + digest
 }
 
-// remember keeps the platforms of a digest as looked up in the repository of text. A lookup that found none is not kept:
-// a miss costs one lookup, and an answer of none is no fact worth holding. An answer that differs from the one held for
-// the same repository and digest drops the entry instead of replacing it.
+// remember keeps the platforms of a digest as looked up in the repository of text. A lookup that found none is kept as
+// that answer too, so a deploy that follows the review does not ask the registry again for a digest that names no
+// platform. An answer that differs from the one held for the same repository and digest drops the entry instead of
+// replacing it.
 func (m *PlatformMemo) remember(text, digest string, platforms []swarm.Platform) {
 	key := memoKey(text, digest)
-	if m == nil || key == "" || len(platforms) == 0 {
+	if m == nil || key == "" {
 		return
 	}
 	m.mu.Lock()
@@ -161,7 +162,7 @@ func (m *PlatformMemo) remember(text, digest string, platforms []swarm.Platform)
 	if len(m.byKey) >= platformMemoLimit {
 		m.byKey = map[string][]swarm.Platform{}
 	}
-	m.byKey[key] = slices.Clone(platforms)
+	m.byKey[key] = append([]swarm.Platform{}, platforms...)
 }
 
 // recall returns the platforms remembered for a digest in the repository of text.
