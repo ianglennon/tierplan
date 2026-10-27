@@ -643,8 +643,8 @@ func (w *driftWorker) logFailure(ctx context.Context, st Stack, what string, err
 // heldFingerprint names what the cached state of the environment holds for the stack, with the revision that is
 // deployed and whether it is running: a service of a swarm by its ID, when it last changed, how many replicas it wants
 // and its image, a container of a host by its ID, state and image. It changes whenever the stack does. A host
-// container counts when it is the stack's or was added to its project from the host CLI, with no bayplan.stack.id
-// (SplitProject), so docker compose up --scale moves it; another stack's container does not.
+// container counts when it is the stack's or was added to one of its services from the host CLI, with no
+// bayplan.stack.id (SplitProject), so docker compose up --scale moves it; another stack's container does not.
 func heldFingerprint(h Held, st Stack, seq int64) string {
 	own := OwnershipOf(st)
 	var parts []string

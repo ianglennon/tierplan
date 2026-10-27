@@ -173,12 +173,14 @@ func (o Ownership) foreignVolume(name string, labels map[string]string) bool {
 //   - A container whose project or namespace (labelKey) is not the stack's name is in no list.
 //   - owned: OwnsWorkload says it is the stack's.
 //   - unlabelled: on a host, a stack Bayplan holds (not Discovered, with an ID) meets a container of its project that
-//     carries no bayplan.stack.id, and owns at least one other container of the project. It is what the person adds
+//     carries no bayplan.stack.id, and owns another container of the same Compose service. It is what the person adds
 //     to the project from the host CLI (docker compose up --scale), and counts as the stack's wherever the stack
-//     compares scale and extra services.
+//     compares scale.
 //   - foreign: every other container under the name. Another non-empty ID is always another stack's (T-08-103). A
 //     container with no ID in a project the stack owns nothing of is a project Bayplan did not deploy or adopt, so it
-//     is not taken over silently (T-08-104, P7 D-12).
+//     is not taken over silently (T-08-104, P7 D-12). Nor is a container with no ID of a service no container of the
+//     stack runs: an unrelated project that resolves to the same name looks just like it, and Deploy, Restore and
+//     Remove would delete it as an orphan (WR-03, T-08-113).
 //
 // A swarm stack has no unlabelled class: its services state the namespace the stack deploy wrote.
 func SplitProject[T any](o Ownership, all []T, labels func(T) map[string]string) (owned, unlabelled, foreign []T) {
@@ -195,8 +197,18 @@ func SplitProject[T any](o Ownership, all []T, labels func(T) map[string]string)
 			foreign = append(foreign, c)
 		}
 	}
-	if len(owned) > 0 {
-		return owned, noID, foreign
+	services := map[string]bool{}
+	for _, c := range owned {
+		if svc := labels(c)[stacks.LabelComposeService]; svc != "" {
+			services[svc] = true
+		}
 	}
-	return owned, nil, append(foreign, noID...)
+	for _, c := range noID {
+		if services[labels(c)[stacks.LabelComposeService]] {
+			unlabelled = append(unlabelled, c)
+		} else {
+			foreign = append(foreign, c)
+		}
+	}
+	return owned, unlabelled, foreign
 }

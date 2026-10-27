@@ -30,9 +30,9 @@ import (
 // stack's, as a service with no container is Missing.
 //
 // A container is the stack's when it carries the stack's ID, or when it carries none and the stack owns another container
-// of the project: a container the host CLI added under the project (docker compose up --scale) is drift, by its scale
-// or as Extra (G-08-6). A container with another stack's ID is not the stack's, and neither is any container of a
-// project the stack holds none of (SplitProject).
+// of the same service: a container the host CLI added to a service (docker compose up --scale) is drift by its scale
+// (G-08-6). A container with another stack's ID is not the stack's, and neither is any container of a project the stack
+// holds none of, nor a container with no ID of a service the stack runs nothing of (SplitProject, WR-03).
 //
 // It only reads the host: the Compose SDK is not asked for anything. The caller has already answered a stopped stack
 // and a stack with no good revision (Drift).

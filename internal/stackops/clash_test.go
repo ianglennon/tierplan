@@ -115,7 +115,7 @@ func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 	c := func(id string, labels map[string]string) dockertest.FakeContainer {
 		return dockertest.FakeContainer{ID: id, Names: []string{"/web-app-" + id}, Image: "x", State: "running", Labels: labels}
 	}
-	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.oneoff": "True"}
+	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "com.docker.compose.oneoff": "True"}
 	anotherStack := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-other"}
 	otherService := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "postgres"}
 	for name, tc := range map[string]struct {

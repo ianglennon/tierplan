@@ -582,6 +582,9 @@ func TestDriftMonitorTimedLookSeesAContainerAddedFromTheHostCLI(t *testing.T) {
 	shop := monitorStack(src, "shop-id", "shop", stacks.TargetStandalone)
 	row := func(id string, labels map[string]string) dockerx.ContainerRow {
 		labels[stacks.LabelComposeProject] = shop.Name
+		if _, ok := labels[stacks.LabelComposeService]; !ok {
+			labels[stacks.LabelComposeService] = "web"
+		}
 		return dockerx.ContainerRow{ID: id, Name: "shop-web-" + id, State: "running", ImageID: "sha256:img", Labels: labels}
 	}
 	var mu sync.Mutex
@@ -614,6 +617,15 @@ func TestDriftMonitorTimedLookSeesAContainerAddedFromTheHostCLI(t *testing.T) {
 	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
 	if calls.count("shop-id") != 1 {
 		t.Fatalf("shop was checked %d times, want a container with another stack's ID to wake nothing", calls.count("shop-id"))
+	}
+
+	// A container with no ID of a service the stack runs nothing of is not the stack's either (WR-03).
+	add(row("c-db", map[string]string{stacks.LabelComposeService: "postgres"}))
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "shop-id", stackops.DriftOutcomeSkipped)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("shop-id") != 1 {
+		t.Fatalf("shop was checked %d times, want a container of a service the stack runs nothing of to wake nothing", calls.count("shop-id"))
 	}
 
 	// docker compose up --scale adds a container with the project and no ID: the next timed look checks.

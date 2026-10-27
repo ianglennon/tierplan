@@ -457,9 +457,9 @@ func standaloneAction(diff standaloneDiff, name string) string {
 // foreignLive reports whether the host holds a container, network or volume under the stack's Compose
 // project that the stack does not own: a Compose project of that name that Bayplan does not manage (D-12). A
 // container is the stack's own, one the host CLI added to its project, or foreign (SplitProject): the CLI's has no
-// bayplan.stack.id and counts only beside a container the stack owns, so a stack scaled with `docker compose up
-// --scale` is no name clash, while another stack's container, or a same-named project the stack holds nothing of,
-// still is (G-08-6, P7 D-12). An adopted stack owns the containers of its project that carry no ID of its own until
+// bayplan.stack.id and counts only beside a container the stack owns of the same service, so a stack scaled with
+// `docker compose up --scale` is no name clash, while another stack's container, a same-named project the stack holds
+// nothing of, or a service the stack runs nothing of, still is (G-08-6, WR-03, P7 D-12). An adopted stack owns the containers of its project that carry no ID of its own until
 // its first deploy, and the networks and volumes recorded when it was adopted for good (D-11, D-18), so a project it
 // took over is no clash.
 func foreignLive(live standaloneLive, own Ownership) bool {

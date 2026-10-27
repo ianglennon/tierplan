@@ -446,9 +446,9 @@ deletes everything the stack owns and needs a typed confirm of the stack's name.
 
 1. The dialog lists what will go: the services (or containers), the stack's own networks, its own secrets and
    configs, and the definition.
-   On a standalone host the containers include any that someone added to the stack's project from the host's CLI
-   (for example with `docker compose up --scale`), and Remove waits for them like the rest, so nothing of the project
-   is left.
+   On a standalone host the containers include any that someone added to one of the stack's services from the host's
+   CLI (for example with `docker compose up --scale`), and Remove waits for them like the rest, so nothing of the
+   stack is left.
 2. **Volumes are opt-in.** Each volume the stack owns is listed (per node on a swarm) with a checkbox, unticked.
    Only a ticked volume is deleted, and only if it carries this stack's label on that node. Unticked volumes stay
    on the host.
@@ -735,13 +735,14 @@ is **Extra**.
 **A container added from the host's CLI counts with the stack.** On a standalone host, a container someone adds to the
 stack's Compose project from the host, such as `docker compose up -d --scale web=2 --no-recreate` run on your own copy
 of the file, carries none of Bayplan's labels, but it belongs to the stack's project. Bayplan counts it with the
-stack while the stack owns at least one other container of that project: a second container of `web` reads as
-**web Changed** with two containers, a container of a service the revision does not declare reads as **Extra**, and a
-restore removes it. The same container shows on the stack's page, in its **Resources** tab and in its logs, does not
+stack while the stack owns another container of the same service: a second container of `web` reads as
+**web Changed** with two containers, and a restore removes it. The same container shows on the stack's page, in its **Resources** tab and in its logs, does not
 block a deploy, a restore, Stop or Start as a name clash, and is listed and removed by **Remove**. A container that
 carries **another Bayplan stack's ID** never counts as this stack's. A Compose project of the same name that the stack
 owns **no container of** is not taken over: it stays a name clash, so Bayplan never acts on a project it did not deploy
-or adopt.
+or adopt. Nor is a container with none of Bayplan's labels of a service the stack runs **no container of**, such as a
+`postgres` from an unrelated `compose.yaml` whose project happens to have the same name: it is not drift, and a deploy,
+restore or Remove is refused as a name clash until you remove it or rename one of the projects.
 
 **What is not drift:**
 
