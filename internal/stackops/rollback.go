@@ -6,6 +6,9 @@ package stackops
 import (
 	"context"
 	"fmt"
+	"slices"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
@@ -46,11 +49,14 @@ type RollbackPlan struct {
 	Plan   convert.Plan
 	// Pins are the images the revision ran, by swarm service name, exactly as it stored them.
 	Pins map[string]string
+	// Platforms are the platforms the revision ran with, by swarm service name, exactly as it recorded them (08-33).
+	// Nil for a revision made before they were recorded.
+	Platforms map[string][]swarm.Platform
 }
 
 // PrepareRollback checks, loads and converts the revision to restore, and checks that it knows an image for every
 // service. It sends nothing to any engine and asks no registry: a roll back redeploys exactly what the
-// revision ran, so the digests it stored are the ones that go out (STK-07, T-07-93). Nothing is stored,
+// revision ran, so the digests and the platforms it stored are the ones that go out (STK-07, T-07-93). Nothing is stored,
 // so a revision that cannot be redeployed is refused before the stack gains a revision of its own.
 //
 // The convert stage's refusal is guarded (convert.GuardSecrets): a field fed by a secret variable is the fixed
@@ -83,7 +89,7 @@ func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pi
 	if _, err := RestoredPins(plan.Services, pins); err != nil {
 		return RollbackPlan{}, refuse(PreparePins, err)
 	}
-	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins}, nil
+	return RollbackPlan{Loaded: loaded, Files: files, Vars: vars, Plan: plan, Pins: pins, Platforms: target.Platforms}, nil
 }
 
 // RestoredPins are the images a roll back sends: for each service with an image, the reference the
@@ -103,4 +109,18 @@ func RestoredPins(services []convert.ServicePlan, stored map[string]string) (map
 		out[sp.Name] = Pin{Service: sp.Name, AsWritten: text, Ref: ref, Action: stacks.PinKeep}
 	}
 	return out, nil
+}
+
+// withStoredPlatforms sets the platforms of each restored pin from the revision's own record (by swarm service name) and
+// returns pins. A roll back sends the platforms its revision stored and asks no registry (P7 D-14, T-07-93); a pin the
+// record says nothing for is left alone, for carryPlatforms to serve from the running service of the same image. The
+// pins map is changed in place and the record is copied.
+func withStoredPlatforms(pins map[string]Pin, platforms map[string][]swarm.Platform) map[string]Pin {
+	for name, p := range pins {
+		if rec := platforms[name]; len(rec) > 0 {
+			p.Platforms = slices.Clone(rec)
+			pins[name] = p
+		}
+	}
+	return pins
 }

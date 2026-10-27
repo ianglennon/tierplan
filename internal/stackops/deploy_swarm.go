@@ -146,6 +146,10 @@ type SwarmDeployInput struct {
 	// swarm service name, and are used as they are. They are not compared with what the swarm runs now
 	// (the point is to move it back), and no registry is asked for anything (STK-07, T-07-93).
 	Rollback bool
+	// RestoredPlatforms, for a Rollback, is the revision's own record of the platforms its services ran with, by swarm
+	// service name (Snapshot.Platforms). They are sent as they are and no registry is asked. A service the record
+	// says nothing for keeps the platforms the swarm runs when it runs the same image (G-08-4, T-08-101).
+	RestoredPlatforms map[string][]swarm.Platform
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -377,7 +381,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		if errors.As(err, &invalid) {
 			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
 		}
-		pinned = PinOutcome{Pins: pins}
+		pinned = PinOutcome{Pins: withStoredPlatforms(pins, in.RestoredPlatforms)}
 	} else if in.Reviewed != nil {
 		pins, err := d.ReviewedPins(ctx, in.EnvID, planned.Services, byName, stored, in.Update, in.Reviewed)
 		var invalid *PinsInvalidError
