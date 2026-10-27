@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
@@ -173,8 +175,10 @@ func checkPasted(ctx context.Context, in AdoptInput) (stacks.CheckResult, stacks
 // withPasted is the prepared adoption with the pasted copy as the definition to adopt. The pins are the running
 // digests of the services that run the image the file names; any other service is pinned to its image as written
 // (a service that does not run, or runs another image than the file says, so its difference shows in the review).
+// A service keeps the platforms it runs with only where it keeps the running pin (D-12).
 func (p adoptPrepared) withPasted(copy stacks.WorkingCopy, loaded *stacks.Loaded, target stacks.Target) adoptPrepared {
 	pins := make(map[string]string, len(loaded.Project.Services))
+	platforms := make(map[string][]swarm.Platform, len(loaded.Project.Services))
 	for key, svc := range loaded.Project.Services {
 		if svc.Image == "" {
 			continue
@@ -190,6 +194,9 @@ func (p adoptPrepared) withPasted(copy stacks.WorkingCopy, loaded *stacks.Loaded
 			}
 			if stacks.SameImageText(text, svc.Image) {
 				pins[engine] = live
+				if pl := p.res.Platforms[engine]; len(pl) > 0 {
+					platforms[engine] = pl
+				}
 				continue
 			}
 		}
@@ -197,6 +204,7 @@ func (p adoptPrepared) withPasted(copy stacks.WorkingCopy, loaded *stacks.Loaded
 	}
 	p.copy = copy
 	p.res.Pins = pins
+	p.res.Platforms = platforms
 	p.res.Notes = nil
 	return p
 }
@@ -319,7 +327,7 @@ func (d Deps) AdoptWithOutcome(ctx context.Context, repo Repo, in AdoptInput) (A
 
 	st, rev, err := repo.Adopt(ctx, AdoptRecord{
 		EnvID: in.EnvID, Name: in.Name, Target: in.Target, SourceRef: in.Name, Actor: in.Caller.Actor,
-		Copy: copy, Pins: prep.res.Pins, Rendered: rendered, Adoption: adoption,
+		Copy: copy, Pins: prep.res.Pins, Platforms: prep.res.Platforms, Rendered: rendered, Adoption: adoption,
 	})
 	if err != nil {
 		return Adopted{}, err

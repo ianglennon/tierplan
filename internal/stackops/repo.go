@@ -257,6 +257,9 @@ type AdoptRecord struct {
 	Actor     string
 	Copy      stacks.WorkingCopy
 	Pins      map[string]string
+	// Platforms are the platforms the swarm services run with, by service name, which revision 1 stores beside its
+	// pins (SetSnapshotPlatforms) so a roll back to it puts them back (D-14). None for a standalone stack.
+	Platforms map[string][]swarm.Platform
 	Rendered  []byte
 	Adoption  stacks.Adoption
 }
@@ -287,6 +290,14 @@ func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, erro
 	rawPins, err := json.Marshal(pins)
 	if err != nil {
 		return Stack{}, Snapshot{}, fmt.Errorf("encode pins: %w", err)
+	}
+	platforms := rec.Platforms
+	if platforms == nil {
+		platforms = map[string][]swarm.Platform{}
+	}
+	rawPlatforms, err := json.Marshal(platforms)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode platforms: %w", err)
 	}
 	rawAdoption, err := json.Marshal(rec.Adoption)
 	if err != nil {
@@ -330,6 +341,9 @@ func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, erro
 	}); err != nil {
 		return Stack{}, Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
+	if n, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(rawPlatforms), ID: revID.String()}); err != nil || n != 1 {
+		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %v (%d rows)", err, n)
+	}
 	if err := r.writeContent(ctx, q, revID.String(), rec.Copy); err != nil {
 		return Stack{}, Snapshot{}, err
 	}
@@ -344,6 +358,9 @@ func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, erro
 	rev := Snapshot{
 		ID: revID.String(), StackID: st.ID, Kind: KindRevision, Seq: seq, Version: 1, Outcome: OutcomeGood,
 		CreatedBy: rec.Actor, CreatedAt: now, Origin: OriginAdopted, Copy: normalise(rec.Copy),
+	}
+	if len(rec.Platforms) > 0 {
+		rev.Platforms = rec.Platforms
 	}
 	return st, rev, nil
 }

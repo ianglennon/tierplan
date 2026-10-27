@@ -99,7 +99,7 @@ func Swarm(in SwarmInput) (Result, error) {
 		b.subs.unfold(&svc)
 		project.Services[name] = svc
 	}
-	return Result{Project: project, YAML: yml, Pins: b.pins, Notes: b.sortedNotes(), Objects: b.sortedObjects()}, nil
+	return Result{Project: project, YAML: yml, Pins: b.pins, Platforms: b.platforms, Notes: b.sortedNotes(), Objects: b.sortedObjects()}, nil
 }
 
 // keys hands out the keys of one kind of top-level entry: one for each engine name, no two the same.
@@ -177,10 +177,11 @@ type builder struct {
 	secrets                                  types.Secrets
 	configs                                  types.Configs
 
-	pins    map[string]string
-	notes   []Note
-	objects map[string]Object
-	subs    substitutions
+	pins      map[string]string
+	platforms map[string][]swarm.Platform
+	notes     []Note
+	objects   map[string]Object
+	subs      substitutions
 }
 
 func newBuilder(in SwarmInput) *builder {
@@ -188,7 +189,7 @@ func newBuilder(in SwarmInput) *builder {
 		in: in, ns: in.Namespace, net: map[string]NetworkInfo{},
 		netKeys: newKeys(), volKeys: newKeys(), secretKeys: newKeys(), configKeys: newKeys(),
 		networks: types.Networks{}, volumes: types.Volumes{}, secrets: types.Secrets{}, configs: types.Configs{},
-		pins: map[string]string{}, objects: map[string]Object{},
+		pins: map[string]string{}, platforms: map[string][]swarm.Platform{}, objects: map[string]Object{},
 	}
 	for _, n := range in.Networks {
 		b.net[n.Name] = n
@@ -326,6 +327,9 @@ func (b *builder) service(svc SwarmService) (string, types.ServiceConfig, error)
 	out.Image = cmp.Or(spec.Labels[stacks.LabelSwarmImage], withoutDigest(cs.Image))
 	if cs.Image != "" {
 		b.pins[svc.Name] = cs.Image
+		if pl := spec.TaskTemplate.Placement; pl != nil && len(pl.Platforms) > 0 {
+			b.platforms[svc.Name] = slices.Clone(pl.Platforms)
+		}
 		if !hasDigest(cs.Image) {
 			b.note(noteUnpinned(short, cs.Image))
 		}

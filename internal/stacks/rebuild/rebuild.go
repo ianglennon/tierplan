@@ -19,6 +19,7 @@ import (
 	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // What a Note is about and how an object of the stack is treated. Kind is one of the Kind constants and Treatment
@@ -64,6 +65,10 @@ type Result struct {
 	// Pins are the images the services run, as the engine holds them (tag@sha256:...), by the name the engine
 	// gives the service. The file names the image as it was written; the pin is what a deploy keeps (D-14).
 	Pins map[string]string
+	// Platforms are the platforms the services run with (their Placement.Platforms), by the name the engine gives
+	// the service, for each service that has any. They travel with the pins and never appear in the file: an
+	// adoption stores them on its first revision so a roll back to it puts them back (D-14).
+	Platforms map[string][]swarm.Platform
 	// Notes are what the rebuild could not say plainly, in service then code order.
 	Notes []Note
 	// Objects are the networks, volumes, secrets and configs the stack uses, in kind then name order.
