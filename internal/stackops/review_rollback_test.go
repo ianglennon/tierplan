@@ -295,15 +295,16 @@ func TestRestoreReviewOfWhatIsDeployedFindsNothingToDo(t *testing.T) {
 	}
 }
 
-// platformsRows are the Placement.Platforms paths a review lists, by service.
+// platformsRows are the services a review lists a Placement.Platforms change for, sorted.
 func platformsRows(t *testing.T, rv stackops.Review) []string {
 	t.Helper()
 	var out []string
 	for _, p := range gapPaths(t, rv.Services) {
-		if strings.Contains(p, "Placement.Platforms") {
-			out = append(out, p)
+		if svc, path, _ := strings.Cut(p, ": "); strings.Contains(path, "Placement.Platforms") && !slices.Contains(out, svc) {
+			out = append(out, svc)
 		}
 	}
+	slices.Sort(out)
 	return out
 }
 
@@ -345,8 +346,8 @@ func TestRollbackAndRestoreReviewsShowThePlatformsTheRevisionStored(t *testing.T
 		t.Run(mode+" lists the platforms change it would make", func(t *testing.T) {
 			t.Parallel()
 			rv, lookups := review(t, mode, []swarm.Platform{amd, arm}, []swarm.Platform{arm})
-			if got := platformsRows(t, rv); len(got) != 3 {
-				t.Errorf("platforms rows = %v, want one for each of the three services: the revision stored arm64 alone", got)
+			if got := platformsRows(t, rv); !slices.Equal(got, []string{"api", "gone", "web"}) {
+				t.Errorf("services with a platforms change = %v, want all three: the revision stored arm64 alone", got)
 			}
 			if lookups != 0 {
 				t.Errorf("the review asked a registry %d times", lookups)

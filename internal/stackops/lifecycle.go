@@ -659,6 +659,9 @@ func (l *lifecycle) recreate(ctx context.Context, plan startPlan, writes *[]serv
 		l.fail(ItemServices, CodePinsInvalid, name)
 		return false
 	}
+	// The platforms the revision recorded go back with its images. A service made again is not running, so no running
+	// service has platforms to lend, and nothing is asked of a registry (T-07-93).
+	withStoredPlatforms(pins, plan.rev.Platforms)
 	for _, sp := range converted.Services {
 		if !plan.missing[sp.Name] {
 			continue
@@ -670,7 +673,7 @@ func (l *lifecycle) recreate(ctx context.Context, plan startPlan, writes *[]serv
 		l.prog.start(idService + sp.Name)
 		// The image is the pinned one the revision ran, never the text and never a newer digest.
 		if p, ok := pins[sp.Name]; ok && sp.Spec.TaskTemplate.ContainerSpec != nil {
-			sp.Spec.TaskTemplate.ContainerSpec.Image = p.Ref
+			sp.Spec = withPin(sp.Spec, p)
 		}
 		raw, merr := json.Marshal(sp.Spec)
 		if merr != nil {

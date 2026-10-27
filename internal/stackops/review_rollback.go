@@ -107,8 +107,9 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	for _, s := range live.Services {
 		byName[s.Name] = s
 	}
-	// A deploy of the revision keeps the platforms of the image a service still runs (deploy_swarm.go), so the review
-	// shows the same spec; plan 08-36 adds the platforms the revision stored (G-08-4).
+	// A deploy of the revision sends the platforms the revision stored and, for a service the record says nothing for,
+	// those of the image it still runs (deploy_swarm.go), so the review shows the same spec (G-08-4, D-05, D-23).
+	withStoredPlatforms(restored, target.Platforms)
 	carryPlatforms(restored, byName)
 	rv.Pins = make(map[string]string, len(restored))
 	for name, p := range restored {
