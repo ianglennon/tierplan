@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -607,6 +608,53 @@ func TestPlatformsAreStoredOnARevisionAndReadBackByService(t *testing.T) {
 	}
 	if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 {
 		t.Errorf("Revision after SetPlatforms(nil) = %v, %v; want no platforms", got.Platforms, err)
+	}
+}
+
+// A revision whose stored platforms cannot be read still opens everywhere a revision is read, with no platforms, and the
+// problem is logged (T-08-109). The test sets the default logger, so it does not run in parallel with the rest.
+func TestARevisionWithUnreadablePlatformsStillOpensWithNone(t *testing.T) {
+	f := newRepo(t)
+	ctx := context.Background()
+	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"not json", `{"web_app": "linux/amd64"}`, `[1, 2]`} {
+		for _, id := range []string{rev.ID, draft.ID} {
+			if _, err := f.repo.Store.Write.ExecContext(ctx, `UPDATE stack_snapshots SET platforms = ? WHERE id = ?`, bad, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var logs bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+		if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 || len(got.Copy.Files) == 0 {
+			t.Errorf("platforms %q: Revision = %v, %v; want it read, with no platforms", bad, got.Platforms, err)
+		}
+		if got, ok, err := f.repo.LatestGoodRevision(ctx, st.ID); err != nil || !ok || len(got.Platforms) != 0 {
+			t.Errorf("platforms %q: LatestGoodRevision = %v, %v, %v; want it read, with no platforms", bad, got.Platforms, ok, err)
+		}
+		if got, err := f.repo.Draft(ctx, st.ID); err != nil || len(got.Platforms) != 0 || !got.IsDraft {
+			t.Errorf("platforms %q: Draft = %v, %v; want it read, with no platforms", bad, got.Platforms, err)
+		}
+		slog.SetDefault(old)
+		if !strings.Contains(logs.String(), "could not read the platforms of a stack revision") {
+			t.Errorf("platforms %q: the problem was not logged: %q", bad, logs.String())
+		}
+	}
+
+	// The stack with no draft starts from its last good revision: that path reads it too.
+	if _, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.repo.Draft(ctx, st.ID); err != nil || got.IsDraft || len(got.Platforms) != 0 || got.BaseSeq != rev.Seq {
+		t.Errorf("Draft of a stack with no draft = base %d, platforms %v, %v; want the last good revision's content with no platforms", got.BaseSeq, got.Platforms, err)
 	}
 }
 

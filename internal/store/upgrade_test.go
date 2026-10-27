@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
@@ -219,6 +220,59 @@ func TestVersion16DatabaseUpgradesToHeadWithStackHistoryBackfill(t *testing.T) {
 	}
 	if _, err := s.Write.ExecContext(ctx, `UPDATE stack_snapshots SET origin = 'adopted' WHERE id = 'snap-1'`); err != nil {
 		t.Errorf("origin adopted refused: %v", err)
+	}
+}
+
+// TestVersion17DatabaseUpgradesToHeadWithRevisionPlatforms stages a database as the release before the revision
+// platforms leave it (schema version 17) with a stack holding a revision and a draft, upgrades it, and checks that
+// both read no platforms and that platforms can be stored on a revision afterwards (plan 08-33, G-08-4).
+func TestVersion17DatabaseUpgradesToHeadWithRevisionPlatforms(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v17-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 17),
+	})
+	if err != nil || res.To != 17 {
+		t.Fatalf("migrate to version 17: %v (at %d)", err, res.To)
+	}
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('stack_snapshots') WHERE name = 'platforms'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("stack_snapshots has the platforms column at version 17 (%d, %v)", n, err)
+	}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := s.Write.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'prod', '', 1, 30, 30)`)
+	exec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('st-1', 'env-1', 'web', 'swarm', 'ada', 40)`)
+	const snap = `INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, pins, created_by, created_at) VALUES (?, 'st-1', ?, ?, ?, 1, 'good', ?, 'ada', 50)`
+	exec(snap, "snap-draft", "draft", 0, 1, "{}")
+	exec(snap, "snap-1", "revision", 1, 0, `{"web_app":"nginx:1.27@sha256:aaa"}`)
+
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v17-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 17 || up.To < 18 {
+		t.Fatalf("upgrade went %d -> %d, want from 17 to at least 18", up.From, up.To)
+	}
+	for _, id := range []string{"snap-draft", "snap-1"} {
+		var platforms, pins string
+		if err := s.Read.QueryRowContext(ctx, `SELECT platforms, pins FROM stack_snapshots WHERE id = ?`, id).Scan(&platforms, &pins); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		if platforms != "{}" {
+			t.Errorf("%s reads platforms %q, want {}", id, platforms)
+		}
+		if id == "snap-1" && pins != `{"web_app":"nginx:1.27@sha256:aaa"}` {
+			t.Errorf("%s pins changed to %q by the upgrade", id, pins)
+		}
+	}
+	if _, err := s.Q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: `{"web_app":[{"Architecture":"amd64","OS":"linux"}]}`, ID: "snap-1"}); err != nil {
+		t.Errorf("platforms could not be stored on the upgraded revision: %v", err)
 	}
 }
 
