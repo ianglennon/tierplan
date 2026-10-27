@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -975,4 +976,73 @@ func TestReviewOfAnAdoptedStackKeepsARealChangeInTheList(t *testing.T) {
 	if rv.Summary.Services.Changed != 1 || rv.Summary.OwnershipOnly != 2 {
 		t.Errorf("summary = %+v, want one changed service and two ownership-only", rv.Summary)
 	}
+}
+
+// TestReviewShowsThePlatformsARedeployPutsBack (G-08-4, P7 D-11, P7 D-18): a service that keeps its digest is sent the
+// platforms the stack's last good revision recorded for that digest, and the review lists that change before the deploy,
+// as the deploy then makes it. A record for another digest is not shown, and a stack whose services run the recorded
+// platforms lists no change.
+func TestReviewShowsThePlatformsARedeployPutsBack(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	kept := "nginx:1.27@" + digestOf("a")
+	const withPlatforms = `"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]`
+	reviewWith := func(t *testing.T, rig *swarmRig, good map[string]stacks.LivePin) stackops.Review {
+		t.Helper()
+		in := rig.reviewInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins = &memPins{good: good}
+		rv, err := rig.deps.Review(testsupport.Context(t), in)
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		return rv
+	}
+	siteChange := func(t *testing.T, rv stackops.Review) stacks.ServiceChange {
+		t.Helper()
+		for _, c := range rv.Services {
+			if c.Name == "site_web" {
+				return c
+			}
+		}
+		t.Fatalf("review lists %+v, want a change for site_web", rv.Services)
+		return stacks.ServiceChange{}
+	}
+
+	t.Run("the recorded platforms are listed as added", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{amd, arm}}})
+		c := siteChange(t, rv)
+		if c.Change != "changed" || !strings.Contains(string(c.Next), withPlatforms) || strings.Contains(string(c.Current), `"Platforms":[{`) {
+			t.Errorf("site_web = %s, current %s, next %s; want a change that adds the recorded platforms", c.Change, c.Current, c.Next)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != 0 {
+			t.Errorf("distribution lookups = %d, want none for a kept digest", n)
+		}
+	})
+
+	t.Run("a record for another digest is not shown", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: "nginx:1.27@" + digestOf("b"), Platforms: []swarm.Platform{amd, arm}}})
+		if c := siteChange(t, rv); strings.Contains(string(c.Next), `"Platforms":[{`) {
+			t.Errorf("next = %s, want no platforms from a record of another digest (T-08-111)", c.Next)
+		}
+	})
+
+	t.Run("services that run the recorded platforms list no change", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = &memPins{}, "rev-1"
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{amd, arm}}})
+		if len(rv.Services) != 0 {
+			t.Errorf("review = %+v, want no change: the service runs the recorded platforms", rv.Services)
+		}
+	})
 }
