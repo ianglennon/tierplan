@@ -1664,3 +1664,79 @@ func TestFirstReviewAndDeployOfAnAdoptedStackKeepItsPlatforms(t *testing.T) {
 		}
 	})
 }
+
+// TestADeployThatLooksAnImageUpSendsThePlatformsOfTheImage (G-08-4, user decision 2026-10-27): docker stack deploy sends
+// each service with the platforms of its image, and so does Bayplan, filled from the answer of the lookup that pinned
+// the digest (the fake's registry answers linux/amd64 and linux/arm64/v8 and two unknown/unknown entries). A redeploy
+// with no edit sends the same platforms and asks no registry (P7 D-18); an image pinned to a local ID has none.
+func TestADeployThatLooksAnImageUpSendsThePlatformsOfTheImage(t *testing.T) {
+	t.Parallel()
+	want := []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}
+
+	t.Run("a new service, a redeploy and a review", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		store := &memPins{}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-1"
+
+		// The review of a service that is not there yet lists it with the platforms it would be sent.
+		first := rig.review(t, "site", pinCompose("nginx:1.27"), nil)
+		if len(first.Services) != 1 || first.Services[0].Change != "added" || !strings.Contains(string(first.Services[0].Next), `"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]`) {
+			t.Fatalf("review of a new service = %+v, want it added with the platforms of its image", first.Services)
+		}
+
+		res, job := rig.deploy(t, in)
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		creates := rig.fake.ServiceCreates()
+		if len(creates) != 1 {
+			t.Fatalf("service creates = %d, want 1", len(creates))
+		}
+		if pl := creates[0].Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, want) {
+			t.Fatalf("created with placement %+v, want the platforms %v", pl, want)
+		}
+		lookups := len(rig.fake.DistributionRefs())
+
+		if rv := rig.review(t, "site", pinCompose("nginx:1.27"), nil); len(rv.Services) != 0 {
+			t.Errorf("review right after the deploy = %+v, want no change", rv.Services)
+		}
+
+		in.RevisionID = "rev-2"
+		again, job := rig.deploy(t, in)
+		if !again.OK() || job.State != jobs.JobDone {
+			t.Fatalf("redeploy = %+v job %s %v", again, job.State, itemStates(job))
+		}
+		ups := rig.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("service updates = %d, want 1", len(ups))
+		}
+		if pl := ups[0].Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, want) {
+			t.Errorf("redeployed with placement %+v, want the same platforms %v", pl, want)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != lookups {
+			t.Errorf("distribution lookups = %d, want still %d: a kept digest is never looked up again (T-08-108)", n, lookups)
+		}
+	})
+
+	t.Run("a local image", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+			c.Images = []dockertest.FakeImage{{ID: localImageID, RepoTags: []string{localImageRef}}}
+		})
+		rig.fake.SetDistributionFailure("docker.io/library/myapp:1", 404, "pull access denied for myapp")
+		_, in := stackInput(t, "site", "services:\n  app:\n    image: myapp:1\n", nil)
+		res, job := rig.deploy(t, in)
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		creates := rig.fake.ServiceCreates()
+		if len(creates) != 1 {
+			t.Fatalf("service creates = %d, want 1", len(creates))
+		}
+		if pl := creates[0].Spec.TaskTemplate.Placement; pl != nil && len(pl.Platforms) != 0 {
+			t.Errorf("created with platforms %+v, want none for a local image", pl.Platforms)
+		}
+	})
+}
