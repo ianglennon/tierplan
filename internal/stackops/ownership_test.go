@@ -292,3 +292,95 @@ func TestStandaloneNameClashGateUsesTheOwnershipOfTheStack(t *testing.T) {
 		t.Fatalf("ForeignStackOf(adopted, deployed) = %v, %v, want an unlabelled container to be a clash once the first deploy is done", foreign, err)
 	}
 }
+
+// TestSplitProject: the containers of a standalone stack's Compose project fall in three classes (G-08-6). Owned
+// are the stack's by Ownership; unlabelled carry no bayplan.stack.id in a project the stack owns a container of,
+// which is how a container the person adds from the host CLI looks; foreign are the rest of the project, another
+// stack's ID always (T-08-103) and a project the stack holds nothing of (T-08-104, P7 D-12).
+func TestSplitProject(t *testing.T) {
+	t.Parallel()
+	in := func(project, id string) map[string]string {
+		l := map[string]string{stacks.LabelComposeProject: project}
+		if id != "" {
+			l[stacks.LabelStackID] = id
+		}
+		return l
+	}
+	labels := func(l map[string]string) map[string]string { return l }
+	split := func(o stackops.Ownership, all ...map[string]string) (owned, unlabelled, foreign []map[string]string) {
+		return stackops.SplitProject(o, all, labels)
+	}
+	managed := stackops.OwnershipOf(stackops.Stack{ID: "stk-1", Name: "shop", Target: stacks.TargetStandalone})
+
+	t.Run("a created stack", func(t *testing.T) {
+		t.Parallel()
+		own, cli, other, blog := in("shop", "stk-1"), in("shop", ""), in("shop", "stk-2"), in("blog", "stk-1")
+		owned, unlabelled, foreign := split(managed, own, cli, other, blog)
+		if len(owned) != 1 || len(unlabelled) != 1 || len(foreign) != 1 ||
+			owned[0][stacks.LabelStackID] != "stk-1" || unlabelled[0][stacks.LabelStackID] != "" || foreign[0][stacks.LabelStackID] != "stk-2" {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want one of each and the project blog in none", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("a project the stack owns nothing of", func(t *testing.T) {
+		t.Parallel()
+		owned, unlabelled, foreign := split(managed, in("shop", ""), in("shop", "stk-2"))
+		if len(owned) != 0 || len(unlabelled) != 0 || len(foreign) != 2 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want a project the stack holds nothing of left foreign", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("a stack with no ID", func(t *testing.T) {
+		t.Parallel()
+		none := stackops.OwnershipOf(stackops.Stack{Name: "shop", Target: stacks.TargetStandalone})
+		owned, unlabelled, foreign := split(none, in("shop", ""), in("shop", "stk-1"))
+		if len(owned) != 0 || len(unlabelled) != 0 || len(foreign) != 2 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want a stack that has no ID to own and claim nothing", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("an adopted stack not deployed yet", func(t *testing.T) {
+		t.Parallel()
+		st := stackops.Stack{
+			ID: "stk-1", Name: "shop", Target: stacks.TargetStandalone,
+			Source:   stacks.Source{Kind: stacks.SourceAdopted, Ref: "shop"},
+			Adoption: stacks.Adoption{PriorID: "stk-old", Pending: true},
+		}
+		owned, unlabelled, foreign := split(stackops.OwnershipOf(st), in("shop", ""), in("shop", "stk-old"), in("shop", "stk-2"))
+		if len(owned) != 2 || len(unlabelled) != 0 || len(foreign) != 1 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want no ID and the prior ID owned, as OwnsWorkload says", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("an adopted stack after its first deploy", func(t *testing.T) {
+		t.Parallel()
+		st := stackops.Stack{
+			ID: "stk-1", Name: "shop", Target: stacks.TargetStandalone,
+			Source:   stacks.Source{Kind: stacks.SourceAdopted, Ref: "shop"},
+			Adoption: stacks.Adoption{PriorID: "stk-old"},
+		}
+		owned, unlabelled, foreign := split(stackops.OwnershipOf(st), in("shop", "stk-1"), in("shop", ""), in("shop", "stk-old"))
+		if len(owned) != 1 || len(unlabelled) != 1 || len(foreign) != 1 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want one of each: the prior ID is another stack's once deployed", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("a discovered stack", func(t *testing.T) {
+		t.Parallel()
+		found := stackops.OwnershipOf(stackops.Stack{Name: "shop", Target: stacks.TargetStandalone, Discovered: true})
+		owned, unlabelled, foreign := split(found, in("shop", ""), in("shop", "stk-2"), in("blog", ""))
+		if len(owned) != 2 || len(unlabelled) != 0 || len(foreign) != 0 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want every container of the project owned", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("a swarm stack", func(t *testing.T) {
+		t.Parallel()
+		swarm := stackops.OwnershipOf(stackops.Stack{ID: "stk-1", Name: "shop", Target: stacks.TargetSwarm})
+		ns := func(id string) map[string]string {
+			l := map[string]string{stacks.LabelSwarmNamespace: "shop"}
+			if id != "" {
+				l[stacks.LabelStackID] = id
+			}
+			return l
+		}
+		owned, unlabelled, foreign := split(swarm, ns("stk-1"), ns(""))
+		if len(owned) != 1 || len(unlabelled) != 0 || len(foreign) != 1 {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want nothing unlabelled on a swarm", owned, unlabelled, foreign)
+		}
+	})
+}

@@ -162,3 +162,18 @@ func (o Ownership) foreignNetwork(name string, labels map[string]string) bool {
 func (o Ownership) foreignVolume(name string, labels map[string]string) bool {
 	return !o.OwnsVolume(name, labels) && !o.Knows(rebuild.KindVolume, name)
 }
+
+// SplitProject is not decided yet: it sorts the containers by OwnsWorkload alone.
+func SplitProject[T any](o Ownership, all []T, labels func(T) map[string]string) (owned, unlabelled, foreign []T) {
+	for _, c := range all {
+		l := labels(c)
+		switch {
+		case l[o.labelKey()] != o.Name:
+		case o.OwnsWorkload(l):
+			owned = append(owned, c)
+		default:
+			foreign = append(foreign, c)
+		}
+	}
+	return owned, unlabelled, foreign
+}

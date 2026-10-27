@@ -112,6 +112,27 @@ func cloneContainer(h *stackopstest.Hosted, from, service string, n int) dockert
 	return src
 }
 
+// cliContainer is the container `docker compose -f <the person's file> up -d --scale <service>=n --no-recreate` adds
+// to a stack's project from the host: a clone of the service's first container with number n, and what the CLI makes
+// of it: no label of Bayplan's, the CLI's own config hash of the file as written (stackopstest.Foreign), the CLI's
+// version and the image as the file wrote it (G-08-6, the debug session standalone-cli-scale-not-drift).
+func cliContainer(t *testing.T, h *stackopstest.Hosted, compose, service string, n int) dockertest.FakeContainer {
+	t.Helper()
+	c := cloneContainer(h, service, service, n)
+	for _, labels := range []map[string]string{c.Labels, c.Inspect.Document.Config.Labels} {
+		for key := range labels {
+			if strings.HasPrefix(key, "bayplan.") {
+				delete(labels, key)
+			}
+		}
+		labels["com.docker.compose.config-hash"] = stackopstest.Foreign(t, h.Name, compose).Hash[service]
+		labels["com.docker.compose.version"] = "5.6.1"
+	}
+	written := h.Project.Services[service].Image
+	c.Image, c.Inspect.Document.Config.Image = written, written
+	return c
+}
+
 func withoutService(h *stackopstest.Hosted, service string) {
 	h.Containers = slices.DeleteFunc(h.Containers, func(c dockertest.FakeContainer) bool {
 		return c.Labels["com.docker.compose.service"] == service
@@ -204,7 +225,7 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 			t.Error(label + ": " + p)
 		}
 	}
-	judge("a scale", func(h *stackopstest.Hosted) { secondContainer(h, "web") }, func(res stackops.DriftResult) []string {
+	scaled := func(res stackops.DriftResult) []string {
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"changed web"}) || res.Count != 1 {
 			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with web changed by its scale", res.State, driftNames(res), res.Count)}
 		}
@@ -212,7 +233,9 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 			return []string{fmt.Sprintf("current = %s\nnext = %s, want two containers running against the one deployed", cur, next)}
 		}
 		return nil
-	})
+	}
+	judge("a container made from the rendered file", func(h *stackopstest.Hosted) { secondContainer(h, "web") }, scaled)
+	judge("a scale from the host CLI", func(h *stackopstest.Hosted) { h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2)) }, scaled)
 	judge("a service with no container", func(h *stackopstest.Hosted) { withoutService(h, "worker") }, func(res stackops.DriftResult) []string {
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing worker"}) || res.Count != 1 {
 			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with worker missing, counted once", res.State, driftNames(res), res.Count)}
@@ -244,6 +267,95 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 			return []string{fmt.Sprintf("drift = %s %v, want none: ownership decides what is the stack's", res.State, driftNames(res))}
 		}
 		return nil
+	})
+}
+
+// adoptedPastPending is the stack as an adopted one is once its first deploy has put Bayplan's labels on what it runs.
+func adoptedPastPending(name string) stackops.Stack {
+	st := standaloneStackOf(name)
+	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: name}
+	st.Adoption = stacks.Adoption{PriorID: "stk-old"}
+	return st
+}
+
+// TestStandaloneDriftSeesContainersFromTheHostCLI: a container the person adds with the docker compose command under
+// the stack's project carries no label of Bayplan's, and is still the stack's: drift counts it (G-08-6, D-21). A
+// container with another stack's ID never is (T-08-103), and a project the stack holds nothing of is not taken over
+// (T-08-104, P7 D-12).
+func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
+	t.Parallel()
+	baseline := hostedDrift(t, driftHostedCompose, nil).drift(t)
+	if baseline.State != stackops.DriftNone {
+		t.Fatalf("baseline drift = %s %v, want none", baseline.State, driftNames(baseline))
+	}
+	withWeb2 := func(h *stackopstest.Hosted) { h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2)) }
+
+	scaled := func(t *testing.T, rig *standaloneDriftRig) {
+		t.Helper()
+		res := rig.drift(t)
+		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"changed web"}) || res.Count != 1 {
+			t.Fatalf("drift = %s %v count %d, want drifted with web changed by its scale", res.State, driftNames(res), res.Count)
+		}
+		if cur := string(res.Services[0].Diff.Current); !strings.Contains(cur, `"scale":2`) {
+			t.Errorf("current = %s, want the two containers that run web", cur)
+		}
+		if res.Fingerprint == baseline.Fingerprint {
+			t.Errorf("fingerprint = %q, want it to move when the CLI adds a container", res.Fingerprint)
+		}
+	}
+	t.Run("a stack Bayplan created", func(t *testing.T) {
+		t.Parallel()
+		scaled(t, hostedDrift(t, driftHostedCompose, withWeb2))
+	})
+	t.Run("an adopted stack after its first deploy", func(t *testing.T) {
+		t.Parallel()
+		rig := hostedDrift(t, driftHostedCompose, withWeb2)
+		rig.st = adoptedPastPending("demo")
+		scaled(t, rig)
+	})
+	t.Run("a service the revision does not declare", func(t *testing.T) {
+		t.Parallel()
+		rig := hostedDrift(t, driftHostedCompose, func(h *stackopstest.Hosted) {
+			ghost := cliContainer(t, h, driftHostedCompose, "worker", 1)
+			ghost.Labels["com.docker.compose.service"] = "ghost"
+			ghost.Inspect.Document.Config.Labels["com.docker.compose.service"] = "ghost"
+			h.Containers = append(h.Containers, ghost)
+		})
+		res := rig.drift(t)
+		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"extra ghost"}) || res.Count != 1 {
+			t.Fatalf("drift = %s %v count %d, want drifted with ghost extra", res.State, driftNames(res), res.Count)
+		}
+	})
+	t.Run("a container with another stack's ID", func(t *testing.T) {
+		t.Parallel()
+		rig := hostedDrift(t, driftHostedCompose, func(h *stackopstest.Hosted) {
+			web2 := cliContainer(t, h, driftHostedCompose, "web", 2)
+			web2.Labels[stacks.LabelStackID] = "someone-else"
+			web2.Inspect.Document.Config.Labels[stacks.LabelStackID] = "someone-else"
+			h.Containers = append(h.Containers, web2)
+		})
+		res := rig.drift(t)
+		if res.State != stackops.DriftNone || res.Fingerprint != baseline.Fingerprint {
+			t.Errorf("drift = %s %v fingerprint %q, want none and the baseline's fingerprint: another stack's container is not this one's", res.State, driftNames(res), res.Fingerprint)
+		}
+	})
+	t.Run("a project the stack holds no container of", func(t *testing.T) {
+		t.Parallel()
+		rig := hostedDrift(t, driftHostedCompose, func(h *stackopstest.Hosted) {
+			for i, c := range h.Containers {
+				for _, labels := range []map[string]string{c.Labels, c.Inspect.Document.Config.Labels} {
+					delete(labels, stacks.LabelStackID)
+				}
+				h.Containers[i] = c
+			}
+		})
+		res := rig.drift(t)
+		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing web", "missing worker"}) {
+			t.Fatalf("drift = %s %v, want every service missing: a project made without Bayplan is not the stack's", res.State, driftNames(res))
+		}
+		if res.Fingerprint != "rev1" {
+			t.Errorf("fingerprint = %q, want the revision alone: no container of the project is the stack's", res.Fingerprint)
+		}
 	})
 }
 
