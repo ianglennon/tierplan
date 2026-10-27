@@ -235,7 +235,9 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 		return nil
 	}
 	judge("a container made from the rendered file", func(h *stackopstest.Hosted) { secondContainer(h, "web") }, scaled)
-	judge("a scale from the host CLI", func(h *stackopstest.Hosted) { h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2)) }, scaled)
+	judge("a scale from the host CLI", func(h *stackopstest.Hosted) {
+		h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2))
+	}, scaled)
 	judge("a service with no container", func(h *stackopstest.Hosted) { withoutService(h, "worker") }, func(res stackops.DriftResult) []string {
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing worker"}) || res.Count != 1 {
 			return []string{fmt.Sprintf("drift = %s %v count %d, want drifted with worker missing, counted once", res.State, driftNames(res), res.Count)}
@@ -288,7 +290,9 @@ func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
 	if baseline.State != stackops.DriftNone {
 		t.Fatalf("baseline drift = %s %v, want none", baseline.State, driftNames(baseline))
 	}
-	withWeb2 := func(h *stackopstest.Hosted) { h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2)) }
+	withWeb2 := func(h *stackopstest.Hosted) {
+		h.Containers = append(h.Containers, cliContainer(t, h, driftHostedCompose, "web", 2))
+	}
 
 	scaled := func(t *testing.T, rig *standaloneDriftRig) {
 		t.Helper()

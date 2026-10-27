@@ -24,6 +24,10 @@ import (
 // namespace or project and either no bayplan.stack.id or the stale one recorded at adoption (D-11); its networks
 // and volumes are owned by the names recorded at adoption, for as long as the stack lives (D-18). A
 // bayplan.stack.id alone never links an object to a stack: another ID is another stack's (T-08-47).
+//
+// A container on a host is in one more class for the drift check: an unlabelled one, with no bayplan.stack.id, in a
+// project the stack owns a container of. The person added it from the host CLI, so it is not owned (OwnsWorkload
+// stays false), and it is not another stack's either (SplitProject).
 type Ownership struct {
 	// StackID is the stored stack's ID; empty for a discovered stack.
 	StackID string
@@ -163,17 +167,36 @@ func (o Ownership) foreignVolume(name string, labels map[string]string) bool {
 	return !o.OwnsVolume(name, labels) && !o.Knows(rebuild.KindVolume, name)
 }
 
-// SplitProject is not decided yet: it sorts the containers by OwnsWorkload alone.
+// SplitProject sorts the containers of an engine into the three classes the stack has under its name, from their
+// labels (G-08-6). It is the one place the rule lives, so the drift check and the drift worker's fingerprint agree.
+//
+//   - A container whose project or namespace (labelKey) is not the stack's name is in no list.
+//   - owned: OwnsWorkload says it is the stack's.
+//   - unlabelled: on a host, a stack Bayplan holds (not Discovered, with an ID) meets a container of its project that
+//     carries no bayplan.stack.id, and owns at least one other container of the project. It is what the person adds
+//     to the project from the host CLI (docker compose up --scale), and counts as the stack's wherever the stack
+//     compares scale and extra services.
+//   - foreign: every other container under the name. Another non-empty ID is always another stack's (T-08-103). A
+//     container with no ID in a project the stack owns nothing of is a project Bayplan did not deploy or adopt, so it
+//     is not taken over silently (T-08-104, P7 D-12).
+//
+// A swarm stack has no unlabelled class: its services state the namespace the stack deploy wrote.
 func SplitProject[T any](o Ownership, all []T, labels func(T) map[string]string) (owned, unlabelled, foreign []T) {
+	var noID []T
 	for _, c := range all {
 		l := labels(c)
 		switch {
-		case l[o.labelKey()] != o.Name:
+		case !o.inName(l[o.labelKey()]):
 		case o.OwnsWorkload(l):
 			owned = append(owned, c)
+		case l[stacks.LabelStackID] == "" && o.Target != stacks.TargetSwarm && !o.Discovered && o.StackID != "":
+			noID = append(noID, c)
 		default:
 			foreign = append(foreign, c)
 		}
 	}
-	return owned, unlabelled, foreign
+	if len(owned) > 0 {
+		return owned, noID, foreign
+	}
+	return owned, nil, append(foreign, noID...)
 }

@@ -26,8 +26,13 @@ import (
 // Three things are added to what the review compares. A container's image is checked against the revision's pin,
 // because the field comparison leaves the image out. A service whose containers differ from the prepared service in
 // nothing the person wrote (an adopted stack's containers carry no label of Bayplan's, so their config hash never
-// matches) is not drift. And a container of the project that the revision does not declare is Extra when the stack owns
-// it, as a service with no container is Missing.
+// matches) is not drift. And a container of the project that the revision does not declare is Extra when it is the
+// stack's, as a service with no container is Missing.
+//
+// A container is the stack's when it carries the stack's ID, or when it carries none and the stack owns another container
+// of the project: a container the host CLI added under the project (docker compose up --scale) is drift, by its scale
+// or as Extra (G-08-6). A container with another stack's ID is not the stack's, and neither is any container of a
+// project the stack holds none of (SplitProject).
 //
 // It only reads the host: the Compose SDK is not asked for anything. The caller has already answered a stopped stack
 // and a stack with no good revision (Drift).
@@ -77,8 +82,10 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 		if e != nil {
 			return e
 		}
-		// A container of the project that the stack does not own is another owner's (a name clash), not the stack's.
-		owned = slices.DeleteFunc(all, func(c dockerx.ComposeContainer) bool { return !own.OwnsWorkload(c.Labels) })
+		// What the stack owns, and what the host CLI added to its project without Bayplan's label, is the stack's to
+		// compare; a container with another stack's ID, or in a project the stack owns nothing of, is not (SplitProject).
+		mine, unlabelled, _ := SplitProject(own, all, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
+		owned = append(mine, unlabelled...)
 		cmp, e = compareStandalone(ctx, c, project, owned, nil, masker)
 		return e
 	})
@@ -216,8 +223,8 @@ func withImage(side json.RawMessage, image string) json.RawMessage {
 	return out
 }
 
-// driftContainersFingerprint names what the host held for the stack at a check: the revision and, for each container the stack
-// owns, its ID and config hash, so a container that is recreated or added or removed moves it.
+// driftContainersFingerprint names what the host held for the stack at a check: the revision and, for each container that is
+// the stack's (owned, or added from the host CLI), its ID and config hash, so a container that is recreated or added or removed moves it.
 func driftContainersFingerprint(owned []dockerx.ComposeContainer, seq int64) string {
 	parts := make([]string, 0, len(owned))
 	for _, c := range owned {
