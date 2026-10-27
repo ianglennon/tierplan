@@ -113,11 +113,11 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 			if e != nil {
 				return e
 			}
-			for _, row := range cs {
-				if own.OwnsWorkload(row.Labels) {
-					out.containers = append(out.containers, row)
-				}
-			}
+			// The stack's own containers and the ones someone added to its project from the host CLI (docker compose up
+			// --scale, no bayplan.stack.id) are what a removal takes; another stack's and a project the stack owns none
+			// of are not (SplitProject, G-08-6).
+			mine, added, _ := SplitProject(own, cs, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
+			out.containers = append(mine, added...)
 			nets, e := c.NetworksWithLabel(ctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
@@ -189,6 +189,17 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 	}
 	out.notReporting = append([]string{}, agg.NotReporting...)
 	out.anyVolume = map[string]bool{}
+	// A container outside the stack is one that is not of the stack: on a host that leaves out the containers the host
+	// CLI added to the stack's project, which a removal takes with it.
+	inStack := func(c envs.ContainerRow) bool { return own.OwnsWorkload(c.Labels) }
+	if st.Target == stacks.TargetStandalone {
+		mine, added, _ := SplitProject(own, agg.Containers, func(c envs.ContainerRow) map[string]string { return c.Labels })
+		ids := make(map[string]bool, len(mine)+len(added))
+		for _, c := range append(mine, added...) {
+			ids[c.ID] = true
+		}
+		inStack = func(c envs.ContainerRow) bool { return ids[c.ID] }
+	}
 	for _, v := range agg.Volumes {
 		out.anyVolume[v.NodeID+"/"+v.Name] = true
 		if !own.OwnsVolume(v.Name, v.Labels) {
@@ -196,7 +207,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 		}
 		choice := VolumeChoice{Name: v.Name, NodeID: v.NodeID, NodeName: v.Node}
 		for _, c := range agg.Containers {
-			if c.NodeID != v.NodeID || own.OwnsWorkload(c.Labels) {
+			if c.NodeID != v.NodeID || inStack(c) {
 				continue
 			}
 			if slices.ContainsFunc(c.Mounts, func(m dockerx.MountRow) bool { return m.Type == "volume" && m.Name == v.Name }) {
@@ -355,6 +366,9 @@ type removal struct {
 	// serviceIDs are the IDs of the swarm services the check found the stack owns: the tasks that outlive a removed
 	// service are the stack's by them.
 	serviceIDs map[string]bool
+	// containerIDs are the IDs of the containers the check found a standalone removal takes, the stack's own and the
+	// ones the host CLI added: the wait keeps counting them by ID after the stack's own are gone.
+	containerIDs map[string]bool
 	// failures are the first object of each step that stayed, until the step ends.
 	failures map[string]failure
 }
@@ -532,6 +546,10 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 		}
 	}
 	x.ownedVolumes = len(owned.volumes)
+	x.containerIDs = make(map[string]bool, len(owned.containers))
+	for _, c := range owned.containers {
+		x.containerIDs[c.ID] = true
+	}
 	x.serviceIDs = make(map[string]bool, len(owned.services))
 	for _, s := range owned.services {
 		x.serviceIDs[s.ID] = true
@@ -617,13 +635,21 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 		var n int
 		err := d.Aggregator.OnNode(rctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
 			// The project's containers, as the SDK counts them: a one-off container (compose run) is not one of its services.
+			// The stack's own and the ones added from the host CLI are waited for; another stack's are not. Once the
+			// stack's own are gone a container the host CLI added no longer has one beside it to be told apart by, so
+			// the containers the check found stay counted by their ID.
 			cs, e := c.ComposeContainers(rctx, in.Stack.Name)
 			if e != nil {
 				return e
 			}
-			n = 0
+			mine, added, _ := SplitProject(own, cs, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
+			counted := make(map[string]bool, len(mine)+len(added))
+			for _, row := range slices.Concat(mine, added) {
+				counted[row.ID] = true
+			}
+			n = len(counted)
 			for _, row := range cs {
-				if own.OwnsWorkload(row.Labels) {
+				if x.containerIDs[row.ID] && !counted[row.ID] {
 					n++
 				}
 			}
