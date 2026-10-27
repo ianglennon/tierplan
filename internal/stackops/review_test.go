@@ -4,6 +4,7 @@
 package stackops_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -1045,4 +1046,58 @@ func TestReviewShowsThePlatformsARedeployPutsBack(t *testing.T) {
 			t.Errorf("review = %+v, want no change: the service runs the recorded platforms", rv.Services)
 		}
 	})
+}
+
+// TestAReviewedDeploySendsThePlacementTheReviewShowed (WR-02): the review and the deploy that follows it apply the
+// platform sources in one order, so the platforms the review lists for a service are the platforms the deploy sends. A
+// stack whose last good revision recorded fewer platforms than the registry names for the same digest is sent the
+// record by both.
+func TestAReviewedDeploySendsThePlacementTheReviewShowed(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	pinned := "nginx:1.27@" + digestOf("a")
+	compose := pinCompose("nginx:1.27")
+	rig := newSwarmRig(t, nil)
+	rig.deps.Platforms = stackops.NewPlatformMemo()
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	// The record was made for the text nginx:1.26, so the review looks nginx:1.27 up; the registry names the same digest.
+	good := map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.26", Image: pinned, Platforms: []swarm.Platform{amd}}}
+
+	in := rig.reviewInput(t, "site", compose, nil)
+	in.Pins = &memPins{good: good}
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	var shown []swarm.Platform
+	for _, c := range rv.Services {
+		if c.Name != "site_web" {
+			continue
+		}
+		var spec swarm.ServiceSpec
+		if err := json.Unmarshal(c.Next, &spec); err != nil {
+			t.Fatalf("review's next spec: %v", err)
+		}
+		if spec.TaskTemplate.Placement != nil {
+			shown = spec.TaskTemplate.Placement.Platforms
+		}
+	}
+
+	deploy := reviewedDeploy(t, rig, "site", compose, rv)
+	deploy.Pins = &memPins{good: good}
+	res, job := rig.deploy(t, deploy)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || creates[0].Spec.TaskTemplate.Placement == nil {
+		t.Fatalf("service creates = %+v, want one with a placement", creates)
+	}
+	sent := creates[0].Spec.TaskTemplate.Placement.Platforms
+	if !slices.Equal(shown, sent) {
+		t.Errorf("the review showed platforms %v, the deploy sent %v, want the same", shown, sent)
+	}
+	if !slices.Equal(sent, []swarm.Platform{amd}) {
+		t.Errorf("the deploy sent %v, want the platforms the last good revision recorded %v", sent, []swarm.Platform{amd})
+	}
 }
