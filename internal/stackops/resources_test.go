@@ -169,6 +169,45 @@ func TestResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing.T) {
 	}
 }
 
+// TestResourcesOfAStandaloneStackListAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the
+// project with none of Bayplan's labels. Beside web-1, which carries the stack's ID, the Resources tab lists it
+// (G-08-6, user decision 2026-10-27). A container with another stack's ID, and the containers of a project the stack
+// owns none of, stay out (P7 D-12, T-08-47).
+func TestResourcesOfAStandaloneStackListAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	names := func(res stackops.Resources) []string {
+		out := make([]string, 0, len(res.Containers.Items))
+		for _, c := range res.Containers.Items {
+			out = append(out, c.Name)
+		}
+		return out
+	}
+
+	h := hostStack(t, "demo", hostedCompose, nil)
+	h.Containers = append(h.Containers, cliContainer(t, h, hostedCompose, "web", 2))
+	stranger := cliContainer(t, h, hostedCompose, "web", 3)
+	stranger.Labels[stacks.LabelStackID] = "stack-other"
+	h.Containers = append(h.Containers, stranger)
+	rig := hostRig(t, h)
+
+	res := rig.deps.Resources(testsupport.Context(t), rig.envID, standaloneStack("demo"), stackops.Declared{})
+
+	if res.Containers.Error != "" {
+		t.Fatalf("containers error = %q", res.Containers.Error)
+	}
+	if got, want := names(res), []string{"demo-db-1", "demo-web-1", "demo-web-2"}; !slices.Equal(got, want) {
+		t.Errorf("containers = %v, want %v: the one the host CLI added is listed, another stack's is not", got, want)
+	}
+
+	// A project the stack owns nothing of: the stack's records carry no container of it, so none is listed.
+	bare := hostStack(t, "demo", hostedCompose, nil)
+	bare.Containers = []dockertest.FakeContainer{cliContainer(t, h, hostedCompose, "web", 2)}
+	bareRig := hostRig(t, bare)
+	if res := bareRig.deps.Resources(testsupport.Context(t), bareRig.envID, standaloneStack("demo"), stackops.Declared{}); len(res.Containers.Items) != 0 {
+		t.Errorf("containers = %v, want none: a project the stack owns nothing of is not taken over", names(res))
+	}
+}
+
 // declaredCompose is a deployed revision that uses two networks, three volumes, a secret, an external config and
 // an external volume, and declares a volume and a secret no service uses.
 const declaredCompose = `services:
