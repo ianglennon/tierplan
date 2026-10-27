@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -569,6 +570,59 @@ func TestDriftMonitorFingerprintSkipsTheDiff(t *testing.T) {
 	m.await(t, "web-id", stackops.DriftOutcomeStored)
 	if calls.count("web-id") != 3 {
 		t.Errorf("web was checked %d times, want a third check for the event", calls.count("web-id"))
+	}
+}
+
+// A container the person adds to a standalone stack's Compose project from the host CLI carries the project and no
+// bayplan.stack.id. The timed look takes it as the stack's and checks again; a container with another stack's ID is not
+// the stack's and does not wake the check (G-08-6, D-22, T-08-103).
+func TestDriftMonitorTimedLookSeesAContainerAddedFromTheHostCLI(t *testing.T) {
+	t.Parallel()
+	src, calls, hub := &fakeDriftSource{}, newDriftCalls(), newFakeHub()
+	shop := monitorStack(src, "shop-id", "shop", stacks.TargetStandalone)
+	row := func(id string, labels map[string]string) dockerx.ContainerRow {
+		labels[stacks.LabelComposeProject] = shop.Name
+		return dockerx.ContainerRow{ID: id, Name: "shop-web-" + id, State: "running", ImageID: "sha256:img", Labels: labels}
+	}
+	var mu sync.Mutex
+	containers := []dockerx.ContainerRow{row("c1", map[string]string{stacks.LabelStackID: shop.ID})}
+	held := func(context.Context, string, bool) (stackops.Held, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return stackops.Held{Containers: slices.Clone(containers)}, nil
+	}
+	add := func(c dockerx.ContainerRow) {
+		mu.Lock()
+		defer mu.Unlock()
+		containers = append(containers, c)
+	}
+	m := startMonitor(t, monitorEnv, src, stackops.DriftMonitorDeps{DriftFunc: calls.check, HeldFunc: held, Subscribe: hub.Subscribe})
+	m.settle(t, "shop-id")
+
+	// Nothing moved at the next timed look: the check is not made.
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "shop-id", stackops.DriftOutcomeSkipped)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("shop-id") != 1 {
+		t.Fatalf("shop was checked %d times, want the first look only", calls.count("shop-id"))
+	}
+
+	// A container of another stack under the same project name is not the stack's: still nothing moved.
+	add(row("c-other", map[string]string{stacks.LabelStackID: "another-stack"}))
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "shop-id", stackops.DriftOutcomeSkipped)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("shop-id") != 1 {
+		t.Fatalf("shop was checked %d times, want a container with another stack's ID to wake nothing", calls.count("shop-id"))
+	}
+
+	// docker compose up --scale adds a container with the project and no ID: the next timed look checks.
+	add(row("c2", map[string]string{}))
+	m.clk.Advance(6 * time.Minute)
+	m.await(t, "shop-id", stackops.DriftOutcomeStored)
+	testsupport.Await(t, "the worker to arm its next timed look", m.clk.armed)
+	if calls.count("shop-id") != 2 {
+		t.Fatalf("shop was checked %d times, want a second check for the container the host CLI added", calls.count("shop-id"))
 	}
 }
 
