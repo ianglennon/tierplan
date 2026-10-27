@@ -63,8 +63,10 @@ type SwarmInput struct {
 }
 
 // Swarm rebuilds the compose project of a swarm stack from its services' specs, the reverse of convert.Convert:
-// converting the result gives the specs back, apart from Bayplan's own labels. Services come out in name order
-// and so does everything else, so the same input always gives the same file.
+// converting the result gives the specs back, apart from Bayplan's own labels, once the pins and the platforms are
+// applied: the image of a service is its pin (Result.Pins) and its Placement.Platforms are Result.Platforms, both
+// kept out of the file. Services come out in name order and so does everything else, so the same input always gives
+// the same file.
 func Swarm(in SwarmInput) (Result, error) {
 	b := newBuilder(in)
 	services := slices.Clone(in.Services)

@@ -4,6 +4,7 @@
 package rebuild_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/stacks/convert"
 	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -208,5 +210,128 @@ func TestRebuildNotes(t *testing.T) {
 	}
 	if !slices.Contains(kinds, "network/shop_lan/external") {
 		t.Errorf("objects = %v, want the macvlan network listed as external", kinds)
+	}
+}
+
+// TestSwarmAnswersEachServicesPlatforms: the platforms a service runs with come back by the engine's service name beside
+// the pins, and never appear in the file. A service that has none has no entry.
+func TestSwarmAnswersEachServicesPlatforms(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	web := coreService()
+	web.Spec.TaskTemplate.Placement = &swarm.Placement{Constraints: []string{"node.role==manager"}, Platforms: []swarm.Platform{amd, arm}}
+	worker := coreService()
+	worker.ID, worker.Name = "svc-worker", "shop_worker"
+	worker.Spec.TaskTemplate.Placement = &swarm.Placement{Platforms: []swarm.Platform{arm}}
+	plain := coreService()
+	plain.ID, plain.Name = "svc-plain", "shop_plain"
+	plain.Spec.TaskTemplate.Placement = &swarm.Placement{Constraints: []string{"node.role==worker"}}
+	none := coreService()
+	none.ID, none.Name = "svc-none", "shop_none"
+
+	res, err := rebuild.Swarm(rebuild.SwarmInput{
+		Namespace: "shop", Services: []rebuild.SwarmService{web, worker, plain, none},
+		Networks: []rebuild.NetworkInfo{{ID: "n1", Name: "shop_default", Driver: "overlay", Labels: map[string]string{"com.docker.stack.namespace": "shop"}}},
+	})
+	if err != nil {
+		t.Fatalf("Swarm: %v", err)
+	}
+
+	want := map[string][]swarm.Platform{"shop_web": {amd, arm}, "shop_worker": {arm}}
+	if !reflect.DeepEqual(res.Platforms, want) {
+		t.Errorf("platforms = %v, want %v: none for a service whose placement has none", res.Platforms, want)
+	}
+	if len(res.Pins) != 4 {
+		t.Errorf("pins = %v, want one for each of the four services", res.Pins)
+	}
+	for _, unwanted := range []string{"platform", "amd64", "arm64"} {
+		if strings.Contains(string(res.YAML), unwanted) {
+			t.Errorf("the file has %q, but the platforms travel with the pins:\n%s", unwanted, res.YAML)
+		}
+	}
+	// The input is not changed, and the answer is a copy.
+	res.Platforms["shop_web"][0] = arm
+	if web.Spec.TaskTemplate.Placement.Platforms[0] != amd {
+		t.Errorf("the answer shares its platforms with the input spec")
+	}
+}
+
+// TestRoundTripWithPlatforms: services that carry platforms (as a swarm deploy writes them beside the pins) rebuild
+// exactly. Converting the rebuilt file and applying the platforms of the result gives the specs back, apart from
+// Bayplan's own labels; the platforms are put on the planned spec the way a deploy puts them (the placement is made
+// when the service has none, and kept when it has constraints).
+func TestRoundTripWithPlatforms(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: web:1
+    deploy:
+      placement:
+        constraints: ["node.role==manager"]
+        max_replicas_per_node: 1
+  worker:
+    image: worker:1
+  batch:
+    image: batch:1
+    deploy:
+      mode: global
+`
+	platformsBy := map[string][]swarm.Platform{
+		"web":    {{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}},
+		"worker": {{OS: "linux", Architecture: "arm64"}},
+	}
+	name := "hand"
+	first, err := convert.Convert(load(t, name, []byte(compose)), convert.Options{StackName: name, StackID: "id-" + name, Objects: corpusObjects})
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	want := map[string]swarm.ServiceSpec{}
+	for i, sp := range first.Services {
+		short := strings.TrimPrefix(sp.Name, name+"_")
+		if pl, ok := platformsBy[short]; ok {
+			placement := swarm.Placement{}
+			if sp.Spec.TaskTemplate.Placement != nil {
+				placement = *sp.Spec.TaskTemplate.Placement
+			}
+			placement.Platforms = pl
+			first.Services[i].Spec.TaskTemplate.Placement = &placement
+		}
+		want[sp.Name] = first.Services[i].Spec
+	}
+
+	in := inputOf(name, first, corpusObjects)
+	res, err := rebuild.Swarm(in)
+	if err != nil {
+		t.Fatalf("Swarm: %v", err)
+	}
+	if len(res.Platforms) != 2 || len(res.Platforms[name+"_web"]) != 2 || len(res.Platforms[name+"_worker"]) != 1 {
+		t.Fatalf("platforms = %v, want web's two and worker's one", res.Platforms)
+	}
+	project := load(t, name, res.YAML)
+	second, err := convert.Convert(project, convert.Options{
+		StackName: name, StackID: "id-" + name,
+		Objects: rebuiltObjects{project: project, secrets: in.Secrets, configs: in.Configs},
+	})
+	if err != nil {
+		t.Fatalf("Convert of the rebuilt file: %v\n%s", err, res.YAML)
+	}
+
+	if len(second.Services) != len(first.Services) {
+		t.Fatalf("services = %d after the round trip, want %d", len(second.Services), len(first.Services))
+	}
+	for _, sp := range second.Services {
+		got := sp.Spec
+		if pl := res.Platforms[sp.Name]; len(pl) > 0 {
+			placement := swarm.Placement{}
+			if got.TaskTemplate.Placement != nil {
+				placement = *got.TaskTemplate.Placement
+			}
+			placement.Platforms = slices.Clone(pl)
+			got.TaskTemplate.Placement = &placement
+		}
+		if g, w := withoutOwnLabels(got), withoutOwnLabels(want[sp.Name]); !reflect.DeepEqual(g, w) {
+			t.Errorf("service %s differs after the round trip\n got: %s\nwant: %s\nfile:\n%s", sp.Name, asJSON(g), asJSON(w), res.YAML)
+		}
 	}
 }
