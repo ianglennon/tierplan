@@ -7,9 +7,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -556,6 +559,68 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 	}
 	if len(got) != len(want) || got["web_app"] != want["web_app"] || got["web_db"] != want["web_db"] {
 		t.Errorf("GoodPins = %+v, want %+v", got, want)
+	}
+}
+
+func TestPlatformsAreStoredOnARevisionAndReadBackByService(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A revision nobody stored platforms on reads none.
+	if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 {
+		t.Fatalf("Revision before SetPlatforms = %v, %v; want no platforms", got.Platforms, err)
+	}
+
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	want := map[string][]swarm.Platform{"web_app": {amd, arm}, "web_db": {amd}}
+	if err := f.repo.SetPlatforms(ctx, rev.ID, want); err != nil {
+		t.Fatalf("SetPlatforms: %v", err)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, rev.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Platforms, want) {
+		t.Errorf("Revision platforms = %v, want %v", got.Platforms, want)
+	}
+	// The pins of the revision are not touched by storing its platforms, nor its platforms by its pins.
+	if err := f.repo.SetPins(ctx, rev.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok, err := f.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !ok || !reflect.DeepEqual(latest.Platforms, want) {
+		t.Errorf("LatestGoodRevision platforms = %v (found %v, %v), want %v", latest.Platforms, ok, err, want)
+	}
+
+	// nil stores the empty record, which reads none.
+	if err := f.repo.SetPlatforms(ctx, rev.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 {
+		t.Errorf("Revision after SetPlatforms(nil) = %v, %v; want no platforms", got.Platforms, err)
+	}
+}
+
+func TestSetPlatformsRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	_, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	plat := map[string][]swarm.Platform{"web_app": {{OS: "linux", Architecture: "amd64"}}}
+	if err := f.repo.SetPlatforms(ctx, "nope", plat); err == nil {
+		t.Error("SetPlatforms of an unknown snapshot succeeded")
+	}
+	if err := f.repo.SetPlatforms(ctx, draft.ID, plat); err == nil {
+		t.Error("SetPlatforms of a draft succeeded: only a revision has platforms")
 	}
 }
 

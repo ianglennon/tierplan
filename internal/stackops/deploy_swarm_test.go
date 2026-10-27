@@ -746,6 +746,8 @@ type memPins struct {
 	mu     sync.Mutex
 	good   map[string]stacks.LivePin
 	stored map[string]map[string]string
+	// platforms are the platforms stored on each snapshot, by swarm service name.
+	platforms map[string]map[string][]swarm.Platform
 }
 
 func (m *memPins) GoodPins(_ context.Context, _ string) (map[string]stacks.LivePin, error) {
@@ -764,10 +766,54 @@ func (m *memPins) SetPins(_ context.Context, snapshotID string, pins map[string]
 	return nil
 }
 
+func (m *memPins) SetPlatforms(_ context.Context, snapshotID string, platforms map[string][]swarm.Platform) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.platforms == nil {
+		m.platforms = map[string]map[string][]swarm.Platform{}
+	}
+	m.platforms[snapshotID] = maps.Clone(platforms)
+	return nil
+}
+
+func (m *memPins) platformsOf(snapshotID string) map[string][]swarm.Platform {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.platforms[snapshotID]
+}
+
 func (m *memPins) pinsOf(snapshotID string) map[string]string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.stored[snapshotID]
+}
+
+// A deploy stores, with its revision, the platforms each service was sent with, so a roll back can send them again
+// without asking a registry (G-08-4, P7 D-14, T-07-93).
+func TestDeployStoresThePlatformsItSentWithTheRevision(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, nil)
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	store := &memPins{}
+	_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+	in.Pins, in.RevisionID = store, "rev-1"
+
+	res, job := rig.deploy(t, in)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v, job = %s %v", res, job.State, itemStates(job))
+	}
+	want := []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || !slices.Equal(creates[0].Spec.TaskTemplate.Placement.Platforms, want) {
+		t.Fatalf("service creates = %+v, want one sent with %v", creates, want)
+	}
+	got := store.platformsOf("rev-1")
+	if len(got) != 1 || !slices.Equal(got["site_web"], want) {
+		t.Errorf("stored platforms = %v, want site_web sent with %v", got, want)
+	}
+	if got := store.pinsOf("rev-1"); !maps.Equal(got, map[string]string{"site_web": "nginx:1.27@" + digestOf("a")}) {
+		t.Errorf("stored pins = %v, want the pinned reference of site_web beside the platforms", got)
+	}
 }
 
 func TestRedeployKeepsTheRunningDigestAfterTheTagMoved(t *testing.T) {
