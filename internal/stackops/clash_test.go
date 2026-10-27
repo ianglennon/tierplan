@@ -21,8 +21,8 @@ var (
 	swarmNS    = map[string]string{"com.docker.stack.namespace": "web"}
 	swarmOwned = map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
 	swarmOther = map[string]string{"com.docker.stack.namespace": "blog", "bayplan.stack.id": "stack-blog"}
-	projNS     = map[string]string{"com.docker.compose.project": "web"}
-	projOwned  = map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-web"}
+	projNS     = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app"}
+	projOwned  = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "bayplan.stack.id": "stack-web"}
 	projOther  = map[string]string{"com.docker.compose.project": "blog"}
 )
 
@@ -107,8 +107,9 @@ func TestForeignStackOnAStandaloneHostFindsAComposeProjectOfTheNameWithoutThisSt
 
 // TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded: a container the host CLI adds to a managed standalone
 // stack's Compose project (docker compose up --scale) carries the project and no bayplan.stack.id. Beside a container
-// that carries the stack's ID it is no name clash; another stack's ID, or a project the stack holds no container of, still
-// is (G-08-6, user decision 2026-10-27; P7 D-12, T-08-47, T-08-107).
+// that carries the stack's ID and runs the same service it is no name clash; another stack's ID, a project the stack holds
+// no container of, or a service no container of the stack runs, still is (G-08-6, WR-03, user decisions 2026-10-27;
+// P7 D-12, T-08-47, T-08-107, T-08-113).
 func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 	t.Parallel()
 	c := func(id string, labels map[string]string) dockertest.FakeContainer {
@@ -116,6 +117,7 @@ func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 	}
 	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.oneoff": "True"}
 	anotherStack := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-other"}
+	otherService := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "postgres"}
 	for name, tc := range map[string]struct {
 		containers []dockertest.FakeContainer
 		want       bool
@@ -123,6 +125,7 @@ func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 		"the stack's own container and a CLI one":       {[]dockertest.FakeContainer{c("1", projOwned), c("2", projNS)}, false},
 		"the stack's own container and a compose run":   {[]dockertest.FakeContainer{c("1", projOwned), c("2", oneOff)}, false},
 		"the stack's own container and another stack's": {[]dockertest.FakeContainer{c("1", projOwned), c("2", anotherStack)}, true},
+		"the stack's own container and another service": {[]dockertest.FakeContainer{c("1", projOwned), c("2", otherService)}, true},
 		"a CLI container beside another stack's alone":  {[]dockertest.FakeContainer{c("1", anotherStack), c("2", projNS)}, true},
 		"CLI containers and none of the stack's own":    {[]dockertest.FakeContainer{c("1", projNS), c("2", projNS)}, true},
 	} {

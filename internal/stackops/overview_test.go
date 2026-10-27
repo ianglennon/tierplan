@@ -285,7 +285,7 @@ func TestStandaloneRowsCountAContainerTheHostCLIAdded(t *testing.T) {
 		want []string
 	}{
 		"added from the host CLI":          {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-2", "web", nil)}, []string{"web:demo-web-1", "web:demo-web-2"}},
-		"a service only the CLI added":     {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-ghost-1", "ghost", nil)}, []string{"ghost:demo-ghost-1", "web:demo-web-1"}},
+		"a service only the CLI added":     {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-ghost-1", "ghost", nil)}, []string{"web:demo-web-1"}},
 		"another stack's container":        {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-2", "web", other)}, []string{"web:demo-web-1"}},
 		"a project the stack owns none of": {[]dockerx.ContainerRow{row("demo-web-1", "web", nil), row("demo-web-2", "web", nil)}, nil},
 		"a one-off beside the stack's own": {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-run-1", "web", map[string]string{"com.docker.compose.oneoff": "True"})}, []string{"web:demo-web-1"}},

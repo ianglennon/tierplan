@@ -294,13 +294,14 @@ func TestStandaloneNameClashGateUsesTheOwnershipOfTheStack(t *testing.T) {
 }
 
 // TestSplitProject: the containers of a standalone stack's Compose project fall in three classes (G-08-6). Owned
-// are the stack's by Ownership; unlabelled carry no bayplan.stack.id in a project the stack owns a container of,
-// which is how a container the person adds from the host CLI looks; foreign are the rest of the project, another
-// stack's ID always (T-08-103) and a project the stack holds nothing of (T-08-104, P7 D-12).
+// are the stack's by Ownership; unlabelled carry no bayplan.stack.id and run a service the stack owns a container of,
+// which is how a container the person adds from the host CLI with docker compose up --scale looks; foreign are the
+// rest of the project: another stack's ID always (T-08-103), a project the stack holds nothing of (T-08-104, P7 D-12),
+// and a container with no ID of a service the stack runs nothing of (WR-03, T-08-113).
 func TestSplitProject(t *testing.T) {
 	t.Parallel()
 	in := func(project, id string) map[string]string {
-		l := map[string]string{stacks.LabelComposeProject: project}
+		l := map[string]string{stacks.LabelComposeProject: project, stacks.LabelComposeService: "web"}
 		if id != "" {
 			l[stacks.LabelStackID] = id
 		}
@@ -319,6 +320,19 @@ func TestSplitProject(t *testing.T) {
 		if len(owned) != 1 || len(unlabelled) != 1 || len(foreign) != 1 ||
 			owned[0][stacks.LabelStackID] != "stk-1" || unlabelled[0][stacks.LabelStackID] != "" || foreign[0][stacks.LabelStackID] != "stk-2" {
 			t.Errorf("owned %v, unlabelled %v, foreign %v, want one of each and the project blog in none", owned, unlabelled, foreign)
+		}
+	})
+	t.Run("a service the stack runs nothing of", func(t *testing.T) {
+		t.Parallel()
+		// An unrelated project that resolves to the same name, or a service the person added from the host CLI: no
+		// container of the stack runs it, so nothing ties it to the stack and it is left alone (WR-03).
+		db, blank := in("shop", ""), in("shop", "")
+		db[stacks.LabelComposeService] = "postgres"
+		delete(blank, stacks.LabelComposeService)
+		owned, unlabelled, foreign := split(managed, in("shop", "stk-1"), in("shop", ""), db, blank)
+		if len(owned) != 1 || len(unlabelled) != 1 || len(foreign) != 2 ||
+			unlabelled[0][stacks.LabelComposeService] != "web" || foreign[0][stacks.LabelComposeService] != "postgres" {
+			t.Errorf("owned %v, unlabelled %v, foreign %v, want only the container of web unlabelled, postgres and the one with no service foreign", owned, unlabelled, foreign)
 		}
 	})
 	t.Run("a project the stack owns nothing of", func(t *testing.T) {

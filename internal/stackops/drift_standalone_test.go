@@ -319,15 +319,17 @@ func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
 	})
 	t.Run("a service the revision does not declare", func(t *testing.T) {
 		t.Parallel()
+		// No container of the stack runs ghost, so nothing ties it to the stack: it may be an unrelated project that
+		// resolves to the same name, and is not drift (WR-03, T-08-113). Deploy refuses it as a name clash instead.
 		rig := hostedDrift(t, driftHostedCompose, func(h *stackopstest.Hosted) {
 			ghost := cliContainer(t, h, driftHostedCompose, "worker", 1)
-			ghost.Labels["com.docker.compose.service"] = "ghost"
-			ghost.Inspect.Document.Config.Labels["com.docker.compose.service"] = "ghost"
+			ghost.Labels[stacks.LabelComposeService] = "ghost"
+			ghost.Inspect.Document.Config.Labels[stacks.LabelComposeService] = "ghost"
 			h.Containers = append(h.Containers, ghost)
 		})
 		res := rig.drift(t)
-		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"extra ghost"}) || res.Count != 1 {
-			t.Fatalf("drift = %s %v count %d, want drifted with ghost extra", res.State, driftNames(res), res.Count)
+		if res.State != stackops.DriftNone || res.Fingerprint != baseline.Fingerprint {
+			t.Errorf("drift = %s %v fingerprint %q, want none and the baseline's fingerprint: a service the stack runs nothing of is not the stack's", res.State, driftNames(res), res.Fingerprint)
 		}
 	})
 	t.Run("a container with another stack's ID", func(t *testing.T) {

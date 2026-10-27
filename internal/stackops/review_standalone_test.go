@@ -570,4 +570,15 @@ func TestStandaloneReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash(t *t
 	if rv := hostRig(t, other).reviewOf(t, "demo", hostedCompose, nil, nil); !clash(rv) {
 		t.Errorf("problems = %+v, want a name clash for a container that carries another stack's ID", rv.Problems)
 	}
+
+	// A container with no ID of a service no container of the stack runs may be an unrelated project that resolves to
+	// the same name: the deploy would remove it as an orphan, so it is refused as before (WR-03, T-08-113).
+	unrelated := hostStack(t, "demo", hostedCompose, nil)
+	db := cliContainer(t, unrelated, hostedCompose, "web", 1)
+	db.Labels[stacks.LabelComposeService] = "postgres"
+	db.Inspect.Document.Config.Labels[stacks.LabelComposeService] = "postgres"
+	unrelated.Containers = append(unrelated.Containers, db)
+	if rv := hostRig(t, unrelated).reviewOf(t, "demo", hostedCompose, nil, nil); !clash(rv) {
+		t.Errorf("problems = %+v, want a name clash for a container of a service the stack runs nothing of", rv.Problems)
+	}
 }
