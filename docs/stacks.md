@@ -336,6 +336,12 @@ on the Overview, in the review and in the Rendered YAML. A standalone host is pi
 - A service that needs a fresh digest needs its registry. If the registry can't be reached, only the services that
   need it are blocked, with the reason. A service that keeps its running digest never needs the registry.
   Registry credentials are the ones stored in Bayplan ([registries.md](registries.md)).
+- **On a swarm, when Bayplan looks an image up it also writes the image's platforms** (for example `linux/amd64` and
+  `linux/arm64`) into the service's placement, as `docker stack deploy` does with its default
+  `--resolve-image=always`. The swarm then schedules the service's tasks only on nodes that can run the image. A kept
+  digest keeps the platforms recorded for it, and asks no registry for them. A service deployed before this version
+  has none recorded: it gains them the next time its image is looked up (**Update images**, or a changed tag),
+  because a kept digest never asks a registry.
 - An image no registry has (built on the host) is pinned to its local image ID, with a warning *isn't from a
   registry*. See [behaviour that is still open](#behaviour-that-is-still-open) for Engine 29.
 
@@ -497,6 +503,8 @@ drift](#drift) works.
 - **It restores everything exactly**: the compose file, the other files, the variables and the pinned image
   digests. **It never looks anything up in a registry**, so a tag that has moved since cannot change what comes
   back. A secret or config that version used is recreated from its stored content.
+- **The platforms come back too.** A revision stores the platforms its images were deployed with, next to their
+  digests, and a roll back restores them without asking a registry.
 - **Your draft stays as it is.** After the roll back the draft shows the notice that the deployed version changed
   since you started editing, and its review asks you to acknowledge it, as for any deploy by someone else.
 - **It is recorded as a new revision** (for example #9, *Roll back of #5*), audited as `stack.deployed` with mode
@@ -658,6 +666,12 @@ recreated.
   the tasks of each service whose container labels change, and on a standalone host Docker Compose recreates each container, because the labels
   change its configuration hash. Plan the deploy for a time a restart is acceptable. The review says so plainly before
   you press anything.
+- **Platforms are kept.** A stack made with `docker stack deploy` carries the platforms the CLI wrote into each
+  service's placement. Adopting records them with the first revision, and the first deploy sends them again, so the
+  review shows no placement change.
+- **A named volume's mount gets the label too.** Bayplan's `bayplan.stack.id` is added to the volume options of a
+  service's mount of a named volume. It counts as an ownership label, so the first review lists it under *Ownership
+  labels only*. The volume itself is not touched.
 - **Data is kept.** The networks and volumes the stack owns are reused under their names. A volume is never
   recreated, and the first deploy of an adopted standalone project was proved on real engines to keep a marker file
   in a volume. Secrets and configs that already exist are not created, changed or removed.
@@ -705,13 +719,15 @@ the revision, or you keep what runs.
 **What counts.** On a swarm, each service of the stack is compared with the deployed revision (converted with the
 digests it stored). On a standalone host, each container of the stack's project is compared by its configuration hash
 and then field by field, and its image against the revision's pin. Any difference in a setting counts: replicas,
-image or digest, environment, ports, labels, mounts, placement, restart policy and the rest. A service the revision
+image or digest, environment, ports, labels, mounts, placement (including the platforms the image runs on), restart
+policy and the rest. A revision stored before platforms were recorded is compared through the platforms of the same
+image, so an old revision does not read as drift. A service the revision
 has and the engine does not is **Missing**; a service or container the stack owns that the revision does not declare
 is **Extra**.
 
 **What is not drift:**
 
-- Bayplan's own ownership labels, and the swarm's force-update counter. A **restart** or a **force update** does
+- Bayplan's own ownership labels (including the one on a named volume's mount), and the swarm's force-update counter. A **restart** or a **force update** does
   not change the spec and is not drift.
 - Runtime state such as task churn and a service's update status.
 - A **stopped** stack. Stop scales it down on purpose, and it is not checked until it is started.
@@ -819,7 +835,7 @@ owns](#what-adopting-owns)). Its services and containers get the label at the fi
 | `com.docker.stack.namespace` | swarm services, networks, secrets and configs | The stack's name, as `docker stack deploy` writes it. A stack that Bayplan did not make but that uses the same name is a foreign stack. |
 | `com.docker.compose.project` | standalone containers, networks and volumes | The stack's name, as Docker Compose writes it. |
 | `com.docker.compose.service`, `.oneoff`, `.config-hash`, `.project.working_dir`, `.project.config_files` | standalone containers | Docker Compose's own labels. The working directory and config files carry neutral constants (`/bayplan-stack`, `compose.yaml`), never a path of the Bayplan server. A container whose config hash differs from its service is recreated. |
-| `bayplan.stack.id` | services, containers, networks, volumes, secrets and configs | The ID of the Bayplan stack record that owns the object. Not on an adopted stack's existing networks and volumes. A label alone never links an object to a stack. |
+| `bayplan.stack.id` | services, containers, networks, volumes, secrets and configs; on a swarm also the volume options of a service's mount of a named volume | The ID of the Bayplan stack record that owns the object. Not on an adopted stack's existing networks and volumes. On a mount it is an ownership label, like the one on the service. A label alone never links an object to a stack. |
 | `bayplan.stack.image` | services and containers | The image exactly as you wrote it, before it was pinned. |
 | `bayplan.stack.object` | secrets and configs | Marks an object made from one of the stack's files; its value is the name the compose file uses. |
 | `bayplan.stack.object.hash` | secrets and configs | The 8-hex-digit content hash that ends the object's name. |
