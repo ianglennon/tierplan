@@ -817,7 +817,7 @@ func (r Repo) SetPlatforms(ctx context.Context, snapshotID string, platforms map
 // GoodPins is what the stack's newest good revision ran, by swarm service name. AsWritten is the
 // stored reference without its digest, which is the text it was deployed from up to how
 // docker spells it; a caller compares it with the current text through sameImageText. A stack
-// with no good revision has none.
+// with no good revision has none. Platforms are the ones that revision recorded for the service (SetPlatforms).
 func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error) {
 	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -830,7 +830,15 @@ func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.L
 	if err := json.Unmarshal([]byte(row.Pins), &pins); err != nil {
 		return nil, fmt.Errorf("read the pins of revision %d: %w", row.Seq, err)
 	}
-	return LivePins(pins), nil
+	out := LivePins(pins)
+	// The platforms the revision recorded belong to the image it pinned; a record of a service with no pin is dropped.
+	for service, platforms := range platformsOf(row) {
+		if lp, ok := out[service]; ok && len(platforms) > 0 {
+			lp.Platforms = slices.Clone(platforms)
+			out[service] = lp
+		}
+	}
+	return out, nil
 }
 
 // LivePins reads pins by swarm service name, tag@sha256 each, as stacks.Render and the review take

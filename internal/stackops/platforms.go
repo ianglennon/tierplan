@@ -42,6 +42,29 @@ func withPin(spec swarm.ServiceSpec, p Pin) swarm.ServiceSpec {
 	return spec
 }
 
+// storedPlatforms fills the platforms of each pin that has none from the record of the stack's last good revision
+// (stored, by service name). It runs before carryPlatforms, so what Bayplan recorded for an image comes first and what
+// the service runs comes second: a redeploy puts back platforms someone took off outside Bayplan, and the review shows
+// it. A record is used only when its image names the same sha256 digest as the pin, so a record made for another
+// image is never applied (T-08-111); nothing is asked of a registry (P7 D-18). The pins map is changed in place.
+func storedPlatforms(pins map[string]Pin, stored map[string]stacks.LivePin) {
+	for name, p := range pins {
+		if len(p.Platforms) > 0 {
+			continue
+		}
+		rec, ok := stored[name]
+		if !ok || len(rec.Platforms) == 0 {
+			continue
+		}
+		digest := digestOf(p.Ref)
+		if !digestRe.MatchString(digest) || digestOf(rec.Image) != digest {
+			continue
+		}
+		p.Platforms = slices.Clone(rec.Platforms)
+		pins[name] = p
+	}
+}
+
 // carryPlatforms fills the platforms of each pin that has none from the running service of the same name. It does so
 // only when that service runs the image the pin names: both name the same sha256 digest, or neither names a digest
 // and both are the same text. A pin whose image differs from the running one gets none, so a service on another

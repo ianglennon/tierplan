@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/swarm"
 )
 
 // PinAction is what a deploy does about the image of one service (D-15).
@@ -29,9 +30,11 @@ const (
 
 // LivePin is an image a service ran or runs: AsWritten is the reference text that was deployed
 // (the com.docker.stack.image label of a swarm service) and Image what was actually sent, the
-// pinned reference.
+// pinned reference. Platforms are the swarm platforms the stack's revision recorded for that image, empty when it
+// recorded none (a service that runs, or an older revision, has none here).
 type LivePin struct {
 	AsWritten, Image string
+	Platforms        []swarm.Platform
 }
 
 // PinInput is one service's image for DecidePin.

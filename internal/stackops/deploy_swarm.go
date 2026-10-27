@@ -387,7 +387,9 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		case err != nil:
 			return fail(ItemLookup, codeOf(ctx, err), "")
 		}
-		// A digest the swarm already runs has its platforms there; only the rest are read from the memo or the registry.
+		// A digest the stack's last good revision recorded platforms for is sent those; a digest the swarm already runs has
+		// its platforms there; only the rest are read from the memo or the registry.
+		storedPlatforms(pins, stored)
 		carryPlatforms(pins, byName)
 		if code, name, msg := d.reviewedPlatforms(ctx, in.EnvID, swarmItems(planned.Services), pins, d.clusterReader(in.EnvID)); code != "" {
 			return failWith(ItemLookup, code, name, msg)
@@ -397,7 +399,8 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		pinned = d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
 	}
 	// A service keeps the platforms of the image it runs; they belong to the image, so a pin that names another one
-	// borrows none (G-08-4, T-08-97).
+	// borrows none (G-08-4, T-08-97). What the last good revision recorded for the digest comes first (T-08-111).
+	storedPlatforms(pinned.Pins, stored)
 	carryPlatforms(pinned.Pins, byName)
 	res.Pins, res.Problems = pinned.Pins, placeProblems(in.Files, pinned.Problems)
 	if pinned.Blocked() {
