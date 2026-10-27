@@ -98,6 +98,11 @@ type Deps struct {
 	// (WriteOnNode refuses a read-only host before it takes a client); a test sets it to play a host that
 	// answers otherwise, which the aggregator proves for itself.
 	Writable func(ctx context.Context, envID, nodeID string) error
+	// Platforms remembers the platforms of every image a lookup found, by digest, so a deploy that follows a review sends
+	// the platforms the review showed without asking the registry again. Nil is no memo: a reviewed deploy then asks the
+	// registry, once for each looked-up digest, for that digest's platforms. One memo is shared by every stack route of a
+	// server.
+	Platforms *PlatformMemo
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

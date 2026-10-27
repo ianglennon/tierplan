@@ -279,6 +279,9 @@ func TestReviewInUpdateModeShowsOnlyTheChosenServicesMoving(t *testing.T) {
 func TestADeployWithReviewedPinsMakesNoRegistryLookupAndRefusesOnesItWouldNotChoose(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
+	// The server shares one memo of the review's answers with the deploy, so the deploy needs no lookup for the platforms
+	// of the digests it was given (G-08-4; without a memo it asks once for each, see TestAReviewedDeploySendsThePlatformsItsReviewFound).
+	rig.deps.Platforms = stackops.NewPlatformMemo()
 	rv := rig.review(t, "tracer", stacks.StarterCompose, nil)
 	lookups := len(rig.fake.DistributionRefs())
 

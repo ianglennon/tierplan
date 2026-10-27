@@ -222,22 +222,29 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string, read reader) 
 	switch {
 	case err == nil:
 		res.ref, res.platforms = resolved.Ref, dockerx.SwarmPlatforms(resolved.Platforms)
+		// A digest names one manifest, so what this lookup learned about it holds for the deploy that follows a review.
+		d.Platforms.remember(resolved.Digest, res.platforms)
 	case local != nil:
 		res.ref, res.local = local.ID, true
 	default:
-		if code := codeOf(ctx, err); code != CodeEngineError {
-			// The agent refused, no manager is connected or the deploy was cancelled: not a
-			// fact about this image.
-			res.infra = code
-			return res
-		}
-		res.failure = CodeImageUnresolved
-		if unreachable(err) {
-			res.failure = CodeRegistryUnreachable
-		}
-		d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "failure", res.failure, "reason", dockerx.PullFailure(err))
+		d.classifyLookup(ctx, envID, text, err, &res)
 	}
 	return res
+}
+
+// classifyLookup sets on res what a failed lookup of text says: infra when the failure is not about this image (the agent
+// refused, no manager is connected, the deploy was cancelled), otherwise the lookup failure that blocks the services
+// that need it.
+func (d Deps) classifyLookup(ctx context.Context, envID, text string, err error, res *lookupResult) {
+	if code := codeOf(ctx, err); code != CodeEngineError {
+		res.infra = code
+		return
+	}
+	res.failure = CodeImageUnresolved
+	if unreachable(err) {
+		res.failure = CodeRegistryUnreachable
+	}
+	d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "failure", res.failure, "reason", dockerx.PullFailure(err))
 }
 
 // unreachable reports whether a lookup failed because the registry could not be reached: a

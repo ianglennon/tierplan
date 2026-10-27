@@ -136,8 +136,10 @@ type SwarmDeployInput struct {
 	// other service keeps the digest it runs.
 	Update map[string]bool
 	// Reviewed, when not nil, are the images a review chose, by swarm service name: the deploy uses
-	// exactly these, after checking each against what it would decide itself (ReviewedPins), and
-	// makes no registry lookup. Nil means the deploy looks the images up itself.
+	// exactly these digests, after checking each against what it would decide itself (ReviewedPins), and
+	// asks no registry for a digest. The platforms of a looked-up image are the ones its review found, read
+	// again for that digest only when the server no longer holds them (Deps.Platforms). Nil means the deploy
+	// looks the images up itself.
 	Reviewed map[string]string
 	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by
 	// swarm service name, and are used as they are. They are not compared with what the swarm runs now
@@ -380,6 +382,11 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
 		case err != nil:
 			return fail(ItemLookup, codeOf(ctx, err), "")
+		}
+		// A digest the swarm already runs has its platforms there; only the rest are read from the memo or the registry.
+		carryPlatforms(pins, byName)
+		if code, name, msg := d.reviewedPlatforms(ctx, in.EnvID, swarmItems(planned.Services), pins, d.clusterReader(in.EnvID)); code != "" {
+			return failWith(ItemLookup, code, name, msg)
 		}
 		pinned = PinOutcome{Pins: pins}
 	} else {
