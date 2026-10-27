@@ -772,6 +772,8 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		EnvID: env.ID, Stack: st, Project: prep.Loaded.Project, Files: prep.Files, Vars: prep.Vars, Copy: target.Copy,
 		Caller: caller, Masker: rendering.masker,
 		Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
+		// The revision's own record of its platforms goes with its digests, so the roll back asks no registry for them.
+		RestoredPlatforms: target.Platforms,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
