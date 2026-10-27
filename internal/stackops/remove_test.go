@@ -742,6 +742,106 @@ func TestStandaloneRemoveOfAProjectAnotherOwnerMadeFailsTheCheckAndRunsNothing(t
 	}
 }
 
+// hostCLIAdded is what `docker compose -f <the person's file> up -d --scale web=2 --no-recreate` adds to a stack's
+// project: a container of the project and the service with none of Bayplan's labels (G-08-6, the debug session
+// standalone-cli-scale-not-drift).
+func hostCLIAdded(id, name string, mounts ...string) dockertest.FakeContainer {
+	return dockertest.FakeContainer{
+		ID: id, Names: []string{"/" + name}, Image: "nginx", State: "running", Mounts: mounts,
+		Labels: map[string]string{"com.docker.compose.project": "plain", "com.docker.compose.service": "web"},
+	}
+}
+
+func TestStandaloneRemoveTakesAContainerTheHostCLIAddedAndWaitsForIt(t *testing.T) {
+	t.Parallel()
+	var base dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: withLabel(hostOwned(), "com.docker.compose.service", "web"), Mounts: []string{"plain_data"}},
+			hostCLIAdded("c2", "plain-web-2", "plain_data"),
+		}
+		c.Networks = []dockertest.FakeNetwork{{ID: "net-plain", Name: "plain_default", Driver: "bridge", Scope: "local", Labels: hostOwned()}}
+		c.Volumes = []dockertest.FakeVolume{{Name: "plain_data", Driver: "local", Labels: hostOwned()}}
+		base = *c
+	})
+	clk := newStepClock()
+	rig.deps.Clock = clk
+	var downs []string
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.DownProject = func(_ context.Context, _ *dockerx.Client, project string) error {
+		downs = append(downs, project)
+		// The stack's own container goes first and the network with it; the one the host CLI added is still there until
+		// the test says it is gone, so the wait is what keeps the removal from going on.
+		base.Containers, base.Networks = base.Containers[1:], nil
+		rig.fake.Reconfigure(base)
+		return nil
+	}
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := rig.deps.Preview(testsupport.Context(t), rig.envID, st, stackops.Declared{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(preview.Containers, []string{"plain-web-1", "plain-web-2"}) {
+		t.Fatalf("preview containers = %v, want both the stack's container and the one the host CLI added", preview.Containers)
+	}
+	if len(preview.Volumes) != 1 || preview.Volumes[0].UsedOutside != 0 {
+		t.Fatalf("preview volumes = %+v, want plain_data with no user outside the stack: the added container is the stack's", preview.Volumes)
+	}
+	rr := rig.startRemove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: &removeStore{}, Volumes: []stackops.VolumeChoice{preview.Volumes[0]}})
+
+	rr.until(t, "the wait to say the added container is left", func(items map[string]jobs.Item) bool {
+		return items[stackops.ItemWait].Result["left"] == "1"
+	})
+	if got := writesTo(rig, "DELETE /volumes/"); len(got) != 0 {
+		t.Fatalf("volume writes = %v: a volume was removed while the added container was still there", got)
+	}
+	base.Containers = nil
+	rig.fake.Reconfigure(base)
+	clk.Tick(t, stackops.PollInterval)
+	res, job := rr.finish(t)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("remove = %+v %v, want it done", res, itemStates(job))
+	}
+	if !slices.Equal(downs, []string{"plain"}) {
+		t.Errorf("down calls = %v, want one for the project plain", downs)
+	}
+	if res.Services != 2 || res.Volumes != 1 {
+		t.Errorf("result = %+v, want 2 containers and the volume removed", res)
+	}
+}
+
+func TestStandaloneRemoveStillFailsTheCheckForAnotherStacksContainerBesideItsOwn(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		stranger := hostCLIAdded("c3", "plain-web-3")
+		stranger.Labels["bayplan.stack.id"] = "stack-stranger"
+		c.Containers = []dockertest.FakeContainer{
+			{ID: "c1", Names: []string{"/plain-web-1"}, Image: "nginx", State: "running", Labels: withLabel(hostOwned(), "com.docker.compose.service", "web")},
+			hostCLIAdded("c2", "plain-web-2"),
+			stranger,
+		}
+	})
+	var downs int
+	rig.deps.Writable = func(context.Context, string, string) error { return nil }
+	rig.deps.DownProject = func(context.Context, *dockerx.Client, string) error { downs++; return nil }
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res, job := rig.remove(t, stackops.RemoveInput{Stack: st, NodeID: node, Store: &removeStore{}})
+
+	if res.Code != stackops.CodeNameClash || downs != 0 {
+		t.Fatalf("remove = %+v (down calls %d) %v, want stack_name_clash and no down", res, downs, itemStates(job))
+	}
+}
+
 func TestStandaloneRemoveWhenTheHostIsReadOnlyChangesNothing(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
