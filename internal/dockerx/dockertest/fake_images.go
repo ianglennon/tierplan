@@ -186,6 +186,7 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 	f.mu.Lock()
 	failure, failing := f.distFail[name]
 	dgst, moved := f.distDigest[name]
+	bare := f.distNoPlatforms[name]
 	f.mu.Unlock()
 	if failing {
 		writeJSON(w, failure.Code, map[string]string{"message": failure.Message})
@@ -194,18 +195,22 @@ func (f *Fake) serveDistribution(w http.ResponseWriter, r *http.Request, p strin
 	if !moved {
 		dgst = fakeDigest(name)
 	}
+	platforms := []map[string]any{
+		{"architecture": "amd64", "os": "linux"},
+		{"architecture": "unknown", "os": "unknown"},
+		{"architecture": "arm64", "os": "linux", "variant": "v8"},
+		{"architecture": "unknown", "os": "unknown"},
+	}
+	if bare {
+		platforms = []map[string]any{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"Descriptor": map[string]any{
 			"mediaType": "application/vnd.oci.image.index.v1+json",
 			"digest":    dgst,
 			"size":      1024,
 		},
-		"Platforms": []map[string]any{
-			{"architecture": "amd64", "os": "linux"},
-			{"architecture": "unknown", "os": "unknown"},
-			{"architecture": "arm64", "os": "linux", "variant": "v8"},
-			{"architecture": "unknown", "os": "unknown"},
-		},
+		"Platforms": platforms,
 	})
 	return true
 }
@@ -220,6 +225,17 @@ func (f *Fake) SetDistributionDigest(fullRef, digest string) {
 		f.distDigest = map[string]string{}
 	}
 	f.distDigest[fullRef] = digest
+}
+
+// SetDistributionNoPlatforms makes the distribution route answer the full reference (for example
+// "docker.io/library/nginx:1.27") with no platform at all from now on, as a registry does for an image that names none.
+func (f *Fake) SetDistributionNoPlatforms(fullRef string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.distNoPlatforms == nil {
+		f.distNoPlatforms = map[string]bool{}
+	}
+	f.distNoPlatforms[fullRef] = true
 }
 
 // SetDistributionFailure makes the distribution route answer the full reference (for example

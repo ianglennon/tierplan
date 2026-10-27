@@ -633,6 +633,9 @@ type Fake struct {
 	// distFail is the status and message the distribution route answers one full reference
 	// with (SetDistributionFailure), where a test makes a single registry fail.
 	distFail map[string]FakePullStatus
+	// distNoPlatforms lists the full references the distribution route answers with no platform at all
+	// (SetDistributionNoPlatforms), as a registry does for an image that names none.
+	distNoPlatforms map[string]bool
 	// distAuth and distRefs are the header and reference of each distribution check.
 	distAuth, distRefs []string
 
