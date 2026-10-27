@@ -379,9 +379,8 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}
 	pinned := d.ResolvePins(ctx, in.EnvID, plan.Services, byName, stored, update)
 	// A service is sent the platforms the last good revision recorded for its digest, else the ones of the image it runs,
-	// as a deploy sends them (G-08-4).
-	storedPlatforms(pinned.Pins, stored)
-	carryPlatforms(pinned.Pins, byName)
+	// in the order a deploy applies them, so the review shows what the deploy sends (G-08-4, WR-02).
+	pinPlatforms(pinned.Pins, stored, byName)
 	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (no manager is connected, the agent refused).

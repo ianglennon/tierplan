@@ -42,26 +42,48 @@ func withPin(spec swarm.ServiceSpec, p Pin) swarm.ServiceSpec {
 	return spec
 }
 
+// recordedPlatforms is the platforms the stack's last good revision recorded for the service of a pin, when that record
+// names the same sha256 digest as the pin. A record made for another image is never applied (T-08-111).
+func recordedPlatforms(p Pin, name string, stored map[string]stacks.LivePin) []swarm.Platform {
+	rec, ok := stored[name]
+	if !ok || len(rec.Platforms) == 0 {
+		return nil
+	}
+	digest := digestOf(p.Ref)
+	if !digestRe.MatchString(digest) || digestOf(rec.Image) != digest {
+		return nil
+	}
+	return slices.Clone(rec.Platforms)
+}
+
+// pinPlatforms gives each pin its platforms by one precedence, which the deploy review and every deploy that looks images
+// up apply alike, so the review shows the placement the deploy sends (WR-02): what the stack's last good revision recorded
+// for the pin's sha256 digest comes first, even over what a registry lookup just said for it, so a redeploy puts back
+// platforms someone took off outside Bayplan and the review shows it; a pin that has none yet then takes those of the
+// running service of the same image (carryPlatforms). Nothing is asked of a registry here (P7 D-18). The pins map is
+// changed in place.
+func pinPlatforms(pins map[string]Pin, stored map[string]stacks.LivePin, live map[string]dockerx.ServiceDetail) {
+	for name, p := range pins {
+		if recorded := recordedPlatforms(p, name, stored); len(recorded) > 0 {
+			p.Platforms = recorded
+			pins[name] = p
+		}
+	}
+	carryPlatforms(pins, live)
+}
+
 // storedPlatforms fills the platforms of each pin that has none from the record of the stack's last good revision
-// (stored, by service name). It runs before carryPlatforms, so what Bayplan recorded for an image comes first and what
-// the service runs comes second: a redeploy puts back platforms someone took off outside Bayplan, and the review shows
-// it. A record is used only when its image names the same sha256 digest as the pin, so a record made for another
-// image is never applied (T-08-111); nothing is asked of a registry (P7 D-18). The pins map is changed in place.
+// (stored, by service name), by the same rule as pinPlatforms but never replacing platforms a pin already has: a
+// rollback's pins carry the platforms their own revision stored, and those stand. The pins map is changed in place.
 func storedPlatforms(pins map[string]Pin, stored map[string]stacks.LivePin) {
 	for name, p := range pins {
 		if len(p.Platforms) > 0 {
 			continue
 		}
-		rec, ok := stored[name]
-		if !ok || len(rec.Platforms) == 0 {
-			continue
+		if recorded := recordedPlatforms(p, name, stored); len(recorded) > 0 {
+			p.Platforms = recorded
+			pins[name] = p
 		}
-		digest := digestOf(p.Ref)
-		if !digestRe.MatchString(digest) || digestOf(rec.Image) != digest {
-			continue
-		}
-		p.Platforms = slices.Clone(rec.Platforms)
-		pins[name] = p
 	}
 }
 
