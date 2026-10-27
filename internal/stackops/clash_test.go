@@ -105,6 +105,43 @@ func TestForeignStackOnAStandaloneHostFindsAComposeProjectOfTheNameWithoutThisSt
 	}
 }
 
+// TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded: a container the host CLI adds to a managed standalone
+// stack's Compose project (docker compose up --scale) carries the project and no bayplan.stack.id. Beside a container
+// that carries the stack's ID it is no name clash; another stack's ID, or a project the stack holds no container of, still
+// is (G-08-6, user decision 2026-10-27; P7 D-12, T-08-47, T-08-107).
+func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
+	t.Parallel()
+	c := func(id string, labels map[string]string) dockertest.FakeContainer {
+		return dockertest.FakeContainer{ID: id, Names: []string{"/web-app-" + id}, Image: "x", State: "running", Labels: labels}
+	}
+	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.oneoff": "True"}
+	anotherStack := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-other"}
+	for name, tc := range map[string]struct {
+		containers []dockertest.FakeContainer
+		want       bool
+	}{
+		"the stack's own container and a CLI one":       {[]dockertest.FakeContainer{c("1", projOwned), c("2", projNS)}, false},
+		"the stack's own container and a compose run":   {[]dockertest.FakeContainer{c("1", projOwned), c("2", oneOff)}, false},
+		"the stack's own container and another stack's": {[]dockertest.FakeContainer{c("1", projOwned), c("2", anotherStack)}, true},
+		"a CLI container beside another stack's alone":  {[]dockertest.FakeContainer{c("1", anotherStack), c("2", projNS)}, true},
+		"CLI containers and none of the stack's own":    {[]dockertest.FakeContainer{c("1", projNS), c("2", projNS)}, true},
+	} {
+		rig := newSwarmRig(t, func(cfg *dockertest.FakeConfig) {
+			standalone(cfg)
+			cfg.Containers = tc.containers
+		})
+		st := stackops.Stack{ID: "stack-web", Name: "web", Target: stacks.TargetStandalone}
+		got, err := rig.deps.ForeignStackOf(testsupport.Context(t), rig.envID, st)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ForeignStackOf = %v, %v, want %v", name, got, err, tc.want)
+		}
+		// The create path asks for a stack that has no container yet, so it stays strict whatever sits in the project.
+		if got, err := rig.deps.ForeignStack(testsupport.Context(t), rig.envID, stacks.TargetStandalone, "web", ""); err != nil || !got {
+			t.Errorf("%s: ForeignStack of a stack being created = %v, %v, want a name clash", name, got, err)
+		}
+	}
+}
+
 // TestCreateClashStaysStrict: the create path's check asks the ownership of a stack that is not adopted, so an object
 // that an adopted stack would own (no ID, or an ID it recorded, a network it recorded) is still foreign to a stack
 // being created, and a stored stack that is not adopted still owns only what carries its own ID (plan 08-18).

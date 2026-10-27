@@ -362,3 +362,31 @@ func TestRollbackAndRestoreReviewsShowThePlatformsTheRevisionStored(t *testing.T
 		})
 	}
 }
+
+// TestStandaloneRestoreReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash: the restore review (D-23) of a stack
+// whose project holds web-2, added with docker compose up --scale, is not refused as a name clash. Its Changes tab is the
+// drift, so it lists web going from 2 containers back to 1, and the deploy stays enabled (G-08-6, D-25).
+func TestStandaloneRestoreReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash(t *testing.T) {
+	t.Parallel()
+	h := hostStack(t, "demo", hostedCompose, nil)
+	h.Containers = append(h.Containers, cliContainer(t, h, hostedCompose, "web", 2))
+	rig := hostRig(t, h)
+	running := map[string]string{"web": "nginx:1.27-alpine@" + stackopstest.Digest("a"), "db": "postgres:16@" + stackopstest.Digest("a")}
+	in := rig.standaloneRollbackInput(t, "demo", hostedCompose, running)
+	in.Mode = stackops.ReviewModeRestore
+
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if rv.Problems.Errors() != 0 || slices.ContainsFunc(rv.Problems, func(p stacks.Problem) bool { return p.Code == stackops.CodeNameClash }) {
+		t.Fatalf("problems = %+v, want none: the container the host CLI added is no name clash", rv.Problems)
+	}
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) {
+		t.Fatalf("services = %v, want web changed (2 containers back to 1)", got)
+	}
+	if cur, next := string(rv.Services[0].Current), string(rv.Services[0].Next); !strings.Contains(cur, `"scale":2`) || !strings.Contains(next, `"scale":1`) {
+		t.Errorf("web current = %s next = %s, want its containers going from 2 back to 1", cur, next)
+	}
+}

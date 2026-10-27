@@ -542,3 +542,32 @@ func TestStandaloneReviewNoObjectRowsWhenUnchanged(t *testing.T) {
 		t.Errorf("objects = %q, want no row for a network that records no hash", objectRows(rv))
 	}
 }
+
+// TestStandaloneReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash: docker compose up --scale web=2 adds web-2 to
+// the project with none of Bayplan's labels. Beside web-1, which carries the stack's ID, it is the person's own
+// change to the stack, so the review goes ahead and shows the scale instead of refusing as a name clash (G-08-6,
+// user decision 2026-10-27). Another stack's container, or a project the stack holds none of, still is one.
+func TestStandaloneReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash(t *testing.T) {
+	t.Parallel()
+	clash := func(rv stackops.Review) bool {
+		return slices.ContainsFunc(rv.Problems, func(p stacks.Problem) bool { return p.Code == stackops.CodeNameClash })
+	}
+
+	h := hostStack(t, "demo", hostedCompose, nil)
+	h.Containers = append(h.Containers, cliContainer(t, h, hostedCompose, "web", 2))
+	rv := hostRig(t, h).reviewOf(t, "demo", hostedCompose, nil, nil)
+	if clash(rv) || rv.Problems.Errors() != 0 {
+		t.Errorf("problems = %+v, want no name clash for a container the host CLI added beside the stack's own", rv.Problems)
+	}
+	if got := changesOf(rv); !slices.Equal(got, []string{"changed web"}) {
+		t.Errorf("services = %v, want web changed: the deploy puts its scale back to 1", got)
+	}
+
+	other := hostStack(t, "demo", hostedCompose, nil)
+	stranger := cliContainer(t, other, hostedCompose, "web", 2)
+	stranger.Labels[stacks.LabelStackID] = "stack-other"
+	other.Containers = append(other.Containers, stranger)
+	if rv := hostRig(t, other).reviewOf(t, "demo", hostedCompose, nil, nil); !clash(rv) {
+		t.Errorf("problems = %+v, want a name clash for a container that carries another stack's ID", rv.Problems)
+	}
+}

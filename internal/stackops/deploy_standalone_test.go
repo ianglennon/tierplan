@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -511,5 +512,49 @@ func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
 		if svc.CustomLabels[stacks.LabelStackID] != a.stack.ID {
 			t.Errorf("service %s is sent without Bayplan's ID: %v", name, svc.CustomLabels)
 		}
+	}
+}
+
+// cliShaped is the container docker compose up --scale adds to a deployed container's project from the host: the
+// same project and service, the next number, and none of Bayplan's labels (G-08-6).
+func cliShaped(from dockertest.FakeContainer, n int) dockertest.FakeContainer {
+	c := from
+	c.ID = fmt.Sprintf("%s-%d", from.ID, n)
+	c.Names = []string{fmt.Sprintf("/%s-%d", strings.TrimSuffix(strings.TrimPrefix(from.Names[0], "/"), "-1"), n)}
+	c.Labels = maps.Clone(from.Labels)
+	for key := range c.Labels {
+		if strings.HasPrefix(key, "bayplan.") {
+			delete(c.Labels, key)
+		}
+	}
+	c.Labels[stacks.LabelComposeConfigHash] = "cli-hash"
+	return c
+}
+
+// TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded: the deploy that puts the revision back (the D-25
+// revert, a roll back deploy) is not refused as a name clash by web-2, which docker compose up --scale added without
+// Bayplan's labels; a container with another stack's ID still refuses it (G-08-6, user decision 2026-10-27).
+func TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	pin := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": pin})["web"]
+	own := deployedContainer("demo", "web", hash, "nginx:1.27-alpine", pin)
+	run := func(added dockertest.FakeContainer) (stackops.DeployResult, *upStandIn) {
+		rig := newStandaloneRig(t, own, added)
+		stand := &upStandIn{}
+		rig.deps.Up = stand.up
+		in := standaloneInput("demo", webStandalone)
+		in.Pins, in.RevisionID, in.Reviewed, in.Rollback = &memPins{}, "rev-1", map[string]string{"web": pin}, true
+		res, _ := rig.deployStandalone(t, in)
+		return res, stand
+	}
+
+	if res, stand := run(cliShaped(own, 2)); !res.OK() || stand.calls != 1 {
+		t.Errorf("result %+v after %d runs, want the restore to run beside the container the host CLI added", res, stand.calls)
+	}
+	stranger := cliShaped(own, 2)
+	stranger.Labels[stacks.LabelStackID] = "stack-other"
+	if res, stand := run(stranger); res.OK() || res.Code != stackops.CodeNameClash || stand.calls != 0 {
+		t.Errorf("result %+v after %d runs, want stack_name_clash for a container with another stack's ID", res, stand.calls)
 	}
 }

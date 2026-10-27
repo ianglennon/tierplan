@@ -822,3 +822,58 @@ func TestStartSendsThePlatformsTheDeployedRevisionStoredAndAsksNoRegistry(t *tes
 		t.Errorf("a start asked a registry %d times", n-lookups)
 	}
 }
+
+// TestStandaloneStopAndStartGoAheadBesideAContainerTheHostCLIAdded: web-2, added with docker compose up --scale and
+// carrying none of Bayplan's labels, is no name clash for a stop or a start of the stack; a container with another
+// stack's ID still is one, and nothing is stopped (G-08-6, user decision 2026-10-27).
+func TestStandaloneStopAndStartGoAheadBesideAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	st := stackops.Stack{ID: "stack-plain", Name: "plain", Target: stacks.TargetStandalone}
+	compose := "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	pinned := "nginx:1.27-alpine@sha256:" + strings.Repeat("c", 64)
+	own := deployedContainer("plain", "web", "hash", "nginx:1.27-alpine", pinned)
+	stranger := cliShaped(own, 2)
+	stranger.Labels[stacks.LabelStackID] = "stack-other"
+
+	for name, tc := range map[string]struct {
+		added dockertest.FakeContainer
+		code  string
+	}{
+		"added from the host CLI":   {cliShaped(own, 2), ""},
+		"another stack's container": {stranger, stackops.CodeNameClash},
+	} {
+		store := &lifecycleStore{
+			rev: stackops.Snapshot{ID: "rev-1", StackID: st.ID, Seq: 1, Kind: stackops.KindRevision, Outcome: stackops.OutcomeGood,
+				Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}},
+			have: true, pins: map[string]string{"web": pinned},
+		}
+		var calls []string
+		rig := newStandaloneRig(t, own, tc.added)
+		rig.deps.Writable = func(context.Context, string, string) error { return nil }
+		rig.deps.StopProject = func(_ context.Context, _ *dockerx.Client, p *types.Project) error {
+			calls = append(calls, "stop "+p.Name)
+			return nil
+		}
+		rig.deps.StartProject = func(_ context.Context, _ *dockerx.Client, p *types.Project) error {
+			calls = append(calls, "start "+p.Name)
+			return nil
+		}
+		node, err := rig.deps.StandaloneNode(testsupport.Context(t), rig.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		stopRes, _ := rig.lifecycleRunOn(t, stackops.LifecycleStop, st, node, store, stackops.Caller{})
+		startRes, _ := rig.lifecycleRunOn(t, stackops.LifecycleStart, st, node, store, stackops.Caller{})
+
+		if tc.code == "" {
+			if !stopRes.OK() || !startRes.OK() || !slices.Equal(calls, []string{"stop plain", "start plain"}) {
+				t.Errorf("%s: stop = %+v, start = %+v, SDK calls %v, want both to go ahead", name, stopRes, startRes, calls)
+			}
+			continue
+		}
+		if stopRes.OK() || stopRes.Code != tc.code || startRes.OK() || startRes.Code != tc.code || len(calls) != 0 {
+			t.Errorf("%s: stop = %+v, start = %+v, SDK calls %v, want %s from both and nothing stopped", name, stopRes, startRes, calls, tc.code)
+		}
+	}
+}

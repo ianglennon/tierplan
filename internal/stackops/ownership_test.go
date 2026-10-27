@@ -289,7 +289,7 @@ func TestStandaloneNameClashGateUsesTheOwnershipOfTheStack(t *testing.T) {
 		t.Fatal(err)
 	}
 	if foreign, err := rig.deps.ForeignStackOf(ctx, rig.envID, st); err != nil || !foreign {
-		t.Fatalf("ForeignStackOf(adopted, deployed) = %v, %v, want an unlabelled container to be a clash once the first deploy is done", foreign, err)
+		t.Fatalf("ForeignStackOf(adopted, deployed) = %v, %v, want a project with no container of the stack's own ID to be a clash once the first deploy is done: a container with no ID is only admitted beside one the stack owns (G-08-6)", foreign, err)
 	}
 }
 
