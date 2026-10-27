@@ -925,6 +925,99 @@ func TestADeployPutsBackThePlatformsRecordedForAKeptDigest(t *testing.T) {
 	})
 }
 
+// TestARollBackDeploySendsThePlatformsItsRevisionStored (G-08-4, P7 D-14, T-07-93, T-08-101): a roll back sends the
+// digests and the platforms its revision stored and asks no registry. A revision from before platforms were stored
+// keeps what the service runs when it runs that revision's image, and sends none when it runs another.
+func TestARollBackDeploySendsThePlatformsItsRevisionStored(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	older := "nginx:1.27@" + digestOf("a")
+	// run deploys revision 2 of the stack, which looks nginx:1.27 up as digest runs (so the service runs both
+	// platforms), and then rolls back to the image of revision 1 with the given record of its platforms.
+	run := func(t *testing.T, runs string, record map[string][]swarm.Platform) (*swarmRig, *memPins, int) {
+		t.Helper()
+		rig := newSwarmRig(t, nil)
+		rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf(runs))
+		store := &memPins{}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-2"
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy of revision 2 = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		lookups := len(rig.fake.DistributionRefs())
+		in.RevisionID, in.Rollback = "rev-3", true
+		in.Reviewed = map[string]string{"site_web": older}
+		in.RestoredPlatforms = record
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("roll back = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		return rig, store, lookups
+	}
+	sent := func(t *testing.T, rig *swarmRig) swarm.ServiceSpec {
+		t.Helper()
+		ups := rig.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("service updates = %d, want 1", len(ups))
+		}
+		return ups[0].Spec
+	}
+	platformsOf := func(spec swarm.ServiceSpec) []swarm.Platform {
+		if pl := spec.TaskTemplate.Placement; pl != nil {
+			return pl.Platforms
+		}
+		return nil
+	}
+
+	t.Run("the revision's own platforms replace the running ones", func(t *testing.T) {
+		t.Parallel()
+		rig, store, lookups := run(t, "b", map[string][]swarm.Platform{"site_web": {amd}})
+		spec := sent(t, rig)
+		if got := spec.TaskTemplate.ContainerSpec.Image; got != older {
+			t.Errorf("rolled back to image %q, want %q", got, older)
+		}
+		if got := platformsOf(spec); !slices.Equal(got, []swarm.Platform{amd}) {
+			t.Errorf("rolled back with platforms %v, want the revision's %v", got, []swarm.Platform{amd})
+		}
+		if got := store.platformsOf("rev-3")["site_web"]; !slices.Equal(got, []swarm.Platform{amd}) {
+			t.Errorf("the roll back revision records platforms %v, want %v", got, []swarm.Platform{amd})
+		}
+		if n := len(rig.fake.DistributionRefs()); n != lookups {
+			t.Errorf("distribution lookups = %d, want %d: a roll back asks no registry (T-07-93)", n, lookups)
+		}
+	})
+
+	t.Run("a revision with no record keeps what the service runs of the same digest", func(t *testing.T) {
+		t.Parallel()
+		rig, _, lookups := run(t, "a", nil)
+		if got := platformsOf(sent(t, rig)); !slices.Equal(got, []swarm.Platform{amd, arm}) {
+			t.Errorf("rolled back with platforms %v, want the running %v", got, []swarm.Platform{amd, arm})
+		}
+		if n := len(rig.fake.DistributionRefs()); n != lookups {
+			t.Errorf("distribution lookups = %d, want %d", n, lookups)
+		}
+	})
+
+	t.Run("a revision with no record sends none when the service runs another digest", func(t *testing.T) {
+		t.Parallel()
+		rig, _, lookups := run(t, "b", nil)
+		if got := platformsOf(sent(t, rig)); len(got) != 0 {
+			t.Errorf("rolled back with platforms %v, want none: the service ran another image (T-08-97)", got)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != lookups {
+			t.Errorf("distribution lookups = %d, want %d", n, lookups)
+		}
+	})
+
+	t.Run("a record for another service is not applied", func(t *testing.T) {
+		t.Parallel()
+		rig, _, _ := run(t, "b", map[string][]swarm.Platform{"site_db": {arm}})
+		if got := platformsOf(sent(t, rig)); len(got) != 0 {
+			t.Errorf("rolled back with platforms %v, want none", got)
+		}
+	})
+}
+
 func TestRedeployKeepsTheRunningDigestAfterTheTagMoved(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)

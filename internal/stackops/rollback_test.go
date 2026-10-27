@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
@@ -36,6 +38,27 @@ func TestPrepareRollbackSendsTheImagesTheRevisionStoredAndNothingElse(t *testing
 	pins, err := stackops.RestoredPins(plan.Plan.Services, plan.Pins)
 	if err != nil || pins["web_web"].Ref != pinned || pins["web_web"].AsWritten != "nginx:1.27-alpine" {
 		t.Errorf("RestoredPins = %+v, %v, want the stored reference unchanged", pins, err)
+	}
+}
+
+func TestPrepareRollbackAnswersThePlatformsTheRevisionStored(t *testing.T) {
+	t.Parallel()
+	pinned := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	target := rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n")
+	target.Platforms = map[string][]swarm.Platform{"web_web": {amd}}
+	plan, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack, target, map[string]string{"web_web": pinned})
+	if err != nil {
+		t.Fatalf("PrepareRollback: %v", err)
+	}
+	if got := plan.Platforms["web_web"]; !slices.Equal(got, []swarm.Platform{amd}) {
+		t.Errorf("plan platforms = %+v, want the revision's %v", plan.Platforms, []swarm.Platform{amd})
+	}
+	// A revision with no record answers none.
+	plain, err := stackops.Deps{}.PrepareRollback(context.Background(), rollbackStack,
+		rollbackTarget("services:\n  web:\n    image: nginx:1.27-alpine\n"), map[string]string{"web_web": pinned})
+	if err != nil || len(plain.Platforms) != 0 {
+		t.Errorf("plan platforms = %+v, %v, want none", plain.Platforms, err)
 	}
 }
 
