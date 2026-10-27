@@ -5,6 +5,7 @@ package stackops_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -225,4 +226,152 @@ func TestAdoptReviewStandaloneOwnershipOnly(t *testing.T) {
 	if want := []string{"web"}; !slices.Equal(res.OwnershipOnly, want) {
 		t.Errorf("ownership-only services = %v, want %v", res.OwnershipOnly, want)
 	}
+}
+
+// legacy2 is a stack made by docker stack deploy with its default --resolve-image=always and a named volume. Its
+// file is what the person wrote: the web image carries a variable, there is no label of Bayplan's anywhere (G-08-4).
+const legacy2Compose = `services:
+  web:
+    image: nginx:${TAG}
+    ports:
+      - "8080:80"
+    networks:
+      - front
+  api:
+    image: ghcr.io/example/legacy-api:2.3
+    environment:
+      LOG_LEVEL: info
+    volumes:
+      - apidata:/data
+    networks:
+      - front
+networks:
+  front:
+volumes:
+  apidata:
+`
+
+// legacy2Rig stands the stored specs of testdata/adopt/legacy2-services.json on a fake swarm: the engine's own
+// /services answer for the stack legacy2, with the platforms docker stack deploy stored from the images it resolved
+// and a named volume whose mount carries only the CLI's namespace label.
+func legacy2Rig(t *testing.T) *swarmRig {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "adopt", "legacy2-services.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored []swarm.Service
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("fixture holds %d services, want 2", len(stored))
+	}
+	// The fixture stays shaped like the CLI's output: none of Bayplan's labels on a service, a container or a mount.
+	var front string
+	var services []dockertest.FakeService
+	for _, s := range stored {
+		spec := s.Spec
+		for where, labels := range map[string]map[string]string{"service": spec.Labels, "container": spec.TaskTemplate.ContainerSpec.Labels} {
+			for k := range labels {
+				if strings.HasPrefix(k, "bayplan.") {
+					t.Fatalf("fixture %s %s label %q is one of Bayplan's", spec.Name, where, k)
+				}
+			}
+		}
+		for _, m := range spec.TaskTemplate.ContainerSpec.Mounts {
+			if m.VolumeOptions == nil {
+				continue
+			}
+			for k := range m.VolumeOptions.Labels {
+				if strings.HasPrefix(k, "bayplan.") {
+					t.Fatalf("fixture %s mount %s label %q is one of Bayplan's", spec.Name, m.Target, k)
+				}
+			}
+		}
+		front = spec.TaskTemplate.Networks[0].Target
+		services = append(services, dockertest.FakeService{
+			ID: s.ID, Name: spec.Name, Mode: "replicated", Running: 1, Desired: 1, Labels: spec.Labels, Spec: &spec,
+		})
+	}
+	ns := map[string]string{stacks.LabelSwarmNamespace: "legacy2"}
+	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = append(c.Networks, dockertest.FakeNetwork{ID: front, Name: "legacy2_front", Driver: "overlay", Scope: "swarm", Labels: ns})
+	}, services...)
+}
+
+// legacy2Check runs the adopt check of legacy2: from what runs when pasted is nil, else with that file pasted back.
+func (r *swarmRig) legacy2Check(t *testing.T, pasted *stacks.WorkingCopy) stackops.AdoptCheckResult {
+	t.Helper()
+	managed, err := adoptRepo(t, r).Stacks(testsupport.Context(t), r.envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := stackops.AdoptInput{
+		EnvID: r.envID, Name: "legacy2", Target: stacks.TargetSwarm, Caller: stackops.Caller{Actor: "ada"}, Managed: managed,
+	}
+	if pasted != nil {
+		in.Source, in.Pasted = stackops.AdoptSourcePaste, pasted
+	}
+	res, err := r.deps.AdoptCheck(testsupport.Context(t), in, true)
+	if err != nil {
+		t.Fatalf("AdoptCheck: %v", err)
+	}
+	return res
+}
+
+// gapPaths lists every differing path of the gaps, so a failure shows what is still read as a difference.
+func gapPaths(t *testing.T, gaps []stacks.ServiceChange) []string {
+	t.Helper()
+	var out []string
+	for _, g := range gaps {
+		var cur, next map[string]any
+		if err := json.Unmarshal(g.Current, &cur); err != nil {
+			cur = nil
+		}
+		if err := json.Unmarshal(g.Next, &next); err != nil {
+			next = nil
+		}
+		for _, p := range stacks.ChangedPaths(cur, next) {
+			out = append(out, g.Short+": "+p.Path)
+		}
+	}
+	return out
+}
+
+// TestAdoptCheckOfADockerStackDeployStackWithPlatformsAndANamedVolume (G-08-4): the stack docker stack deploy made
+// with its default --resolve-image=always holds the platforms of each image, and its named volume's mount carries no
+// label of Bayplan's. Neither is something a compose file can say, so the check of what runs and the check of the
+// file the stack was made from are both clean: the services differ in nothing but the ownership labels (D-12, D-20).
+func TestAdoptCheckOfADockerStackDeployStackWithPlatformsAndANamedVolume(t *testing.T) {
+	t.Parallel()
+	rig := legacy2Rig(t)
+
+	report := func(t *testing.T, res stackops.AdoptCheckResult) {
+		t.Helper()
+		if !res.Clean || len(res.Gaps) != 0 {
+			var settings int
+			for _, g := range res.Gaps {
+				settings += g.Settings
+			}
+			t.Fatalf("Clean = %v with %d gap(s) of %d settings:\n%s", res.Clean, len(res.Gaps), settings, strings.Join(gapPaths(t, res.Gaps), "\n"))
+		}
+		if want := []string{"api", "web"}; !slices.Equal(res.OwnershipOnly, want) {
+			t.Errorf("ownership-only services = %v, want %v", res.OwnershipOnly, want)
+		}
+	}
+
+	t.Run("rebuilt from what runs", func(t *testing.T) {
+		res := rig.legacy2Check(t, nil)
+		report(t, res)
+	})
+
+	t.Run("pasted file", func(t *testing.T) {
+		pasted := composeOnly(legacy2Compose, stacks.Var{Name: "TAG", Value: "1.27-alpine"})
+		res := rig.legacy2Check(t, &pasted)
+		report(t, res)
+		if !res.Matches {
+			t.Errorf("Matches = false, want the file the stack was made from to match what runs")
+		}
+	})
 }

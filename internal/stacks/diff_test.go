@@ -194,3 +194,56 @@ func TestMarkOwnershipOnly(t *testing.T) {
 		t.Errorf("an added service was marked ownership-only")
 	}
 }
+
+// TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount: the converter puts Bayplan's ID label on the mount of a
+// named volume, so that path is one of the ownership labels. A difference in the same mount beside it, or a label of
+// the mount that is not Bayplan's, keeps the service a gap (G-08-4, T-08-55).
+func TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount(t *testing.T) {
+	t.Parallel()
+	const mountLabel = "TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.bayplan.stack.id"
+	for name, tc := range map[string]struct {
+		paths []string
+		want  bool
+	}{
+		"only the mount label":                    {[]string{mountLabel}, true},
+		"the mount label and the service label":   {[]string{mountLabel, "Labels.bayplan.stack.id"}, true},
+		"the mount label and its source":          {[]string{mountLabel, "TaskTemplate.ContainerSpec.Mounts[/data].Source"}, false},
+		"another label of the mount":              {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.com.docker.stack.namespace"}, false},
+		"a label of the mount named like Bayplan": {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.bayplanx"}, false},
+		"a bayplan key elsewhere in a mount":      {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].Source.bayplan.x"}, false},
+	} {
+		var changes []stacks.PathChange
+		for _, p := range tc.paths {
+			changes = append(changes, stacks.PathChange{Path: p})
+		}
+		if got := stacks.OwnershipOnlyPaths(changes); got != tc.want {
+			t.Errorf("%s: OwnershipOnlyPaths = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount: a service that differs from the running one in Bayplan's
+// ID on the service, its containers and a volume mount is ownership-only; a real difference in that mount is not.
+func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
+	t.Parallel()
+	running := specOf(t, `{"Name":"shop_api","Labels":{"x":"1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"com.docker.stack.namespace":"shop"}}}]}}}`)
+	desired := specOf(t, `{"Name":"shop_api","Labels":{"x":"1","bayplan.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"bayplan.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"com.docker.stack.namespace":"shop","bayplan.stack.id":"id-1"}}}]}}}`)
+	moved := specOf(t, marshalSpec(t, desired))
+	moved.TaskTemplate.ContainerSpec.Mounts[0].Source = "shop_other"
+
+	for name, tc := range map[string]struct {
+		desired swarm.ServiceSpec
+		want    bool
+	}{
+		"Bayplan's ID on service, containers and mount": {desired, true},
+		"the same and another source":                   {moved, false},
+	} {
+		d := map[string]swarm.ServiceSpec{"shop_api": tc.desired}
+		l := map[string]swarm.ServiceSpec{"shop_api": running}
+		rows := stacks.DiffServices(d, l, stacks.Masker{})
+		stacks.MarkOwnershipOnly(rows, d, l)
+		if len(rows) != 1 || rows[0].OwnershipOnly != tc.want {
+			t.Errorf("%s: rows = %+v, want one row with OwnershipOnly %v", name, rows, tc.want)
+		}
+	}
+}

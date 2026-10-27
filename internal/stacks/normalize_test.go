@@ -52,6 +52,9 @@ func TestNormalizeSpecAppliesTheDefaultsAnEngineStoresSoBothSidesCompareEqual(t 
 		"the order of networks":   {`{"Name":"a","TaskTemplate":{"Networks":[{"Target":"b"},{"Target":"a"}]}}`, `{"Name":"a","TaskTemplate":{"Networks":[{"Target":"a"},{"Target":"b"}]}}`},
 		"the stop bookkeeping":    {`{"Name":"a","Labels":{"bayplan.stack.stopped-replicas":"3","x":"1"}}`, `{"Name":"a","Labels":{"x":"1"}}`},
 		"empty versus absent":     {`{"Name":"a","TaskTemplate":{"ContainerSpec":{"Env":[],"Labels":{}}}}`, `{"Name":"a","TaskTemplate":{"ContainerSpec":{}}}`},
+		"the order of platforms":  {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"arm64","OS":"linux"},{"Architecture":"amd64","OS":"linux"},{"OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"OS":"linux"},{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]}}}`},
+		"a repeated platform":     {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"amd64","OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"}]}}}`},
+		"no platforms":            {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{}}}`},
 	} {
 		w, s := stacks.NormalizeSpec(specOf(t, tc.written)), stacks.NormalizeSpec(specOf(t, tc.stored))
 		if got, want := marshalSpec(t, w), marshalSpec(t, s); got != want {
@@ -71,6 +74,8 @@ func TestNormalizeSpecKeepsARealDifference(t *testing.T) {
 		"a published port":     {`{"Name":"a","EndpointSpec":{"Ports":[{"TargetPort":80,"PublishedPort":8080}]}}`, `{"Name":"a","EndpointSpec":{"Ports":[{"TargetPort":80,"PublishedPort":8081}]}}`},
 		"the dnsrr endpoint":   {`{"Name":"a","EndpointSpec":{"Mode":"dnsrr"}}`, `{"Name":"a"}`},
 		"a start-first update": {`{"Name":"a","UpdateConfig":{"Order":"start-first"}}`, `{"Name":"a","UpdateConfig":{}}`},
+		"a platform":           {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"arm64","OS":"linux"}]}}}`},
+		"a lost platform":      {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"}]}}}`},
 	} {
 		a, b := stacks.NormalizeSpec(specOf(t, tc.a)), stacks.NormalizeSpec(specOf(t, tc.b))
 		if marshalSpec(t, a) == marshalSpec(t, b) {
