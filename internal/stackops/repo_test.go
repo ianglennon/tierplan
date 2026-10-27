@@ -558,7 +558,52 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		"web_app": {AsWritten: "nginx:1.27", Image: "nginx:1.27@sha256:aaa"},
 		"web_db":  {AsWritten: "registry.example:5000/db:2", Image: "registry.example:5000/db:2@sha256:bbb"},
 	}
-	if len(got) != len(want) || got["web_app"] != want["web_app"] || got["web_db"] != want["web_db"] {
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GoodPins = %+v, want %+v", got, want)
+	}
+}
+
+// GoodPins answers each pin with the platforms the newest good revision recorded for that service: a service without a
+// record has none, a record of a service that has no pin is dropped, and a revision that ended failed never counts
+// (G-08-4, P7 D-18).
+func TestGoodPinsCarryThePlatformsTheLastGoodRevisionRecorded(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa", "web_db": "db:2@sha256:bbb"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetPlatforms(ctx, good.ID, map[string][]swarm.Platform{"web_app": {amd, arm}, "web_gone": {amd}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err := f.repo.SetPins(ctx, failed.ID, map[string]string{"web_app": "nginx:1.28@sha256:ccc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetPlatforms(ctx, failed.ID, map[string][]swarm.Platform{"web_app": {amd}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.repo.GoodPins(ctx, st.ID)
+	if err != nil {
+		t.Fatalf("GoodPins: %v", err)
+	}
+	want := map[string]stacks.LivePin{
+		"web_app": {AsWritten: "nginx:1.27", Image: "nginx:1.27@sha256:aaa", Platforms: []swarm.Platform{amd, arm}},
+		"web_db":  {AsWritten: "db:2", Image: "db:2@sha256:bbb"},
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("GoodPins = %+v, want %+v", got, want)
 	}
 }

@@ -816,6 +816,115 @@ func TestDeployStoresThePlatformsItSentWithTheRevision(t *testing.T) {
 	}
 }
 
+// siteWeb is the service of pinCompose in a stack named site that docker stack deploy (or Bayplan) left running the image
+// ref, written as nginx:1.27, with no platforms: someone took them off outside Bayplan.
+func siteWeb(ref string) dockertest.FakeService {
+	owned := map[string]string{"com.docker.stack.namespace": "site", "bayplan.stack.id": "stack-site", stacks.LabelSwarmImage: "nginx:1.27"}
+	return dockertest.FakeService{ID: "svc-web", Name: "site_web", Mode: "replicated", Image: ref, Version: 3, Labels: owned, Desired: 1, Running: 1}
+}
+
+// TestADeployPutsBackThePlatformsRecordedForAKeptDigest (G-08-4, P7 D-18, T-08-111): the platforms belong to the image,
+// and what Bayplan recorded for a digest comes before what a service happens to run. A service that keeps its digest is
+// sent the platforms the stack's last good revision recorded for that digest, so an outside change is put back; with
+// nothing recorded it keeps the ones it runs; a record of another digest is never applied; and no registry is asked.
+func TestADeployPutsBackThePlatformsRecordedForAKeptDigest(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	kept := "nginx:1.27@" + digestOf("a")
+	updatedPlatforms := func(t *testing.T, rig *swarmRig) []swarm.Platform {
+		t.Helper()
+		ups := rig.fake.ServiceUpdates()
+		if len(ups) != 1 {
+			t.Fatalf("service updates = %d, want 1", len(ups))
+		}
+		if pl := ups[0].Spec.TaskTemplate.Placement; pl != nil {
+			return pl.Platforms
+		}
+		return nil
+	}
+
+	t.Run("a record for the same digest is put back", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		store := &memPins{good: map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{amd, arm}}}}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-2"
+		res, job := rig.deploy(t, in)
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		if got := updatedPlatforms(t, rig); !slices.Equal(got, []swarm.Platform{amd, arm}) {
+			t.Errorf("redeployed with platforms %v, want the recorded %v", got, []swarm.Platform{amd, arm})
+		}
+		if got := store.platformsOf("rev-2")["site_web"]; !slices.Equal(got, []swarm.Platform{amd, arm}) {
+			t.Errorf("the revision records platforms %v, want the ones it sent", got)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != 0 {
+			t.Errorf("distribution lookups = %d, want none for a kept digest (P7 D-18)", n)
+		}
+	})
+
+	t.Run("a record for another digest is ignored", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		other := "nginx:1.27@" + digestOf("b")
+		store := &memPins{good: map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: other, Platforms: []swarm.Platform{amd, arm}}}}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-2"
+		res, job := rig.deploy(t, in)
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		if got := updatedPlatforms(t, rig); len(got) != 0 {
+			t.Errorf("redeployed with platforms %v, want none: the record belongs to another digest (T-08-111)", got)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != 0 {
+			t.Errorf("distribution lookups = %d, want none", n)
+		}
+	})
+
+	t.Run("nothing recorded keeps what the service runs", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+		store := &memPins{}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-1"
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("first deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		// The stack's last good revision holds the pin but no platforms (a revision from before they were recorded).
+		store.good = map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept}}
+		in.RevisionID = "rev-2"
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("second deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		if got := updatedPlatforms(t, rig); !slices.Equal(got, []swarm.Platform{amd, arm}) {
+			t.Errorf("redeployed with platforms %v, want the ones the service runs %v", got, []swarm.Platform{amd, arm})
+		}
+	})
+
+	t.Run("a service the swarm lost is sent what its good revision recorded", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		store := &memPins{good: map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{arm}}}}
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = store, "rev-2"
+		res, job := rig.deploy(t, in)
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		creates := rig.fake.ServiceCreates()
+		if len(creates) != 1 || creates[0].Spec.TaskTemplate.Placement == nil || !slices.Equal(creates[0].Spec.TaskTemplate.Placement.Platforms, []swarm.Platform{arm}) {
+			t.Fatalf("service creates = %+v, want one sent with %v", creates, []swarm.Platform{arm})
+		}
+		if n := len(rig.fake.DistributionRefs()); n != 0 {
+			t.Errorf("distribution lookups = %d, want none", n)
+		}
+	})
+}
+
 func TestRedeployKeepsTheRunningDigestAfterTheTagMoved(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
