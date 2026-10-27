@@ -331,3 +331,56 @@ func TestDriftChangesNothingOnTheEngine(t *testing.T) {
 		t.Errorf("a drift check asked a registry %d times", n-lookups)
 	}
 }
+
+// TestDriftOfAServiceWithPlatformsTheRevisionDidNotConvertIsNone (G-08-4, D-21): the platforms of a service belong to
+// the image it runs, and no compose file says them, so a stack docker stack deploy made, adopted right now, has them on
+// every service and no drift.
+func TestDriftOfAServiceWithPlatformsTheRevisionDidNotConvertIsNone(t *testing.T) {
+	t.Parallel()
+	rig := newDriftRig(t)
+	for _, svc := range []string{"web", "api", "gone"} {
+		rig.editLive(t, svc, func(s *swarm.ServiceSpec) {
+			pl := swarm.Placement{}
+			if s.TaskTemplate.Placement != nil {
+				pl = *s.TaskTemplate.Placement
+			}
+			pl.Platforms = []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux", Architecture: "arm64"}}
+			s.TaskTemplate.Placement = &pl
+		})
+	}
+
+	if res := rig.drift(t); res.State != stackops.DriftNone || len(res.Services) != 0 {
+		t.Fatalf("drift = %s %v, want none: the platforms of the image a service runs are not a difference", res.State, driftNames(res))
+	}
+}
+
+// TestDriftOfAServiceOnAnotherDigestBorrowsNoPlatforms (T-08-97): the desired side takes the platforms of the running
+// service only while it runs the digest the revision pinned. A service on another digest is changed, with its image among
+// the differences, and the platforms of what runs are among them too: they were not lent to what should run.
+func TestDriftOfAServiceOnAnotherDigestBorrowsNoPlatforms(t *testing.T) {
+	t.Parallel()
+	rig := newDriftRig(t)
+	rig.editLive(t, "web", func(s *swarm.ServiceSpec) {
+		s.TaskTemplate.ContainerSpec.Image = "nginx:1.27-alpine@sha256:" + strings.Repeat("e", 64)
+		pl := swarm.Placement{}
+		if s.TaskTemplate.Placement != nil {
+			pl = *s.TaskTemplate.Placement
+		}
+		pl.Platforms = []swarm.Platform{{OS: "linux", Architecture: "amd64"}}
+		s.TaskTemplate.Placement = &pl
+	})
+
+	res := rig.drift(t)
+	if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"changed web"}) {
+		t.Fatalf("drift = %s %v, want drifted with web changed", res.State, driftNames(res))
+	}
+	paths := gapPaths(t, []stacks.ServiceChange{res.Services[0].Diff})
+	var image, platforms bool
+	for _, p := range paths {
+		image = image || strings.Contains(p, "ContainerSpec.Image")
+		platforms = platforms || strings.Contains(p, "Placement.Platforms")
+	}
+	if !image || !platforms {
+		t.Errorf("differences = %v, want the image and the platforms of what runs (none lent to the desired side)", paths)
+	}
+}

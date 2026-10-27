@@ -1587,3 +1587,80 @@ func TestFirstDeployRelabelsAStaleID(t *testing.T) {
 		t.Errorf("the deploy wrote to networks: %v", got)
 	}
 }
+
+// livePlatforms is an edit of a service as docker stack deploy left it: the platforms of its image, which no compose file
+// says (G-08-4).
+func livePlatforms(platforms ...swarm.Platform) func(string, *swarm.ServiceSpec) {
+	return func(_ string, spec *swarm.ServiceSpec) {
+		pl := swarm.Placement{}
+		if spec.TaskTemplate.Placement != nil {
+			pl = *spec.TaskTemplate.Placement
+		}
+		pl.Platforms = slices.Clone(platforms)
+		spec.TaskTemplate.Placement = &pl
+	}
+}
+
+// TestFirstReviewAndDeployOfAnAdoptedStackKeepItsPlatforms (G-08-4, D-14, D-16): the stack docker stack deploy made holds
+// the platforms of each image. Its first review lists every service as an ownership-label recreation and nothing in the
+// placement, and its first deploy sends the services with those platforms; a stack that runs none is sent none.
+func TestFirstReviewAndDeployOfAnAdoptedStackKeepItsPlatforms(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+
+	t.Run("platforms the CLI wrote", func(t *testing.T) {
+		t.Parallel()
+		a := adoptCorpus(t, livePlatforms(amd, arm))
+		rv := a.review(t)
+		if len(rv.Problems) != 0 {
+			t.Fatalf("problems = %+v, want none", rv.Problems)
+		}
+		if len(rv.Services) != 3 || rv.Summary.OwnershipOnly != 3 {
+			t.Fatalf("services = %d, ownership-only = %d, want every service listed as an ownership-label recreation (3)", len(rv.Services), rv.Summary.OwnershipOnly)
+		}
+		for _, p := range gapPaths(t, rv.Services) {
+			if strings.Contains(p, "Placement") {
+				t.Errorf("the review lists %s, want the platforms the services run kept", p)
+			}
+		}
+		for _, s := range rv.Services {
+			if !s.OwnershipOnly {
+				t.Errorf("service %s is not ownership-only", s.Short)
+			}
+		}
+
+		res, job := a.rig.deploy(t, a.deployInput(t, rv))
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		ups := a.rig.fake.ServiceUpdates()
+		if len(ups) != 3 {
+			t.Fatalf("service updates = %d, want 3", len(ups))
+		}
+		for _, u := range ups {
+			pl := u.Spec.TaskTemplate.Placement
+			if pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{amd, arm}) {
+				t.Errorf("service %s was updated with placement %+v, want the platforms linux/amd64 and linux/arm64", u.Spec.Name, pl)
+			}
+		}
+		if still := a.review(t); len(still.Services) != 0 {
+			t.Errorf("review after the first deploy = %+v, want no change", still.Services)
+		}
+	})
+
+	t.Run("no platforms", func(t *testing.T) {
+		t.Parallel()
+		a := adoptCorpus(t, nil)
+		rv := a.review(t)
+		res, job := a.rig.deploy(t, a.deployInput(t, rv))
+		if !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		for _, u := range a.rig.fake.ServiceUpdates() {
+			if pl := u.Spec.TaskTemplate.Placement; pl != nil && len(pl.Platforms) != 0 {
+				t.Errorf("service %s was updated with platforms %+v, want none for a stack that runs none", u.Spec.Name, pl.Platforms)
+			}
+		}
+	})
+}
