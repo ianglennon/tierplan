@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -183,6 +184,9 @@ type PinStore interface {
 	GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error)
 	// SetPins stores the pinned reference of each service on a revision.
 	SetPins(ctx context.Context, snapshotID string, pins map[string]string) error
+	// SetPlatforms stores on a revision the platforms each service was sent with, by swarm service name, so a roll
+	// back can send them again without a registry (P7 D-14, T-07-93). A service sent none is left out.
+	SetPlatforms(ctx context.Context, snapshotID string, platforms map[string][]swarm.Platform) error
 }
 
 var _ PinStore = Repo{}
@@ -409,6 +413,9 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if in.Pins != nil && in.RevisionID != "" {
 		if err := in.Pins.SetPins(ctx, in.RevisionID, pinned.Refs()); err != nil {
 			d.log().Error("could not store the pins of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		}
+		if err := in.Pins.SetPlatforms(ctx, in.RevisionID, pinned.Platforms()); err != nil {
+			d.log().Error("could not store the platforms of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		}
 	}
 	r.Finish(ItemLookup, jobs.ItemDone, "", "", map[string]string{"images": strconv.Itoa(len(pinned.Pins))})

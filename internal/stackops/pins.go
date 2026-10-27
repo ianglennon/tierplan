@@ -68,6 +68,18 @@ func (o PinOutcome) Refs() map[string]string {
 	return out
 }
 
+// Platforms are the platforms each service is sent with, by swarm service name, the form a revision stores beside its
+// pins. A service sent none is left out.
+func (o PinOutcome) Platforms() map[string][]swarm.Platform {
+	out := make(map[string][]swarm.Platform, len(o.Pins))
+	for name, p := range o.Pins {
+		if len(p.Platforms) > 0 {
+			out[name] = slices.Clone(p.Platforms)
+		}
+	}
+	return out
+}
+
 // pinItem is the part of a service the pin decision reads: the name it is keyed by (the swarm service
 // name on a swarm, the name in the compose file on a standalone host), its name in the compose file and
 // the image as written.

@@ -34,6 +34,10 @@ func (failingPins) GoodPins(context.Context, string) (map[string]stacks.LivePin,
 
 func (failingPins) SetPins(context.Context, string, map[string]string) error { return nil }
 
+func (failingPins) SetPlatforms(context.Context, string, map[string][]swarm.Platform) error {
+	return nil
+}
+
 // revertsInput is a review of draft as the stack drift's deploy, with its deployed revision, pins and audit log as the
 // route supplies them.
 func (r *driftRig) revertsInput(t *testing.T, draft string) stackops.ReviewInput {

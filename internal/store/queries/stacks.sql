@@ -62,7 +62,7 @@ INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -101,7 +101,7 @@ SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) + 1 AS seq FROM stack_snapshots
 WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -114,7 +114,7 @@ WHERE stack_id = ? AND kind = 'revision';
 -- name: GoodRevisionBefore :one
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -135,7 +135,7 @@ WHERE id = sqlc.arg(id) AND kind = 'revision';
 UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -144,6 +144,10 @@ UPDATE stack_snapshots SET base_seq = ? WHERE stack_id = ? AND kind = 'draft';
 
 -- name: SetSnapshotPins :execrows
 UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotPlatforms :execrows
+-- The platforms each service of a revision was sent with, JSON by swarm service name.
+UPDATE stack_snapshots SET platforms = ? WHERE id = ? AND kind = 'revision';
 
 -- name: InsertStackDeploy :exec
 INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at)

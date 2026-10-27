@@ -121,7 +121,7 @@ func (q *Queries) FinishStackDeploy(ctx context.Context, arg FinishStackDeployPa
 }
 
 const getDraft = `-- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'
 `
 
@@ -142,12 +142,13 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 		&i.CreatedAt,
 		&i.Origin,
 		&i.RestoredFrom,
+		&i.Platforms,
 	)
 	return i, err
 }
 
 const getRevision = `-- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
 `
 
@@ -173,6 +174,7 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 		&i.CreatedAt,
 		&i.Origin,
 		&i.RestoredFrom,
+		&i.Platforms,
 	)
 	return i, err
 }
@@ -252,7 +254,7 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 }
 
 const goodRevisionBefore = `-- name: GoodRevisionBefore :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1
 `
@@ -281,6 +283,7 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 		&i.CreatedAt,
 		&i.Origin,
 		&i.RestoredFrom,
+		&i.Platforms,
 	)
 	return i, err
 }
@@ -603,7 +606,7 @@ func (q *Queries) LatestDoneStackDeploysByEnv(ctx context.Context, envID string)
 }
 
 const latestGoodRevision = `-- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1
 `
@@ -625,6 +628,7 @@ func (q *Queries) LatestGoodRevision(ctx context.Context, stackID string) (Stack
 		&i.CreatedAt,
 		&i.Origin,
 		&i.RestoredFrom,
+		&i.Platforms,
 	)
 	return i, err
 }
@@ -1104,6 +1108,24 @@ type SetSnapshotPinsParams struct {
 
 func (q *Queries) SetSnapshotPins(ctx context.Context, arg SetSnapshotPinsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotPins, arg.Pins, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotPlatforms = `-- name: SetSnapshotPlatforms :execrows
+UPDATE stack_snapshots SET platforms = ? WHERE id = ? AND kind = 'revision'
+`
+
+type SetSnapshotPlatformsParams struct {
+	Platforms string
+	ID        string
+}
+
+// The platforms each service of a revision was sent with, JSON by swarm service name.
+func (q *Queries) SetSnapshotPlatforms(ctx context.Context, arg SetSnapshotPlatformsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotPlatforms, arg.Platforms, arg.ID)
 	if err != nil {
 		return 0, err
 	}

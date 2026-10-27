@@ -251,6 +251,7 @@ type StackSnapshot struct {
 	CreatedAt    int64
 	Origin       string
 	RestoredFrom int64
+	Platforms    string
 }
 
 type StackSnapshotFile struct {

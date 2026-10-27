@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -107,7 +108,10 @@ type Snapshot struct {
 	// revision a roll back copied, and 0 for any other.
 	Origin       string
 	RestoredFrom int64
-	Copy         stacks.WorkingCopy
+	// Platforms are the swarm platforms each service of a revision was deployed with, by swarm service name; a
+	// revision stored before they were recorded, a draft and a service sent none have none (G-08-4).
+	Platforms map[string][]swarm.Platform
+	Copy      stacks.WorkingCopy
 	// IsDraft is true for a draft that is stored. It is false for what Draft answers when the stack
 	// has none: the last good revision, or the starter, so the editor always has content.
 	IsDraft bool
@@ -151,7 +155,23 @@ func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		Origin: row.Origin, RestoredFrom: row.RestoredFrom, IsDraft: row.Kind == KindDraft,
+		Platforms: platformsOf(row),
 	}
+}
+
+// platformsOf reads the platforms of a snapshot row. A record that is not valid JSON reads as none and is logged:
+// a revision must stay readable (History, roll back, drift), and no platforms is the same as a revision from before
+// they were recorded (T-08-109).
+func platformsOf(row sqlc.StackSnapshot) map[string][]swarm.Platform {
+	if row.Platforms == "" || row.Platforms == "{}" {
+		return nil
+	}
+	var out map[string][]swarm.Platform
+	if err := json.Unmarshal([]byte(row.Platforms), &out); err != nil {
+		slog.Default().Warn("could not read the platforms of a stack revision", "snapshot", row.ID, "error", err)
+		return nil
+	}
+	return out
 }
 
 func deployOf(row sqlc.StackDeploy) DeployRow {
@@ -770,6 +790,26 @@ func (r Repo) SetPins(ctx context.Context, snapshotID string, pins map[string]st
 	}
 	if n != 1 {
 		return fmt.Errorf("set pins: no revision %s", snapshotID)
+	}
+	return nil
+}
+
+// SetPlatforms stores on a revision the platforms each service of it was sent with, by swarm service name, so a
+// roll back can send them again without a registry (P7 D-14, T-07-93). A deploy stores them beside its pins.
+func (r Repo) SetPlatforms(ctx context.Context, snapshotID string, platforms map[string][]swarm.Platform) error {
+	if platforms == nil {
+		platforms = map[string][]swarm.Platform{}
+	}
+	raw, err := json.Marshal(platforms)
+	if err != nil {
+		return fmt.Errorf("encode platforms: %w", err)
+	}
+	n, err := r.Store.Q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set platforms: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set platforms: no revision %s", snapshotID)
 	}
 	return nil
 }
