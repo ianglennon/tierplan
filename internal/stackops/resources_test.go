@@ -144,7 +144,7 @@ func TestResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing.T) {
 		Labels: map[string]string{"com.docker.compose.project": "other", "com.docker.compose.service": "web", "bayplan.stack.id": "stack-other"},
 	}, dockertest.FakeContainer{
 		ID: "foreign-1", Names: []string{"/demo-foreign-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "foreign"},
+		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "foreign", "bayplan.stack.id": "stack-stranger"},
 	})
 	h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "n-foreign", Name: "demo_hand", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "demo"}})
 	rig := hostRig(t, h)
@@ -155,7 +155,7 @@ func TestResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing.T) {
 		t.Fatalf("containers error = %q", res.Containers.Error)
 	}
 	if len(res.Containers.Items) != 2 || res.Containers.Items[0].Name != "demo-db-1" || res.Containers.Items[1].Name != "demo-web-1" {
-		t.Fatalf("containers = %+v, want the two services' containers by name, no one-off and none of another project", res.Containers.Items)
+		t.Fatalf("containers = %+v, want the two services' containers by name, no one-off, none of another project and none of another stack's (a container with no ID is TestResourcesOfAStandaloneStackListAContainerTheHostCLIAdded)", res.Containers.Items)
 	}
 	web := res.Containers.Items[1]
 	if web.ID != h.IDs["web"] || web.Service != "web" || web.State != "running" || web.Image != h.Pins["web"] {

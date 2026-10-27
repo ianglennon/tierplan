@@ -278,13 +278,6 @@ func cardOf[T any](d Deps, envID string, stack Stack, card string, items []T, er
 	return ResourceCard[T]{Items: items}
 }
 
-// ownsLabels reports whether an object's labels are the stack's own, by Ownership: its swarm namespace or
-// Compose project and, for a stack Bayplan holds, the ID of its record. A name alone is never ownership:
-// another stack, or a person, can make an object under the same namespace.
-func ownsLabels(stack Stack, labels map[string]string) bool {
-	return OwnershipOf(stack).OwnsWorkload(labels)
-}
-
 // Resources reads the cards of a stack's Resources tab now. Each card keeps its own error, so a secrets list the
 // engine refuses leaves the tasks and the networks in place. decl is what the deployed revision refers to
 // (Repo.Declared); the zero value is a stack with none. It is a read.
@@ -638,7 +631,9 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl De
 }
 
 // standaloneContainers lists the containers of the stack's Compose project, stopped ones too, one-off
-// containers (`compose run`) left out.
+// containers (`compose run`) left out. They are the stack's own and the ones the host CLI added to its project
+// without Bayplan's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6);
+// another stack's container and a project the stack owns none of stay out.
 func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stack) ([]ContainerResource, error) {
 	node, err := d.StandaloneNode(ctx, envID)
 	if err != nil {
@@ -652,9 +647,10 @@ func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stac
 	}); err != nil {
 		return nil, err
 	}
-	out := make([]ContainerResource, 0, len(rows))
-	for _, r := range rows {
-		if !ownsLabels(stack, r.Labels) || strings.EqualFold(r.Labels[stacks.LabelComposeOneoff], "true") {
+	mine, unlabelled, _ := SplitProject(OwnershipOf(stack), rows, func(r dockerx.ContainerRow) map[string]string { return r.Labels })
+	out := make([]ContainerResource, 0, len(mine)+len(unlabelled))
+	for _, r := range append(mine, unlabelled...) {
+		if strings.EqualFold(r.Labels[stacks.LabelComposeOneoff], "true") {
 			continue
 		}
 		seen := map[string]bool{}
