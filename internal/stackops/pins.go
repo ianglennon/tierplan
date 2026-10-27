@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
@@ -151,7 +152,7 @@ func (d Deps) resolvePins(ctx context.Context, envID string, items []pinItem, li
 					File: stacks.ComposeFile, Key: "services." + it.Short + ".image",
 				})
 			default:
-				pin.Ref = res.ref
+				pin.Ref, pin.Platforms = res.ref, slices.Clone(res.platforms)
 			}
 		}
 		out.Pins[it.Name] = pin
@@ -179,7 +180,9 @@ func pinInputFor(it pinItem, live, stored map[string]stacks.LivePin, update map[
 // need it (CodeRegistryUnreachable or CodeImageUnresolved), infra a deploy code for one that
 // blocks the deploy.
 type lookupResult struct {
-	ref            string
+	ref string
+	// platforms are those of the image the lookup pinned, empty for a local image (it has no registry to say them).
+	platforms      []swarm.Platform
 	local          bool
 	failure, infra string
 	host           string
@@ -218,7 +221,7 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string, read reader) 
 	})
 	switch {
 	case err == nil:
-		res.ref = resolved.Ref
+		res.ref, res.platforms = resolved.Ref, dockerx.SwarmPlatforms(resolved.Platforms)
 	case local != nil:
 		res.ref, res.local = local.ID, true
 	default:

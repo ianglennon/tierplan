@@ -107,6 +107,9 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	for _, s := range live.Services {
 		byName[s.Name] = s
 	}
+	// A deploy of the revision keeps the platforms of the image a service still runs (deploy_swarm.go), so the review
+	// shows the same spec; plan 08-36 adds the platforms the revision stored (G-08-4).
+	carryPlatforms(restored, byName)
 	rv.Pins = make(map[string]string, len(restored))
 	for name, p := range restored {
 		rv.Pins[name] = p.Ref
@@ -117,10 +120,8 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		if p, ok := restored[sp.Name]; ok && spec.TaskTemplate.ContainerSpec != nil {
-			cs := *spec.TaskTemplate.ContainerSpec
-			cs.Image = p.Ref
-			spec.TaskTemplate.ContainerSpec = &cs
+		if p, ok := restored[sp.Name]; ok {
+			spec = withPin(spec, p)
 		}
 		if existing, ok := byName[sp.Name]; ok {
 			// The counter that makes the swarm replace tasks is carried over, as a deploy does.
