@@ -105,7 +105,7 @@
       "add": "Add file",
       "search": "Search files",
       "noneToAdd": "No other .yml or .yaml files in this folder.",
-      "noMatch": "Nothing matches “{{query}}”.",
+      "noMatch": "Nothing matches that search.",
       "moveUp": "Move {{file}} up",
       "moveDown": "Move {{file}} down",
       "remove": "Remove {{file}}",

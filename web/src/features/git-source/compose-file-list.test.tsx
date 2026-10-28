@@ -73,6 +73,13 @@ const rows = () =>
     "listitem",
   );
 const names = () => rows().map((r) => r.querySelector("code")?.textContent);
+// openAdd opens the Add file popover once the folder has been read: the button is off until then.
+async function openAdd() {
+  const add = screen.getByRole("button", { name: "Add file" }) as HTMLButtonElement;
+  await waitFor(() => expect(add.disabled).toBe(false));
+  fireEvent.click(add);
+}
+
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
 
 describe("ComposeFileList", () => {
@@ -139,7 +146,7 @@ describe("ComposeFileList", () => {
   it("offers only the folder's yml and yaml files that are not chosen, and adds the pick last", async () => {
     mount(["compose.yaml"]);
     await screen.findByRole("list", { name: "Compose files, in merge order" });
-    fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+    await openAdd();
     const list = await screen.findByRole("listbox");
     expect(
       within(list)
@@ -157,7 +164,7 @@ describe("ComposeFileList", () => {
     entries = [file("compose.yaml"), file("notes.txt")];
     mount(["compose.yaml"]);
     await screen.findByRole("list", { name: "Compose files, in merge order" });
-    fireEvent.click(screen.getByRole("button", { name: "Add file" }));
+    await openAdd();
     expect(await screen.findByText("No other .yml or .yaml files in this folder.")).toBeTruthy();
   });
 
