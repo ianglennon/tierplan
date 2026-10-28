@@ -7,10 +7,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,5 +186,151 @@ func TestAMirrorIDThatIsNotAUUIDIsRefused(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(f.root); len(entries) != 0 {
 		t.Errorf("a refused ID created %v", entries)
+	}
+}
+
+// moveBranch points a branch of the fixture's bare repository at a commit. It returns an error
+// instead of failing the test, so a goroutine can call it.
+func moveBranch(dir, branch, sha string) error {
+	out, err := exec.Command("git", "-C", dir, "update-ref", "refs/heads/"+branch, sha).CombinedOutput() //nolint:gosec // G204: a test's own constants
+	if err != nil {
+		return fmt.Errorf("git update-ref: %w: %s", err, out)
+	}
+	return nil
+}
+
+// TestMirrorConcurrentFetchAndRead has eight goroutines fetch a branch that keeps moving and read a
+// folder at the commit each fetch answered. Every read must show exactly the content of that commit,
+// never a mix of two, and the race detector must stay quiet.
+func TestMirrorConcurrentFetchAndRead(t *testing.T) {
+	t.Parallel()
+	repo := gittest.NewRepo(t)
+	const commits = 6
+	shas := make([]string, commits)
+	index := map[string]int{}
+	for i := range commits {
+		shas[i] = repo.Commit(t, map[string]string{
+			"n":                           fmt.Sprint(i),
+			fmt.Sprintf("d/only-%d", i):   "x\n",
+			fmt.Sprintf("d/only-%d", i-1): gittest.Delete,
+		}, fmt.Sprintf("c%d", i))
+		index[shas[i]] = i
+	}
+	if err := moveBranch(repo.Dir(), "moving", shas[0]); err != nil {
+		t.Fatal(err)
+	}
+	srv := gittest.NewHTTPServer(t, repo, gittest.HTTPOptions{TLS: true})
+	g := gitx.NewGoGit(gitx.Options{Root: t.TempDir()})
+	m := gitx.MirrorID(uuid.NewString())
+	remote := gitx.Remote{URL: srv.URL, CAPEM: srv.CAPEM}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	moverDone := make(chan error, 1)
+	go func() {
+		for i := 0; ctx.Err() == nil; i++ {
+			if err := moveBranch(repo.Dir(), "moving", shas[i%commits]); err != nil {
+				moverDone <- err
+				return
+			}
+		}
+		moverDone <- nil
+	}()
+
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 12 {
+				c, err := g.FetchRef(context.Background(), m, remote, gitx.RefBranch, "moving")
+				if err != nil {
+					t.Errorf("worker %d: FetchRef: %v", w, err)
+					return
+				}
+				i, ok := index[c.SHA]
+				if !ok {
+					t.Errorf("worker %d: FetchRef answered %s, which is not a commit of the fixture", w, c.SHA)
+					return
+				}
+				d, err := g.ReadDir(context.Background(), m, c.SHA, "d", 0)
+				if err != nil || len(d.Entries) != 1 || d.Entries[0].Name != fmt.Sprintf("only-%d", i) {
+					t.Errorf("worker %d: ReadDir(d) at commit %d = %+v, %v, want the one file only-%d", w, i, d, err, i)
+					return
+				}
+				root, err := g.ReadDir(context.Background(), m, c.SHA, "", 0)
+				if err != nil || root.Total != 2 {
+					t.Errorf("worker %d: ReadDir(root) at commit %d = %+v, %v, want d and n", w, i, root, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	cancel()
+	if err := <-moverDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMirrorCreateOnce(t *testing.T) {
+	t.Parallel()
+	f := newBrowseFixture(t, gittest.HTTPOptions{})
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if c, err := f.g.FetchRef(context.Background(), f.m, f.remote(), gitx.RefBranch, "main"); err != nil || c.SHA != f.sha {
+				t.Errorf("worker %d: FetchRef = %+v, %v, want %s", w, c, err, f.sha)
+			}
+		}()
+	}
+	wg.Wait()
+
+	entries, err := os.ReadDir(f.root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("the mirrors directory holds %v (%v), want one mirror", entries, err)
+	}
+	cfg, err := os.ReadFile(filepath.Join(f.mirrorDir(), "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(cfg), `[remote "origin"]`); n != 1 {
+		t.Errorf("the mirror's configuration has %d origin remotes, want 1:\n%s", n, cfg)
+	}
+}
+
+func TestMirrorRecreated(t *testing.T) {
+	t.Parallel()
+	f := newBrowseFixture(t, gittest.HTTPOptions{})
+	ctx := context.Background()
+	if _, err := f.g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Removed between calls: a read finds nothing, and the next fetch makes it again.
+	if err := os.RemoveAll(f.mirrorDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.g.ReadDir(ctx, f.m, f.sha, "", 0); codeOf(err) != "commit_missing" {
+		t.Errorf("ReadDir of a removed mirror = %s, want commit_missing", codeOf(err))
+	}
+	if c, err := f.g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main"); err != nil || c.SHA != f.sha {
+		t.Fatalf("FetchRef after the removal = %+v, %v, want %s", c, err, f.sha)
+	}
+	if d, err := f.g.ReadDir(ctx, f.m, f.sha, "stacks", 0); err != nil || len(d.Entries) != 2 {
+		t.Errorf("ReadDir after the fetch = %+v, %v, want the two folders of stacks", d, err)
+	}
+
+	// A directory left empty by a fetch that died while making it is made good too.
+	if err := os.RemoveAll(f.mirrorDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(f.mirrorDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := f.g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main"); err != nil || c.SHA != f.sha {
+		t.Errorf("FetchRef into an empty directory = %+v, %v, want %s", c, err, f.sha)
 	}
 }
