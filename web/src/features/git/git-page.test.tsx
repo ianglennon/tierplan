@@ -33,6 +33,11 @@ let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 let repos: unknown[];
 let credentials: unknown[];
+let reposStatus: number;
+let reposCalls: number;
+let credentialsStatus: number;
+let tests: string[];
+let testResult: unknown;
 let deleted: string[];
 let deleteStatus: number;
 let deleteBody: unknown;
@@ -64,6 +69,11 @@ beforeEach(() => {
   me = makeMe({ instanceAdmin: true });
   repos = [];
   credentials = [];
+  reposStatus = 200;
+  reposCalls = 0;
+  credentialsStatus = 200;
+  tests = [];
+  testResult = {};
   deleted = [];
   deleteStatus = 204;
   deleteBody = undefined;
@@ -82,8 +92,24 @@ beforeEach(() => {
           ? new Response(null, { status: 204 })
           : Response.json(deleteBody, { status: deleteStatus });
       }
-      if (url.pathname === "/api/git/repos") return Response.json({ items: repos });
-      if (url.pathname === "/api/git/credentials") return Response.json({ items: credentials });
+      if (/^\/api\/(env\/[^/]+\/)?git\/repos\/[^/]+\/test$/.test(url.pathname)) {
+        tests.push(url.pathname);
+        return Response.json(testResult);
+      }
+      if (url.pathname === "/api/git/repos") {
+        reposCalls += 1;
+        return reposStatus === 200
+          ? Response.json({ items: repos })
+          : Response.json({ title: "boom", status: reposStatus }, { status: reposStatus });
+      }
+      if (url.pathname === "/api/git/credentials") {
+        return credentialsStatus === 200
+          ? Response.json({ items: credentials })
+          : Response.json(
+              { title: "boom", status: credentialsStatus },
+              { status: credentialsStatus },
+            );
+      }
       if (url.pathname === "/api/environments") {
         return Response.json({
           items: [
@@ -371,6 +397,333 @@ describe("GitPage delete", () => {
     expect(alert.textContent).toContain(
       "Used by 2 repositories. Pick another credential for them first.",
     );
+  });
+});
+
+describe("GitPage empty, loading and error states", () => {
+  it("offers Add repository to someone who can manage when there are none", async () => {
+    mount();
+    expect(await screen.findByText("No repositories")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Add a repository so stacks can be created from git. A public repository needs no credential.",
+      ),
+    ).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Add repository" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(changes).toEqual([{ repo: "new" }]);
+  });
+
+  it("tells everyone else to ask an administrator, with no Add button at all", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    mount();
+    expect(await screen.findByText("No repositories apply here")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Ask an administrator to add a repository connection before you create a stack from git.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add repository" })).toBeNull();
+  });
+
+  it("says no credential applies to a viewer, and offers Add credential to an administrator", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    mount("credentials");
+    expect(await screen.findByText("No git credentials apply here")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add credential" })).toBeNull();
+    cleanup();
+    me = makeMe({ instanceAdmin: true });
+    client.clear();
+    mount("credentials");
+    expect(await screen.findByText("No git credentials")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Add a token or a deploy key for a private repository. Public repositories work without one.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing matches the search, with Clear filters", async () => {
+    repos = [repo("alpha")];
+    search = { q: "zzz" };
+    mount();
+    expect(await screen.findByText("No repositories match “zzz”.")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Clear filters" }).at(-1) as HTMLElement);
+    expect(changes).toContainEqual({ q: undefined, scope: undefined });
+  });
+
+  it("says no credential matches the search", async () => {
+    credentials = [credential("alpha")];
+    search = { q: "zzz" };
+    mount("credentials");
+    expect(await screen.findByText("No credentials match “zzz”.")).toBeTruthy();
+  });
+
+  it("shows 8 skeleton rows at once, with the tabs and the toolbar", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    client.setQueryData(["me"], makeMe({ instanceAdmin: true }));
+    mount();
+    await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(9));
+    expect(screen.getByRole("table").getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("searchbox", { name: "Search repositories" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Repositories" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Credentials" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Git" })).toBeTruthy();
+  });
+
+  it("shows the error with Retry loading repositories, and Retry reads the list again", async () => {
+    reposStatus = 500;
+    mount();
+    expect(await screen.findByText("Couldn't load repositories.")).toBeTruthy();
+    expect(screen.getByText("Check the connection and try again.")).toBeTruthy();
+    const before = reposCalls;
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading repositories" }));
+    await waitFor(() => expect(reposCalls).toBeGreaterThan(before));
+  });
+
+  it("shows the credentials error with its own words", async () => {
+    credentialsStatus = 500;
+    mount("credentials");
+    expect(await screen.findByText("Couldn't load git credentials.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry loading credentials" })).toBeTruthy();
+  });
+
+  it("shows the Gone state for a repository that is not listed any more, and Back closes it", async () => {
+    repos = [repo("alpha")];
+    search = { repo: "missing" };
+    mount();
+    expect(await screen.findByText("That repository is gone")).toBeTruthy();
+    expect(screen.getByText("It was deleted while you were looking at it.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back to repositories" }));
+    expect(changes).toContainEqual({ repo: undefined });
+  });
+
+  it("shows the Gone state for a credential that is not listed any more", async () => {
+    credentials = [credential("alpha")];
+    search = { credential: "missing" };
+    mount("credentials");
+    expect(await screen.findByText("That credential is gone")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to credentials" })).toBeTruthy();
+  });
+
+  it("shows field skeletons in the sheet while the list it needs loads", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    client.setQueryData(["me"], makeMe({ instanceAdmin: true }));
+    search = { repo: "alpha" };
+    mount();
+    const sheet = await screen.findByRole("dialog");
+    expect(sheet.querySelector('[aria-busy="true"]')).toBeTruthy();
+  });
+});
+
+describe("GitPage partial, plural and overflow rows", () => {
+  it("shows 0 and 1 as plurals", async () => {
+    repos = [repo("none"), repo("one", { usedBy: 1 })];
+    credentials = [credential("c-none"), credential("c-one", { usedBy: 1 })];
+    mount();
+    await screen.findByText("none");
+    expect(within(bodyRows()[0] as HTMLElement).getByText("0 stacks")).toBeTruthy();
+    expect(within(bodyRows()[1] as HTMLElement).getByText("1 stack")).toBeTruthy();
+    cleanup();
+    mount("credentials");
+    await screen.findByText("c-none");
+    expect(within(bodyRows()[0] as HTMLElement).getByText("0 repositories")).toBeTruthy();
+    expect(within(bodyRows()[1] as HTMLElement).getByText("1 repository")).toBeTruthy();
+  });
+
+  it("truncates a long address inside a cell that scrolls sideways, and keeps the whole value in the page", async () => {
+    const long = `https://git.example.com/${"a".repeat(200)}.git`;
+    repos = [repo("alpha", { url: long })];
+    mount();
+    const cell = await screen.findByText(long);
+    expect(cell.className).toContain("truncate");
+    const wrapper = screen.getByRole("table").parentElement as HTMLElement;
+    expect(wrapper.className).toContain("overflow-x-auto");
+  });
+
+  it("lists up to 10 repositories behind a Used by count, then 'and n more'", async () => {
+    credentials = [credential("alpha", { usedBy: 12 })];
+    repos = Array.from({ length: 12 }, (_, i) =>
+      repo(`repo-${String(i).padStart(2, "0")}`, {
+        credential: { id: "alpha", name: "alpha", scope: instance },
+      }),
+    );
+    mount("credentials");
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Used by alpha" }));
+    expect(await screen.findByText("repo-09")).toBeTruthy();
+    expect(screen.queryByText("repo-10")).toBeNull();
+    expect(screen.getByText("and 2 more")).toBeTruthy();
+  });
+
+  it("shows a failed last test as text", async () => {
+    repos = [
+      repo("alpha", { lastTest: { at: "2026-10-01T10:00:00Z", ok: false, code: "unreachable" } }),
+      repo("beta", { lastTest: { at: "2026-10-01T10:00:00Z", ok: true, code: "" } }),
+    ];
+    mount();
+    await screen.findByText("alpha");
+    expect(within(bodyRows()[0] as HTMLElement).getByText("Failed")).toBeTruthy();
+    expect(within(bodyRows()[1] as HTMLElement).getByText("Passed")).toBeTruthy();
+  });
+});
+
+describe("GitPage visibility and permissions", () => {
+  it("shows a viewer the page without Add buttons, and View details only", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    repos = [repo("alpha", { readOnly: true })];
+    credentials = [credential("c1", { readOnly: true })];
+    mount();
+    await screen.findByText("alpha");
+    expect(screen.queryByRole("button", { name: "Add repository" })).toBeNull();
+    openMenu("alpha");
+    expect((await screen.findAllByRole("menuitem")).map((i) => i.textContent)).toEqual([
+      "View details",
+    ]);
+  });
+
+  it("lets an environment Admin manage their own rows and see instance rows read-only", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    repos = [repo("inst", { readOnly: true }), repo("lab-repo", { scope: lab })];
+    mount();
+    await screen.findByText("lab-repo");
+    expect(
+      screen.getByRole("button", { name: "Actions for inst" }).getAttribute("aria-describedby"),
+    ).toBeTruthy();
+    expect(screen.getByText("Needs an instance administrator")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Actions for lab-repo" }).getAttribute("aria-describedby"),
+    ).toBeNull();
+    openMenu("lab-repo");
+    expect((await screen.findAllByRole("menuitem")).map((i) => i.textContent)).toEqual([
+      "Edit",
+      "Test",
+      "Delete…",
+    ]);
+  });
+
+  it("opens an instance repository as read-only details for an environment Admin, with Edit unavailable and why", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    repos = [repo("inst", { readOnly: true })];
+    search = { repo: "inst" };
+    mount();
+    expect(await screen.findByText("You can see this repository but not change it.")).toBeTruthy();
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("Needs an instance administrator").length).toBeGreaterThan(0);
+  });
+
+  it("says which role an environment repository needs when the user is a viewer there", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    repos = [repo("lab-repo", { scope: lab, readOnly: true })];
+    search = { repo: "lab-repo" };
+    mount();
+    await screen.findByText("You can see this repository but not change it.");
+    expect(screen.getAllByText("Needs Admin on Lab").length).toBeGreaterThan(0);
+  });
+
+  it("lists only the environments the user can see in the Scope filter", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    repos = [repo("alpha", { readOnly: true })];
+    mount();
+    await screen.findByText("alpha");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Scope" }), { key: "Enter" });
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options).toEqual(["All scopes", "Instance", "Lab"]);
+  });
+
+  it("filters by scope and counts the match in the caption", async () => {
+    repos = [repo("alpha"), repo("beta", { scope: lab })];
+    search = { scope: "e1" };
+    mount();
+    await screen.findByText("beta");
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.getByText("1 of 2 repositories")).toBeTruthy();
+  });
+
+  it("drops ?repo=new for someone who cannot add a repository", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    repos = [repo("alpha", { readOnly: true })];
+    search = { repo: "new" };
+    mount();
+    await waitFor(() => expect(changes).toContainEqual({ repo: undefined }));
+    expect(screen.queryByText("Add a repository")).toBeNull();
+  });
+});
+
+describe("GitPage Test row action", () => {
+  it("tests a saved repository and toasts the branches and tags", async () => {
+    repos = [repo("alpha")];
+    testResult = {
+      branchCount: 12,
+      tagCount: 4,
+      branches: [],
+      tags: [],
+      defaultBranch: "main",
+      failure: null,
+      steps: {},
+    };
+    mount();
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Test" }));
+    await waitFor(() => expect(tests).toEqual(["/api/git/repos/alpha/test"]));
+    expect(await screen.findByText("Passed: found 12 branches and 4 tags.")).toBeTruthy();
+  });
+
+  it("toasts the mapped reason of a failed test, never the server's words", async () => {
+    repos = [repo("alpha")];
+    testResult = {
+      branchCount: 0,
+      tagCount: 0,
+      branches: null,
+      tags: null,
+      defaultBranch: "",
+      failure: { code: "auth_refused", host: "git.example.com" },
+      steps: {},
+    };
+    mount();
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Test" }));
+    expect(
+      await screen.findByText(
+        "Failed: git.example.com refused the credential. Check the token or the deploy key.",
+      ),
+    ).toBeTruthy();
+  });
+});
+
+describe("GitPage row highlight", () => {
+  it("highlights a row that appears while the page is open, then lets go of it", async () => {
+    repos = [repo("alpha")];
+    mount();
+    await screen.findByText("alpha");
+    expect(bodyRows()[0]?.getAttribute("data-changed")).toBeNull();
+    repos = [repo("alpha"), repo("beta")];
+    await client.invalidateQueries({ queryKey: ["git"] });
+    await screen.findByText("beta");
+    const row = bodyRows().find((r) => r.textContent?.includes("beta")) as HTMLElement;
+    expect(row.getAttribute("data-changed")).toBe("true");
+    expect(
+      bodyRows()
+        .find((r) => r.textContent?.includes("alpha"))
+        ?.getAttribute("data-changed"),
+    ).toBeNull();
+    await waitFor(() => expect(row.getAttribute("data-changed")).toBeNull(), { timeout: 4000 });
+  });
+
+  it("does not highlight the rows of the first load", async () => {
+    repos = [repo("alpha"), repo("beta")];
+    mount();
+    await screen.findByText("beta");
+    for (const row of bodyRows()) expect(row.getAttribute("data-changed")).toBeNull();
   });
 });
 
