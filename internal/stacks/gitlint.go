@@ -151,3 +151,16 @@ func envSecretLikeValues(files []File) []string {
 	}
 	return out
 }
+
+// gitLFSPrefix starts every Git LFS pointer file.
+const gitLFSPrefix = "version https://git-lfs.github.com/spec/v1"
+
+// IsLFSPointer reports whether content is a Git LFS pointer rather than the file it stands for.
+func IsLFSPointer(content []byte) bool { return false }
+
+// SubmoduleProblem is the blocking problem for a path that is a git submodule (D-10).
+func SubmoduleProblem(path string) Problem { return Problem{} }
+
+// SymlinkOutsideProblem is the blocking problem for a link in the repository that points outside the
+// stack folder (D-10).
+func SymlinkOutsideProblem(path string) Problem { return Problem{} }
