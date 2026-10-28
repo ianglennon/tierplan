@@ -4,12 +4,15 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // Checking a repository folder before a stack exists (plan 09-12, GIT-08, D-09). The router, policy, CSRF guard,
@@ -176,5 +179,181 @@ func TestGitStackCheckRoute(t *testing.T) {
 	// The repository layer rule holds here as for a create.
 	if rec := g.check(t, g.admin, g.checkBody(func(b map[string]any) { b["repoId"] = "nope" })); rec.Code != http.StatusNotFound || problemType(t, rec) != "repository_not_found" {
 		t.Errorf("an unknown repository: %d %s", rec.Code, rec.Body)
+	}
+}
+
+const gitOverlayCompose = `services:
+  web:
+    image: nginx:1.27
+    secrets: [db_pw]
+    env_file: web.env
+secrets:
+  db_pw:
+    file: ./db_pw.txt
+`
+
+const gitOverlaySecret = "overlay-secret-4c1e"
+
+// newOverlayFix serves a stack whose compose file names a secret file the repository does not hold.
+func newOverlayFix(t *testing.T) *gitStackFix {
+	t.Helper()
+	g := newGitStackFix(t)
+	g.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": gitOverlayCompose}, "overlay stack")
+	return g
+}
+
+func (a gitCheckAnswer) hasProblem(code, file string) bool {
+	for _, p := range a.Problems {
+		if p.Code == code && (file == "" || p.File == file || strings.Contains(p.Message, file)) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGitStackCreateOverlays(t *testing.T) {
+	t.Parallel()
+	g := newOverlayFix(t)
+	ctx := context.Background()
+
+	// Without the file the check names it, and the problem offers the overlay.
+	got, _ := g.checkOK(t, g.checkBody(nil))
+	if !slices.Equal(got.Missing, []string{"db_pw.txt"}) || !got.hasProblem("repo_file_missing", "db_pw.txt") {
+		t.Errorf("missing = %v, problems = %+v, want db_pw.txt missing", got.Missing, got.Problems)
+	}
+	// With its path sent the check lists nothing missing: the contents are not needed to know that.
+	got, _ = g.checkOK(t, g.checkBody(func(b map[string]any) { b["overlayPaths"] = []string{"db_pw.txt"} }))
+	if len(got.Missing) != 0 || got.hasProblem("repo_file_missing", "") || got.hasProblem("overlay_clash", "") {
+		t.Errorf("missing = %v, problems = %+v, want the overlay to fill db_pw.txt", got.Missing, got.Problems)
+	}
+
+	rec := g.create(t, g.admin, g.body(func(b map[string]any) {
+		b["overlays"] = []map[string]any{{"path": "db_pw.txt", "content": gitOverlaySecret}}
+	}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), gitOverlaySecret) {
+		t.Errorf("the answer of the create holds the overlay's content: %s", rec.Body)
+	}
+	var created gitStackAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range created.Problems {
+		if p.Code == "repo_file_missing" || p.Code == "overlay_clash" {
+			t.Errorf("problem %+v after the overlay was added", p)
+		}
+	}
+
+	// The overlay is a secret file with origin overlay, sealed at rest, and a read of the draft hides it.
+	draft, err := g.stackRepo().Draft(ctx, created.StackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range draft.Copy.Files {
+		if f.Path != "db_pw.txt" {
+			continue
+		}
+		found = true
+		if f.Origin != stacks.OriginOverlay || !f.Secret || string(f.Content) != gitOverlaySecret {
+			t.Errorf("db_pw.txt = %+v, want a secret file of origin overlay holding what was sent", f)
+		}
+	}
+	if !found {
+		t.Errorf("the draft has no db_pw.txt: %+v", draft.Copy.Files)
+	}
+	var plain, sealed, origin string
+	if err := g.f.st.Read.QueryRow(`SELECT content, content_sealed, origin FROM stack_snapshot_files WHERE path = 'db_pw.txt'`).Scan(&plain, &sealed, &origin); err != nil {
+		t.Fatal(err)
+	}
+	if plain != "" || sealed == "" || strings.Contains(sealed, gitOverlaySecret) || origin != "overlay" {
+		t.Errorf("stored plain %q sealed %q origin %q, want an empty plain column, a sealed envelope and origin overlay", plain, sealed, origin)
+	}
+	read := g.f.credCall(t, g.admin, http.MethodGet, "/api/env/"+g.env+"/stacks/"+created.StackID+"/draft", "")
+	if read.Code != http.StatusOK || strings.Contains(read.Body.String(), gitOverlaySecret) || !strings.Contains(read.Body.String(), "<hidden>") {
+		t.Errorf("draft read: %d %s, want the overlay hidden", read.Code, read.Body)
+	}
+
+	// The rules of a file hold for an overlay, and a refusal creates nothing.
+	var before int
+	if err := g.f.st.Read.QueryRow(`SELECT count(*) FROM stacks`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		overlay map[string]any
+		typ     string
+	}{
+		{"a path outside the folder", map[string]any{"path": "../x", "content": "x"}, "file_path_invalid"},
+		{"an absolute path", map[string]any{"path": "/etc/x", "content": "x"}, "file_path_invalid"},
+		{"over 1 MiB", map[string]any{"path": "big.txt", "content": strings.Repeat("a", 1<<20+1)}, "file_too_large"},
+	} {
+		rec := g.create(t, g.admin, g.body(func(b map[string]any) { b["name"] = "other"; b["overlays"] = []map[string]any{c.overlay} }))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != c.typ {
+			t.Errorf("%s: %d %.200s, want 422 %s", c.name, rec.Code, rec.Body, c.typ)
+		}
+	}
+	rec = g.check(t, g.admin, g.checkBody(func(b map[string]any) { b["overlayPaths"] = []string{"../x"} }))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "file_path_invalid" {
+		t.Errorf("check with a bad overlay path: %d %s", rec.Code, rec.Body)
+	}
+	var after int
+	if err := g.f.st.Read.QueryRow(`SELECT count(*) FROM stacks`).Scan(&after); err != nil || after != before {
+		t.Errorf("a refused create changed the stacks from %d to %d, %v", before, after, err)
+	}
+}
+
+func TestGitStackOverlayClash(t *testing.T) {
+	t.Parallel()
+	g := newOverlayFix(t)
+	ctx := context.Background()
+	// web.env is in the repository and referenced; README.md is in it and not referenced. Both are paths of the repository.
+	for _, path := range []string{"web.env", "README.md"} {
+		got, _ := g.checkOK(t, g.checkBody(func(b map[string]any) { b["overlayPaths"] = []string{"db_pw.txt", path} }))
+		var blocking bool
+		for _, p := range got.Problems {
+			blocking = blocking || (p.Code == "overlay_clash" && p.Severity == "error" && p.File == path)
+		}
+		if !blocking {
+			t.Errorf("%s: problems = %+v, want a blocking overlay_clash", path, got.Problems)
+		}
+		if len(got.Missing) != 0 {
+			t.Errorf("%s: missing = %v, want none", path, got.Missing)
+		}
+
+		name := "clash-" + strings.ReplaceAll(strings.ToLower(path), ".", "-")
+		rec := g.create(t, g.admin, g.body(func(b map[string]any) {
+			b["name"] = name
+			b["overlays"] = []map[string]any{{"path": "db_pw.txt", "content": "pw"}, {"path": path, "content": "shadow"}}
+		}))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s: create: %d %s, want 201: a draft saves with its problems", path, rec.Code, rec.Body)
+		}
+		var created gitStackAnswer
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		var clash bool
+		for _, p := range created.Problems {
+			clash = clash || (p.Code == "overlay_clash" && p.Severity == "error" && p.File == path)
+		}
+		if !clash {
+			t.Errorf("%s: problems = %+v, want the blocking overlay_clash", path, created.Problems)
+		}
+		// The repository's file stands; the overlay never shadows it.
+		draft, err := g.stackRepo().Draft(ctx, created.StackID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range draft.Copy.Files {
+			if f.Path == path && (f.Origin != stacks.OriginRepo || string(f.Content) == "shadow") {
+				t.Errorf("%s = %+v, want the repository's file", path, f)
+			}
+			if f.Path == "db_pw.txt" && f.Origin != stacks.OriginOverlay {
+				t.Errorf("db_pw.txt = %+v, want the overlay that fills a missing path", f)
+			}
+		}
 	}
 }
