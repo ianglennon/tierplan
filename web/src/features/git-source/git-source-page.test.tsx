@@ -131,4 +131,29 @@ describe("GitSourcePage", () => {
     expect(await screen.findByRole("heading", { name: "Create shop from git" })).toBeTruthy();
     await waitFor(() => expect(document.body.textContent).toContain("On Prod (Swarm)"));
   });
+
+  it("clears the folder and files when the repository changes, and says it would", async () => {
+    world.repos = [repoOf("r1", "homelab"), repoOf("r2", "tools")];
+    mount();
+    await chooseRepository("homelab");
+    fireEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+    expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
+    expect(
+      screen.getByText("Changing the repository clears the folder and files you chose."),
+    ).toBeTruthy();
+
+    await chooseRepository("tools");
+    await waitFor(() => expect(screen.queryByText(/Stack folder:/)).toBeNull());
+    expect(screen.getByText("Choose a ref first.")).toBeTruthy();
+  });
+
+  it("clears the folder and files when the kind of ref changes", async () => {
+    mount();
+    await chooseRepository("homelab");
+    fireEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+    expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
+    await waitFor(() => expect(screen.queryByText(/Stack folder:/)).toBeNull());
+    expect(screen.getByRole("combobox", { name: "Tag" }).textContent).toContain("Choose a tag");
+  });
 });
