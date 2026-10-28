@@ -163,4 +163,23 @@ describe("GitSourcePage", () => {
     await waitFor(() => expect(screen.queryByText(/Stack folder:/)).toBeNull());
     expect(screen.getByRole("combobox", { name: "Tag" }).textContent).toContain("Choose a tag");
   });
+
+  it("turns Create stack off again when the last compose file is removed", async () => {
+    mount();
+    await chooseRepository("homelab");
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Branch" }).textContent).toContain("main"),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "stacks" }));
+    fireEvent.click(await screen.findByRole("button", { name: /web/ }));
+    await useThisFolder();
+    await screen.findByText("Picked compose.yaml. Change it if the stack uses another.");
+    expect(
+      screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove compose.yaml" }));
+    expect(screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+  });
 });
