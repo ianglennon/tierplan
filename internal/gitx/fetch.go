@@ -8,7 +8,9 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -25,10 +27,41 @@ const fetchDeadline = 10 * time.Minute
 // ErrRefInvalid is what a ref ValidRefName refuses is answered with, before any git call.
 var ErrRefInvalid = errors.New("gitx: the ref is not a valid name")
 
-// ValidRefName says whether ref can be asked of a mirror as a ref of the kind.
+// maxRefName is the longest branch or tag name accepted, in bytes.
+const maxRefName = 255
+
+// ValidRefName says whether ref can be asked of a mirror as a ref of the kind: a branch or tag name
+// by the rules of git check-ref-format (no control characters, space, ~ ^ : ? * [ or backslash, no
+// "..", "@{", "//", no part starting with "." or ending in ".lock", no ending in "." or "/") and not
+// starting with "-" or "/", at most 255 bytes; a commit by 7 to 40 hex characters. A name that
+// passes cannot be read by git as an option or as part of a refspec.
 func ValidRefName(kind RefKind, ref string) error {
-	if ref == "" {
+	switch kind {
+	case RefCommit:
+		if len(ref) < 7 || len(ref) > 40 || strings.Trim(ref, "0123456789abcdefABCDEF") != "" {
+			return ErrRefInvalid
+		}
+		return nil
+	case RefBranch, RefTag:
+	default:
 		return ErrRefInvalid
+	}
+	if ref == "" || ref == "@" || len(ref) > maxRefName || !utf8.ValidString(ref) {
+		return ErrRefInvalid
+	}
+	if ref[0] == '-' || ref[0] == '/' || strings.HasSuffix(ref, "/") || strings.HasSuffix(ref, ".") ||
+		strings.Contains(ref, "..") || strings.Contains(ref, "@{") || strings.Contains(ref, "//") {
+		return ErrRefInvalid
+	}
+	for _, r := range ref {
+		if r < 0x20 || r == 0x7f || strings.ContainsRune(" ~^:?*[\\", r) {
+			return ErrRefInvalid
+		}
+	}
+	for _, part := range strings.Split(ref, "/") {
+		if strings.HasPrefix(part, ".") || strings.HasSuffix(part, ".lock") {
+			return ErrRefInvalid
+		}
 	}
 	return nil
 }
@@ -88,14 +121,87 @@ func (g *GoGit) fetchLocked(ctx context.Context, dir string, r Remote, u URL, ki
 		g.log.Error("could not open a git mirror", "error", err)
 		return Commit{}, &Error{Code: CodeUnreachable, Host: u.Host}
 	}
-	if kind != RefBranch {
-		return Commit{}, ErrRefInvalid
+	if kind == RefCommit {
+		return g.fetchCommit(ctx, repo, r, u, strings.ToLower(ref))
 	}
 	name := plumbing.NewBranchReferenceName(ref)
+	if kind == RefTag {
+		name = plumbing.NewTagReferenceName(ref)
+	}
 	if err := g.fetch(ctx, repo, r, u, []config.RefSpec{trackedSpec(name)}); err != nil {
 		return Commit{}, err
 	}
 	return resolveLocal(repo, name, u.Host)
+}
+
+// allRefs are the refspecs of the last resort for a commit: every head and tag.
+var allRefs = []config.RefSpec{"+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"}
+
+// fetchCommit finds a commit in the mirror, fetching it only when the mirror lacks it. A commit is
+// the same wherever it is found, so one the mirror holds is never fetched again. A full ID is
+// asked for directly into a ref of its own, which servers such as GitHub allow even when no
+// branch reaches it; when that fails, and for a prefix that cannot be asked for, every head and
+// tag is fetched and the commit looked for among them.
+func (g *GoGit) fetchCommit(ctx context.Context, repo *git.Repository, r Remote, u URL, ref string) (Commit, error) {
+	full := len(ref) == 40
+	find := func() (Commit, error) {
+		if full {
+			if c, ok := commitOf(repo, plumbing.NewHash(ref)); ok {
+				return c, nil
+			}
+			return Commit{}, &Error{Code: CodeCommitMissing, Host: u.Host}
+		}
+		return resolveCommitPrefix(repo, ref, u.Host)
+	}
+	c, err := find()
+	if err == nil || !isCode(err, CodeCommitMissing) {
+		return c, err
+	}
+	if full {
+		pinned := plumbing.ReferenceName("refs/bayplan/pinned/" + ref)
+		switch err := g.fetch(ctx, repo, r, u, []config.RefSpec{pinSpec(ref, pinned)}); {
+		case err == nil:
+			if c, err := find(); err == nil {
+				return c, nil
+			}
+		case isHard(err):
+			return Commit{}, err
+		}
+	}
+	if err := g.fetch(ctx, repo, r, u, allRefs); err != nil {
+		if isCode(err, CodeRefMissing) {
+			// An empty repository has no commits.
+			return Commit{}, &Error{Code: CodeCommitMissing, Host: u.Host}
+		}
+		return Commit{}, err
+	}
+	return find()
+}
+
+// pinSpec is the refspec that fetches the commit sha into the ref dst.
+func pinSpec(sha string, dst plumbing.ReferenceName) config.RefSpec {
+	return config.RefSpec("+" + sha + ":" + dst.String())
+}
+
+// isCode reports whether err is a *Error with the code.
+func isCode(err error, c Code) bool {
+	var ge *Error
+	return errors.As(err, &ge) && ge.Code == c
+}
+
+// isHard reports whether err says asking again another way would fail the same way: the server
+// cannot be reached or trusted, or refuses us. Anything else may only mean it will not hand out a
+// commit by its ID.
+func isHard(err error) bool {
+	var ge *Error
+	if !errors.As(err, &ge) {
+		return false
+	}
+	switch ge.Code {
+	case CodeAuthRefused, CodeNotFound, CodeCertUntrusted, CodeHostKeyChanged, CodeHostKeyUntrusted, CodeEgressBlocked, CodeTimeout, CodeTooLarge:
+		return true
+	}
+	return false
 }
 
 // trackedSpec is the refspec that fetches exactly one ref into the same name in the mirror,
@@ -150,17 +256,4 @@ func (g *GoGit) fetch(ctx context.Context, repo *git.Repository, r Remote, u URL
 		return &Error{Code: CodeRefMissing, Host: u.Host}
 	}
 	return Classify(err, u.Host)
-}
-
-// resolveLocal reads the commit a ref of the mirror points at.
-func resolveLocal(repo *git.Repository, name plumbing.ReferenceName, host string) (Commit, error) {
-	ref, err := repo.Reference(name, true)
-	if err != nil {
-		return Commit{}, &Error{Code: CodeRefMissing, Host: host}
-	}
-	c, err := repo.CommitObject(ref.Hash())
-	if err != nil {
-		return Commit{}, &Error{Code: CodeRefMissing, Host: host}
-	}
-	return Commit{SHA: c.Hash.String(), When: c.Committer.When.UTC()}, nil
 }
