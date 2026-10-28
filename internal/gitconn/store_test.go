@@ -8,7 +8,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,5 +189,298 @@ func TestRecordTestRemembersTheOutcomeAndWhatItShowedOfTheCredential(t *testing.
 	}
 	if err := s.RecordTest(ctx, "gone", true, ""); err != nil {
 		t.Errorf("RecordTest of a repository deleted meanwhile: %v, want nil", err)
+	}
+}
+
+// sealedOf is the stored sealed column of a credential.
+func sealedOf(t *testing.T, st *store.Store, id string) string {
+	t.Helper()
+	var sealed string
+	if err := st.Read.QueryRow(`SELECT secret_sealed FROM git_credentials WHERE id = ?`, id).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	return sealed
+}
+
+func TestGitConnNameRace(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a")
+	ctx := context.Background()
+
+	race := func(t *testing.T, create func() error) {
+		t.Helper()
+		const racers = 2
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		errs := make([]error, racers)
+		for i := range racers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs[i] = create()
+			}()
+		}
+		close(start)
+		wg.Wait()
+		var ok, taken int
+		for _, err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, gitconn.ErrNameTaken):
+				taken++
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+		if ok != 1 || taken != 1 {
+			t.Errorf("two simultaneous creates of one name: %d created, %d name_taken, want exactly 1 and 1", ok, taken)
+		}
+	}
+	for name, env := range map[string]*string{"instance": nil, "environment": ptr("env-a")} {
+		t.Run(name+" credential", func(t *testing.T) {
+			race(t, func() error {
+				_, err := s.CreateCredential(ctx, httpsCredential(env, "same"), "u", nil)
+				return err
+			})
+			var n int
+			if err := st.Read.QueryRow(`SELECT count(*) FROM git_credentials WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
+				t.Errorf("rows = %d, %v; want exactly one", n, err)
+			}
+		})
+		t.Run(name+" repository", func(t *testing.T) {
+			race(t, func() error {
+				_, err := s.CreateRepo(ctx, gitconn.RepoInput{EnvID: env, Name: "same", URL: "https://git.example.org/a.git"}, "u", nil)
+				return err
+			})
+			var n int
+			if err := st.Read.QueryRow(`SELECT count(*) FROM git_repos WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
+				t.Errorf("rows = %d, %v; want exactly one", n, err)
+			}
+		})
+	}
+	// The same name in another layer is another row.
+	if _, err := s.CreateCredential(ctx, httpsCredential(ptr("env-a"), "other-layer"), "u", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateCredential(ctx, httpsCredential(nil, "other-layer"), "u", nil); err != nil {
+		t.Errorf("the same name in the instance layer: %v, want it allowed", err)
+	}
+}
+
+func TestGitConnListsEveryLayerInstanceFirst(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a")
+	ctx := context.Background()
+	for _, in := range []gitconn.CredentialInput{httpsCredential(ptr("env-a"), "a-first"), httpsCredential(nil, "z-last"), httpsCredential(nil, "m-mid")} {
+		if _, err := s.CreateCredential(ctx, in, "u", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	creds, err := s.ListCredentials(ctx)
+	if err != nil {
+		t.Fatalf("ListCredentials: %v", err)
+	}
+	var names []string
+	for _, c := range creds {
+		names = append(names, c.Name)
+	}
+	if !slices.Equal(names, []string{"m-mid", "z-last", "a-first"}) {
+		t.Errorf("credentials = %v, want the instance's by name, then the environment's", names)
+	}
+	for _, in := range []gitconn.RepoInput{
+		{EnvID: ptr("env-a"), Name: "a-first", URL: "https://git.example.org/a.git"}, {Name: "z-last", URL: "https://git.example.org/z.git"},
+	} {
+		if _, err := s.CreateRepo(ctx, in, "u", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	repos, err := s.ListRepos(ctx)
+	if err != nil || len(repos) != 2 || repos[0].Name != "z-last" || repos[1].Name != "a-first" {
+		t.Errorf("ListRepos = %+v, %v; want the instance repository first", repos, err)
+	}
+	for _, c := range creds {
+		if c.Last4 == "" {
+			t.Errorf("credential %s lost its last4", c.Name)
+		}
+	}
+}
+
+func TestGitConnUpdateRules(t *testing.T) {
+	s, st, v := newStore(t)
+	addEnvironment(t, st, "env-a")
+	ctx := context.Background()
+	c, err := s.CreateCredential(ctx, httpsCredential(nil, "gitea"), "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := sealedOf(t, st, c.ID)
+
+	// An empty secret keeps the saved one byte for byte; the changed fields are named, sorted.
+	got, changed, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "gitea-2", Type: gitconn.TypeHTTPS, Username: "robot"}, nil)
+	if err != nil {
+		t.Fatalf("UpdateCredential: %v", err)
+	}
+	if got.Name != "gitea-2" || got.Username != "robot" || got.Last4 != "wxyz" || !slices.Equal(changed, []string{"name", "username"}) {
+		t.Errorf("credential = %+v changed = %v", got, changed)
+	}
+	if sealedOf(t, st, c.ID) != before {
+		t.Error("the sealed secret changed although no new secret was given")
+	}
+
+	// A form that changes nothing writes nothing and runs no hook.
+	ran := false
+	if _, changed, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "gitea-2", Type: gitconn.TypeHTTPS, Username: "robot"},
+		func(context.Context, *sql.Tx, gitconn.Credential, []string) error { ran = true; return nil }); err != nil || len(changed) != 0 || ran {
+		t.Errorf("an unchanged form: changed %v, hook ran %v, err %v", changed, ran, err)
+	}
+
+	// A new secret is sealed again under the same context and replaces last4; the word secret is
+	// all the change records.
+	got, changed, err = s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "gitea-2", Type: gitconn.TypeHTTPS, Username: "robot", Secret: "glpat-another-token-ABCD"}, nil)
+	if err != nil || got.Last4 != "ABCD" || !slices.Equal(changed, []string{"secret"}) {
+		t.Fatalf("new secret: %+v %v %v", got, changed, err)
+	}
+	if plain, err := v.Open(vault.ContextGitCred+c.ID, sealedOf(t, st, c.ID)); err != nil || string(plain) != "glpat-another-token-ABCD" {
+		t.Errorf("sealed value = %q, %v", plain, err)
+	}
+
+	// Switching the type needs a secret typed now.
+	_, _, err = s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "gitea-2", Type: gitconn.TypeSSH, Username: "git"}, nil)
+	var ve *gitconn.ValidationError
+	if !errors.As(err, &ve) || ve.Fields[0].Field != "secret" || ve.Fields[0].Code != gitconn.CodeSecretRequired {
+		t.Errorf("a type switch without a secret: %v, want secret: secret_required", err)
+	}
+
+	// A credential of another layer is not found, and nothing changes.
+	if _, _, err := s.UpdateCredential(ctx, "env-a", c.ID, gitconn.CredentialUpdate{Name: "taken-over", Type: gitconn.TypeHTTPS, Username: "x"}, nil); !errors.Is(err, gitconn.ErrNotFound) {
+		t.Errorf("update through another layer: %v, want ErrNotFound", err)
+	}
+	if cur, _ := s.GetCredential(ctx, c.ID); cur.Name != "gitea-2" {
+		t.Errorf("the name is %q after a refused update through another layer", cur.Name)
+	}
+
+	// A hook that fails rolls the change back.
+	boom := errors.New("audit failed")
+	if _, _, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "rolled-back", Type: gitconn.TypeHTTPS, Username: "robot"},
+		func(context.Context, *sql.Tx, gitconn.Credential, []string) error { return boom }); !errors.Is(err, boom) {
+		t.Errorf("hook failure: %v", err)
+	}
+	if cur, _ := s.GetCredential(ctx, c.ID); cur.Name != "gitea-2" {
+		t.Errorf("the name is %q after a failed hook, want it rolled back", cur.Name)
+	}
+
+	// A clash within the layer is name_taken.
+	if _, err := s.CreateCredential(ctx, httpsCredential(nil, "other"), "u", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "other", Type: gitconn.TypeHTTPS, Username: "robot"}, nil); !errors.Is(err, gitconn.ErrNameTaken) {
+		t.Errorf("rename onto another: %v, want ErrNameTaken", err)
+	}
+
+	// A repository whose address moves to another host keeps its credential only when the request
+	// names it again.
+	r, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: "app", URL: "https://git.example.org/acme/app.git", CredentialID: &c.ID}, "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordTest(ctx, r.ID, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	moved := gitconn.RepoUpdate{Name: "app", URL: "https://elsewhere.example.net/acme/app.git"}
+	if _, _, err := s.UpdateRepo(ctx, "", r.ID, moved, nil); !errors.As(err, &ve) || ve.Fields[0].Field != "credentialId" || ve.Fields[0].Code != gitconn.CodeCredentialReselect {
+		t.Errorf("a new host without naming the credential: %v, want credentialId: credential_reselect", err)
+	}
+	if cur, _ := s.GetRepo(ctx, r.ID); cur.URL != r.URL || cur.CredentialID != c.ID {
+		t.Errorf("repository after a refused move = %+v, want it unchanged", cur)
+	}
+	// The same host (another path, a new name) keeps the credential without naming it.
+	same, changed, err := s.UpdateRepo(ctx, "", r.ID, gitconn.RepoUpdate{Name: "app-renamed", URL: "https://git.example.org/acme/other.git"}, nil)
+	if err != nil || same.CredentialID != c.ID || !slices.Equal(changed, []string{"name", "url"}) {
+		t.Errorf("same host: %+v %v %v, want the credential kept and name, url changed", same, changed, err)
+	}
+	if same.LastTest != nil {
+		t.Errorf("the last test survived an address change: %+v", same.LastTest)
+	}
+	// Naming the credential again lets the host move; naming none drops it.
+	moved.CredentialID = &c.ID
+	again, changed, err := s.UpdateRepo(ctx, "", r.ID, moved, nil)
+	if err != nil || again.CredentialID != c.ID || again.Host() != "elsewhere.example.net" || !slices.Equal(changed, []string{"url"}) {
+		t.Errorf("a new host naming the credential: %+v %v %v", again, changed, err)
+	}
+	none := ""
+	moved.CredentialID = &none
+	if dropped, changed, err := s.UpdateRepo(ctx, "", r.ID, moved, nil); err != nil || dropped.CredentialID != "" || !slices.Equal(changed, []string{"credential"}) {
+		t.Errorf("dropping the credential: %+v %v %v", dropped, changed, err)
+	}
+	// A repository of another layer is not found; a credential outside the layer is refused.
+	if _, _, err := s.UpdateRepo(ctx, "env-a", r.ID, moved, nil); !errors.Is(err, gitconn.ErrNotFound) {
+		t.Errorf("update through another layer: %v, want ErrNotFound", err)
+	}
+	inEnv, err := s.CreateCredential(ctx, httpsCredential(ptr("env-a"), "env-cred"), "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved.CredentialID = &inEnv.ID
+	if _, _, err := s.UpdateRepo(ctx, "", r.ID, moved, nil); !errors.As(err, &ve) || ve.Fields[0].Code != gitconn.CodeCredentialScope {
+		t.Errorf("an instance repository picking an environment credential: %v, want credential_scope", err)
+	}
+}
+
+func TestGitCredentialInUse(t *testing.T) {
+	s, st, _ := newStore(t)
+	addEnvironment(t, st, "env-a")
+	ctx := context.Background()
+	c, err := s.CreateCredential(ctx, httpsCredential(nil, "shared"), "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repos []gitconn.Repo
+	for _, name := range []string{"one", "two"} {
+		r, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: name, URL: "https://git.example.org/" + name + ".git", CredentialID: &c.ID}, "u", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repos = append(repos, r)
+	}
+	if got, _ := s.GetCredential(ctx, c.ID); got.UsedBy != 2 {
+		t.Errorf("UsedBy = %d, want 2", got.UsedBy)
+	}
+	_, err = s.DeleteCredential(ctx, "", c.ID, nil)
+	var inUse *gitconn.InUseError
+	if !errors.As(err, &inUse) || inUse.Count != 2 || !errors.Is(err, gitconn.ErrCredentialInUse) {
+		t.Fatalf("delete of a credential used by 2 repositories: %v, want an InUseError with count 2", err)
+	}
+	if _, err := s.GetCredential(ctx, c.ID); err != nil {
+		t.Errorf("the credential is gone after a refused delete: %v", err)
+	}
+	// Another layer cannot delete it, even when unused.
+	if _, err := s.DeleteCredential(ctx, "env-a", c.ID, nil); !errors.Is(err, gitconn.ErrNotFound) {
+		t.Errorf("delete through another layer: %v, want ErrNotFound", err)
+	}
+	// Free it, then it can go; a repeated delete is not found.
+	for _, r := range repos {
+		if _, err := s.DeleteRepo(ctx, "", r.ID, nil); err != nil {
+			t.Fatalf("DeleteRepo: %v", err)
+		}
+	}
+	boom := errors.New("audit failed")
+	if _, err := s.DeleteCredential(ctx, "", c.ID, func(context.Context, *sql.Tx, gitconn.Credential) error { return boom }); !errors.Is(err, boom) {
+		t.Errorf("hook failure: %v", err)
+	}
+	if _, err := s.GetCredential(ctx, c.ID); err != nil {
+		t.Errorf("the credential is gone after a failed hook: %v", err)
+	}
+	gone, err := s.DeleteCredential(ctx, "", c.ID, nil)
+	if err != nil || gone.Name != "shared" {
+		t.Fatalf("DeleteCredential: %+v %v", gone, err)
+	}
+	if _, err := s.DeleteCredential(ctx, "", c.ID, nil); !errors.Is(err, gitconn.ErrNotFound) {
+		t.Errorf("a repeated delete: %v, want ErrNotFound", err)
+	}
+	var sealed int
+	if err := st.Read.QueryRow(`SELECT count(*) FROM git_credentials`).Scan(&sealed); err != nil || sealed != 0 {
+		t.Errorf("credentials left = %d, %v", sealed, err)
 	}
 }

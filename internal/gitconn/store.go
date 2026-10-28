@@ -466,3 +466,57 @@ func boolInt(b bool) int64 {
 	}
 	return 0
 }
+
+// errNotImplemented is what the operations of the next step answer until they exist.
+var errNotImplemented = errors.New("gitconn: not implemented")
+
+// CredentialUpdate is what a person types to change a credential: everything but the layer, which
+// a credential never leaves. Secret empty means keep the saved one.
+type CredentialUpdate struct {
+	Name, Type, Username, Secret string
+}
+
+// UpdateHook runs inside the transaction that stores a change to a credential, with the credential
+// as it now is and the names of the fields that changed.
+type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []string) error
+
+// RepoUpdate is what a person types to change a repository. CredentialID nil keeps the saved
+// credential (unless the address moved to another host), an empty string picks none.
+type RepoUpdate struct {
+	Name, URL    string
+	CredentialID *string
+	CAPEM        string
+}
+
+// RepoUpdateHook is UpdateHook for a repository.
+type RepoUpdateHook func(ctx context.Context, tx *sql.Tx, r Repo, changed []string) error
+
+// UpdateCredential changes a credential of one layer (envID empty for the instance's).
+func (s *Store) UpdateCredential(ctx context.Context, envID, id string, in CredentialUpdate, hook UpdateHook) (Credential, []string, error) {
+	return Credential{}, nil, errNotImplemented
+}
+
+// DeleteCredential removes a credential of one layer that no repository uses.
+func (s *Store) DeleteCredential(ctx context.Context, envID, id string, hook TxHook) (Credential, error) {
+	return Credential{}, errNotImplemented
+}
+
+// ListCredentials returns every credential of every layer.
+func (s *Store) ListCredentials(ctx context.Context) ([]Credential, error) {
+	return nil, errNotImplemented
+}
+
+// UpdateRepo changes a repository of one layer (envID empty for the instance's).
+func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate, hook RepoUpdateHook) (Repo, []string, error) {
+	return Repo{}, nil, errNotImplemented
+}
+
+// DeleteRepo removes a repository of one layer.
+func (s *Store) DeleteRepo(ctx context.Context, envID, id string, hook RepoHook) (Repo, error) {
+	return Repo{}, errNotImplemented
+}
+
+// ListRepos returns every repository of every layer.
+func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
+	return nil, errNotImplemented
+}
