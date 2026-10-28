@@ -311,3 +311,13 @@ func SymlinkOutsideProblem(path string) Problem {
 		Message: path + " is a link to somewhere outside the stack folder.",
 	}
 }
+
+// SymlinkUnsupportedProblem is the blocking problem for a link that stays inside the stack folder but is not a link
+// to a regular file: a link to another link or to a folder, or to nothing. Only one hop to a file is followed
+// (D-10). It has the code of SymlinkOutsideProblem.
+func SymlinkUnsupportedProblem(path string) Problem {
+	return Problem{
+		Severity: SeverityError, Code: CodeSymlinkOutside, File: path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: path + " is a link that doesn't lead to a file in the stack folder. Bayplan follows a link to a file only.",
+	}
+}

@@ -214,8 +214,9 @@ func cleanLocation(folder string, compose []string) (string, []string, error) {
 	return folder, out, nil
 }
 
-// linkProblems are the blocking problems of a stack file that is a submodule or a link out of the folder, or sits
-// behind one. A link is never followed (D-10), so such a file is not stored.
+// linkProblems are the blocking problems of a stack file that is a submodule or a link that was not followed, or
+// sits behind one. A link is followed only when it names a regular file inside the folder (D-10), and then it is
+// stored under its own path and raises nothing. What a link outside the folder names is never read.
 func linkProblems(needed []string, f gitx.Folder) stacks.Problems {
 	var out stacks.Problems
 	seen := map[string]bool{}
@@ -228,27 +229,18 @@ func linkProblems(needed []string, f gitx.Folder) stacks.Problems {
 	for _, p := range needed {
 		for at := p; at != "." && at != "/" && at != ""; at = path.Dir(at) {
 			link, ok := f.Links[at]
-			if !ok {
+			if !ok || link.Followed {
 				continue
 			}
 			switch {
 			case link.Kind == gitx.EntrySubmodule:
 				add(stacks.SubmoduleProblem(at))
-			case escapes(at, link.Target):
+			case link.Outside:
 				add(stacks.SymlinkOutsideProblem(at))
+			default:
+				add(stacks.SymlinkUnsupportedProblem(at))
 			}
 		}
 	}
 	return out
-}
-
-// escapes reports whether the symlink at linkPath points outside the folder, judged on the text of its target: an
-// absolute target, one with a "..", or one that cannot be read. A target that stays inside is not followed either,
-// but it is not what D-10 names.
-func escapes(linkPath, target string) bool {
-	if target == "" || path.IsAbs(target) {
-		return true
-	}
-	resolved := path.Join(path.Dir(linkPath), target)
-	return resolved == ".." || strings.HasPrefix(resolved, "../")
 }

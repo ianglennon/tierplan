@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path"
 	"slices"
 	"strings"
 
@@ -98,6 +99,12 @@ type Link struct {
 	// Target is where a symlink points, as the repository records it; empty for a submodule and for a target over
 	// maxLinkTarget bytes.
 	Target string
+	// Outside is a symlink whose target, cleaned relative to the link's directory, leaves the folder (or is
+	// absolute, empty or unreadable). Its target is never looked up.
+	Outside bool
+	// Followed is a wanted symlink that names a regular file inside the folder: its entry in Folder.Files holds
+	// that file's content under the link's own path (D-10, one hop). Other links are never followed.
+	Followed bool
 }
 
 // maxLinkTarget is the longest symlink target ReadFolder reports.
@@ -119,7 +126,10 @@ func (g *GoGit) FolderTree(ctx context.Context, m MirrorID, sha, dir string) (st
 // ReadFolder reads the files of the folder dir of the commit sha in the mirror m, from the object database by the
 // commit's ID. want is asked about every file with its path relative to the folder; the files it accepts are read
 // into Folder.Files and the others are only counted and named. A symlink or a submodule is reported in
-// Folder.Links and, when want accepts it, in Files without being followed. Nothing is written to disk.
+// Folder.Links. A wanted symlink is followed at most one hop, and only when path.Clean of its target stays inside
+// the folder and names a regular file: it is then in Files as a file with that file's content (Link.Followed).
+// Any other wanted link, and a wanted submodule, is in Files with its Kind and without content, and a link
+// that leaves the folder has its target left unread. Nothing is written to disk.
 func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, want func(rel string) bool, limits ReadLimits) (Folder, error) {
 	limits = limits.withDefaults()
 	out := Folder{Links: map[string]Link{}}
@@ -131,13 +141,49 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 		defer walker.Close()
 		var seen int
 		var total int64
+		// The wanted symlinks that stay inside the folder, resolved once the whole folder has been walked.
+		type pending struct {
+			index    int
+			resolved string
+		}
+		var links []pending
+		readLinks := func() error {
+			for _, l := range links {
+				e, err := t.FindEntry(l.resolved)
+				if err != nil || kindOf(e.Mode) != EntryFile {
+					// Not there, or a link, a folder or a submodule: one hop only.
+					continue
+				}
+				blob, err := repo.BlobObject(e.Hash)
+				if err != nil {
+					return &Error{Code: CodeFileMissing}
+				}
+				name := out.Files[l.index].Path
+				if blob.Size > limits.MaxFileBytes {
+					return &LimitError{Path: name}
+				}
+				if total += blob.Size; total > limits.MaxTotalBytes {
+					return &LimitError{}
+				}
+				content, err := readBlob(blob, limits.MaxFileBytes)
+				if err != nil {
+					return err
+				}
+				out.Files[l.index].Kind = EntryFile
+				out.Files[l.index].Content = content
+				link := out.Links[name]
+				link.Followed = true
+				out.Links[name] = link
+			}
+			return nil
+		}
 		for {
 			if err := ctx.Err(); err != nil {
 				return Classify(err, "")
 			}
 			name, entry, err := walker.Next()
 			if errors.Is(err, io.EOF) {
-				return nil
+				return readLinks()
 			}
 			if err != nil {
 				return &Error{Code: CodeUnreachable}
@@ -151,10 +197,17 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 			}
 			if kind != EntryFile {
 				link := Link{Kind: kind}
+				var resolved string
 				if kind == EntrySymlink {
 					link.Target = readLinkTarget(repo, entry.Hash)
+					resolved, link.Outside = resolveLink(name, link.Target)
 				}
 				out.Links[name] = link
+				if kind == EntrySymlink && !link.Outside && want(name) {
+					out.Files = append(out.Files, FolderFile{Path: name, Kind: kind})
+					links = append(links, pending{index: len(out.Files) - 1, resolved: resolved})
+					continue
+				}
 			}
 			if !want(name) {
 				out.OthersTotal++
@@ -192,6 +245,20 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 	}
 	sortFolder(&out)
 	return out, nil
+}
+
+// resolveLink is where the symlink at linkPath (relative to the folder) points, relative to the folder, judged on
+// the text of its target: outside is true for an absolute, empty or unreadable target and for one that leaves the
+// folder after path.Clean.
+func resolveLink(linkPath, target string) (resolved string, outside bool) {
+	if target == "" || strings.ContainsRune(target, 0) || path.IsAbs(target) {
+		return "", true
+	}
+	resolved = path.Clean(path.Dir(linkPath) + "/" + target)
+	if resolved == ".." || strings.HasPrefix(resolved, "../") {
+		return "", true
+	}
+	return resolved, false
 }
 
 // readLinkTarget reads the target of the symlink whose blob is h, or "" when it cannot be read or is too long.

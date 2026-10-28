@@ -23,18 +23,25 @@ type folderFixture struct {
 
 func newFolderFixture(t *testing.T) *folderFixture {
 	t.Helper()
-	repo := gittest.NewRepo(t)
-	repo.Symlink(t, "stacks/web/out", "../../outside")
-	repo.Symlink(t, "stacks/web/same", "web.env")
-	repo.Submodule(t, "stacks/web/lib")
-	sha := repo.Commit(t, map[string]string{
+	return newFolderFixtureWith(t, func(repo *gittest.Repo) {
+		repo.Symlink(t, "stacks/web/out", "../../outside")
+		repo.Symlink(t, "stacks/web/same", "web.env")
+		repo.Submodule(t, "stacks/web/lib")
+	}, map[string]string{
 		"stacks/web/compose.yaml":  "services: {}\n",
 		"stacks/web/.env":          "TAG=1\n",
 		"stacks/web/web.env":       "A=b\n",
 		"stacks/web/README.md":     "# web\n",
 		"stacks/web/docs/a.md":     "a\n",
 		"stacks/other/compose.yml": "services: {}\n",
-	}, "first")
+	})
+}
+
+func newFolderFixtureWith(t *testing.T, prepare func(*gittest.Repo), files map[string]string) *folderFixture {
+	t.Helper()
+	repo := gittest.NewRepo(t)
+	prepare(repo)
+	sha := repo.Commit(t, files, "first")
 	f := &browseFixture{repo: repo, sha: sha, root: t.TempDir()}
 	f.srv = gittest.NewHTTPServer(t, repo, gittest.HTTPOptions{TLS: true})
 	f.g = gitx.NewGoGit(gitx.Options{Root: f.root})
@@ -98,16 +105,67 @@ func TestReadFolderNamesAreCapped(t *testing.T) {
 	}
 }
 
-func TestReadFolderAWantedLinkIsReportedNotFollowed(t *testing.T) {
+func TestReadFolderAWantedLinkInsideTheFolderIsReadAsItsFile(t *testing.T) {
 	t.Parallel()
 	f := newFolderFixture(t)
-	got, err := f.g.ReadFolder(context.Background(), f.m, f.sha, "stacks/web", func(rel string) bool { return rel == "same" || rel == "lib" }, gitx.ReadLimits{})
+	got, err := f.g.ReadFolder(context.Background(), f.m, f.sha, "stacks/web", func(rel string) bool { return rel == "same" || rel == "lib" || rel == "out" }, gitx.ReadLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Files) != 2 || got.Files[0].Path != "lib" || got.Files[0].Kind != gitx.EntrySubmodule || got.Files[1].Path != "same" ||
-		got.Files[1].Kind != gitx.EntrySymlink || string(got.Files[1].Content) != "web.env" {
-		t.Errorf("files = %+v, want the submodule and the symlink with its target as content", got.Files)
+	if len(got.Files) != 3 || got.Files[0].Path != "lib" || got.Files[0].Kind != gitx.EntrySubmodule ||
+		got.Files[1].Path != "out" || got.Files[1].Kind != gitx.EntrySymlink ||
+		got.Files[2].Path != "same" || got.Files[2].Kind != gitx.EntryFile || string(got.Files[2].Content) != "A=b\n" {
+		t.Errorf("files = %+v, want the submodule, the unfollowed outside link and same read as web.env", got.Files)
+	}
+	if !got.Links["same"].Followed || got.Links["out"].Followed || !got.Links["out"].Outside {
+		t.Errorf("links = %+v, want same followed and out outside and unfollowed", got.Links)
+	}
+}
+
+// The outside marker lives in the same repository, so a read that followed a link out of the folder would find it.
+func TestReadFolderSymlinks(t *testing.T) {
+	t.Parallel()
+	const marker = "OUTSIDE-MARKER"
+	f := newFolderFixtureWith(t, func(r *gittest.Repo) {
+		r.Symlink(t, "stacks/web/inside", "real.env")
+		r.Symlink(t, "stacks/web/sub/deep", "../real.env")
+		r.Symlink(t, "stacks/web/dotted", "./sub/../real.env")
+		r.Symlink(t, "stacks/web/outside", "../secret/key.env")
+		r.Symlink(t, "stacks/web/sneaky", "sub/../../secret/key.env")
+		r.Symlink(t, "stacks/web/absolute", "/etc/passwd")
+		r.Symlink(t, "stacks/web/chain", "inside")
+		r.Symlink(t, "stacks/web/todir", "sub")
+		r.Symlink(t, "stacks/web/nowhere", "missing.env")
+		r.Symlink(t, "stacks/web/toself", ".")
+	}, map[string]string{
+		"stacks/web/compose.yaml":  "services: {}\n",
+		"stacks/web/real.env":      "A=b\n",
+		"stacks/web/sub/x.env":     "X=1\n",
+		"stacks/secret/key.env":    marker + "\n",
+		"stacks/other/compose.yml": "services: {}\n",
+	})
+	got, err := f.g.ReadFolder(context.Background(), f.m, f.sha, "stacks/web", func(string) bool { return true }, gitx.ReadLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]gitx.FolderFile{}
+	for _, file := range got.Files {
+		byPath[file.Path] = file
+		if strings.Contains(string(file.Content), marker) {
+			t.Errorf("%s holds the content of a file outside the folder", file.Path)
+		}
+	}
+	for _, name := range []string{"inside", "sub/deep", "dotted"} {
+		file := byPath[name]
+		if file.Kind != gitx.EntryFile || string(file.Content) != "A=b\n" || !got.Links[name].Followed {
+			t.Errorf("%s = %+v (followed %v), want real.env's content as a file", name, file, got.Links[name].Followed)
+		}
+	}
+	for name, outside := range map[string]bool{"outside": true, "sneaky": true, "absolute": true, "chain": false, "todir": false, "nowhere": false, "toself": false} {
+		l := got.Links[name]
+		if l.Followed || l.Outside != outside || byPath[name].Kind != gitx.EntrySymlink {
+			t.Errorf("%s = link %+v file %+v, want an unfollowed link with outside=%v", name, l, byPath[name], outside)
+		}
 	}
 }
 

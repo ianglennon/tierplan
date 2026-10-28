@@ -212,6 +212,47 @@ func TestGitStackCreateRefusals(t *testing.T) {
 	}
 }
 
+func TestGitStackCreateSymlinkOutside(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	ctx := context.Background()
+	const marker = "OUTSIDE-MARKER-77c1"
+	// web.env becomes a link to a file of the same repository outside the stack folder.
+	g.repo.Commit(t, map[string]string{"stacks/web/web.env": gittest.Delete, "stacks/secret/key.env": marker + "\n"}, "remove")
+	g.repo.Symlink(t, "stacks/web/web.env", "../secret/key.env")
+	g.repo.Commit(t, nil, "link")
+
+	rec := g.create(t, g.admin, g.body(nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), marker) {
+		t.Errorf("the answer holds the content of a file outside the folder: %s", rec.Body)
+	}
+	var got gitStackAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	var blocked bool
+	for _, p := range got.Problems {
+		if p.Code == stacks.CodeSymlinkOutside && p.File == "web.env" && p.Severity == "error" {
+			blocked = true
+		}
+	}
+	if !blocked {
+		t.Errorf("problems = %+v, want a blocking git_symlink_outside on web.env", got.Problems)
+	}
+	draft, err := g.stackRepo().Draft(ctx, got.StackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range draft.Copy.Files {
+		if file.Path == "web.env" || strings.Contains(string(file.Content), marker) {
+			t.Errorf("the draft holds %s, which is or holds what a link led to outside the folder", file.Path)
+		}
+	}
+}
+
 func TestGitStackCreateNeedsTheCreatePermission(t *testing.T) {
 	t.Parallel()
 	g := newGitStackFix(t)

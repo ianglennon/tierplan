@@ -349,3 +349,80 @@ func TestImportRefusesAFileOverTheLimit(t *testing.T) {
 		t.Errorf("err = %v, want a LimitError naming web.env", err)
 	}
 }
+
+// The outside file is in the same repository, so a read that followed the link out of the folder would find it.
+const outsideMarker = "OUTSIDE-MARKER-9f3a"
+
+func TestImportSymlinkOutside(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, map[string]string{
+		"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:1.27\n    env_file: [out.env, up.env, abs.env, ok.env]\n",
+		"stacks/web/ok.env":       "A=b\n",
+		"stacks/secret/key.env":   outsideMarker + "\n",
+	}, func(r *gittest.Repo) {
+		r.Symlink(t, "stacks/web/out.env", "../secret/key.env")
+		r.Symlink(t, "stacks/web/up.env", "./sub/../../secret/key.env")
+		r.Symlink(t, "stacks/web/abs.env", "/etc/passwd")
+	})
+	imp, err := f.svc.Import(context.Background(), f.request())
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if got := paths(imp.Files); !slices.Equal(got, []string{"compose.yaml", "ok.env"}) {
+		t.Errorf("files = %v, want the links left out", got)
+	}
+	for _, file := range imp.Files {
+		if strings.Contains(string(file.Content), outsideMarker) {
+			t.Errorf("%s holds the content of a file outside the folder", file.Path)
+		}
+	}
+	got := map[string]stacks.Severity{}
+	for _, p := range imp.Problems {
+		if p.Code == stacks.CodeSymlinkOutside {
+			got[p.File] = p.Severity
+		}
+		if strings.Contains(p.Message, outsideMarker) {
+			t.Errorf("problem %+v holds outside content", p)
+		}
+	}
+	for _, name := range []string{"out.env", "up.env", "abs.env"} {
+		if got[name] != stacks.SeverityError {
+			t.Errorf("problems = %+v, want a blocking git_symlink_outside on %s", imp.Problems, name)
+		}
+	}
+}
+
+func TestImportFollowsOneHopToAFileInsideTheFolder(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, map[string]string{
+		"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:1.27\n    env_file: [link.env, chain.env, dir.env]\n",
+		"stacks/web/real.env":     "A=b\n",
+		"stacks/web/sub/x.env":    "X=1\n",
+	}, func(r *gittest.Repo) {
+		r.Symlink(t, "stacks/web/link.env", "real.env")
+		r.Symlink(t, "stacks/web/chain.env", "link.env")
+		r.Symlink(t, "stacks/web/dir.env", "sub")
+	})
+	imp, err := f.svc.Import(context.Background(), f.request())
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	var link *stacks.File
+	for i := range imp.Files {
+		if imp.Files[i].Path == "link.env" {
+			link = &imp.Files[i]
+		}
+	}
+	if link == nil || string(link.Content) != "A=b\n" || link.Origin != stacks.OriginRepo {
+		t.Fatalf("files = %v, want link.env stored with real.env's content", paths(imp.Files))
+	}
+	blocking := map[string]bool{}
+	for _, p := range imp.Problems {
+		if p.Code == stacks.CodeSymlinkOutside {
+			blocking[p.File] = true
+		}
+	}
+	if blocking["link.env"] || !blocking["chain.env"] || !blocking["dir.env"] {
+		t.Errorf("problems = %+v, want the link to a file followed and the link to a link and to a folder refused", imp.Problems)
+	}
+}
