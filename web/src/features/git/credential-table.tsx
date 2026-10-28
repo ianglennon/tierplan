@@ -38,6 +38,7 @@ import { CredentialBadge } from "@/features/registries/credential-badge";
 import {
   type Column,
   ResourceTable,
+  type RowState,
   type TableSort,
   TruncatedText,
 } from "@/features/resources/resource-table";
@@ -129,6 +130,8 @@ interface CredentialTableProps {
   onDelete: (credential: GitCredential) => void;
   // The names of the repositories that use each credential, by credential ID.
   usedByNames: ReadonlyMap<string, readonly string[]>;
+  // A row that appeared while the page was open, muted for 1.5 s.
+  rowStates?: ReadonlyMap<string, RowState>;
 }
 
 // CredentialTable is the Credentials tab (GIT-01, D-01, D-02): every credential the caller may see.
@@ -150,6 +153,7 @@ export function CredentialTable({
   onOpen,
   onDelete,
   usedByNames,
+  rowStates,
 }: CredentialTableProps) {
   const t = useT();
   const reasonOf = useManageReason();
@@ -374,6 +378,7 @@ export function CredentialTable({
       caption={caption}
       sort={sort}
       actions={addButton}
+      rowStates={rowStates}
       banner={banner}
       toolbar={
         <GitToolbar

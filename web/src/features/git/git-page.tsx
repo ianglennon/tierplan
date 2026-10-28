@@ -20,7 +20,11 @@ import { CredentialSheet, PlaceholderCredentialSheet } from "@/features/git/cred
 import { CredentialTable } from "@/features/git/credential-table";
 import { DeleteCredentialDialog } from "@/features/git/delete-credential-dialog";
 import { DeleteRepositoryDialog } from "@/features/git/delete-repository-dialog";
-import type { GitFiltersPatch, ScopeOption } from "@/features/git/git-table-parts";
+import {
+  type GitFiltersPatch,
+  type ScopeOption,
+  useAppearedRows,
+} from "@/features/git/git-table-parts";
 import { useFailureReason } from "@/features/git/repo-test-result";
 import { PlaceholderRepositorySheet, RepositorySheet } from "@/features/git/repository-sheet";
 import { RepositoryTable } from "@/features/git/repository-table";
@@ -161,6 +165,12 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
 
   // ?repo=new is the add form, which only an instance administrator or an environment Admin has.
   // For anyone else the parameter is dropped, so a shared link shows the list.
+  // Rows that show up while the page is open are muted for a moment.
+  const repoIds = useMemo(() => repos.data?.map((r) => r.id), [repos.data]);
+  const credentialIds = useMemo(() => credentials.data?.map((c) => c.id), [credentials.data]);
+  const repoRows = useAppearedRows(repoIds);
+  const credentialRows = useAppearedRows(credentialIds);
+
   const sheetKey = tab === "repositories" ? "repo" : "credential";
   const open = search[sheetKey];
   const addDenied = allowed && !canAdd && open === "new";
@@ -289,6 +299,7 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
           onTest={test}
           onDelete={setDeletingRepo}
           testingId={testingId}
+          rowStates={repoRows}
         />
       ) : (
         <CredentialTable
@@ -306,6 +317,7 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
           onOpen={(id) => onSearchChange({ credential: id })}
           onDelete={setDeletingCredential}
           usedByNames={usedByNames}
+          rowStates={credentialRows}
         />
       )}
       <DeleteRepositoryDialog

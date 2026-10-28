@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { type ReactNode, useId } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchBox } from "@/features/containers/container-list";
+import type { RowState } from "@/features/resources/resource-table";
 import { useMe } from "@/hooks/use-me";
 import { needsOf } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -235,4 +236,48 @@ export function UsedByCount({ count, label, names, rowName }: UsedByCountProps) 
       </PopoverContent>
     </Popover>
   );
+}
+
+// How long a row that appeared stays muted (UI-SPEC "Row change highlight").
+export const APPEARED_MS = 1500;
+
+// useAppearedRows says which rows appeared while the page was open: the ones in the first list
+// that arrives are not new, and a row that shows up in a later answer is muted for 1.5 s, as the
+// other lists do, so a person sees what the refresh brought. ids is undefined while loading.
+export function useAppearedRows(ids: readonly string[] | undefined): ReadonlyMap<string, RowState> {
+  const seen = useRef<Set<string> | null>(null);
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const [fresh, setFresh] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    if (!ids) return;
+    if (seen.current === null) {
+      seen.current = new Set(ids);
+      return;
+    }
+    const known = seen.current;
+    const appeared = ids.filter((id) => !known.has(id));
+    if (appeared.length === 0) return;
+    for (const id of appeared) known.add(id);
+    setFresh((prev) => new Set([...prev, ...appeared]));
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      setFresh((prev) => {
+        const next = new Set(prev);
+        for (const id of appeared) next.delete(id);
+        return next;
+      });
+    }, APPEARED_MS);
+    timers.current.add(timer);
+  }, [ids]);
+
+  useEffect(() => {
+    const live = timers.current;
+    return () => {
+      for (const timer of live) clearTimeout(timer);
+      live.clear();
+    };
+  }, []);
+
+  return useMemo(() => new Map([...fresh].map((id) => [id, { changed: true }])), [fresh]);
 }
