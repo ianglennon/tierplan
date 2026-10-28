@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
@@ -75,7 +76,7 @@ func RegisterGitStacks(r *httpx.Router, s StacksDeps, g GitDeps) {
 		Summary: "Create a stack from a folder of a git repository",
 		Description: "Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, " +
 			"and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. " +
-			"The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. " +
+			"The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. " +
 			"The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). " +
 			"422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; " +
 			"422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. Needs stacks.create (Admin).",
@@ -133,6 +134,8 @@ func createGitStack(ctx context.Context, d StacksDeps, g GitDeps, in *GitStackCr
 	if err != nil {
 		return nil, stackInternal(d, "create from git", env.ID, err)
 	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackCreatedFromGit, st.ID, audit.ResultSuccess, "",
+		map[string]string{"stack": body.Name, "repository": imp.Source.RepoName, "ref": imp.Source.Ref, "folder": imp.Source.Folder})
 	notImported := imp.NotImported
 	if notImported == nil {
 		notImported = []string{}
