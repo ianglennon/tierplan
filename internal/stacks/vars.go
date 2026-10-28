@@ -67,28 +67,41 @@ type ResolvedVar struct {
 
 var varNameFormRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Refs lists the variables the working copy's compose file refers to, sorted by name: every
+// Refs lists the variables the working copy's compose files refer to, sorted by name: every
 // $NAME, ${NAME}, ${NAME:-default}, ${NAME-default}, ${NAME:?message} and the like in a value of
-// the file, wherever the YAML puts it. Only compose.yaml is read: it is the one file compose-go
-// interpolates, so a ${...} in a configuration file the stack carries is that file's own text and
-// not a variable of the stack. A reference in a YAML comment is not one either. A file that is
-// not valid YAML has no references.
+// a compose file, wherever the YAML puts it. Only the compose files are read: they are the files
+// compose-go interpolates, so a ${...} in a configuration file the stack carries is that file's own
+// text and not a variable of the stack. A reference in a YAML comment is not one either. A file that
+// is not valid YAML has no references. Each place carries the compose file it is in and its line;
+// places are in file order, then line, then column.
 func Refs(c WorkingCopy) []VarRef {
-	content := c.Compose()
-	if len(content) == 0 || len(content) > MaxFileBytes {
-		return nil
-	}
-	ix, err := parseIndex(content)
-	if err != nil {
-		return nil
-	}
 	acc := map[string]*VarRef{}
-	for _, root := range ix.docs {
-		collectRefs(root, acc, nil, 0)
+	order := map[string]int{}
+	for i, cf := range c.ComposeContents() {
+		order[cf.Path] = i
+		if len(cf.Content) == 0 || len(cf.Content) > MaxFileBytes {
+			continue
+		}
+		ix, err := parseIndex(cf.Content)
+		if err != nil {
+			continue
+		}
+		for _, root := range ix.docs {
+			collectRefs(root, cf.Path, acc, nil, 0)
+		}
 	}
 	out := make([]VarRef, 0, len(acc))
 	for _, r := range acc {
-		sort.SliceStable(r.Places, func(i, j int) bool { return r.Places[i].Line < r.Places[j].Line })
+		sort.SliceStable(r.Places, func(i, j int) bool {
+			a, b := r.Places[i], r.Places[j]
+			if order[a.File] != order[b.File] {
+				return order[a.File] < order[b.File]
+			}
+			if a.Line != b.Line {
+				return a.Line < b.Line
+			}
+			return a.Col < b.Col
+		})
 		out = append(out, *r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -102,31 +115,31 @@ const maxRefDepth = 64
 // the document to n, so the environment of a service can be told from any other map. Keys are not
 // interpolated by compose-go, so they are not read; an alias is not followed, because the anchor
 // it names is walked where it is written.
-func collectRefs(n *yaml.Node, acc map[string]*VarRef, path []string, depth int) {
+func collectRefs(n *yaml.Node, file string, acc map[string]*VarRef, path []string, depth int) {
 	if n == nil || depth > maxRefDepth {
 		return
 	}
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, c := range n.Content {
-			collectRefs(c, acc, path, depth+1)
+			collectRefs(c, file, acc, path, depth+1)
 		}
 	case yaml.SequenceNode:
 		for _, c := range n.Content {
-			collectRefs(c, acc, append(path, "[]"), depth+1)
+			collectRefs(c, file, acc, append(path, "[]"), depth+1)
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key, val := n.Content[i].Value, n.Content[i+1]
 			if len(path) == 2 && path[0] == "services" && key == "environment" {
-				collectEnvironment(val, acc, depth+1)
+				collectEnvironment(val, file, acc, depth+1)
 				continue
 			}
-			collectRefs(val, acc, append(path, key), depth+1)
+			collectRefs(val, file, acc, append(path, key), depth+1)
 		}
 	case yaml.ScalarNode:
 		if strings.Contains(n.Value, "$") {
-			addScalarRefs(n, acc)
+			addScalarRefs(n, file, acc)
 		}
 	}
 }
@@ -135,30 +148,30 @@ func collectRefs(n *yaml.Node, acc map[string]*VarRef, path []string, depth int)
 // bare entry ("- FOO", or "FOO:" with nothing after it) is a reference to the variable FOO: the
 // Compose spec passes it through from the environment of the host, and Bayplan takes it from the
 // table instead.
-func collectEnvironment(n *yaml.Node, acc map[string]*VarRef, depth int) {
+func collectEnvironment(n *yaml.Node, file string, acc map[string]*VarRef, depth int) {
 	switch n.Kind {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key, val := n.Content[i], n.Content[i+1]
 			if val.Kind == yaml.ScalarNode && val.Tag == "!!null" {
-				addBare(acc, key.Value, key.Line, key.Column)
+				addBare(acc, file, key.Value, key.Line, key.Column)
 				continue
 			}
-			collectRefs(val, acc, nil, depth+1)
+			collectRefs(val, file, acc, nil, depth+1)
 		}
 	case yaml.SequenceNode:
 		for _, item := range n.Content {
 			if item.Kind == yaml.ScalarNode && !strings.ContainsAny(item.Value, "=$") {
-				addBare(acc, item.Value, item.Line, item.Column)
+				addBare(acc, file, item.Value, item.Line, item.Column)
 				continue
 			}
-			collectRefs(item, acc, nil, depth+1)
+			collectRefs(item, file, acc, nil, depth+1)
 		}
 	}
 }
 
 // addBare records a bare environment entry as a plain reference to name.
-func addBare(acc map[string]*VarRef, name string, line, col int) {
+func addBare(acc map[string]*VarRef, file, name string, line, col int) {
 	if !varNameFormRe.MatchString(name) {
 		return
 	}
@@ -167,11 +180,11 @@ func addBare(acc map[string]*VarRef, name string, line, col int) {
 		r = &VarRef{Name: name}
 		acc[name] = r
 	}
-	r.Places = append(r.Places, Place{File: ComposeFile, Line: line, Col: col, Plain: true})
+	r.Places = append(r.Places, Place{File: file, Line: line, Col: col, Plain: true})
 }
 
 // addScalarRefs reads the references of one scalar value into acc.
-func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
+func addScalarRefs(n *yaml.Node, file string, acc map[string]*VarRef) {
 	found := template.ExtractVariables(map[string]any{"v": n.Value}, nil)
 	// A name that stands inside the default of another is read only when that one is empty, so an
 	// unset value there is not an error where the name stands.
@@ -206,7 +219,7 @@ func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
 		}
 		r.Required = r.Required || required
 		r.Places = append(r.Places, Place{
-			File: ComposeFile, Line: lineOf(n, name), Col: n.Column,
+			File: file, Line: lineOf(n, name), Col: n.Column,
 			Plain: !hasDefault && !required && !nested[name],
 		})
 	}
