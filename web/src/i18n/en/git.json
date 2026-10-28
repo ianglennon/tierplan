@@ -228,6 +228,22 @@
         "generic": "Couldn't run the test. Try again."
       }
     },
+    "hostKey": {
+      "confirm": {
+        "title": "Confirm this host's key",
+        "body": "{{host}} presented a {{type}} key. Check the fingerprint against the one your git host publishes before you trust it.",
+        "fingerprint": "Fingerprint",
+        "copy": "Copy fingerprint",
+        "copied": "Copied",
+        "trust": "Trust this key",
+        "dismiss": "Don't trust it",
+        "helper": "Bayplan keeps this key with the repository and stops if it ever changes."
+      },
+      "confirmed": "Key trusted. It is saved with the repository.",
+      "builtin": "Matches the built-in key for {{host}}.",
+      "trusted": "Trusted",
+      "trustedKey": "Trusted key"
+    },
     "repoSheet": {
       "add": {
         "title": "Add a repository",

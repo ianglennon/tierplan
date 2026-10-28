@@ -16,6 +16,7 @@ import {
   gitCredentialsQuery,
   useCreateGitRepo,
   useTestGitAddress,
+  useTestGitRepo,
   useUpdateGitRepo,
 } from "@/api/git";
 import { KeyValueTable } from "@/components/key-value-table";
@@ -36,9 +37,10 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { addressKind, validateGitAddress } from "@/features/git/address-rules";
+import { addressKind, hostOf, validateGitAddress } from "@/features/git/address-rules";
 import { CredentialSheet } from "@/features/git/credential-sheet";
 import { useManageReason } from "@/features/git/git-table-parts";
+import { HostKeyConfirm, TrustedKeyLine } from "@/features/git/host-key-confirm";
 import { RepoTestResult } from "@/features/git/repo-test-result";
 import { hostKeyState, LastTestCell } from "@/features/git/repository-table";
 import {
@@ -232,6 +234,7 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   const create = useCreateGitRepo();
   const update = useUpdateGitRepo();
   const tester = useTestGitAddress();
+  const savedTester = useTestGitRepo();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [discarding, setDiscarding] = useState(false);
   // Advanced starts open for a repository that already has a CA, so the field is never hidden.
@@ -240,6 +243,16 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   // The last test shown: what it said and the values it was run on. A change to any of them greys
   // it out.
   const [tested, setTested] = useState<{ result: GitTestResult; key: string } | null>(null);
+  // The host key a person confirmed after a test, held here until Save (UI-SPEC default 7). It
+  // belongs to the address it was shown for: another address forgets it, and closing the sheet
+  // drops it with the rest of the form.
+  const [confirmedKey, setConfirmedKey] = useState<{
+    url: string;
+    key: string;
+    fingerprint: string;
+  } | null>(null);
+  // The fingerprint of a prompt the person answered "Don't trust it" to.
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const { choices, ready } = useScopeChoices("repoSheet");
   const me = useMe();
   const credentialList = useQuery(gitCredentialsQuery);
@@ -257,6 +270,8 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   const scope = form.watch("scope");
   const [url, credentialId, caPem] = form.watch(["url", "credentialId", "caPem"]);
   const pending = create.isPending || update.isPending;
+  const testing = tester.isPending || savedTester.isPending;
+  const heldKey = confirmedKey && confirmedKey.url === url.trim() ? confirmedKey : null;
 
   // The credentials this repository may use (D-02): an environment repository, those of its own
   // environment and the instance's; an instance repository, only the instance's. Options that do
@@ -376,6 +391,7 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
         url: values.url.trim(),
         caPem: values.caPem.trim(),
         credentialId: picked,
+        ...(heldKey && addressKind(values.url) === "ssh" ? { hostKey: heldKey.key } : {}),
       };
       update.mutate(
         { id: repo.id, body, envId: repo.scope.envId ?? undefined },
@@ -394,6 +410,7 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
       url: values.url.trim(),
       ...(values.caPem.trim() ? { caPem: values.caPem.trim() } : {}),
       ...(picked ? { credentialId: picked } : {}),
+      ...(heldKey && addressKind(values.url) === "ssh" ? { hostKey: heldKey.key } : {}),
     };
     create.mutate(
       { body, envId: envOfScope(values.scope) },
@@ -410,15 +427,45 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   // runTest lists the repository as the form has it, saved or not. The server makes the calls, so
   // it also tells a git host that is down from a credential that is wrong. The previous result is
   // cleared at once, so a stale answer is never read as the new one.
+  //
+  // A saved ssh repository tested as it was saved is tested through its own route: only that one
+  // knows the key a person trusted, so only it can say the key changed. With a confirmed key in the
+  // form, or any field changed, the address is tested and the key is sent along.
   async function runTest() {
-    if (tester.isPending) return;
+    if (testing) return;
     setTestError(null);
     setTested(null);
+    setDismissedKey(null);
     const valid = await form.trigger(["url", "caPem"]);
     if (form.getFieldState("caPem").invalid) setAdvanced(true);
     if (!valid) return;
     const values = form.getValues();
     const key = testKey;
+    const handlers = {
+      onSuccess: (result: GitTestResult) => {
+        // A field changed while the test ran: its result is for values that are gone.
+        if (latestTestKey.current === key) setTested({ result, key });
+      },
+      onError: (err: GitRequestError) => {
+        if (placeFieldErrors(err)) return;
+        setTestError(
+          err.status === 429
+            ? t("git.test.errors.rateLimited")
+            : err.status === 403
+              ? t("git.test.errors.permission")
+              : t("git.test.errors.generic"),
+        );
+      },
+    };
+    const asSaved =
+      repo !== undefined &&
+      heldKey === null &&
+      addressKind(values.url) === "ssh" &&
+      key === JSON.stringify([defaults.url.trim(), defaults.credentialId, defaults.caPem.trim()]);
+    if (asSaved) {
+      savedTester.mutate({ id: repo.id, envId: repo.scope.envId ?? undefined }, handlers);
+      return;
+    }
     tester.mutate(
       {
         envId: envOfScope(repo ? scopeValue(repo) : values.scope),
@@ -426,26 +473,23 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
           url: values.url.trim(),
           ...(values.caPem.trim() ? { caPem: values.caPem.trim() } : {}),
           ...(values.credentialId !== NO_CREDENTIAL ? { credentialId: values.credentialId } : {}),
+          ...(heldKey && addressKind(values.url) === "ssh" ? { hostKey: heldKey.key } : {}),
         },
       },
-      {
-        onSuccess: (result) => {
-          // A field changed while the test ran: its result is for values that are gone.
-          if (latestTestKey.current === key) setTested({ result, key });
-        },
-        onError: (err) => {
-          if (placeFieldErrors(err)) return;
-          setTestError(
-            err.status === 429
-              ? t("git.test.errors.rateLimited")
-              : err.status === 403
-                ? t("git.test.errors.permission")
-                : t("git.test.errors.generic"),
-          );
-        },
-      },
+      handlers,
     );
   }
+
+  // What the test found out about the host key, shown under its steps.
+  const result = tested && !stale ? tested.result : null;
+  const testedHost = hostOf(url);
+  const keyResult =
+    result && result.hostKey.state !== "none" && result.hostKey.fingerprint !== dismissedKey
+      ? result.hostKey
+      : null;
+  // A stored key stays on screen while nothing has been tested in this sheet.
+  const storedKey =
+    tested === null && repo?.hostKey && addressKind(url) === "ssh" ? repo.hostKey : null;
 
   return (
     <>
@@ -672,10 +716,10 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                     type="button"
                     variant="outline"
                     className={TOUCH_HEIGHT}
-                    disabled={tester.isPending}
+                    disabled={testing}
                     onClick={() => void runTest()}
                   >
-                    {tester.isPending ? (
+                    {testing ? (
                       <>
                         <Spinner aria-hidden="true" />
                         {t("git.test.pending")}
@@ -697,6 +741,29 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                   </div>
                 ) : null}
                 {tested ? <RepoTestResult result={tested.result} stale={stale} /> : null}
+                {keyResult ? (
+                  <HostKeyConfirm
+                    hostKey={keyResult}
+                    host={testedHost}
+                    pending={
+                      heldKey !== null &&
+                      (keyResult.state === "trusted" ||
+                        keyResult.fingerprint === heldKey.fingerprint)
+                    }
+                    onTrust={() =>
+                      setConfirmedKey({
+                        url: url.trim(),
+                        key: keyResult.key,
+                        fingerprint: keyResult.fingerprint,
+                      })
+                    }
+                    onDismiss={() => {
+                      setConfirmedKey(null);
+                      setDismissedKey(keyResult.fingerprint);
+                    }}
+                  />
+                ) : null}
+                {storedKey ? <TrustedKeyLine fingerprint={storedKey.fingerprint} /> : null}
                 {/* The warning lives inside the Test section, inside the FieldGroup. FieldGroup is
                     an inline-size container (@container/field-group). A box that appears next to
                     it in the same commit that grows its content makes Chromium drop the layout
