@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/api"
 	"github.com/ianglennon/bayplan/internal/gitsync"
@@ -230,5 +231,89 @@ func TestReasonCodesMatchEnum(t *testing.T) {
 	}
 	if !strings.Contains(f.Tag.Get("json"), "omitempty") {
 		t.Errorf("json tag %q, want omitempty so no reason is an absent field", f.Tag.Get("json"))
+	}
+}
+
+type bellItem struct {
+	ID           string `json:"id"`
+	Severity     string `json:"severity"`
+	EnvID        string `json:"envId"`
+	StackID      string `json:"stackId"`
+	StackName    string `json:"stackName"`
+	ReasonCode   string `json:"reasonCode"`
+	ReasonDetail string `json:"reasonDetail"`
+	Since        string `json:"since"`
+}
+
+// gitSyncItems are the git_sync_error items the bell shows a user.
+func (g *gitStackFix) gitSyncItems(t *testing.T, u credentialUser) []bellItem {
+	t.Helper()
+	rec := g.f.credCall(t, u, http.MethodGet, "/api/environments/warnings", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []bellItem `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []bellItem
+	for _, it := range body.Items {
+		if it.ID == "git_sync_error" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func TestGitSyncBellItems(t *testing.T) {
+	t.Parallel()
+	g, stackID, _ := newStackGitFix(t)
+	repo := g.stackRepo()
+	ctx := context.Background()
+	since := time.Date(2026, 10, 28, 8, 0, 0, 0, time.UTC)
+	checked := since.Add(time.Hour)
+	state := stackops.GitState{
+		StackID: stackID, Status: stackops.GitStatusError, ReasonCode: string(gitsync.ReasonRefGone),
+		ReasonDetail: "The branch or tag no longer exists.", CheckedAt: &checked, ErrorSince: &since, ConsecutiveFailures: 3,
+	}
+	envAdmin := g.f.asRoleOn(t, "u-env-admin", g.env, "admin")
+	operator := g.f.asRoleOn(t, "u-operator", g.env, "operator")
+	viewer := g.f.asRoleOn(t, "u-viewer-bell", g.env, "viewer")
+
+	if items := g.gitSyncItems(t, g.admin); len(items) != 0 {
+		t.Fatalf("items before any error = %+v, want none", items)
+	}
+	if err := repo.WriteGitState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, u := range map[string]credentialUser{"instance admin": g.admin, "environment admin": envAdmin} {
+		items := g.gitSyncItems(t, u)
+		if len(items) != 1 {
+			t.Errorf("%s: items = %+v, want one", name, items)
+			continue
+		}
+		it := items[0]
+		if it.Severity != "error" || it.EnvID != g.env || it.StackID != stackID || it.StackName != "web" ||
+			it.ReasonCode != "ref_gone" || it.ReasonDetail != state.ReasonDetail || it.Since != "2026-10-28T08:00:00Z" {
+			t.Errorf("%s: item = %+v, want the stack in error since 08:00 with its reason", name, it)
+		}
+	}
+	// Only whoever manages the environment's git is told: git.manage (T-09-96).
+	for name, u := range map[string]credentialUser{"operator": operator, "viewer": viewer} {
+		if items := g.gitSyncItems(t, u); len(items) != 0 {
+			t.Errorf("%s was shown %+v, want nothing", name, items)
+		}
+	}
+
+	// Back in sync, the item is gone: nothing is stored to dismiss.
+	state.Status, state.ReasonCode, state.ReasonDetail, state.ErrorSince, state.ConsecutiveFailures = stackops.GitStatusInSync, "", "", nil, 0
+	if err := repo.WriteGitState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if items := g.gitSyncItems(t, g.admin); len(items) != 0 {
+		t.Errorf("items once back in sync = %+v, want none", items)
 	}
 }
