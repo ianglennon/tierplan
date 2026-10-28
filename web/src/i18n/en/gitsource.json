@@ -22,7 +22,6 @@
     },
     "refKind": {
       "label": "Follow a",
-      "clears": "Changing this clears the folder and files you chose.",
       "branch": "Branch",
       "tag": "Tag",
       "commit": "Commit"
@@ -111,7 +110,6 @@
       "remove": "Remove {{file}}",
       "picked": "Picked {{file}}. Change it if the stack uses another.",
       "position": "{{file}} is now number {{n}}",
-      "loading": "Reading the files of this folder…",
       "failed": "Couldn't read the files of this folder."
     },
     "reasons": {

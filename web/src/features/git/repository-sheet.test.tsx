@@ -86,6 +86,7 @@ beforeEach(() => {
   testBody = passed;
   testGate = null;
   closed = 0;
+  saved = [];
   credentials = [];
   credentialsPosted = [];
   put = [];
@@ -151,12 +152,16 @@ afterEach(() => {
   client.clear();
 });
 
+// The repositories handed to onSaved, in the order they were saved.
+let saved: GitRepo[];
+
 function Harness({ repo }: { repo?: GitRepo }) {
   const [open, setOpen] = useState(true);
   return open ? (
     <RepositorySheet
       mode={repo ? "edit" : "add"}
       repo={repo}
+      onSaved={(made) => saved.push(made)}
       onClose={() => {
         closed += 1;
         setOpen(false);
@@ -360,6 +365,18 @@ describe("RepositorySheet save", () => {
       url: "https://git.example.com/acme/stacks.git",
     });
     expect(await screen.findByText("Added repository homelab-stacks.")).toBeTruthy();
+    await waitFor(() => expect(closed).toBe(1));
+  });
+
+  it("hands the repository it saved to onSaved before it closes", async () => {
+    mount();
+    await screen.findByText("Add a repository");
+    type("Name", "homelab-stacks");
+    type("Repository address", "https://git.example.com/acme/stacks.git");
+    save();
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]?.id).toBe("r1");
+    expect(saved[0]?.name).toBe("homelab-stacks");
     await waitFor(() => expect(closed).toBe(1));
   });
 });

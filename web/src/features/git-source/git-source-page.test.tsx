@@ -11,7 +11,6 @@ import {
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { Toaster } from "@/components/ui/sonner";
 import { GitSourcePage } from "@/features/git-source/git-source-page";
 import {
@@ -27,6 +26,7 @@ import {
   treeOf,
   type World,
 } from "@/features/git-source/test-fixture";
+import { makeMe } from "@/test-me";
 
 let world: World;
 let client: ReturnType<typeof newClient>;
@@ -181,5 +181,61 @@ describe("GitSourcePage", () => {
     expect(screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled")).toBe(
       "true",
     );
+  });
+
+  it("says the repositories could not be loaded, and asks again on Retry loading repositories", async () => {
+    let calls = 0;
+    world.reposAnswer = () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ type: "x", title: "x", status: 500 }, { status: 500 })
+        : Response.json({ items: [repoOf("r1", "homelab")] });
+    };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load the repositories.");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry loading repositories" }));
+    expect(await screen.findByRole("combobox", { name: "Repository" })).toBeTruthy();
+  });
+
+  it("offers Add a repository… to an Env Admin and opens the repository sheet", async () => {
+    mount();
+    const select = await screen.findByRole("combobox", { name: "Repository" });
+    fireEvent.keyDown(select, { key: "Enter" });
+    const add = (await screen.findAllByRole("option")).find(
+      (o) => o.textContent === "Add a repository…",
+    );
+    fireEvent.click(add as HTMLElement);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(await screen.findByText("Add a repository")).toBeTruthy();
+  });
+
+  it("does not offer Add a repository… to someone who may not add one, and says none is available", async () => {
+    world.repos = [];
+    world.me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    expect(
+      await screen.findByText(
+        "No repository is available on Prod. An administrator can add one under Git.",
+      ),
+    ).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Repository" }), { key: "Enter" });
+    expect(screen.queryByRole("option", { name: "Add a repository…" })).toBeNull();
+  });
+
+  it("lists each repository with its address and where it applies", async () => {
+    world.repos = [
+      repoOf("r1", "homelab"),
+      repoOf("r2", "tools", { scope: { kind: "environment", envId: ENV, envName: "Prod" } }),
+    ];
+    mount();
+    const select = await screen.findByRole("combobox", { name: "Repository" });
+    fireEvent.keyDown(select, { key: "Enter" });
+    const options = await screen.findAllByRole("option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      "homelabInstancehttps://git.example.com/homelab.git",
+      "toolsProdhttps://git.example.com/tools.git",
+      "Add a repository…",
+    ]);
   });
 });

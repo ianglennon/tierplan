@@ -23,6 +23,8 @@ export interface Sent {
 export interface World {
   sent: Sent[];
   repos: GitRepo[];
+  // When set, the answer to the list of repositories, in place of repos.
+  reposAnswer?: () => Response;
   refs: () => Response | Promise<Response>;
   // The answer to a read of one folder; the query holds refKind, ref and path.
   tree: (query: URLSearchParams) => Response | Promise<Response>;
@@ -128,7 +130,7 @@ export function stubFetch(world: World) {
       if (entry.path === "/api/me") return Response.json(world.me);
       if (entry.path === "/api/environments") return Response.json({ items: world.environments });
       if (entry.path === `/api/env/${ENV}/git/repos` && req.method === "GET") {
-        return Response.json({ items: world.repos });
+        return world.reposAnswer ? world.reposAnswer() : Response.json({ items: world.repos });
       }
       if (/^\/api\/env\/[^/]+\/git\/repos\/[^/]+\/refs$/.test(entry.path)) return world.refs();
       if (/^\/api\/env\/[^/]+\/git\/repos\/[^/]+\/tree$/.test(entry.path)) {

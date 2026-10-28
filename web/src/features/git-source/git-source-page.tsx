@@ -176,9 +176,11 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
           <p className="max-w-prose text-sm text-muted-foreground">
             {t("gitSource.page.body", { name })}
           </p>
-          <p className="text-sm text-muted-foreground">
-            {t("stacks.create.target", { name: envName, target })}
-          </p>
+          {target ? (
+            <p className="text-sm text-muted-foreground">
+              {t("stacks.create.target", { name: envName, target })}
+            </p>
+          ) : null}
         </header>
 
         {refusal ? (
@@ -201,6 +203,13 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
             onKindChange={changeKind}
             onRefChange={setGitRef}
             clears={folder !== null}
+            envName={envName}
+            loaded={repos.isSuccess}
+            loadError={
+              repos.isError && !repos.data
+                ? { retrying: repos.isFetching, onRetry: () => void repos.refetch() }
+                : undefined
+            }
           />
         </SettingsCard>
 
