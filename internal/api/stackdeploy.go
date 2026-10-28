@@ -446,13 +446,13 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	}
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
-		return nil, objectProblem(err, masker)
+		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)})
 	if err != nil {
 		// A refusal about a field that uses a secret variable arrives as the fixed sentence; the SecretUse is
 		// built only on this path.
-		return nil, convertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(draft.Copy)), masker)
+		return nil, refuse(refusalConvert, convertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(draft.Copy)), masker))
 	}
 	// The images the review chose are checked now, before anything is stored, against what the
 	// server decides itself: a pin it would not have chosen is refused and nothing starts.
@@ -470,7 +470,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
 	if pol.Refused {
-		return nil, policyProblem(pol)
+		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
@@ -556,7 +556,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}
 	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
-		return nil, objectProblem(err, masker)
+		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	if checked.Problems.Errors() > 0 {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
@@ -578,7 +578,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
 	if pol.Refused {
-		return nil, policyProblem(pol)
+		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {

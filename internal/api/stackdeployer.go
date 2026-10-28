@@ -7,6 +7,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -57,30 +60,30 @@ func (s *StackDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envI
 	if p == nil {
 		return DeployStarted{}, &DeployRefusal{Code: refusalForbidden, Detail: "no principal"}
 	}
-	env, err := s.environment(ctx, envID)
+	env, err := s.environment(ctx, envID, stackID)
 	if err != nil {
 		return DeployStarted{}, err
 	}
 	// The route's own permission, which the router judges before its handler runs.
 	if s.d.Checker == nil {
-		return DeployStarted{}, s.internal("check permission", envID, errors.New("no checker"))
+		return DeployStarted{}, s.internal("check permission", stackID, errors.New("no checker"))
 	}
 	dec := s.d.Checker.Check(ctx, p, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment}, envID)
 	if dec.Err != nil {
-		return DeployStarted{}, s.internal("check permission", envID, dec.Err)
+		return DeployStarted{}, s.internal("check permission", stackID, dec.Err)
 	}
 	if !dec.Allowed {
 		return DeployStarted{}, &DeployRefusal{Code: refusalForbidden, Detail: "The user this deploy acts for may not deploy here."}
 	}
 	out, err := deployDraft(ctx, s.d, p, env, stackID, StackDeployRequest{DraftVersion: draftVersion}, "", deployOpts{Trigger: trigger})
 	if err != nil {
-		return DeployStarted{}, s.refusal(envID, err)
+		return DeployStarted{}, s.refusal(stackID, err)
 	}
 	return DeployStarted{JobID: out.Body.JobID, Seq: out.Body.Revision}, nil
 }
 
 // environment resolves the environment the way the router does: one that is gone or disabled is refused.
-func (s *StackDeployer) environment(ctx context.Context, envID string) (*httpx.Env, error) {
+func (s *StackDeployer) environment(ctx context.Context, envID, stackID string) (*httpx.Env, error) {
 	if s.d.Envs == nil {
 		return nil, &DeployRefusal{Code: refusalEnvNotFound, Detail: "The environment is not available."}
 	}
@@ -91,27 +94,75 @@ func (s *StackDeployer) environment(ctx context.Context, envID string) (*httpx.E
 	case errors.Is(err, httpx.ErrEnvDisabled):
 		return nil, &DeployRefusal{Code: refusalEnvDisabled, Detail: "The environment is disabled."}
 	case err != nil:
-		return nil, s.internal("resolve the environment", envID, err)
+		return nil, s.internal("resolve the environment", stackID, err)
 	}
 	return &e, nil
 }
 
-// internal is a failure of Bayplan itself: it is logged with the environment only and may pass on its own.
-func (s *StackDeployer) internal(what, envID string, err error) error {
-	s.d.Log.Error("an automated stack deploy failed", "step", what, "environment", envID, "error", err)
+// internal is a failure of Bayplan itself: it is logged with the stack only and may pass on its own.
+func (s *StackDeployer) internal(what, stackID string, err error) error {
+	s.d.Log.Error("an automated stack deploy failed", "step", what, "stack", stackID, "error", err)
 	return &DeployRefusal{Code: refusalInternal, Detail: "Bayplan could not start the deploy.", Retry: true}
 }
 
-// refusal turns the error of deployDraft into the refusal an automated caller reads.
-func (s *StackDeployer) refusal(envID string, err error) error {
-	return s.internal("deploy", envID, err)
+// refusal turns the error of deployDraft into the refusal an automated caller reads. The code comes from what
+// the problem constructors set (the code a call site gave it, or the problem's type), never from its wording.
+func (s *StackDeployer) refusal(stackID string, err error) error {
+	var ce *codedProblem
+	if errors.As(err, &ce) {
+		return &DeployRefusal{Code: ce.code, Detail: problemDetail(ce.err)}
+	}
+	var em *huma.ErrorModel
+	if errors.As(err, &em) && em.Status < http.StatusInternalServerError {
+		switch em.Type {
+		case problemStackInvalid:
+			return &DeployRefusal{Code: refusalNotDeployable, Detail: em.Detail}
+		case problemNameClash:
+			return &DeployRefusal{Code: refusalNameClash, Detail: em.Detail}
+		case problemDraftChanged:
+			return &DeployRefusal{Code: refusalDraftChanged, Detail: em.Detail}
+		case problemPinsInvalid:
+			return &DeployRefusal{Code: refusalPinsInvalid, Detail: em.Detail}
+		case problemOperationLocked:
+			return &DeployRefusal{Code: refusalOperationLocked, Detail: em.Detail, Retry: true}
+		case problemTooManyDeploys:
+			return &DeployRefusal{Code: refusalJobsBusy, Detail: em.Detail, Retry: true}
+		case problemTargetChanged, problemConcurrentUnacknowledged, problemStackNotFound, problemServicesInvalid:
+			return &DeployRefusal{Code: em.Type, Detail: em.Detail}
+		}
+	}
+	// Anything else is a failure of Bayplan or of the environment, which may pass: only the stack is logged.
+	s.d.Log.Error("an automated stack deploy failed", "stack", stackID, "error", err)
+	return &DeployRefusal{Code: refusalInternal, Detail: "Bayplan could not start the deploy.", Retry: true}
 }
 
+// problemDetail is the sentence of a problem, empty for any other error.
+func problemDetail(err error) string {
+	var em *huma.ErrorModel
+	if errors.As(err, &em) {
+		return em.Detail
+	}
+	return ""
+}
+
+// refuse gives a problem the code an automated caller reads. The route answers the problem itself (plainProblem).
+func refuse(code string, err error) error { return &codedProblem{code: code, err: err} }
+
+// The codes of a refusal. They are stable: an automated caller decides on them.
 const (
-	refusalForbidden   = "forbidden"
-	refusalEnvNotFound = "environment_not_found"
-	refusalEnvDisabled = "environment_disabled"
-	refusalInternal    = "internal"
+	refusalForbidden       = "forbidden"
+	refusalEnvNotFound     = "environment_not_found"
+	refusalEnvDisabled     = "environment_disabled"
+	refusalPolicy          = "policy_refused"
+	refusalNotDeployable   = "not_deployable"
+	refusalNameClash       = "name_clash"
+	refusalDraftChanged    = "draft_changed"
+	refusalObjects         = "objects_invalid"
+	refusalConvert         = "convert_failed"
+	refusalPinsInvalid     = "pins_invalid"
+	refusalOperationLocked = "operation_locked"
+	refusalJobsBusy        = "jobs_busy"
+	refusalInternal        = "internal"
 )
 
 // plainProblem is err as the route answers it: a refusal that was given a code for an automated caller is
