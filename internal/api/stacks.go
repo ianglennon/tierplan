@@ -142,6 +142,9 @@ type StacksDeps struct {
 	DriftRecheck func(envID, stackID string)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
+	// router. Nil makes such a deploy refuse with environment_not_found.
+	Envs httpx.EnvResolver
 	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of
 	// that container; either is empty when Bayplan cannot tell. The lists flag the stack that holds them (D-49).
 	SelfContainerID, SelfNamespace string

@@ -143,6 +143,10 @@ type authFixture struct {
 	stackOnDrift func(context.Context)
 	// stackDriftRecheck is called when an operation on a stack ends, as the background drift check is asked (plan 08-21).
 	stackDriftRecheck func(envID, stackID string)
+	// stackLocks is the operation lock the stack routes and a StackDeployer share; stackDeps is what the routes
+	// were registered with (set by build), for a test that deploys without a request (plan 09-03).
+	stackLocks *stackops.Locks
+	stackDeps  api.StacksDeps
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
@@ -373,14 +377,21 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if stackLogs.Now == nil {
 			stackLogs.Now = f.clk.now
 		}
-		api.RegisterStacks(r, api.StacksDeps{
+		stackDeps := api.StacksDeps{
 			Logs:       stackLogs,
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
-		})
+		}
+		// The deployer of a background service shares the locks and the environment lookup of the routes.
+		if f.stackLocks == nil {
+			f.stackLocks = stackops.NewLocks()
+		}
+		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
+		f.stackDeps = stackDeps
+		api.RegisterStacks(r, stackDeps)
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
 			logsSrc = f.logsWrap(logsSrc)
