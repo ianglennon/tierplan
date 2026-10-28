@@ -29,8 +29,10 @@ let putBodies: Record<string, unknown>[];
 let trusted: { path: string; body: Record<string, unknown> }[];
 let trustStatus: number;
 let closed: number;
+let changes: Record<string, unknown>[];
 
 const instance = { kind: "instance", envId: null, envName: null };
+const lab = { kind: "environment", envId: "e1", envName: "Lab" };
 
 const KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPresented";
 const FINGERPRINT = "SHA256:Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWo";
@@ -125,6 +127,7 @@ beforeEach(() => {
   trusted = [];
   trustStatus = 200;
   closed = 0;
+  changes = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -203,7 +206,7 @@ function mountPage() {
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <GitPage search={{}} onSearchChange={() => {}} />
+          <GitPage search={{}} onSearchChange={(patch) => changes.push(patch)} />
           <Toaster />
         </TooltipProvider>
       </TestRouter>
@@ -370,5 +373,186 @@ describe("the Host key cell", () => {
     expect(cell("c-trusted").textContent).toBe(`Trusted${SAVED_FINGERPRINT.slice(0, 12)}`);
     expect(cell("d-new").textContent).toBe("Not trusted yet");
     expect(cell("e-changed").textContent).toBe("Changed");
+  });
+});
+
+const openMenu = (name: string) => {
+  const actions = screen.getByRole("button", { name: `Actions for ${name}` });
+  fireEvent.pointerDown(actions, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.click(actions);
+};
+
+const changedRepo = (extra: Record<string, unknown> = {}) =>
+  repo("stacks", { hostKey: savedKey, lastTest: changedTest, ...extra });
+
+async function openChangedAlert(target: GitRepo) {
+  mountSheet(target);
+  await screen.findByText("Edit stacks");
+  runTest();
+  return screen.findByText("The host key for git.example.com has changed");
+}
+
+describe("a changed host key in the sheet", () => {
+  it("stops with an alert that names the saved and the presented key", async () => {
+    const title = await openChangedAlert(changedRepo());
+    const alert = title.closest('[data-slot="alert"]') as HTMLElement;
+    expect(alert.getAttribute("role")).toBe("alert");
+    expect(
+      within(alert).getByText(
+        /Bayplan stopped, because this can mean someone is intercepting the connection\./,
+      ),
+    ).toBeTruthy();
+    expect(within(alert).getByText(SAVED_FINGERPRINT).className).toContain("font-mono");
+    expect(within(alert).getByText(FINGERPRINT).className).toContain("font-mono");
+    expect(within(alert).getByRole("button", { name: "Re-trust host key…" })).toBeTruthy();
+    // The saved repository was tested through its own route, so its trusted key was compared.
+    expect(savedTests).toEqual(["/api/git/repos/stacks/test"]);
+    expect(addressTests).toEqual([]);
+  });
+
+  it("opens the Trust the new key dialog with the focus on Keep the old key", async () => {
+    await openChangedAlert(changedRepo());
+    fireEvent.click(screen.getByRole("button", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Trust the new key for git.example.com?")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        /Only continue if you know why, for example you rebuilt the server\./,
+      ),
+    ).toBeTruthy();
+    expect(within(dialog).getByText(SAVED_FINGERPRINT)).toBeTruthy();
+    expect(within(dialog).getByText(FINGERPRINT)).toBeTruthy();
+    expect(within(dialog).getByText(/Bayplan will record who trusted it\./)).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole("button", { name: "Keep the old key" }),
+      ),
+    );
+    const trust = within(dialog).getByRole("button", { name: "Trust the new key" });
+    expect(trust.className).toContain("bg-destructive-fill");
+  });
+
+  it("keeps the old key without calling the server", async () => {
+    await openChangedAlert(changedRepo());
+    fireEvent.click(screen.getByRole("button", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep the old key" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(trusted).toEqual([]);
+    expect(screen.getByText("The host key for git.example.com has changed")).toBeTruthy();
+  });
+
+  it("trusts the presented key, toasts, and lets the changed alert go", async () => {
+    await openChangedAlert(changedRepo());
+    fireEvent.click(screen.getByRole("button", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Trust the new key" }));
+    expect(await screen.findByText("Trusted the new key for git.example.com.")).toBeTruthy();
+    expect(trusted).toEqual([
+      { path: "/api/git/repos/stacks/trust-host-key", body: { hostKey: KEY } },
+    ]);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(screen.queryByText("The host key for git.example.com has changed")).toBeNull();
+  });
+
+  it("uses the environment's route for an environment repository", async () => {
+    await openChangedAlert(changedRepo({ scope: lab }));
+    fireEvent.click(screen.getByRole("button", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Trust the new key" }));
+    await waitFor(() => expect(trusted).toHaveLength(1));
+    expect(trusted[0]?.path).toBe("/api/env/e1/git/repos/stacks/trust-host-key");
+  });
+
+  it("shows a refusal inside the dialog and keeps it open", async () => {
+    trustStatus = 403;
+    await openChangedAlert(changedRepo());
+    fireEvent.click(screen.getByRole("button", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Trust the new key" }));
+    expect(
+      await within(dialog).findByText("You don't have permission to trust this host key."),
+    ).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+});
+
+describe("the row action Re-trust host key…", () => {
+  it("is offered to admins for a Changed row and a Not trusted yet row only", async () => {
+    repos = [
+      repo("a-https", { url: "https://git.example.com/acme/a.git" }),
+      repo("b-builtin", { url: "git@github.com:acme/b.git" }),
+      repo("c-trusted", { hostKey: savedKey }),
+      repo("d-new"),
+      repo("e-changed", { hostKey: savedKey, lastTest: changedTest }),
+    ];
+    mountPage();
+    await screen.findByText("a-https");
+    const items = async (name: string) => {
+      openMenu(name);
+      const found = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+      await waitFor(() => expect(screen.queryAllByRole("menuitem")).toHaveLength(0));
+      return found;
+    };
+    expect(await items("a-https")).not.toContain("Re-trust host key…");
+    expect(await items("b-builtin")).not.toContain("Re-trust host key…");
+    expect(await items("c-trusted")).not.toContain("Re-trust host key…");
+    expect(await items("d-new")).toEqual(["Edit", "Test", "Re-trust host key…", "Delete…"]);
+    expect(await items("e-changed")).toEqual(["Edit", "Test", "Re-trust host key…", "Delete…"]);
+  });
+
+  it("is not offered to someone who may only see the row", async () => {
+    me = makeMe({ envs: { e1: "viewer" } });
+    repos = [changedRepo({ readOnly: true, scope: lab })];
+    mountPage();
+    await screen.findByText("stacks");
+    openMenu("stacks");
+    expect((await screen.findAllByRole("menuitem")).map((i) => i.textContent)).toEqual([
+      "View details",
+    ]);
+  });
+
+  it("reads the key the host shows now and asks before trusting a changed one", async () => {
+    repos = [changedRepo()];
+    mountPage();
+    await screen.findByText("stacks");
+    openMenu("stacks");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Re-trust host key…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(savedTests).toEqual(["/api/git/repos/stacks/test"]);
+    expect(within(dialog).getByText("Trust the new key for git.example.com?")).toBeTruthy();
+    expect(within(dialog).getByText(SAVED_FINGERPRINT)).toBeTruthy();
+    expect(within(dialog).getByText(FINGERPRINT)).toBeTruthy();
+    expect(trusted).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Trust the new key" }));
+    await waitFor(() => expect(trusted).toHaveLength(1));
+    expect(trusted[0]?.body).toEqual({ hostKey: KEY });
+    expect(await screen.findByText("Trusted the new key for git.example.com.")).toBeTruthy();
+  });
+
+  it("opens the sheet at the confirm for a repository that was never trusted", async () => {
+    repos = [repo("d-new")];
+    mountPage();
+    await screen.findByText("d-new");
+    openMenu("d-new");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Re-trust host key…" }));
+    expect(changes).toEqual([{ repo: "d-new" }]);
+    expect(trusted).toEqual([]);
+    expect(savedTests).toEqual([]);
+  });
+
+  it("says so, and trusts nothing, when the host no longer shows another key", async () => {
+    repos = [changedRepo()];
+    savedResult = trustedPass;
+    mountPage();
+    await screen.findByText("stacks");
+    openMenu("stacks");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Re-trust host key…" }));
+    expect(
+      await screen.findByText("The host key for git.example.com matches the saved key again."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(trusted).toEqual([]);
   });
 });
