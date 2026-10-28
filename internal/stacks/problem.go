@@ -52,7 +52,7 @@ const (
 
 	// CodeEnvSecretLike is a key of the repository's .env whose name looks like a secret (a warning).
 	CodeEnvSecretLike = "env_secret_like"
-	// CodeOverlayClash is a path that is both a repository file and an overlay file.
+	// A path that is both a repository file and an overlay file is an overlay clash.
 	CodeOverlayClash = "overlay_clash"
 	// CodeRepoFileMissing is a file the compose files refer to that is neither in the repository nor an
 	// overlay file.
