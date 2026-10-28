@@ -74,6 +74,9 @@ const (
 	PermStacksDeploy          Perm = "stacks.deploy"
 	PermStacksCreate          Perm = "stacks.create"
 	PermStacksDelete          Perm = "stacks.delete"
+	PermGitRead               Perm = "git.read"
+	PermGitManage             Perm = "git.manage"
+	PermGitInstance           Perm = "git.instance"
 )
 
 // Registry is a list of permissions. The Checker consults one, so a test can
@@ -134,6 +137,9 @@ var defaultRegistry = Registry{
 	{Name: PermStacksDeploy, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Deploy, update, roll back, stop, start and cancel stack operations"},
 	{Name: PermStacksCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create stacks"},
 	{Name: PermStacksDelete, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Remove stacks"},
+	{Name: PermGitRead, Scope: ScopeEnvironment, MinRole: RoleViewer, Description: "View the git repositories and credentials that apply to this environment"},
+	{Name: PermGitManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks"},
+	{Name: PermGitInstance, Scope: ScopeGlobal, Dangerous: true, Description: "Manage git repositories and credentials that apply to every environment"},
 }
 
 // DefaultRegistry returns a copy of the registry production runs with.

@@ -29,6 +29,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -110,6 +111,9 @@ type authFixture struct {
 	// registryEgress is the policy the credential tests dial through (plan 05-11); a test
 	// that talks to a registry of its own sets one that trusts that registry's certificate.
 	registryEgress registry.EgressPolicy
+	// gitClient is the client behind the git test routes (plan 09-01); nil builds a go-git one that
+	// dials through registryEgress.
+	gitClient gitx.Client
 	// envSvc, when set, is the environment registry behind the environment
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
@@ -417,6 +421,12 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
+	gitx.InstallTransport(registry.NewEgressPolicy(nil))
+	gitClient := f.gitClient
+	if gitClient == nil {
+		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log})
+	}
+	api.RegisterGit(r, api.GitDeps{Git: gitClient, Log: log})
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),

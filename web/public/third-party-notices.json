@@ -1115,6 +1115,11 @@
     "licence": "ISC"
   },
   {
+    "name": "dario.cat/mergo",
+    "version": "v1.0.2",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "date-fns",
     "version": "4.4.0",
     "licence": "MIT"
@@ -1460,6 +1465,11 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/cloudflare/circl",
+    "version": "v1.6.3",
+    "licence": "BSD-3-Clause"
+  },
+  {
     "name": "github.com/coder/websocket",
     "version": "v1.8.15",
     "licence": "ISC"
@@ -1525,6 +1535,11 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/cyphar/filepath-securejoin",
+    "version": "v0.7.0",
+    "licence": "BSD-3-Clause AND MPL-2.0"
+  },
+  {
     "name": "github.com/danielgtaylor/huma/v2",
     "version": "v2.39.1",
     "licence": "MIT"
@@ -1580,6 +1595,11 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/emirpasic/gods",
+    "version": "v1.18.1",
+    "licence": "BSD-2-Clause AND ISC"
+  },
+  {
     "name": "github.com/felixge/httpsnoop",
     "version": "v1.1.0",
     "licence": "MIT"
@@ -1593,6 +1613,21 @@
     "name": "github.com/go-chi/chi/v5",
     "version": "v5.3.2",
     "licence": "MIT"
+  },
+  {
+    "name": "github.com/go-git/gcfg",
+    "version": "v1.5.1-0.20230307220236-3a3c6141e376",
+    "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/go-git/go-billy/v5",
+    "version": "v5.9.2",
+    "licence": "Apache-2.0"
+  },
+  {
+    "name": "github.com/go-git/go-git/v5",
+    "version": "v5.19.3",
+    "licence": "Apache-2.0"
   },
   {
     "name": "github.com/go-logr/logr",
@@ -1618,6 +1653,11 @@
     "name": "github.com/golang-jwt/jwt/v5",
     "version": "v5.3.1",
     "licence": "MIT"
+  },
+  {
+    "name": "github.com/golang/groupcache",
+    "version": "v0.0.0-20241129210726-2c02b8208cf8",
+    "licence": "Apache-2.0"
   },
   {
     "name": "github.com/google/go-cmp",
@@ -1663,6 +1703,16 @@
     "name": "github.com/inhies/go-bytesize",
     "version": "v0.0.0-20220417184213-4913239db9cf",
     "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/jbenet/go-context",
+    "version": "v0.0.0-20150711004518-d14ea06fba99",
+    "licence": "MIT"
+  },
+  {
+    "name": "github.com/kevinburke/ssh_config",
+    "version": "v1.2.0",
+    "licence": "MIT"
   },
   {
     "name": "github.com/klauspost/compress",
@@ -1780,6 +1830,11 @@
     "licence": "Apache-2.0"
   },
   {
+    "name": "github.com/pjbgf/sha1cd",
+    "version": "v0.7.0",
+    "licence": "Apache-2.0"
+  },
+  {
     "name": "github.com/pkg/errors",
     "version": "v0.9.1",
     "licence": "BSD-2-Clause"
@@ -1793,6 +1848,11 @@
     "name": "github.com/pressly/goose/v3",
     "version": "v3.28.0",
     "licence": "MIT"
+  },
+  {
+    "name": "github.com/ProtonMail/go-crypto",
+    "version": "v1.4.1",
+    "licence": "BSD-3-Clause"
   },
   {
     "name": "github.com/realclientip/realclientip-go",
@@ -1820,6 +1880,11 @@
     "licence": "MIT"
   },
   {
+    "name": "github.com/sergi/go-diff",
+    "version": "v1.3.2-0.20230802210424-5b0b94c5c0d3",
+    "licence": "MIT"
+  },
+  {
     "name": "github.com/sethvargo/go-retry",
     "version": "v0.4.0",
     "licence": "Apache-2.0"
@@ -1833,6 +1898,11 @@
     "name": "github.com/sirupsen/logrus",
     "version": "v1.10.2",
     "licence": "MIT"
+  },
+  {
+    "name": "github.com/skeema/knownhosts",
+    "version": "v1.3.1",
+    "licence": "Apache-2.0"
   },
   {
     "name": "github.com/skratchdot/open-golang",
@@ -1878,6 +1948,11 @@
     "name": "github.com/ulikunitz/xz",
     "version": "v0.5.16",
     "licence": "BSD-3-Clause"
+  },
+  {
+    "name": "github.com/xanzy/ssh-agent",
+    "version": "v0.3.3",
+    "licence": "Apache-2.0"
   },
   {
     "name": "github.com/xhit/go-str2duration/v2",
@@ -2038,6 +2113,11 @@
     "name": "gopkg.in/ini.v1",
     "version": "v1.67.3",
     "licence": "Apache-2.0"
+  },
+  {
+    "name": "gopkg.in/warnings.v0",
+    "version": "v0.1.2",
+    "licence": "BSD-2-Clause"
   },
   {
     "name": "gotest.tools/v3",

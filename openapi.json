@@ -4515,6 +4515,150 @@
         ],
         "type": "object"
       },
+      "GitTestFailureBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Why the test failed",
+            "enum": [
+              "unreachable",
+              "auth_refused",
+              "not_found",
+              "cert_untrusted",
+              "host_key_changed",
+              "host_key_untrusted",
+              "egress_blocked",
+              "ref_missing",
+              "timeout",
+              "too_large"
+            ],
+            "type": "string"
+          },
+          "host": {
+            "description": "The host the test was made to",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "host"
+        ],
+        "type": "object"
+      },
+      "GitTestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "caPem": {
+            "description": "A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification",
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "url": {
+            "description": "The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it",
+            "maxLength": 2048,
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
+      "GitTestResultBody": {
+        "additionalProperties": false,
+        "properties": {
+          "branchCount": {
+            "description": "How many branches the repository has",
+            "format": "int64",
+            "type": "integer"
+          },
+          "branches": {
+            "description": "The first 20 branch names, in name order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "defaultBranch": {
+            "description": "The branch HEAD points at; empty when the server does not say",
+            "type": "string"
+          },
+          "failure": {
+            "$ref": "#/components/schemas/GitTestFailureBody",
+            "description": "Set when the test failed; null when it passed"
+          },
+          "steps": {
+            "$ref": "#/components/schemas/GitTestStepsBody"
+          },
+          "tagCount": {
+            "description": "How many tags the repository has",
+            "format": "int64",
+            "type": "integer"
+          },
+          "tags": {
+            "description": "The first 20 tag names, in name order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "steps",
+          "branches",
+          "tags",
+          "branchCount",
+          "tagCount",
+          "defaultBranch",
+          "failure"
+        ],
+        "type": "object"
+      },
+      "GitTestStepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "description": "passed, failed, not_checked when an earlier step failed, or not_needed when the step did not apply (no sign-in was asked for)",
+            "enum": [
+              "passed",
+              "failed",
+              "not_checked",
+              "not_needed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "GitTestStepsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "reachable": {
+            "$ref": "#/components/schemas/GitTestStepBody"
+          },
+          "refs": {
+            "$ref": "#/components/schemas/GitTestStepBody"
+          },
+          "signedIn": {
+            "$ref": "#/components/schemas/GitTestStepBody"
+          }
+        },
+        "required": [
+          "reachable",
+          "signedIn",
+          "refs"
+        ],
+        "type": "object"
+      },
       "GrantBody": {
         "additionalProperties": false,
         "properties": {
@@ -19942,6 +20086,67 @@
         ]
       }
     },
+    "/api/env/{envId}/git/repos/test": {
+      "post": {
+        "description": "As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Writes nothing.",
+        "operationId": "testGitAddress",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitTestResultBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test a git repository address from the server, for an environment",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/env/{envId}/images": {
       "get": {
         "description": "Newest first, ties by image ID. An untagged image is listed as \u003cnone\u003e and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.",
@@ -27315,6 +27520,55 @@
         "summary": "Rotate an environment's join token",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/git/repos/test": {
+      "post": {
+        "description": "Lists the branches and tags of a repository over HTTPS from the Bayplan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).",
+        "operationId": "testGitAddressInstance",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitTestResultBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Test a git repository address from the server",
+        "tags": [
+          "git"
         ]
       }
     },

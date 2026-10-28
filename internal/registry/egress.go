@@ -32,6 +32,12 @@ var ErrResponseTooLarge = errors.New("registry: the registry's answer is larger 
 // 10,000-name cap, and far under what a hostile host could stream in the 30 second call timeout.
 const responseBytesMax = 32 << 20
 
+// gitResponseBytesMax is the most bytes read from a git connection after one request was written:
+// 1 GiB. A packfile of a large repository is far over the 32 MiB a registry answer may be, and one
+// keep-alive connection carries several requests, so the count restarts at each write. It is still
+// a bound, so a hostile host cannot stream without end (T-09-04).
+const gitResponseBytesMax = 1 << 30
+
 const (
 	dialTimeout           = 10 * time.Second
 	tlsHandshakeTimeout   = 10 * time.Second
@@ -166,7 +172,59 @@ func (p EgressPolicy) Transport() *http.Transport {
 			if err != nil {
 				return nil, err
 			}
-			return &boundedConn{Conn: c}, nil
+			return &boundedConn{Conn: c, limit: responseBytesMax}, nil
+		},
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		DisableCompression:    true,
+		MaxIdleConns:          32,
+		IdleConnTimeout:       90 * time.Second,
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: p.roots},
+	}
+}
+
+// egressKey is the context key of a policy that stands in for a git transport's own for one call.
+type egressKey struct{}
+
+// WithEgressPolicy returns ctx carrying p as the policy the git transport dials through for the
+// calls made with it, in place of the policy the transport was built with. The transport is
+// installed once in the process (go-git keeps its protocols in a package variable), so this is how
+// a caller that holds its own policy applies it: the dial hook reads the policy from the context
+// the HTTP client passes to the dialer. The replaced policy is never looser than the zero value:
+// every EgressPolicy always refuses the built-in ranges.
+func WithEgressPolicy(ctx context.Context, p EgressPolicy) context.Context {
+	return context.WithValue(ctx, egressKey{}, p)
+}
+
+// DialControl returns the dialer hook of the policy: it refuses a connection to an address the
+// policy blocks, after DNS has answered. It is for a dialer that is not the registry's or git's
+// HTTP transport, such as an SSH client.
+func (p EgressPolicy) DialControl() func(network, address string, c syscall.RawConn) error {
+	return p.control
+}
+
+// GitTransport returns a new HTTP transport for git over HTTPS: the dialer, the timeouts and the
+// refusal of a proxy are those of Transport, and certificates are always verified (there is no
+// field here that turns it off). It differs in what it reads: a git answer is a packfile, so a
+// connection fails with ErrResponseTooLarge only once more than gitResponseBytesMax bytes have
+// come since the last request was written, not at 32 MiB. Compression stays off, so wire bytes
+// are the bytes read and a small compressed answer cannot expand without limit.
+//
+// It must be an *http.Transport: go-git clones it to add a per-call certificate authority.
+func (p EgressPolicy) GitTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			pol := p
+			if o, ok := ctx.Value(egressKey{}).(EgressPolicy); ok {
+				pol = o
+			}
+			d := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second, Control: pol.control}
+			c, err := d.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &boundedConn{Conn: c, limit: gitResponseBytesMax}, nil
 		},
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
@@ -178,15 +236,16 @@ func (p EgressPolicy) Transport() *http.Transport {
 }
 
 // boundedConn counts what is read from a connection since the last write and fails the read that
-// would pass responseBytesMax. HTTP/1.1 writes a request before it reads the answer, so the count
-// is the size of one answer (and the TLS framing around it).
+// would pass limit. HTTP/1.1 writes a request before it reads the answer, so the count is the size
+// of one answer (and the TLS framing around it).
 type boundedConn struct {
 	net.Conn
-	read atomic.Int64
+	limit int64
+	read  atomic.Int64
 }
 
 func (c *boundedConn) Read(p []byte) (int, error) {
-	left := responseBytesMax - c.read.Load()
+	left := c.limit - c.read.Load()
 	if left <= 0 {
 		return 0, ErrResponseTooLarge
 	}

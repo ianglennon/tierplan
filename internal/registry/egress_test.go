@@ -5,6 +5,7 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/netip"
@@ -95,5 +96,109 @@ func TestRefusesHostJudgesLiteralAddressesAndResolvedNamesAndLeavesUnresolvableN
 		if got := p.RefusesHost(context.Background(), host); got != want {
 			t.Errorf("RefusesHost(%q) = %v, want %v", host, got, want)
 		}
+	}
+}
+
+// The git transport shares the dial hook of the registry transport, with a larger read bound and
+// no switch that turns certificate checks off (plan 09-01, T-09-01, T-09-04).
+func TestGitTransportRefusesToDialABlockedAddressBeforeConnecting(t *testing.T) {
+	tr := NewEgressPolicy(nil).GitTransport()
+	for _, addr := range []string{"169.254.169.254:443", "[fe80::1]:443", "0.0.0.0:443", "224.0.0.1:443"} {
+		conn, err := tr.DialContext(context.Background(), "tcp", addr)
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if !errors.Is(err, ErrEgressBlocked) {
+			t.Errorf("dial %s: err = %v, want ErrEgressBlocked", addr, err)
+		}
+	}
+}
+
+func TestGitTransportUsesNoProxyAndKeepsCertificateChecksOn(t *testing.T) {
+	tr := NewEgressPolicy(nil).GitTransport()
+	if tr.Proxy != nil {
+		t.Error("the git transport takes a proxy from the environment, which would be dialled instead of the host")
+	}
+	if tr.TLSClientConfig == nil || tr.TLSClientConfig.MinVersion != tls.VersionTLS12 || tr.TLSClientConfig.VerifyPeerCertificate != nil {
+		t.Errorf("TLS config = %+v, want TLS 1.2 minimum with the default verification", tr.TLSClientConfig)
+	}
+}
+
+func TestGitTransportDialsThroughThePolicyOfTheCallWhenTheContextCarriesOne(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	tr := NewEgressPolicy(nil).GitTransport()
+	conn, err := tr.DialContext(context.Background(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback with the transport's own policy: %v", err)
+	}
+	_ = conn.Close()
+
+	blockLoopback := NewEgressPolicy([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})
+	conn, err = tr.DialContext(WithEgressPolicy(context.Background(), blockLoopback), "tcp", l.Addr().String())
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("dial with a call policy that blocks loopback: err = %v, want ErrEgressBlocked", err)
+	}
+}
+
+func TestDialControlRefusesWhatThePolicyBlocks(t *testing.T) {
+	ctl := NewEgressPolicy(nil).DialControl()
+	if err := ctl("tcp", "169.254.169.254:22", nil); !errors.Is(err, ErrEgressBlocked) {
+		t.Errorf("control(metadata) = %v, want ErrEgressBlocked", err)
+	}
+	if err := ctl("tcp", "10.0.0.5:22", nil); err != nil {
+		t.Errorf("control(private) = %v, want nil", err)
+	}
+}
+
+func TestABoundedConnFailsTheReadThatPassesItsLimitAndStartsAgainAtTheNextWrite(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+	go func() {
+		buf := make([]byte, 64)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+			if _, err := server.Write([]byte("0123456789")); err != nil {
+				return
+			}
+		}
+	}()
+	c := &boundedConn{Conn: client, limit: 10}
+	buf := make([]byte, 64)
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := c.Read(buf); err != nil || n != 10 {
+		t.Fatalf("first read = %d, %v, want 10 bytes", n, err)
+	}
+	if _, err := c.Read(buf); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("read past the limit = %v, want ErrResponseTooLarge", err)
+	}
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := c.Read(buf); err != nil || n != 10 {
+		t.Fatalf("read after the next write = %d, %v, want 10 bytes", n, err)
+	}
+	if gitResponseBytesMax <= responseBytesMax {
+		t.Errorf("gitResponseBytesMax = %d, want it above the registry's %d", gitResponseBytesMax, responseBytesMax)
 	}
 }

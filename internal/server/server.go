@@ -30,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -180,6 +181,7 @@ type RouterDeps struct {
 	Pulls         api.PullsDeps
 	Stacks        api.StacksDeps
 	Registries    api.RegistriesDeps
+	Git           api.GitDeps
 	Tags          api.TagsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
@@ -232,6 +234,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterPulls(r, d.Pulls)
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
+	api.RegisterGit(r, d.Git)
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
@@ -749,6 +752,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
 	registryEgress := registry.NewEgressPolicy(cfg.RegistryBlockCIDRs)
 	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)
+	// Git over HTTPS dials through the same policy. go-git keeps its protocols in a package variable, so the
+	// transport is installed once, here, before any route can run a git call (Phase 9, T-09-01).
+	gitx.InstallTransport(registryEgress)
+	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log})
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -822,6 +829,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
+		Git:           api.GitDeps{Git: gitClient, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},

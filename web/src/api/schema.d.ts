@@ -804,6 +804,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git/repos/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a git repository address from the server, for an environment
+         * @description As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Writes nothing.
+         */
+        post: operations["testGitAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images": {
         parameters: {
             query?: never;
@@ -2787,6 +2807,26 @@ export interface paths {
          * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
          */
         delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a git repository address from the server
+         * @description Lists the branches and tags of a repository over HTTPS from the Bayplan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).
+         */
+        post: operations["testGitAddressInstance"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -5842,6 +5882,54 @@ export interface components {
             message: string;
             /** @description The compose service the note is about; empty when it concerns the whole file */
             service: string;
+        };
+        GitTestFailureBody: {
+            /**
+             * @description Why the test failed
+             * @enum {string}
+             */
+            code: "unreachable" | "auth_refused" | "not_found" | "cert_untrusted" | "host_key_changed" | "host_key_untrusted" | "egress_blocked" | "ref_missing" | "timeout" | "too_large";
+            /** @description The host the test was made to */
+            host: string;
+        };
+        GitTestRequest: {
+            /** @description A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
+            caPem?: string;
+            /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
+            url: string;
+        };
+        GitTestResultBody: {
+            /**
+             * Format: int64
+             * @description How many branches the repository has
+             */
+            branchCount: number;
+            /** @description The first 20 branch names, in name order */
+            branches: string[] | null;
+            /** @description The branch HEAD points at; empty when the server does not say */
+            defaultBranch: string;
+            /** @description Set when the test failed; null when it passed */
+            failure: components["schemas"]["GitTestFailureBody"];
+            steps: components["schemas"]["GitTestStepsBody"];
+            /**
+             * Format: int64
+             * @description How many tags the repository has
+             */
+            tagCount: number;
+            /** @description The first 20 tag names, in name order */
+            tags: string[] | null;
+        };
+        GitTestStepBody: {
+            /**
+             * @description passed, failed, not_checked when an earlier step failed, or not_needed when the step did not apply (no sign-in was asked for)
+             * @enum {string}
+             */
+            state: "passed" | "failed" | "not_checked" | "not_needed";
+        };
+        GitTestStepsBody: {
+            reachable: components["schemas"]["GitTestStepBody"];
+            refs: components["schemas"]["GitTestStepBody"];
+            signedIn: components["schemas"]["GitTestStepBody"];
         };
         GrantBody: {
             /**
@@ -12615,6 +12703,43 @@ export interface operations {
             };
         };
     };
+    testGitAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listImages: {
         parameters: {
             query?: {
@@ -16794,6 +16919,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitAddressInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
             };
             /** @description Error */
             default: {
