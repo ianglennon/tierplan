@@ -151,6 +151,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.repo_tested",
   "git.host_key_trusted",
   "git.host_key_retrusted",
+  "git.sync_failed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -314,6 +315,13 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   }
   if (key === "stack.drift_accepted" && details?.stack) {
     return t("audit.actions.stack.drift_accepted_named", { name: details.stack });
+  }
+  // A failed sync names the stack and says why.
+  if (key === "git.sync_failed" && details?.stack) {
+    return t("audit.actions.git.sync_failed_named", {
+      name: details.stack,
+      reason: details.reason ?? details.reason_code ?? "",
+    });
   }
   // A git connection change names the credential or repository it was about.
   if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {

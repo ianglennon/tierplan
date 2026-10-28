@@ -762,7 +762,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitConns := gitconn.NewStore(st, vlt, nil)
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log,
-		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Log: log}),
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log}),
 	}
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{

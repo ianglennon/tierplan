@@ -110,7 +110,8 @@ func (s *Service) runCheck(ctx context.Context, envID, stackID, trigger string, 
 }
 
 func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome, error) {
-	if _, err := s.repo.Stack(ctx, envID, stackID); err != nil {
+	st, err := s.repo.Stack(ctx, envID, stackID)
+	if err != nil {
 		return "", err
 	}
 	sg, err := s.repo.StackGit(ctx, stackID)
@@ -140,17 +141,17 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 	rem, err := s.conns.Remote(ctx, repo)
 	if err != nil {
 		s.log.Error("could not prepare a git remote for a sync check", "stack", stackID, "error", err)
-		return s.fail(ctx, prev, next, ReasonFetchFailed, err)
+		return s.fail(ctx, st, prev, next, ReasonFetchFailed, err)
 	}
 	mirror := gitx.MirrorID(repo.ID)
 	head, err := s.git.FetchRef(ctx, mirror, rem, gitx.RefKind(sg.RefKind), sg.Ref)
 	s.recordUse(ctx, repo, err)
 	if err != nil {
-		return s.fail(ctx, prev, next, reasonOf(err), err)
+		return s.fail(ctx, st, prev, next, reasonOf(err), err)
 	}
 	tree, err := s.git.FolderTree(ctx, mirror, head.SHA, sg.Folder)
 	if err != nil {
-		return s.fail(ctx, prev, next, reasonOf(err), err)
+		return s.fail(ctx, st, prev, next, reasonOf(err), err)
 	}
 	next.HeadCommit, next.HeadTree = head.SHA, tree
 	next.Status, next.Behind = stackops.GitStatusUnknown, 0
@@ -173,12 +174,12 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 	default:
 		touch, err := s.git.CommitsTouching(ctx, mirror, head.SHA, dep.Commit, sg.Folder, BehindCap)
 		if err != nil {
-			return s.fail(ctx, prev, next, reasonOf(err), err)
+			return s.fail(ctx, st, prev, next, reasonOf(err), err)
 		}
 		next.Status, next.Behind = stackops.GitStatusBehind, max(touch.Count, 1)
 		out = OutcomeBehind
 	}
-	if err := s.writeState(ctx, prev, next, systemActor); err != nil {
+	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
 		return "", err
 	}
 	return out, nil
@@ -186,19 +187,11 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 
 // fail records a check that could not be made: the state goes to error with the reason, keeping the last answer about
 // the head and how far behind the stack was, since the last good deployed state keeps running (D-16). The time the
-// error began and the run of failures are kept from one check to the next.
-func (s *Service) fail(ctx context.Context, prev, next stackops.GitState, code ReasonCode, cause error) (Outcome, error) {
+// error began and the run of failures are worked out by writeState.
+func (s *Service) fail(ctx context.Context, st stackops.Stack, prev, next stackops.GitState, code ReasonCode, cause error) (Outcome, error) {
 	next.Status, next.ReasonCode, next.ReasonDetail = stackops.GitStatusError, string(code), detailOf(code, cause)
 	next.HeadCommit, next.HeadTree, next.Behind = prev.HeadCommit, prev.HeadTree, prev.Behind
-	next.ConsecutiveFailures = 1
-	next.ErrorSince = next.CheckedAt
-	if prev.Status == stackops.GitStatusError {
-		next.ConsecutiveFailures = prev.ConsecutiveFailures + 1
-		if prev.ErrorSince != nil {
-			next.ErrorSince = prev.ErrorSince
-		}
-	}
-	if err := s.writeState(ctx, prev, next, systemActor); err != nil {
+	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
 		return "", err
 	}
 	return OutcomeError, nil

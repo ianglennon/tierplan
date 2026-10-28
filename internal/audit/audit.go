@@ -199,6 +199,9 @@ const (
 	ActionGitRepoTested              = "git.repo_tested"
 	ActionGitHostKeyTrusted          = "git.host_key_trusted"
 	ActionGitHostKeyRetrusted        = "git.host_key_retrusted"
+	// ActionGitSyncFailed: the sync check of a git stack went into error, or into a different error (D-16). A repeat of
+	// the error already recorded writes nothing.
+	ActionGitSyncFailed = "git.sync_failed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

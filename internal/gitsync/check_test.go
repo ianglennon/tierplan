@@ -6,11 +6,13 @@ package gitsync_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -65,7 +67,9 @@ func newCheckFixture(t *testing.T, wrap func(gitx.Client) gitx.Client, joined fu
 		client = wrap(client)
 	}
 	clock := &checkClock{t: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)}
-	svc := gitsync.New(gitsync.Deps{Git: client, Conns: f.conns, Repo: rr, Now: clock.now, Joined: joined})
+	svc := gitsync.New(gitsync.Deps{
+		Git: client, Conns: f.conns, Repo: rr, Audit: audit.NewWriter(f.st, v, nil, clock.now), Now: clock.now, Joined: joined,
+	})
 
 	ctx := context.Background()
 	imp, err := f.svc.Import(ctx, f.request())
@@ -111,6 +115,39 @@ func (f *checkFixture) state(t *testing.T) stackops.GitState {
 		t.Fatalf("GitState: %v", err)
 	}
 	return s
+}
+
+// syncFailure is one git.sync_failed row of the audit log.
+type syncFailure struct {
+	ActorID, TargetType, TargetID, EnvID, Result string
+	Details                                      map[string]string
+}
+
+// syncFailures are the git.sync_failed entries so far, oldest first.
+func (f *checkFixture) syncFailures(t *testing.T) []syncFailure {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT actor_id, target_type, target_id, COALESCE(env_id, ''), result, details
+		FROM audit_log WHERE action = ? ORDER BY seq`, audit.ActionGitSyncFailed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []syncFailure
+	for rows.Next() {
+		var e syncFailure
+		var details string
+		if err := rows.Scan(&e.ActorID, &e.TargetType, &e.TargetID, &e.EnvID, &e.Result, &details); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(details), &e.Details); err != nil {
+			t.Fatalf("details %q: %v", details, err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // changeWeb commits a change to the stack's folder.
@@ -272,6 +309,63 @@ func TestCheckRecordsAFailureAndRecovers(t *testing.T) {
 	}
 	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.ReasonCode != "" || s.ReasonDetail != "" || s.ErrorSince != nil || s.ConsecutiveFailures != 0 {
 		t.Errorf("state = %+v, want the error cleared", s)
+	}
+}
+
+func TestCheckRefGoneThenClears(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	f.deploy(t)
+	f.check(t)
+	if got := f.syncFailures(t); len(got) != 0 {
+		t.Fatalf("audit rows before any error = %+v", got)
+	}
+	f.repo.DeleteRef(t, "refs/heads/main")
+
+	f.clock.advance(time.Minute)
+	if out := f.check(t); out != gitsync.OutcomeError {
+		t.Fatalf("check of a branch that is gone = %s, want error", out)
+	}
+	first := f.state(t)
+	if first.Status != stackops.GitStatusError || first.ReasonCode != string(gitsync.ReasonRefGone) || first.ErrorSince == nil ||
+		first.ConsecutiveFailures != 1 || first.DeployedCommit != f.sha {
+		t.Fatalf("state = %+v, want error ref_gone from now, one failure, the deployed commit kept", first)
+	}
+	rows := f.syncFailures(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows after the first error = %+v, want exactly one", rows)
+	}
+	if got := rows[0]; got.ActorID != "system:gitsync" || got.TargetType != "stack" || got.TargetID != f.stackID || got.EnvID != "env-1" || got.Result != "failure" {
+		t.Errorf("audit row = %+v, want the system's failure on the stack", got)
+	}
+	if d := rows[0].Details; d["stack"] != "web" || d["reason_code"] != "ref_gone" || d["commit"] != f.sha[:7] || d["reason"] != first.ReasonDetail {
+		t.Errorf("audit details = %v, want the stack, ref_gone, the short SHA %s and the sentence", d, f.sha[:7])
+	}
+
+	// The same error again adds to the run and writes nothing more.
+	f.clock.advance(time.Minute)
+	f.check(t)
+	again := f.state(t)
+	if again.ConsecutiveFailures != 2 || again.ErrorSince == nil || !again.ErrorSince.Equal(*first.ErrorSince) {
+		t.Errorf("second failure = %+v, want 2 failures since %v", again, first.ErrorSince)
+	}
+	if rows := f.syncFailures(t); len(rows) != 1 {
+		t.Errorf("audit rows after a repeated error = %d, want still one", len(rows))
+	}
+
+	// The branch comes back: the status clears with its reason and its start.
+	f.repo.Commit(t, map[string]string{"README.md": "back\n"}, "back")
+	if out := f.check(t); out != gitsync.OutcomeInSync {
+		t.Fatalf("check once the branch is back = %s, want in_sync", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.ReasonCode != "" || s.ReasonDetail != "" || s.ErrorSince != nil || s.ConsecutiveFailures != 0 {
+		t.Errorf("state = %+v, want the error cleared", s)
+	}
+	// An error after the clear is a new error again.
+	f.repo.DeleteRef(t, "refs/heads/main")
+	f.check(t)
+	if rows := f.syncFailures(t); len(rows) != 2 {
+		t.Errorf("audit rows after an error that follows a good check = %d, want 2", len(rows))
 	}
 }
 

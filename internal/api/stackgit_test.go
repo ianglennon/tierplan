@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/api"
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/stackops"
 )
@@ -315,5 +316,61 @@ func TestGitSyncBellItems(t *testing.T) {
 	}
 	if items := g.gitSyncItems(t, g.admin); len(items) != 0 {
 		t.Errorf("items once back in sync = %+v, want none", items)
+	}
+}
+
+func TestStackGitErrorState(t *testing.T) {
+	t.Parallel()
+	g, stackID, ended := newStackGitFix(t)
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeInSync {
+		t.Fatalf("first check = %s, want in_sync", out)
+	}
+	if got := g.readGit(t, g.admin, stackID); got.Status != "in_sync" || got.ReasonCode != "" {
+		t.Fatalf("git before the error = %+v, want in_sync", got)
+	}
+
+	// The branch is deleted on the git host.
+	g.repo.DeleteRef(t, "refs/heads/main")
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeError {
+		t.Fatalf("check of a branch that is gone = %s, want error", out)
+	}
+	got := g.readGit(t, g.admin, stackID)
+	if got.Status != "error" || got.ReasonCode != "ref_gone" || got.ReasonDetail == "" || got.CheckedAt == "" {
+		t.Fatalf("git after the failure = %+v, want error ref_gone with a sentence, never in_sync (GIT-09)", got)
+	}
+	// The last good state keeps running: what was deployed is still what the stack says is deployed.
+	if got.DeployedSha != g.sha {
+		t.Errorf("deployed = %s, want %s kept", got.DeployedSha, g.sha)
+	}
+	// The stack list says the same.
+	rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/env/"+g.env+"/stacks", "")
+	var list listedGit
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &list) != nil {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	for _, it := range list.Items {
+		if it.ID == stackID && (it.Git == nil || it.Git.Status != "error" || it.Git.ReasonCode != "ref_gone") {
+			t.Errorf("list git = %+v, want error ref_gone", it.Git)
+		}
+	}
+	if n := len(g.f.audits(t, audit.ActionGitSyncFailed)); n != 1 {
+		t.Errorf("git.sync_failed rows = %d, want 1", n)
+	}
+	// A second failed check changes nothing the reader sees and writes no second row.
+	g.checkNow(t, g.admin, stackID, ended)
+	if again := g.readGit(t, g.admin, stackID); again.Status != "error" || again.ReasonCode != "ref_gone" {
+		t.Errorf("git after a repeated failure = %+v, want the same error", again)
+	}
+	if n := len(g.f.audits(t, audit.ActionGitSyncFailed)); n != 1 {
+		t.Errorf("git.sync_failed rows after a repeat = %d, want still 1", n)
+	}
+
+	// The branch is back: the next good check clears the error.
+	g.repo.Commit(t, map[string]string{"README.md": "back\n"}, "back")
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeInSync {
+		t.Fatalf("check once the branch is back = %s, want in_sync", out)
+	}
+	if back := g.readGit(t, g.admin, stackID); back.Status != "in_sync" || back.ReasonCode != "" || back.ReasonDetail != "" {
+		t.Errorf("git after the good check = %+v, want in_sync with no reason", back)
 	}
 }

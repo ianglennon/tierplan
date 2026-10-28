@@ -14,11 +14,39 @@ import (
 )
 
 // writeState stores the answer of a check. It is the one place stack_git_state is written, so that what is new in an
-// answer (a stack that has just gone into error) is judged in one place: the audit row and the bell item of a new error
-// hang on this seam (D-16). actor is who the answer is for; nothing is audited yet.
+// answer is judged in one place (D-16). st is the stack the state belongs to and actor who the answer is for.
 //
-// An answer that is the one already stored, looked at again, changes only the time of the check.
-func (s *Service) writeState(ctx context.Context, prev, next stackops.GitState, _ audit.Actor) error {
+// An answer of error is new when the stored state was not an error or the reason code differs. A new error starts
+// error_since and the run of failures at one, and is audited once as git.sync_failed. The same error seen again only
+// adds to the run of failures and keeps its start, and writes nothing to the audit log. Any other answer clears the
+// error's start and the run, so the next error is new. An answer that is the one already stored, looked at again,
+// changes only the time of the check.
+func (s *Service) writeState(ctx context.Context, st stackops.Stack, prev, next stackops.GitState, actor audit.Actor) error {
+	fresh := false
+	switch {
+	case next.Status != stackops.GitStatusError:
+		next.ErrorSince, next.ConsecutiveFailures = nil, 0
+	case prev.Status == stackops.GitStatusError && prev.ReasonCode == next.ReasonCode:
+		next.ConsecutiveFailures = max(prev.ConsecutiveFailures, 1) + 1
+		next.ErrorSince = prev.ErrorSince
+		if next.ErrorSince == nil {
+			next.ErrorSince = next.CheckedAt
+		}
+	default:
+		fresh = true
+		next.ConsecutiveFailures = 1
+		next.ErrorSince = next.CheckedAt
+	}
+	if err := s.store(ctx, prev, next); err != nil {
+		return err
+	}
+	if fresh {
+		s.auditSyncFailed(ctx, st, next, actor)
+	}
+	return nil
+}
+
+func (s *Service) store(ctx context.Context, prev, next stackops.GitState) error {
 	if prev.CheckedAt != nil && sameAnswer(prev, next) {
 		if next.CheckedAt == nil {
 			return nil
@@ -29,6 +57,31 @@ func (s *Service) writeState(ctx context.Context, prev, next stackops.GitState, 
 		}
 	}
 	return s.repo.WriteGitState(ctx, next)
+}
+
+// shortSHALen is how many characters of a commit the audit log keeps.
+const shortSHALen = 7
+
+// auditSyncFailed records that a stack's sync went into an error. The detail names the stack, the reason code and its
+// fixed sentence, and the short SHA of the head last seen; nothing from the server or the credential. A failure to write
+// the entry is logged and does not undo the state: the stack must read error either way.
+func (s *Service) auditSyncFailed(ctx context.Context, st stackops.Stack, next stackops.GitState, actor audit.Actor) {
+	if s.audit == nil {
+		return
+	}
+	commit := next.HeadCommit
+	if len(commit) > shortSHALen {
+		commit = commit[:shortSHALen]
+	}
+	err := s.audit.Record(ctx, audit.Entry{
+		Actor: actor, Action: audit.ActionGitSyncFailed, TargetType: "stack", TargetID: st.ID, EnvID: st.EnvID,
+		Result: audit.ResultFailure, Details: map[string]string{
+			"stack": st.Name, "reason_code": next.ReasonCode, "reason": next.ReasonDetail, "commit": commit,
+		},
+	})
+	if err != nil {
+		s.log.Error("could not audit a failed git sync", "stack", st.ID, "error", err)
+	}
 }
 
 // sameAnswer says whether two states differ only in when they were checked.

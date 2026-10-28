@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -25,6 +26,8 @@ type Deps struct {
 	// Repo stores the stacks.
 	Repo stackops.Repo
 	Log  *slog.Logger
+	// Audit records a stack's sync going into error. Nil records nothing (a test that does not look at the log).
+	Audit *audit.Writer
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 	// Joined, when set, is called each time a caller starts or joins the check of a stack, with how many callers wait on
@@ -38,6 +41,7 @@ type Service struct {
 	conns *gitconn.Store
 	repo  stackops.Repo
 	log   *slog.Logger
+	audit *audit.Writer
 	now   func() time.Time
 
 	joined func(stackID string, waiting int)
@@ -48,7 +52,7 @@ type Service struct {
 
 // New returns a Service.
 func New(d Deps) *Service {
-	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, now: d.Now, joined: d.Joined, checking: map[string]*checkCall{}}
+	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, joined: d.Joined, checking: map[string]*checkCall{}}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

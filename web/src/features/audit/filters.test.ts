@@ -147,6 +147,15 @@ describe("actionLabel", () => {
     expect(audit.audit.actions.stack.drift_accepted).toBe("Accepted live state into the draft");
   });
 
+  it("labels a failed git sync with the stack and the reason when the entry has them", () => {
+    expect(KNOWN_ACTIONS).toContain("git.sync_failed");
+    expect(
+      actionLabel("git.sync_failed", echo, { stack: "web", reason: "The branch is gone." }),
+    ).toBe("t:audit.actions.git.sync_failed_named");
+    expect(actionLabel("git.sync_failed", echo)).toBe("t:audit.actions.git.sync_failed");
+    expect(audit.audit.actions.git.sync_failed_named).toBe("Sync of {{name}} failed: {{reason}}");
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];
