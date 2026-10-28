@@ -2997,7 +2997,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -5937,7 +5937,7 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error";
             /** @description For restart_loop_container: the exit code of the container's newest death */
             lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
@@ -5953,6 +5953,10 @@ export interface components {
             offsetSeconds?: number;
             /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
             reason?: string;
+            /** @description For git_sync_error: why the sync check failed, one of the reason codes of the stack's git route (fetch_failed, host_key_changed, host_key_untrusted, ref_gone, folder_gone, checks_failed, auto_deploy_blocked, auto_deploy_failed) */
+            reasonCode?: string;
+            /** @description For git_sync_error: a sentence on the reason, at most 300 characters; it carries nothing from the server */
+            reasonDetail?: string;
             /** @description For restart_loop: the service's name, at most 64 characters */
             service?: string;
             /** @description For restart_loop: the service's ID */
@@ -5967,6 +5971,10 @@ export interface components {
              * @description When the problem began, where that is known. Items are shown newest first
              */
             since?: string;
+            /** @description For git_sync_error: the stack's ID */
+            stackId?: string;
+            /** @description For git_sync_error: the stack's name, at most 64 characters */
+            stackName?: string;
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes

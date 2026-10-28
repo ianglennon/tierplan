@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/stackops"
 )
 
 // EnvWarningsDeps are the dependencies of the environment warnings route.
@@ -25,6 +26,8 @@ type EnvWarningsDeps struct {
 	// Clusters is the cluster reader whose last read says which services are in a restart loop
 	// (RES-13). Nil lists none.
 	Clusters *envs.Clusters
+	// Repo holds the git stacks' sync states, which the bell lists the errors of. Nil lists none.
+	Repo *stackops.Repo
 	// Agents are the node list's own dependencies, so an agent reads here as it does
 	// in the list: its certificate, clock, update state and the manual update need.
 	Agents AgentsDeps
@@ -36,7 +39,7 @@ type EnvWarningsDeps struct {
 
 // EnvWarningBody is one environment problem in the header bell.
 type EnvWarningBody struct {
-	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered,restart_loop,restart_loop_container" doc:"Which problem this is"`
+	ID            string `json:"id" enum:"env_offline,cert_not_renewing,manual_update_needed,clock_skew,pending_long,cluster_changed,fold_offered,restart_loop,restart_loop_container,git_sync_error" doc:"Which problem this is"`
 	Severity      string `json:"severity" enum:"error,warning" doc:"error: an environment is out of reach or a certificate has expired. warning: something needs attention"`
 	EnvID         string `json:"envId,omitempty" doc:"The environment the problem is about. Absent for manual_update_needed when it spans more than one environment"`
 	EnvName       string `json:"envName,omitempty" doc:"That environment's name, at most 64 characters. For fold_offered, the swarm environment"`
@@ -58,6 +61,11 @@ type EnvWarningBody struct {
 	ContainerID  string `json:"containerId,omitempty" doc:"For restart_loop_container: the container's ID as the last read holds it"`
 	NodeID       string `json:"nodeId,omitempty" doc:"For restart_loop_container: the node the container is on, as the container routes take it"`
 	LastExitCode string `json:"lastExitCode,omitempty" doc:"For restart_loop_container: the exit code of the container's newest death"`
+
+	StackID      string `json:"stackId,omitempty" doc:"For git_sync_error: the stack's ID"`
+	StackName    string `json:"stackName,omitempty" doc:"For git_sync_error: the stack's name, at most 64 characters"`
+	ReasonCode   string `json:"reasonCode,omitempty" doc:"For git_sync_error: why the sync check failed, one of the reason codes of the stack's git route (fetch_failed, host_key_changed, host_key_untrusted, ref_gone, folder_gone, checks_failed, auto_deploy_blocked, auto_deploy_failed)"`
+	ReasonDetail string `json:"reasonDetail,omitempty" doc:"For git_sync_error: a sentence on the reason, at most 300 characters; it carries nothing from the server"`
 }
 
 // EnvWarningsBody lists the environment warnings that apply now.
@@ -79,6 +87,7 @@ func envWarningBody(w envs.EnvWarning) EnvWarningBody {
 		OffsetSeconds: envs.ClockOffsetSeconds(w.Offset),
 		Service:       w.Service, ServiceID: w.ServiceID, WindowMinutes: w.WindowMinutes, LatestError: w.LatestError,
 		Container: w.Container, ContainerID: w.ContainerID, NodeID: w.NodeID, LastExitCode: w.LastExitCode,
+		StackID: w.StackID, StackName: w.StackName, ReasonCode: w.ReasonCode, ReasonDetail: w.ReasonDetail,
 	}
 }
 
@@ -107,7 +116,8 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 			"re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, " +
 			"only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, " +
 			"only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, " +
-			"only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, " +
+			"only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, " +
+			"only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again). Only environments the caller holds environments.read for are considered, " +
 			"so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. " +
 			"Errors come first, then the newest. Names are at most 64 characters.",
 		Tags: []string{"environments"},
@@ -164,6 +174,12 @@ func RegisterEnvWarnings(r *httpx.Router, d EnvWarningsDeps) {
 		warnings := envs.Warnings(visible, states, at)
 		warnings = append(warnings, restartLoopWarnings(d, perEnv, visible)...)
 		warnings = append(warnings, containerLoopWarnings(d, perEnv, visible)...)
+		gitWarnings, err := gitSyncWarnings(ctx, d, perEnv, visible)
+		if err != nil {
+			d.Log.Error("environment warnings failed", "step", "git sync errors", "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		warnings = append(warnings, gitWarnings...)
 		envs.SortWarnings(warnings)
 		items := make([]EnvWarningBody, 0, len(warnings))
 		for _, w := range warnings {
@@ -223,4 +239,57 @@ func restartLoopWarnings(d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visib
 		}
 	}
 	return out
+}
+
+// gitSyncWarnings are the sync errors of the git stacks of the environments the caller manages git on: nothing is read
+// from a repository for the bell, only the states the checks stored. An environment whose stacks cannot be read fails the
+// whole answer, as the other reads of the bell do.
+func gitSyncWarnings(ctx context.Context, d EnvWarningsDeps, perEnv map[string][]rbac.Perm, visible []envs.Environment) ([]envs.EnvWarning, error) {
+	if d.Repo == nil || d.Repo.Store == nil {
+		return nil, nil
+	}
+	var out []envs.EnvWarning
+	for _, e := range visible {
+		if !canIn(perEnv, e.ID, rbac.PermGitManage) {
+			continue
+		}
+		states, err := d.Repo.GitStates(ctx, e.ID)
+		if err != nil {
+			return nil, err
+		}
+		var failing []envs.GitSyncError
+		for id, st := range states {
+			if st.Status != stackops.GitStatusError {
+				continue
+			}
+			failing = append(failing, envs.GitSyncError{StackID: id, ReasonCode: st.ReasonCode, ReasonDetail: st.ReasonDetail, Since: errorSince(st)})
+		}
+		if len(failing) == 0 {
+			continue
+		}
+		stacks, err := d.Repo.Stacks(ctx, e.ID)
+		if err != nil {
+			return nil, err
+		}
+		names := make(map[string]string, len(stacks))
+		for _, s := range stacks {
+			names[s.ID] = s.Name
+		}
+		for i := range failing {
+			failing[i].StackName = names[failing[i].StackID]
+		}
+		out = append(out, envs.GitSyncWarnings(e, failing)...)
+	}
+	return out, nil
+}
+
+// errorSince is when a stack's sync went into error, the time of its last check if the state does not say.
+func errorSince(st stackops.GitState) time.Time {
+	switch {
+	case st.ErrorSince != nil:
+		return *st.ErrorSince
+	case st.CheckedAt != nil:
+		return *st.CheckedAt
+	}
+	return time.Time{}
 }

@@ -295,3 +295,29 @@ func TestContainerLoopWarningsCutLongNamesAndSortByNodeAndName(t *testing.T) {
 		t.Errorf("order = %v, want the same order every time: by node, then name", order)
 	}
 }
+
+func TestGitSyncWarningsAreErrorsWithCappedText(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 10, 28, 8, 0, 0, 0, time.UTC)
+	got := GitSyncWarnings(Environment{ID: "e1", Name: "prod"}, []GitSyncError{
+		{StackID: "s2", StackName: strings.Repeat("n", 200), ReasonCode: "fetch_failed", ReasonDetail: strings.Repeat("d", 1000), Since: since},
+		{StackID: "s1", StackName: "web", ReasonCode: "ref_gone", ReasonDetail: "The branch or tag no longer exists.", Since: since.Add(time.Hour)},
+	})
+	if len(got) != 2 {
+		t.Fatalf("warnings = %+v, want one for each stack", got)
+	}
+	if got[0].StackID != "s1" {
+		t.Errorf("order = %s first, want the newest error first", got[0].StackID)
+	}
+	for _, w := range got {
+		if w.ID != WarnGitSyncError || w.Severity != SeverityError || w.EnvID != "e1" || w.EnvName != "prod" {
+			t.Errorf("warning = %+v, want a git_sync_error of environment e1", w)
+		}
+	}
+	if n := len([]rune(got[1].StackName)); n != maxNodeLen {
+		t.Errorf("stack name has %d characters, want it cut to %d", n, maxNodeLen)
+	}
+	if n := len([]rune(got[1].ReasonDetail)); n != maxWarnError {
+		t.Errorf("reason detail has %d characters, want it cut to %d", n, maxWarnError)
+	}
+}

@@ -23,6 +23,9 @@ const (
 	// WarnRestartLoopContainer is a standalone container that keeps dying and whose alerts
 	// nobody muted (plan 06-36, RES-13, D-15).
 	WarnRestartLoopContainer = "restart_loop_container"
+	// The next is a git stack whose sync check is in error: the repository can't be reached, the ref is gone and
+	// so on (Phase 9, D-16). It is told to whoever manages the environment's git, and goes when the stack is in sync.
+	WarnGitSyncError = "git_sync_error"
 )
 
 // maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
@@ -52,6 +55,9 @@ type EnvWarning struct {
 	// For a container loop: the container's name and ID, the node it is on and its last
 	// exit code. Count and WindowMinutes are as for a service.
 	Container, ContainerID, NodeID, LastExitCode string
+	// For a git sync error: the stack, the reason code of its check and the sentence that goes with it. Since is when
+	// the error began.
+	StackID, StackName, ReasonCode, ReasonDetail string
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -221,6 +227,9 @@ func SortWarnings(out []EnvWarning) {
 		}
 		if a.ContainerID != b.ContainerID {
 			return a.ContainerID < b.ContainerID
+		}
+		if a.StackID != b.StackID {
+			return a.StackID < b.StackID
 		}
 		return a.ID < b.ID
 	})
