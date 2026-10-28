@@ -180,3 +180,167 @@ func TestGitSSHHostKeyIsValidated(t *testing.T) {
 		t.Errorf("create an https repository with a host key: %d %s, want 422 host_key_not_ssh", rec.Code, rec.Body)
 	}
 }
+
+// savedSSHRepo saves the repository with the server's key trusted and returns its ID.
+func (s *sshRepoFix) savedSSHRepo(t *testing.T, name string) string {
+	t.Helper()
+	rec := s.createRepo(t, name, map[string]any{"hostKey": s.srv.HostKeyLine})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	return decodeGitRepo(t, rec).ID
+}
+
+func TestGitSSHUntrustedWithoutKey(t *testing.T) {
+	t.Parallel()
+	s := newSSHRepoFix(t)
+	rec := s.createRepo(t, "app", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a repository saved without a key: %d %s", rec.Code, rec.Body)
+	}
+	id := decodeGitRepo(t, rec).ID
+
+	for i := range 2 {
+		got := s.testSaved(t, id)
+		if got.Failure == nil || got.Failure.Code != "host_key_untrusted" || got.Failure.Host != "127.0.0.1" {
+			t.Fatalf("test %d = %+v, want host_key_untrusted at 127.0.0.1", i, got.Failure)
+		}
+		if got.HostKey.State != "untrusted" || got.HostKey.Fingerprint != ssh.FingerprintSHA256(s.srv.HostKey) || got.HostKey.Key != s.srv.HostKeyLine {
+			t.Errorf("test %d hostKey = %+v, want the key to confirm", i, got.HostKey)
+		}
+	}
+	if n := s.srv.AuthAttempts(); n != 0 {
+		t.Errorf("authentication attempts = %d, want none", n)
+	}
+	// The last test is on the repository.
+	one := decodeGitRepo(t, s.f.credCall(t, s.admin, http.MethodGet, "/api/git/repos/"+id, ""))
+	if one.LastTest == nil || one.LastTest.OK || one.LastTest.Code != "host_key_untrusted" {
+		t.Errorf("last test = %+v, want host_key_untrusted", one.LastTest)
+	}
+}
+
+func TestGitSSHChangedKeyStops(t *testing.T) {
+	t.Parallel()
+	s := newSSHRepoFix(t)
+	id := s.savedSSHRepo(t, "app")
+	if got := s.testSaved(t, id); got.Failure != nil {
+		t.Fatalf("test before the key changed: %+v", got.Failure)
+	}
+	oldFP, attempts := ssh.FingerprintSHA256(s.srv.HostKey), s.srv.AuthAttempts()
+
+	s.srv.RotateHostKey(t)
+	newFP := ssh.FingerprintSHA256(s.srv.HostKey)
+	for i := range 2 {
+		got := s.testSaved(t, id)
+		if got.Failure == nil || got.Failure.Code != "host_key_changed" {
+			t.Fatalf("test %d after the key changed = %+v, want host_key_changed", i, got.Failure)
+		}
+		if got.HostKey.State != "changed" || got.HostKey.Fingerprint != newFP || got.HostKey.SavedFingerprint != oldFP {
+			t.Errorf("test %d hostKey = %+v, want changed with the new fingerprint %s and the saved %s", i, got.HostKey, newFP, oldFP)
+		}
+	}
+	// Never accepted on its own: no credential was sent, and the saved key is still the old one.
+	if n := s.srv.AuthAttempts(); n != attempts {
+		t.Errorf("authentication attempts went from %d to %d: a credential was sent to a host whose key changed", attempts, n)
+	}
+	one := decodeGitRepo(t, s.f.credCall(t, s.admin, http.MethodGet, "/api/git/repos/"+id, ""))
+	if one.LastTest == nil || one.LastTest.Code != "host_key_changed" {
+		t.Errorf("last test = %+v, want host_key_changed", one.LastTest)
+	}
+	if got := s.testAddress(t, map[string]any{"hostKey": s.srv.HostKeyLine}); got.Failure != nil || got.HostKey.State != "trusted" {
+		t.Errorf("an address test sent with the new key = %+v: a person may confirm it for that one test", got)
+	}
+	if got := s.testSaved(t, id); got.Failure == nil || got.Failure.Code != "host_key_changed" {
+		t.Errorf("the saved repository after that one confirmed test = %+v, want host_key_changed still", got.Failure)
+	}
+}
+
+func TestGitSSHRetrust(t *testing.T) {
+	t.Parallel()
+	s := newSSHRepoFix(t)
+	id := s.savedSSHRepo(t, "app")
+	oldFP := ssh.FingerprintSHA256(s.srv.HostKey)
+	s.srv.RotateHostKey(t)
+	newFP := ssh.FingerprintSHA256(s.srv.HostKey)
+	if got := s.testSaved(t, id); got.Failure == nil || got.Failure.Code != "host_key_changed" {
+		t.Fatalf("test after the key changed = %+v", got.Failure)
+	}
+
+	for name, body := range map[string]string{
+		"not a key":   gitJSON(map[string]any{"hostKey": "not a key"}),
+		"no key":      gitJSON(map[string]any{}),
+		"a truncated": gitJSON(map[string]any{"hostKey": "ssh-ed25519 AAAA"}),
+	} {
+		if rec := s.f.credCall(t, s.admin, http.MethodPost, "/api/git/repos/"+id+"/trust-host-key", body); rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: %d %s, want 422", name, rec.Code, rec.Body)
+		}
+	}
+	if rec := s.f.credCall(t, s.admin, http.MethodPost, "/api/git/repos/nope/trust-host-key", gitJSON(map[string]any{"hostKey": s.srv.HostKeyLine})); rec.Code != http.StatusNotFound {
+		t.Errorf("a repository that does not exist: %d %s, want 404", rec.Code, rec.Body)
+	}
+
+	rec := s.f.credCall(t, s.admin, http.MethodPost, "/api/git/repos/"+id+"/trust-host-key", gitJSON(map[string]any{"hostKey": s.srv.HostKeyLine}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trust-host-key: %d %s", rec.Code, rec.Body)
+	}
+	var repo struct {
+		HostKey  *struct{ Fingerprint string } `json:"hostKey"`
+		LastTest *struct{}                     `json:"lastTest"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &repo); err != nil || repo.HostKey == nil || repo.HostKey.Fingerprint != newFP {
+		t.Errorf("repository after trusting = %s (%v), want the new key", rec.Body, err)
+	}
+	if repo.LastTest != nil {
+		t.Errorf("the last test was kept: it was seen against a key that no longer applies")
+	}
+	rows := s.f.auditRows(t, "git.host_key_retrusted")
+	if len(rows) != 1 || rows[0].TargetID != id || rows[0].Details["fingerprint"] != newFP || rows[0].Details["fingerprint_from"] != oldFP {
+		t.Errorf("git.host_key_retrusted audit rows = %+v, want one with both fingerprints", rows)
+	}
+	if got := s.testSaved(t, id); got.Failure != nil || got.HostKey.State != "trusted" {
+		t.Errorf("test after re-trusting = %+v, want it to pass", got)
+	}
+}
+
+func TestGitSSHRetrustNeedsGitManageOrGitInstance(t *testing.T) {
+	t.Parallel()
+	s := newSSHRepoFix(t)
+	f := s.f
+	env := f.add(t).ID
+	envAdmin := f.asRoleOn(t, "envadmin", env, "admin")
+	operator := f.asRoleOn(t, "operator", env, "operator")
+	hk := gitJSON(map[string]any{"hostKey": s.srv.HostKeyLine})
+
+	// An environment repository: its Admin may trust a key, an Operator may not.
+	rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+env+"/git/repos",
+		gitJSON(map[string]any{"name": "envrepo", "url": s.srv.URL, "credentialId": s.credID}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create environment repository: %d %s", rec.Code, rec.Body)
+	}
+	envRepo := decodeGitRepo(t, rec).ID
+	if rec := f.credCall(t, operator, http.MethodPost, "/api/env/"+env+"/git/repos/"+envRepo+"/trust-host-key", hk); rec.Code != http.StatusForbidden {
+		t.Errorf("operator: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+env+"/git/repos/"+envRepo+"/trust-host-key", hk); rec.Code != http.StatusOK {
+		t.Errorf("env admin: %d %s, want 200", rec.Code, rec.Body)
+	}
+	rows := f.auditRows(t, "git.host_key_trusted")
+	if len(rows) != 1 || rows[0].EnvID != env || rows[0].Details["layer"] != "environment" {
+		t.Errorf("git.host_key_trusted rows = %+v, want one for the environment, the first key of a repository", rows)
+	}
+
+	// The instance twin needs git.instance, and each route answers only for its own layer.
+	instRepo := s.savedSSHRepo(t, "instrepo")
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/git/repos/"+instRepo+"/trust-host-key", hk); rec.Code != http.StatusForbidden {
+		t.Errorf("env admin on the instance route: %d %s, want 403", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, s.admin, http.MethodPost, "/api/git/repos/"+envRepo+"/trust-host-key", hk); rec.Code != http.StatusNotFound {
+		t.Errorf("an environment repository on the instance route: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, envAdmin, http.MethodPost, "/api/env/"+env+"/git/repos/"+instRepo+"/trust-host-key", hk); rec.Code != http.StatusNotFound {
+		t.Errorf("an instance repository on the environment route: %d %s, want 404", rec.Code, rec.Body)
+	}
+	if rec := f.credCall(t, s.admin, http.MethodPost, "/api/git/repos/"+instRepo+"/trust-host-key", hk); rec.Code != http.StatusOK {
+		t.Errorf("instance admin on the instance route: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
