@@ -658,12 +658,16 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor, origin string) (S
 	if err := r.writeContent(ctx, q, id.String(), draft.Copy); err != nil {
 		return Snapshot{}, err
 	}
+	// A revision records what the draft was made from, so it restores without the repository (D-08).
+	if err := r.copyGit(ctx, q, id.String(), draft.Git, ""); err != nil {
+		return Snapshot{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
 	}
 	return Snapshot{
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, Copy: draft.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, Git: draft.Git, Copy: draft.Copy,
 	}, nil
 }
 
@@ -755,6 +759,10 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 	if err := r.writeContent(ctx, q, id.String(), from.Copy); err != nil {
 		return Snapshot{}, err
 	}
+	// The copy is of the revision it restores, so it records that revision's source, not the draft's (D-08).
+	if err := r.copyGit(ctx, q, id.String(), from.Git, ""); err != nil {
+		return Snapshot{}, err
+	}
 	// The copy starts with the platforms of the revision it copies, as it starts with its pins (G-08-4). The record
 	// is the one the snapshot given carries, which a Repo read from the stored row (a record that did not read is none).
 	recorded := from.Platforms
@@ -772,7 +780,7 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 	}
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Copy: from.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Git: from.Git, Copy: from.Copy,
 		Platforms: recorded,
 	}, nil
 }

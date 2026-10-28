@@ -893,7 +893,7 @@ func registerGitRepoManagement(r *httpx.Router, d GitDeps) {
 		"When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. " +
 		"The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. " +
 		"Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. "
-	const deleteDoc = "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. "
+	const deleteDoc = "Removes the repository. 409 repo_in_use, with the number of stacks in errors (conflict.count), when stacks still use it: nothing is removed. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. "
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "listGitRepos",

@@ -24,6 +24,7 @@ import (
 const (
 	problemGitCredentialInUse = "credential_in_use" //nolint:gosec // G101: a problem type, not a credential
 	problemRepositoryNotFound = "repository_not_found"
+	problemGitRepoInUse       = "repo_in_use"
 
 	gitCredentialTargetType = "git_credential" //nolint:gosec // G101: a target type, not a credential
 	gitRepoTargetType       = "git_repo"
@@ -204,6 +205,7 @@ func gitFieldProblems(ve *gitconn.ValidationError) error {
 func (d GitDeps) gitFail(what string, err error) error {
 	var ve *gitconn.ValidationError
 	var inUse *gitconn.InUseError
+	var repoInUse *gitconn.RepoInUseError
 	switch {
 	case errors.As(err, &ve):
 		return gitFieldProblems(ve)
@@ -216,6 +218,12 @@ func (d GitDeps) gitFail(what string, err error) error {
 			Errors: []*huma.ErrorDetail{{Location: "conflict.count", Message: strconv.Itoa(inUse.Count)}},
 		}
 		return m
+	case errors.As(err, &repoInUse):
+		return &huma.ErrorModel{
+			Type: problemGitRepoInUse, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+			Detail: "Stacks use this repository. Delete them, or make them use another, first.",
+			Errors: []*huma.ErrorDetail{{Location: "conflict.count", Message: strconv.Itoa(repoInUse.Count)}},
+		}
 	case errors.Is(err, gitconn.ErrNotFound):
 		return httpx.Problem(http.StatusNotFound, problemCredentialNotFound, "not found")
 	}

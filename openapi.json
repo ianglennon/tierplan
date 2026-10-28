@@ -21287,7 +21287,7 @@
     },
     "/api/env/{envId}/git/repos/{repoId}": {
       "delete": {
-        "description": "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+        "description": "Removes the repository. 409 repo_in_use, with the number of stacks in errors (conflict.count), when stacks still use it: nothing is removed. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
         "operationId": "deleteGitRepo",
         "parameters": [
           {
@@ -29507,7 +29507,7 @@
     },
     "/api/git/repos/{repoId}": {
       "delete": {
-        "description": "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+        "description": "Removes the repository. 409 repo_in_use, with the number of stacks in errors (conflict.count), when stacks still use it: nothing is removed. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
         "operationId": "deleteGitRepoInstance",
         "parameters": [
           {

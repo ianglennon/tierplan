@@ -124,7 +124,7 @@ type Repo struct {
 	HostKeyTrustedBy string
 	HostKeyTrustedAt *time.Time
 	LastTest         *LastTest
-	// UsedBy is how many stacks use it. Stacks cannot point at a repository yet.
+	// UsedBy is how many stacks use it.
 	UsedBy    int
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -506,6 +506,7 @@ func repoOf(r sqlc.GetGitRepoRow) Repo {
 		ID: r.ID, EnvID: r.EnvID.String, Name: r.Name, URL: r.Url, CredentialID: r.CredentialID.String,
 		CredentialName: r.CredentialName, CredentialEnvID: r.CredentialEnvID.String, CAPEM: r.CaPem,
 		HostKey: r.HostKey, HostKeyFP: r.HostKeyFp, HostKeyTrustedBy: r.HostKeyTrustedBy,
+		UsedBy:    int(r.UsedBy),
 		CreatedAt: time.Unix(0, r.CreatedAt).UTC(), UpdatedAt: time.Unix(0, r.UpdatedAt).UTC(), CreatedBy: r.CreatedBy,
 	}
 	if r.HostKeyTrustedAt.Valid {
@@ -952,6 +953,15 @@ func (s *Store) DeleteRepo(ctx context.Context, envID, id string, hook RepoHook)
 	r := repoOf(row)
 	if r.EnvID != envID {
 		return Repo{}, ErrNotFound
+	}
+	// The write connection is the only writer, so the count cannot change before the delete. The foreign key
+	// (ON DELETE NO ACTION) is the backstop.
+	used, err := q.CountStacksUsingRepo(ctx, id)
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: count the stacks that use it: %w", err)
+	}
+	if used > 0 {
+		return Repo{}, &RepoInUseError{Count: int(used)}
 	}
 	if _, err := q.DeleteGitRepo(ctx, sqlc.DeleteGitRepoParams{ID: id, EnvID: nullString(envID)}); errors.Is(err, sql.ErrNoRows) {
 		return Repo{}, ErrNotFound
