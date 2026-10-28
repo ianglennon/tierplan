@@ -222,3 +222,117 @@ func TestGitStackCreateNeedsTheCreatePermission(t *testing.T) {
 		}
 	}
 }
+
+type gitRepoListResp struct {
+	Items []struct {
+		ID     string `json:"id"`
+		UsedBy int    `json:"usedBy"`
+	} `json:"items"`
+}
+
+func TestGitRepoInUseByStacks(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	for _, name := range []string{"one", "two"} {
+		if rec := g.create(t, g.admin, g.body(func(b map[string]any) { b["name"] = name })); rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	// The repository says how many stacks use it.
+	rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/env/"+g.env+"/git/repos/"+g.id, "")
+	if rec.Code != http.StatusOK || decodeGitRepo(t, rec).UsedBy != 2 {
+		t.Errorf("read: %d %s, want usedBy 2", rec.Code, rec.Body)
+	}
+	rec = g.f.credCall(t, g.admin, http.MethodGet, "/api/git/repos", "")
+	var list gitRepoListResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || len(list.Items) != 1 || list.Items[0].UsedBy != 2 {
+		t.Errorf("list: %d %s, want usedBy 2", rec.Code, rec.Body)
+	}
+
+	// Deleting it is 409 repo_in_use with the count, and the repository stays.
+	rec = g.f.credCall(t, g.admin, http.MethodDelete, "/api/env/"+g.env+"/git/repos/"+g.id, "")
+	var p browseProblem
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusConflict || p.Type != "repo_in_use" || len(p.Errors) != 1 || p.Errors[0].Location != "conflict.count" || p.Errors[0].Message != "2" {
+		t.Errorf("delete: %d %s, want 409 repo_in_use with a count of 2", rec.Code, rec.Body)
+	}
+	if rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/env/"+g.env+"/git/repos/"+g.id, ""); rec.Code != http.StatusOK {
+		t.Errorf("the repository is gone after a refused delete: %d", rec.Code)
+	}
+
+	// Removing a stack frees one; removing both lets the repository go.
+	for _, st := range g.f.stackIDs(t) {
+		if _, err := g.f.st.Write.Exec(`DELETE FROM stacks WHERE id = ?`, st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec := g.f.credCall(t, g.admin, http.MethodDelete, "/api/env/"+g.env+"/git/repos/"+g.id, ""); rec.Code != http.StatusNoContent {
+		t.Errorf("delete after the stacks went: %d %s, want 204", rec.Code, rec.Body)
+	}
+}
+
+func (f *envFix) stackIDs(t *testing.T) []string {
+	t.Helper()
+	rows, err := f.st.Read.Query(`SELECT id FROM stacks`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func TestEnvDeleteWithGitStack(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	ctx := context.Background()
+	// An environment of its own holds a repository and a stack that uses it, and a stack that uses the instance's.
+	g.f.addEnvironmentRow(t, "env-del")
+	own := decodeGitRepo(t, g.f.credCall(t, g.admin, http.MethodPost, "/api/env/env-del/git/repos",
+		gitJSON(map[string]any{"name": "own", "url": g.srv.URL, "caPem": g.srv.CAPEM}))).ID
+	instance := decodeGitRepo(t, g.f.credCall(t, g.admin, http.MethodPost, "/api/git/repos",
+		gitJSON(map[string]any{"name": "shared", "url": g.srv.URL, "caPem": g.srv.CAPEM}))).ID
+	repo := g.stackRepo()
+	for i, repoID := range []string{own, instance} {
+		in := stackops.CreateGitStackInput{
+			EnvID: "env-del", Name: []string{"a", "b"}[i], Target: stacks.TargetStandalone, Actor: "ada",
+			Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: "compose.yaml", Content: []byte("services: {}\n"), Origin: stacks.OriginRepo}}, ComposeFiles: []string{"compose.yaml"}},
+			Rev: stackops.GitRevision{Commit: g.sha, Tree: "t", Source: stackops.GitSource{
+				RepoID: repoID, RepoName: "r", RefKind: "branch", Ref: "main", ComposeFiles: []string{"compose.yaml"},
+			}},
+		}
+		if _, _, err := repo.CreateGitStack(ctx, in); err != nil {
+			t.Fatalf("CreateGitStack: %v", err)
+		}
+	}
+
+	if rec := g.f.credCall(t, g.admin, http.MethodDelete, "/api/environments/env-del", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove the environment: %d %s, want 204", rec.Code, rec.Body)
+	}
+	var n int
+	for _, table := range []string{"stacks", "stack_git", "stack_git_state"} {
+		if err := g.f.st.Read.QueryRow(`SELECT count(*) FROM ` + table + ` WHERE ` + map[string]string{
+			"stacks": "env_id = 'env-del'", "stack_git": "1 = 1", "stack_git_state": "1 = 1"}[table]).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s holds %d rows after the environment went, %v", table, n, err)
+		}
+	}
+	// Its repository went with it and the instance's is still there, no longer in use.
+	if rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/git/repos", ""); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), own) || !strings.Contains(rec.Body.String(), instance) {
+		t.Errorf("repositories after the removal: %d %s", rec.Code, rec.Body)
+	}
+	if rec := g.f.credCall(t, g.admin, http.MethodDelete, "/api/git/repos/"+instance, ""); rec.Code != http.StatusNoContent {
+		t.Errorf("delete the instance repository: %d %s, want 204: no stack uses it any more", rec.Code, rec.Body)
+	}
+}

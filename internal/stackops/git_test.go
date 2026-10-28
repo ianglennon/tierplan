@@ -264,3 +264,149 @@ func TestInlineSnapshotsHaveNoGitColumns(t *testing.T) {
 		t.Errorf("draft = %+v, %v", got, err)
 	}
 }
+
+// moveDraftTo makes the draft of a stack stand at another commit, as a sync of the repository will.
+func (f repoFixture) moveDraftTo(t *testing.T, stackID, commit, tree string) {
+	t.Helper()
+	source := `{"repoId":"` + gitRepoID + `","repoName":"acme","refKind":"branch","ref":"main","folder":"stacks/web","composeFiles":["compose.yaml"]}`
+	if _, err := f.repo.Store.Write.ExecContext(context.Background(),
+		`UPDATE stack_snapshots SET git_commit = ?, git_tree = ?, git_source = ?, compose_files = '["compose.yaml"]' WHERE stack_id = ? AND kind = 'draft'`,
+		commit, tree, source, stackID); err != nil {
+		t.Fatalf("move the draft: %v", err)
+	}
+}
+
+func TestGitRevisionRoundTrip(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, _, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatalf("NewRevision: %v", err)
+	}
+	if rev.Git.Commit != gitCommit || rev.Git.Tree != gitTree || rev.Git.Source.Folder != "stacks/web" {
+		t.Errorf("new revision git = %+v, want the draft's commit, tree and source", rev.Git)
+	}
+
+	// Read back from the store, the revision is the draft's content with its origins and compose files.
+	got, err := f.repo.Revision(ctx, st.ID, rev.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Git.Commit != gitCommit || got.Git.Tree != gitTree || got.Git.Source.RepoID != gitRepoID || got.Git.Source.RepoName != "acme" ||
+		got.Git.Source.RefKind != "branch" || got.Git.Source.Ref != "main" || got.Git.Source.Folder != "stacks/web" ||
+		!slices.Equal(got.Git.Source.ComposeFiles, []string{"compose.yaml", "compose.prod.yaml"}) {
+		t.Errorf("revision git = %+v", got.Git)
+	}
+	if !slices.Equal(got.Copy.ComposeFiles, []string{"compose.yaml", "compose.prod.yaml"}) {
+		t.Errorf("revision compose files = %v", got.Copy.ComposeFiles)
+	}
+	for _, file := range got.Copy.Files {
+		if file.Origin != stacks.OriginRepo {
+			t.Errorf("revision file %s has origin %q, want repo", file.Path, file.Origin)
+		}
+	}
+	// It restores without the mirror and survives a force-push: nothing about it is read from the repository, so
+	// moving the draft on leaves the revision as it was.
+	f.moveDraftTo(t, st.ID, "ffffffffffffffffffffffffffffffffffffffff", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	again, err := f.repo.Revision(ctx, st.ID, rev.Seq)
+	if err != nil || again.Git.Commit != gitCommit || again.Git.Tree != gitTree {
+		t.Errorf("revision after the draft moved = %+v, %v", again.Git, err)
+	}
+}
+
+func TestGitRollbackCopiesRestoredSource(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, _, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, first.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	// A later sync moved the draft to another commit and folder; its revision is good too.
+	const newCommit, newTree = "ffffffffffffffffffffffffffffffffffffffff", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	f.moveDraftTo(t, st.ID, newCommit, newTree)
+	second, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Git.Commit != newCommit {
+		t.Fatalf("second revision git = %+v, want the moved draft's", second.Git)
+	}
+
+	// A roll back to the first revision copies the first revision's source, not the draft's.
+	from, err := f.repo.Revision(ctx, st.ID, first.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := f.repo.CopyRevision(ctx, from, "carol", stackops.OriginRollback)
+	if err != nil {
+		t.Fatalf("CopyRevision: %v", err)
+	}
+	if back.Git.Commit != gitCommit || back.Git.Tree != gitTree {
+		t.Errorf("rollback git = %+v, want the restored revision's commit and tree", back.Git)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, back.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Git.Commit != gitCommit || got.Git.Tree != gitTree || !slices.Equal(got.Git.Source.ComposeFiles, []string{"compose.yaml", "compose.prod.yaml"}) ||
+		!slices.Equal(got.Copy.ComposeFiles, []string{"compose.yaml", "compose.prod.yaml"}) || got.RestoredFrom != first.Seq {
+		t.Errorf("stored rollback = %+v, want the first revision's source and compose files, restored from %d", got, first.Seq)
+	}
+	for _, file := range got.Copy.Files {
+		if file.Origin != stacks.OriginRepo {
+			t.Errorf("rollback file %s has origin %q, want repo", file.Path, file.Origin)
+		}
+	}
+	// A roll back is not a sync: it records no trigger.
+	if got.SyncTrigger != "" {
+		t.Errorf("rollback trigger = %q", got.SyncTrigger)
+	}
+}
+
+func TestInlineRevisionUnchanged(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "plain", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := f.repo.CopyRevision(ctx, rev, "bob", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snap := range []stackops.Snapshot{rev, copied} {
+		var commit, tree, source, files, trigger string
+		if err := f.repo.Store.Read.QueryRow(`SELECT git_commit, git_tree, git_source, compose_files, sync_trigger FROM stack_snapshots WHERE id = ?`, snap.ID).
+			Scan(&commit, &tree, &source, &files, &trigger); err != nil {
+			t.Fatal(err)
+		}
+		if commit != "" || tree != "" || source != "{}" || files != "[]" || trigger != "" {
+			t.Errorf("revision %d columns = %q %q %q %q %q, want empty git columns and '[]' compose files", snap.Seq, commit, tree, source, files, trigger)
+		}
+		got, err := f.repo.Revision(ctx, st.ID, snap.Seq)
+		if err != nil || got.Git.Commit != "" || got.Git.Source.RepoID != "" || len(got.Copy.ComposeFiles) != 0 ||
+			len(got.Copy.Files) != 1 || got.Copy.Files[0].Origin != stacks.OriginInline || string(got.Copy.Compose()) != "services: {}\n" {
+			t.Errorf("revision %d = %+v, %v, want an inline revision as before", snap.Seq, got, err)
+		}
+	}
+}

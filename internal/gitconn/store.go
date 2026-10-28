@@ -36,6 +36,17 @@ var (
 	ErrCredentialInUse = errors.New("gitconn: repositories use the credential")
 )
 
+// ErrRepoInUse means stacks still use the repository.
+var ErrRepoInUse = errors.New("gitconn: stacks use the repository")
+
+// RepoInUseError says how many stacks use a repository. It matches ErrRepoInUse.
+type RepoInUseError struct{ Count int }
+
+func (e *RepoInUseError) Error() string { return ErrRepoInUse.Error() }
+
+// Unwrap lets errors.Is match the sentinel.
+func (e *RepoInUseError) Unwrap() error { return ErrRepoInUse }
+
 // InUseError says how many repositories use a credential. It matches ErrCredentialInUse.
 type InUseError struct{ Count int }
 

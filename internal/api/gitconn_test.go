@@ -63,6 +63,7 @@ type gitRepoResp struct {
 	CAPEM    string `json:"caPem"`
 	HasCA    bool   `json:"hasCa"`
 	ReadOnly bool   `json:"readOnly"`
+	UsedBy   int    `json:"usedBy"`
 	LastTest *struct {
 		OK   bool   `json:"ok"`
 		Code string `json:"code"`

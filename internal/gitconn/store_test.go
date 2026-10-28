@@ -704,3 +704,56 @@ func TestAHostKeyStaysWithTheMachineItWasTrustedFor(t *testing.T) {
 		t.Fatalf("update with a key: %+v, %v; want it stored for admin-2", again, err)
 	}
 }
+
+// addGitStack stores a stack of environment env that points at repoID, as the create of a git stack does.
+func addGitStack(t *testing.T, st *store.Store, env, id, repoID string) {
+	t.Helper()
+	for _, q := range []string{
+		`INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at) VALUES ('` + id + `', '` + env + `', '` + id + `', 'standalone', 'git', '` + repoID + `', 'u', 1)`,
+		`INSERT INTO stack_git (stack_id, repo_id, ref_kind, ref, folder, compose_files, created_at, updated_at) VALUES ('` + id + `', '` + repoID + `', 'branch', 'main', '', '["compose.yaml"]', 1, 1)`,
+	} {
+		if _, err := st.Write.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRepoInUseByStacks(t *testing.T) {
+	s, st, _ := newStore(t)
+	ctx := context.Background()
+	addEnvironment(t, st, "env-1")
+	env := ptr("env-1")
+	repo, err := s.CreateRepo(ctx, gitconn.RepoInput{EnvID: env, Name: "acme", URL: "https://git.example/acme/stacks.git"}, "admin-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addGitStack(t, st, "env-1", "stack-a", repo.ID)
+	addGitStack(t, st, "env-1", "stack-b", repo.ID)
+
+	got, err := s.GetRepo(ctx, repo.ID)
+	if err != nil || got.UsedBy != 2 {
+		t.Errorf("GetRepo usedBy = %d, %v, want 2", got.UsedBy, err)
+	}
+	list, err := s.ListRepos(ctx)
+	if err != nil || len(list) != 1 || list[0].UsedBy != 2 {
+		t.Errorf("ListRepos = %+v, %v, want usedBy 2", list, err)
+	}
+
+	// A repository that stacks use cannot be deleted, and nothing is removed.
+	_, err = s.DeleteRepo(ctx, "env-1", repo.ID, nil)
+	var inUse *gitconn.RepoInUseError
+	if !errors.Is(err, gitconn.ErrRepoInUse) || !errors.As(err, &inUse) || inUse.Count != 2 {
+		t.Fatalf("DeleteRepo = %v, want ErrRepoInUse with a count of 2", err)
+	}
+	if _, err := s.GetRepo(ctx, repo.ID); err != nil {
+		t.Errorf("the repository is gone after a refused delete: %v", err)
+	}
+
+	// Once the stacks are gone it can be deleted.
+	if _, err := st.Write.Exec(`DELETE FROM stacks`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteRepo(ctx, "env-1", repo.ID, nil); err != nil {
+		t.Errorf("DeleteRepo after the stacks were removed: %v", err)
+	}
+}
