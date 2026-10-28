@@ -948,6 +948,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git/repos/{repoId}/trust-host-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trust an SSH host key for an environment's git repository
+         * @description Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        post: operations["trustGitHostKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images": {
         parameters: {
             query?: never;
@@ -3074,6 +3094,26 @@ export interface paths {
          * @description Runs the same test as testing an address, on the saved repository with its saved credential, and records when it ran, whether it passed and the code it failed with. A test that failed is a 200 with failure.code and failure.host. Needs git.instance. A repository of an environment answers 404 repository_not_found here. At most 10 tests a minute per user across all the test routes: 429 rate_limited. Audited as git.repo_tested with the host, the credential's name and scope and the code of a failure.
          */
         post: operations["testGitRepoInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}/trust-host-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trust an SSH host key for an instance git repository
+         * @description Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        post: operations["trustGitHostKeyInstance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6343,6 +6383,10 @@ export interface components {
             reachable: components["schemas"]["GitTestStepBody"];
             refs: components["schemas"]["GitTestStepBody"];
             signedIn: components["schemas"]["GitTestStepBody"];
+        };
+        GitTrustHostKeyRequest: {
+            /** @description The SSH host key to trust, in authorized_keys form (hostKey.key of a test that answered untrusted or changed), after comparing its fingerprint with the one the host's administrator publishes. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for a repository whose address is not ssh */
+            hostKey: string;
         };
         GrantBody: {
             /**
@@ -13540,6 +13584,45 @@ export interface operations {
             };
         };
     };
+    trustGitHostKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTrustHostKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listImages: {
         parameters: {
             query?: {
@@ -18113,6 +18196,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    trustGitHostKeyInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTrustHostKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
                 };
             };
             /** @description Error */

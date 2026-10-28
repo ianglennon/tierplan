@@ -5078,6 +5078,20 @@
         ],
         "type": "object"
       },
+      "GitTrustHostKeyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "hostKey": {
+            "description": "The SSH host key to trust, in authorized_keys form (hostKey.key of a test that answered untrusted or changed), after comparing its fingerprint with the one the host's administrator publishes. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for a repository whose address is not ssh",
+            "maxLength": 4096,
+            "type": "string"
+          }
+        },
+        "required": [
+          "hostKey"
+        ],
+        "type": "object"
+      },
       "GrantBody": {
         "additionalProperties": false,
         "properties": {
@@ -21204,6 +21218,78 @@
         ]
       }
     },
+    "/api/env/{envId}/git/repos/{repoId}/trust-host-key": {
+      "post": {
+        "description": "Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+        "operationId": "trustGitHostKey",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitTrustHostKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Trust an SSH host key for an environment's git repository",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/env/{envId}/images": {
       "get": {
         "description": "Newest first, ties by image ID. An untagged image is listed as \u003cnone\u003e and marked dangling. view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). 503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. Needs images.read (Viewer) on the environment. Reads are not audited.",
@@ -29144,6 +29230,68 @@
           }
         },
         "summary": "Test a saved instance git repository from the server",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/git/repos/{repoId}/trust-host-key": {
+      "post": {
+        "description": "Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+        "operationId": "trustGitHostKeyInstance",
+        "parameters": [
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitTrustHostKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Trust an SSH host key for an instance git repository",
         "tags": [
           "git"
         ]

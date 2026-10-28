@@ -398,6 +398,26 @@ type GitRepoBody struct {
 	UpdatedAt  time.Time                       `json:"updatedAt" format:"date-time" doc:"When it was last changed"`
 }
 
+// GitTrustHostKeyRequest is the body of trusting a host key.
+type GitTrustHostKeyRequest struct {
+	HostKey string `json:"hostKey" maxLength:"4096" doc:"The SSH host key to trust, in authorized_keys form (hostKey.key of a test that answered untrusted or changed), after comparing its fingerprint with the one the host's administrator publishes. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for a repository whose address is not ssh"`
+}
+
+// TrustGitHostKeyInput is the request of the instance trust-host-key route.
+type TrustGitHostKeyInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+	Body      GitTrustHostKeyRequest
+}
+
+// TrustGitEnvHostKeyInput is the request of the environment trust-host-key route.
+type TrustGitEnvHostKeyInput struct {
+	EnvironmentPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+	Body      GitTrustHostKeyRequest
+}
+
 // GitRepoOutput wraps GitRepoBody for huma.
 type GitRepoOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -575,6 +595,27 @@ func (d GitDeps) testSavedRepo(ctx context.Context, limiter *testLimiter, userAg
 	return res.out, nil
 }
 
+// trustHostKey stores the SSH host key a person confirmed as the one the repository's host is
+// trusted by, replacing any earlier one, and audits it in the same transaction: git.host_key_retrusted
+// with both fingerprints when a key was saved before, git.host_key_trusted for the first. It is the
+// only way a changed key is accepted; no test and no fetch ever does it.
+func (d GitDeps) trustHostKey(ctx context.Context, p *rbac.Principal, envID, repoID, userAgent, line string) (*GitRepoOutput, error) {
+	repo, err := d.lookupRepo(ctx, envID, repoID)
+	if err != nil {
+		return nil, d.repoFail("get repository to trust a host key", err)
+	}
+	r, err := d.Conns.TrustHostKey(ctx, repo.ID, line, p.ID, func(ctx context.Context, tx *sql.Tx, before, after gitconn.Repo) error {
+		if before.HostKey != "" {
+			return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitHostKeyRetrusted, gitRepoTargetType, after.ID, envID, hostKeyAuditDetails(after, before.HostKeyFP))
+		}
+		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitHostKeyTrusted, gitRepoTargetType, after.ID, envID, hostKeyAuditDetails(after, ""))
+	})
+	if err != nil {
+		return nil, d.repoFail("trust a host key", err)
+	}
+	return &GitRepoOutput{CacheControl: "no-store", Body: d.gitRepoBody(ctx, r, false)}, nil
+}
+
 // registerGitRepos registers the repository routes.
 func registerGitRepos(r *httpx.Router, d GitDeps, limiter *testLimiter) {
 	unavailable := func() error {
@@ -679,6 +720,51 @@ func registerGitRepos(r *httpx.Router, d GitDeps, limiter *testLimiter) {
 		Tags: []string{"git"},
 	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *TestGitEnvRepoInput) (*GitTestOutput, error) {
 		return d.testSavedRepo(ctx, limiter, in.UserAgent, in.EnvID, in.RepoID)
+	})
+
+	const trustDoc = "Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. " +
+		"This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. " +
+		"The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). " +
+		"Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. "
+	trustGuard := func(ctx context.Context) (*rbac.Principal, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, unavailable()
+		}
+		return p, nil
+	}
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "trustGitHostKeyInstance",
+		Method:      http.MethodPost,
+		Path:        "/api/git/repos/{repoId}/trust-host-key",
+		Summary:     "Trust an SSH host key for an instance git repository",
+		Description: trustDoc + "Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *TrustGitHostKeyInput) (*GitRepoOutput, error) {
+		p, err := trustGuard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.trustHostKey(ctx, p, "", in.RepoID, in.UserAgent, in.Body.HostKey)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "trustGitHostKey",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/git/repos/{repoId}/trust-host-key",
+		Summary:     "Trust an SSH host key for an environment's git repository",
+		Description: trustDoc + "Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *TrustGitEnvHostKeyInput) (*GitRepoOutput, error) {
+		p, err := trustGuard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.trustHostKey(ctx, p, in.EnvID, in.RepoID, in.UserAgent, in.Body.HostKey)
 	})
 }
 
