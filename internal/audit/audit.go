@@ -180,6 +180,7 @@ const (
 	ActionSecretRotated              = "secret.rotated"
 	ActionConfigRotated              = "config.rotated"
 	ActionStackCreated               = "stack.created"
+	ActionStackCreatedFromGit        = "stack.created_from_git"
 	ActionStackDraftSaved            = "stack.draft_saved"
 	ActionStackDraftDiscarded        = "stack.draft_discarded"
 	ActionStackDeployed              = "stack.deployed"

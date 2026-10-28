@@ -374,8 +374,10 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // adds the changed fields and, when the address moved, the host it pointed at before. A test of a saved
 // repository records its host, the credential used and the code of a failure. Trusting an SSH host key records
 // the repository, its layer, its host and the key's fingerprint (public material, never the key itself); trusting
-// a key again also records the fingerprint it replaced (plan 09-06, D-03).
+// a key again also records the fingerprint it replaced (plan 09-06, D-03). Creating a stack from a repository folder
+// records the stack, the repository's name, the ref and the folder (plan 09-11, GIT-02).
 var phase9DetailKeys = map[string][]string{
+	audit.ActionStackCreatedFromGit:  {"stack", "repository", "ref", "folder"},
 	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
 	audit.ActionGitCredentialUpdated: {"name", "layer", "type", "username", "fingerprint", "changed"},
 	audit.ActionGitCredentialDeleted: {"name", "layer", "type", "username", "fingerprint"},
@@ -408,6 +410,7 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		t.Fatalf("verify = %+v", got)
 	}
 	for key, constant := range map[string]string{
+		"stack.created_from_git": audit.ActionStackCreatedFromGit,
 		"git.credential_created": audit.ActionGitCredentialCreated,
 		"git.credential_updated": audit.ActionGitCredentialUpdated,
 		"git.credential_deleted": audit.ActionGitCredentialDeleted,

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -426,3 +427,52 @@ func TestImportFollowsOneHopToAFileInsideTheFolder(t *testing.T) {
 		t.Errorf("problems = %+v, want the link to a file followed and the link to a link and to a folder refused", imp.Problems)
 	}
 }
+
+func TestImportHostileContentIsBlockingAndNeverStored(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, map[string]string{
+		"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:1.27\n    env_file: [lfs.env, ../other/up.env, /etc/passwd, ok.env]\n",
+		"stacks/web/lfs.env":      "version https://git-lfs.github.com/spec/v1\noid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\nsize 12345\n",
+		"stacks/web/ok.env":       "A=b\n",
+		"stacks/other/up.env":     outsideMarker + "\n",
+	}, nil)
+	imp, err := f.svc.Import(context.Background(), f.request())
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	for _, file := range imp.Files {
+		if strings.Contains(string(file.Content), outsideMarker) {
+			t.Errorf("%s holds the content of a file outside the folder", file.Path)
+		}
+	}
+	blocking := map[string]string{}
+	for _, p := range errorsOf(imp.Problems) {
+		blocking[p.Code] += p.File + ","
+	}
+	if !strings.Contains(blocking[stacks.CodeLFSPointer], "lfs.env") {
+		t.Errorf("problems = %+v, want a blocking git_lfs_pointer on lfs.env", imp.Problems)
+	}
+	if blocking[stacks.CodePathIllegal] == "" {
+		t.Errorf("problems = %+v, want a blocking problem for the paths that leave the folder", imp.Problems)
+	}
+}
+
+func TestImportRefusesMoreFilesThanAStackMayHold(t *testing.T) {
+	t.Parallel()
+	var refs []string
+	files := map[string]string{}
+	for i := range 60 {
+		name := "e" + strings.Repeat("0", 2-len(itoa(i))) + itoa(i) + ".env"
+		refs = append(refs, name)
+		files["stacks/web/"+name] = "A=b\n"
+	}
+	files["stacks/web/compose.yaml"] = "services:\n  web:\n    image: nginx:1.27\n    env_file: [" + strings.Join(refs, ", ") + "]\n"
+	f := newFixture(t, files, nil)
+	_, err := f.svc.Import(context.Background(), f.request())
+	var fe *stacks.FileError
+	if !errors.As(err, &fe) || !errors.Is(err, stacks.ErrStackTooLarge) {
+		t.Errorf("err = %v, want ErrStackTooLarge", err)
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }

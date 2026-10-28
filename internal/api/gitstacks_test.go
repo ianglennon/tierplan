@@ -6,6 +6,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -250,6 +251,142 @@ func TestGitStackCreateSymlinkOutside(t *testing.T) {
 		if file.Path == "web.env" || strings.Contains(string(file.Content), marker) {
 			t.Errorf("the draft holds %s, which is or holds what a link led to outside the folder", file.Path)
 		}
+	}
+}
+
+func TestGitStackCreateRefusalsOfSizeAndCommit(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	// A stack that names 60 files, and one whose files are 9 MiB together (each under the 1 MiB file limit).
+	many := map[string]string{}
+	var refs, heavyRefs []string
+	for i := range 60 {
+		name := fmt.Sprintf("e%02d.env", i)
+		refs = append(refs, name)
+		many["stacks/many/"+name] = "A=b\n"
+	}
+	many["stacks/many/compose.yaml"] = "services:\n  web:\n    image: nginx:1.27\n    env_file: [" + strings.Join(refs, ", ") + "]\n"
+	for i := range 9 {
+		name := fmt.Sprintf("h%d.env", i)
+		heavyRefs = append(heavyRefs, name)
+		many["stacks/heavy/"+name] = strings.Repeat("A=b\n", 262000)
+	}
+	many["stacks/heavy/compose.yaml"] = "services:\n  web:\n    image: nginx:1.27\n    env_file: [" + strings.Join(heavyRefs, ", ") + "]\n"
+	g.repo.Commit(t, many, "big")
+
+	cases := []struct {
+		name   string
+		mut    func(map[string]any)
+		status int
+		typ    string
+	}{
+		{"60 files", func(b map[string]any) { b["folder"] = "stacks/many" }, http.StatusUnprocessableEntity, "stack_too_large"},
+		{"9 MiB", func(b map[string]any) { b["folder"] = "stacks/heavy" }, http.StatusUnprocessableEntity, "stack_too_large"},
+		{"a commit the repository does not hold", func(b map[string]any) {
+			b["refKind"], b["ref"] = "commit", strings.Repeat("ab", 20)
+		}, http.StatusUnprocessableEntity, "commit_missing"},
+		{"a tag that is not there", func(b map[string]any) { b["refKind"], b["ref"] = "tag", "v9" }, http.StatusUnprocessableEntity, "ref_missing"},
+	}
+	for _, c := range cases {
+		rec := g.create(t, g.admin, g.body(c.mut))
+		if rec.Code != c.status || problemType(t, rec) != c.typ {
+			t.Errorf("%s: %d %s, want %d %s", c.name, rec.Code, rec.Body, c.status, c.typ)
+		}
+	}
+	var n int
+	if err := g.f.st.Read.QueryRow(`SELECT (SELECT count(*) FROM stacks) + (SELECT count(*) FROM stack_git)`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("a refused create left %d rows, %v", n, err)
+	}
+}
+
+func TestGitStackCreateRefKinds(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	ctx := context.Background()
+	g.repo.Tag(t, "v1", g.sha, true)
+
+	for _, c := range []struct {
+		name, kind, ref, wantKind, wantRef string
+	}{
+		{"by-branch", "branch", "main", "branch", "main"},
+		{"by-tag", "tag", "v1", "tag", "v1"},
+		{"by-prefix", "commit", g.sha[:7], "commit", g.sha},
+		{"by-full-sha", "commit", g.sha, "commit", g.sha},
+	} {
+		rec := g.create(t, g.admin, g.body(func(b map[string]any) { b["name"], b["refKind"], b["ref"] = c.name, c.kind, c.ref }))
+		if rec.Code != http.StatusCreated {
+			t.Errorf("%s: %d %s", c.name, rec.Code, rec.Body)
+			continue
+		}
+		var got gitStackAnswer
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		gs, err := g.stackRepo().StackGit(ctx, got.StackID)
+		if err != nil || gs.RefKind != c.wantKind || gs.Ref != c.wantRef || got.Commit != g.sha {
+			t.Errorf("%s: stack_git = %+v, %v, commit %s, want %s %s at %s", c.name, gs, err, got.Commit, c.wantKind, c.wantRef, g.sha)
+		}
+		draft, err := g.stackRepo().Draft(ctx, got.StackID)
+		if err != nil || draft.Git.Source.RefKind != c.wantKind || draft.Git.Source.Ref != c.wantRef {
+			t.Errorf("%s: draft source = %+v, %v", c.name, draft.Git.Source, err)
+		}
+	}
+}
+
+func TestGitStackCreateDuplicate(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	if rec := g.create(t, g.admin, g.body(nil)); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	count := func() (n int) {
+		if err := g.f.st.Read.QueryRow(`SELECT (SELECT count(*) FROM stacks) * 100 + (SELECT count(*) FROM stack_git) * 10 + (SELECT count(*) FROM stack_git_state)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	before := count()
+	for range 2 {
+		rec := g.create(t, g.admin, g.body(nil))
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_taken" {
+			t.Errorf("a name already used: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
+		}
+	}
+	if after := count(); after != before {
+		t.Errorf("a refused create changed the rows from %d to %d", before, after)
+	}
+}
+
+func TestGitStackCreateAudited(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	rec := g.create(t, g.admin, g.body(nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var got gitStackAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	rows := g.f.auditRows(t, "stack.created_from_git")
+	if len(rows) != 1 {
+		t.Fatalf("%d audit rows, want exactly 1", len(rows))
+	}
+	r := rows[0]
+	if r.EnvID != g.env || r.Result != "success" || r.TargetID != got.StackID {
+		t.Errorf("row = %+v, want a success on the new stack in the environment", r)
+	}
+	for k, want := range map[string]string{"stack": "web", "repository": "acme", "ref": "main", "folder": "stacks/web"} {
+		if r.Details[k] != want {
+			t.Errorf("detail %s = %q, want %q", k, r.Details[k], want)
+		}
+	}
+	// A refused create is not a creation.
+	if rec := g.create(t, g.admin, g.body(nil)); rec.Code != http.StatusConflict {
+		t.Fatalf("again: %d", rec.Code)
+	}
+	if rows := g.f.auditRows(t, "stack.created_from_git"); len(rows) != 1 {
+		t.Errorf("%d audit rows after a refused create, want still 1", len(rows))
 	}
 }
 
