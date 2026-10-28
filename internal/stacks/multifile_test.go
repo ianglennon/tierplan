@@ -252,3 +252,118 @@ func TestInlineCopyUnchanged(t *testing.T) {
 		t.Error("Compose() is not the first compose file")
 	}
 }
+
+func TestMultiFileRefs(t *testing.T) {
+	t.Parallel()
+	const a = `services:
+  web:
+    image: nginx:${TAG}
+    environment:
+      SHARED: ${SHARED:-x}
+      BARE_A:
+`
+	const b = `services:
+  web:
+    ports:
+      - "${PORT:-8080}:80"
+    environment:
+      - SHARED
+      - ${ONLY_B}
+    command: ["echo", "${SHARED}"]
+`
+	c := twoFiles(a, b, "a.yaml", "b.yaml")
+	c.Files = []stacks.File{{Path: "a.yaml", Content: []byte(a)}, {Path: "b.yaml", Content: []byte(b)}}
+	refs := stacks.Refs(c)
+	by := map[string]stacks.VarRef{}
+	var names []string
+	for _, r := range refs {
+		by[r.Name] = r
+		names = append(names, r.Name)
+	}
+	if want := []string{"BARE_A", "ONLY_B", "PORT", "SHARED", "TAG"}; !slices.Equal(names, want) {
+		t.Fatalf("names = %v, want %v: the union of both files", names, want)
+	}
+	for name, want := range map[string]string{"TAG": "a.yaml", "BARE_A": "a.yaml", "PORT": "b.yaml", "ONLY_B": "b.yaml"} {
+		places := by[name].Places
+		if len(places) != 1 || places[0].File != want || places[0].Line < 1 {
+			t.Errorf("%s places = %+v, want one in %s at a real line", name, places, want)
+		}
+	}
+	// A variable used in both files is one reference with places in both, in file order then line.
+	shared := by["SHARED"].Places
+	var got []string
+	for _, p := range shared {
+		got = append(got, p.File)
+	}
+	if !slices.Equal(got, []string{"a.yaml", "b.yaml", "b.yaml"}) {
+		t.Fatalf("SHARED places = %+v, want a.yaml then b.yaml twice", shared)
+	}
+	if shared[1].Line > shared[2].Line {
+		t.Errorf("SHARED places in b.yaml = %+v, want them in line order", shared)
+	}
+	// Reversing the order reverses the places.
+	rev := stacks.Refs(stacks.WorkingCopy{Files: c.Files, ComposeFiles: []string{"b.yaml", "a.yaml"}})
+	for _, r := range rev {
+		if r.Name == "SHARED" && r.Places[0].File != "b.yaml" {
+			t.Errorf("SHARED first place = %s with b.yaml first, want b.yaml", r.Places[0].File)
+		}
+	}
+	// An inline copy still reads compose.yaml.
+	for _, r := range stacks.Refs(copyOf("services:\n  web:\n    image: ${IMG}\n")) {
+		if r.Places[0].File != stacks.ComposeFile {
+			t.Errorf("inline place file = %s, want compose.yaml", r.Places[0].File)
+		}
+	}
+}
+
+func TestMultiFileSecretUse(t *testing.T) {
+	t.Parallel()
+	const base = "services:\n  web:\n    image: nginx:1.27-alpine\n"
+	const override = `services:
+  web:
+    environment:
+      TOKEN: ${PW}
+secrets:
+  tok:
+    file: ./tok.txt
+`
+	c := stacks.WorkingCopy{
+		Files: []stacks.File{
+			{Path: "base.yaml", Content: []byte(base)},
+			{Path: "override.yaml", Content: []byte(override)},
+			{Path: "tok.txt", Content: []byte("s3cret-token-value")},
+		},
+		Vars:         []stacks.Var{{Name: "PW", Value: "Password2024!", Secret: true}},
+		ComposeFiles: []string{"base.yaml", "override.yaml"},
+	}
+	uses := stacks.SecretFileUses(c.ComposeContents())
+	if len(uses) != 1 || uses[0].Path != "tok.txt" || uses[0].Compose != "override.yaml" {
+		t.Fatalf("SecretFileUses = %+v, want tok.txt used from override.yaml", uses)
+	}
+	marked := stacks.MarkSecretFilesFor(c.Files, nil, c.ComposeFiles)
+	for _, f := range marked {
+		if want := f.Path == "tok.txt"; f.Secret != want {
+			t.Errorf("%s secret = %v, want %v", f.Path, f.Secret, want)
+		}
+	}
+	if got := stacks.MarkSecretFiles(c.Files, nil); got[2].Secret {
+		t.Error("MarkSecretFiles reads compose.yaml only: it must not see the second file")
+	}
+	res := stacks.Check(context.Background(), stacks.CheckInput{Name: "m", Target: stacks.TargetSwarm, Copy: c})
+	if !slices.Equal(res.SecretFiles, []string{"tok.txt"}) {
+		t.Errorf("Check.SecretFiles = %v, want [tok.txt]", res.SecretFiles)
+	}
+	// The secret variable used in the second file is known to the secret-use decision.
+	s := stacks.NewSecretUse(c)
+	if !s.Any() || !s.Uses("services.web.environment.TOKEN") {
+		t.Errorf("SecretUse over both files: Any=%v Uses=%v, want both true for a variable used in override.yaml", s.Any(), s.Uses("services.web.environment.TOKEN"))
+	}
+	if s.Uses("services.web.image") {
+		t.Error("services.web.image reported as using a secret")
+	}
+	// The same file named by both compose files is attributed to the first.
+	both := []stacks.ComposeContent{{Path: "x.yaml", Content: []byte(override)}, {Path: "y.yaml", Content: []byte(override)}}
+	if got := stacks.SecretFileUses(both); len(got) != 1 || got[0].Compose != "x.yaml" {
+		t.Errorf("SecretFileUses = %+v, want the first compose file", got)
+	}
+}
