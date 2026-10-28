@@ -93,6 +93,7 @@ export function RepoCard({
         <RefPicker
           envId={envId}
           repoId={repoId}
+          repoName={picked?.name ?? ""}
           kind={kind}
           value={gitRef}
           onKindChange={onKindChange}

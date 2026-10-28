@@ -111,3 +111,8 @@ export function formatClockOffset(seconds: number): string {
   if (whole === 0) return "0 s";
   return `${whole > 0 ? "+" : "−"}${Math.abs(whole)} s`;
 }
+
+// formatCount writes a whole number the way the reader's locale does ("5,000" in English).
+export function formatCount(n: number): string {
+  return new Intl.NumberFormat().format(n);
+}

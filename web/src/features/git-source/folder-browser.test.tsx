@@ -202,12 +202,13 @@ describe("FolderBrowser", () => {
     expect(screen.getByText("Stack folder: / (repository root)")).toBeTruthy();
   });
 
-  it("marks the chosen folder with aria-current and offers Change", async () => {
+  it("folds away to the chosen folder, and Change opens the list with the chosen folder marked", async () => {
     mount("stacks");
+    expect(screen.getByText("Stack folder: stacks")).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "Folder contents" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
     const row = await screen.findByRole("button", { name: /^stacks/ });
     expect(row.getAttribute("aria-current")).toBe("true");
-    expect(screen.getByRole("button", { name: "Change" })).toBeTruthy();
-    expect(screen.getByText("Stack folder: stacks")).toBeTruthy();
   });
 
   it("walks the list with the arrow keys, opening with Enter or Right and going up with Left or Backspace", async () => {
@@ -240,7 +241,7 @@ describe("FolderBrowser", () => {
   it("announces Opened {folder}, {n} entries politely when a folder is entered", async () => {
     mount();
     await open("stacks");
-    const region = await screen.findByTestId("opened");
+    const region = await screen.findByRole("status");
     expect(region.getAttribute("aria-live")).toBe("polite");
     await waitFor(() => expect(region.textContent).toBe("Opened stacks, 2 entries"));
   });
@@ -254,13 +255,11 @@ describe("FolderBrowser", () => {
     };
     mount();
     await open("one");
-    await waitFor(() =>
-      expect(screen.getByTestId("opened").textContent).toBe("Opened one, 1 entry"),
-    );
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Opened one, 1 entry"));
     fireEvent.click(screen.getByRole("button", { name: "Repository root" }));
     await open("none");
     await waitFor(() =>
-      expect(screen.getByTestId("opened").textContent).toBe("Opened none, 0 entries"),
+      expect(screen.getByRole("status").textContent).toBe("Opened none, 0 entries"),
     );
   });
 
@@ -305,8 +304,9 @@ describe("FolderBrowser", () => {
     const long = "n".repeat(150);
     world.tree = (q) => Response.json(treeOf(q.get("path") ?? "", [dir(long)]));
     mount(long);
+    expect(screen.getByText(`Stack folder: ${long}`).className).toContain("break-all");
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
     const row = await screen.findByRole("button", { name: new RegExp(long) });
     expect(row.querySelector(".truncate")).toBeTruthy();
-    expect(screen.getByText(`Stack folder: ${long}`).className).toContain("break-all");
   });
 });

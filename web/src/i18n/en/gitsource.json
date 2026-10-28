@@ -95,9 +95,7 @@
       "failed": "Couldn't read {{repo}} at {{ref}}.",
       "retry": "Retry loading folders",
       "opened_one": "Opened {{folder}}, {{count}} entry",
-      "opened_other": "Opened {{folder}}, {{count}} entries",
-      "openedRoot_one": "Opened the repository root, {{count}} entry",
-      "openedRoot_other": "Opened the repository root, {{count}} entries"
+      "opened_other": "Opened {{folder}}, {{count}} entries"
     },
     "compose": {
       "title": "Compose files",

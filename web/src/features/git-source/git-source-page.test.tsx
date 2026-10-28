@@ -80,6 +80,13 @@ async function chooseRepository(name: string) {
   fireEvent.click(options.find((o) => o.textContent?.includes(name)) as HTMLElement);
 }
 
+// useThisFolder presses Use this folder once the folder has been read: it is off until then.
+async function useThisFolder() {
+  const button = await screen.findByRole("button", { name: "Use this folder" });
+  await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(button);
+}
+
 const posts = () => world.sent.filter((s) => s.method === "POST");
 
 describe("GitSourcePage", () => {
@@ -92,7 +99,7 @@ describe("GitSourcePage", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "stacks" }));
     fireEvent.click(await screen.findByRole("button", { name: /web/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+    await useThisFolder();
     // The one conventional file is picked for the person.
     expect(
       await screen.findByText("Picked compose.yaml. Change it if the stack uses another."),
@@ -136,7 +143,7 @@ describe("GitSourcePage", () => {
     world.repos = [repoOf("r1", "homelab"), repoOf("r2", "tools")];
     mount();
     await chooseRepository("homelab");
-    fireEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+    await useThisFolder();
     expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
     expect(
       screen.getByText("Changing the repository clears the folder and files you chose."),
@@ -150,7 +157,7 @@ describe("GitSourcePage", () => {
   it("clears the folder and files when the kind of ref changes", async () => {
     mount();
     await chooseRepository("homelab");
-    fireEvent.click(await screen.findByRole("button", { name: "Use this folder" }));
+    await useThisFolder();
     expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
     await waitFor(() => expect(screen.queryByText(/Stack folder:/)).toBeNull());
