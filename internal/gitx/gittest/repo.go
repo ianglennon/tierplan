@@ -142,6 +142,12 @@ func (r *Repo) Ref(tb testing.TB, name, sha string) {
 	r.git(tb, r.bare, "update-ref", name, sha)
 }
 
+// DeleteRef removes any reference, such as refs/heads/dev, from the bare repository.
+func (r *Repo) DeleteRef(tb testing.TB, name string) {
+	tb.Helper()
+	r.git(tb, r.bare, "update-ref", "-d", name)
+}
+
 // git runs the git command line in dir and returns its standard output. A failure fails the test
 // with git's own message.
 func (r *Repo) git(tb testing.TB, dir string, args ...string) string {

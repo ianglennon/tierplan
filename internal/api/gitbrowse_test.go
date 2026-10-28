@@ -192,3 +192,63 @@ func TestGitBrowse(t *testing.T) {
 		t.Errorf("environment admin: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
+
+func TestGitBrowseTagsCommitsAndMissingThings(t *testing.T) {
+	t.Parallel()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	env := f.add(t).ID
+	admin := f.asAdmin(t)
+	b := newBrowseRepoFix(t)
+	id := b.save(t, f, admin, "/api/env/"+env+"/git/repos", "own")
+
+	get := func(kind, ref, path string) *httptest.ResponseRecorder {
+		return f.credCall(t, admin, http.MethodGet, treeURL(env, id, kind, ref, path), "")
+	}
+	// An annotated tag, a commit by prefix and by its full ID all answer the commit's folder.
+	for _, tc := range []struct{ kind, ref string }{{"tag", "v1"}, {"commit", b.sha[:7]}, {"commit", b.sha}} {
+		rec := get(tc.kind, tc.ref, "stacks")
+		var tree browseTreeResp
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tree) != nil || tree.Commit != b.sha || len(tree.Entries) != 2 {
+			t.Errorf("%s %s: %d %s, want the stacks folder of %s", tc.kind, tc.ref, rec.Code, rec.Body, b.sha)
+		}
+	}
+
+	// Every way something can be missing is a 422 with its own type, worded for a person.
+	for _, tc := range []struct {
+		name, kind, ref, path, typ, detail string
+	}{
+		{"branch", "branch", "gone", "", "ref_missing", "Branch gone isn't in own."},
+		{"tag", "tag", "gone", "", "ref_missing", "Tag gone isn't in own."},
+		{"commit", "commit", "deadbee", "", "commit_missing", "Commit deadbee isn't in own."},
+		{"folder", "branch", "main", "nope", "folder_missing", "There is no folder nope at this commit."},
+		{"file", "branch", "main", "compose.yaml", "folder_missing", "There is no folder compose.yaml at this commit."},
+	} {
+		rec := get(tc.kind, tc.ref, tc.path)
+		p := decodeBrowseProblem(t, rec)
+		if rec.Code != http.StatusUnprocessableEntity || p.Type != tc.typ || p.Detail != tc.detail {
+			t.Errorf("%s: %d %s, want 422 %s %q", tc.name, rec.Code, rec.Body, tc.typ, tc.detail)
+		}
+	}
+}
+
+func TestGitBrowseRefInvalidNeverReachesTheServer(t *testing.T) {
+	t.Parallel()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	env := f.add(t).ID
+	admin := f.asAdmin(t)
+	b := newBrowseRepoFix(t)
+	id := b.save(t, f, admin, "/api/env/"+env+"/git/repos", "own")
+	before := b.srv.Requests()
+
+	for _, tc := range []struct{ kind, ref string }{
+		{"branch", "a..b"}, {"branch", "-x"}, {"tag", "a\nb"}, {"branch", strings.Repeat("a", 300)}, {"commit", "abc"}, {"commit", "main"},
+	} {
+		rec := f.credCall(t, admin, http.MethodGet, treeURL(env, id, tc.kind, tc.ref, ""), "")
+		if p := decodeBrowseProblem(t, rec); rec.Code != http.StatusUnprocessableEntity || p.Type != "ref_invalid" {
+			t.Errorf("%s %q: %d %s, want 422 ref_invalid", tc.kind, tc.ref, rec.Code, rec.Body)
+		}
+	}
+	if n := b.srv.Requests() - before; n != 0 {
+		t.Errorf("the git server saw %d requests for refused names, want none", n)
+	}
+}
