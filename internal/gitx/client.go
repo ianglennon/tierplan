@@ -185,6 +185,10 @@ type Client interface {
 	// database only; the other files are counted and the first ones named. A symlink or submodule is
 	// reported and never followed. A *LimitError when a file or the files together break limits.
 	ReadFolder(ctx context.Context, m MirrorID, sha, dir string, want func(rel string) bool, limits ReadLimits) (Folder, error)
+	// CommitsTouching counts the commits reachable from head and not from base that changed the folder dir, newest
+	// first (D-13), walking at most limit commits (DefaultTouchLimit when it is not positive). A base that is not an
+	// ancestor of head is Touch.NotAncestor. commit_missing for a head the mirror does not hold.
+	CommitsTouching(ctx context.Context, m MirrorID, head, base, dir string, limit int) (Touch, error)
 }
 
 // Options builds a GoGit.

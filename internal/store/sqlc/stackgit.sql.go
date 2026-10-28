@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"database/sql"
 )
 
 const countStacksUsingRepo = `-- name: CountStacksUsingRepo :one
@@ -229,4 +230,73 @@ func (q *Queries) ListStackGitsByEnv(ctx context.Context, envID string) ([]Stack
 		return nil, err
 	}
 	return items, nil
+}
+
+const setStackGitChecked = `-- name: SetStackGitChecked :execrows
+UPDATE stack_git_state SET checked_at = ? WHERE stack_id = ?
+`
+
+type SetStackGitCheckedParams struct {
+	CheckedAt sql.NullInt64
+	StackID   string
+}
+
+// A check that found nothing new: only the time it looked changes.
+func (q *Queries) SetStackGitChecked(ctx context.Context, arg SetStackGitCheckedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackGitChecked, arg.CheckedAt, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const upsertStackGitState = `-- name: UpsertStackGitState :exec
+INSERT INTO stack_git_state (stack_id, deployed_commit, deployed_tree, head_commit, head_tree, behind, status, reason_code,
+                             reason_detail, checked_at, error_since, consecutive_failures, pending_commit, next_check_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
+    deployed_commit = excluded.deployed_commit, deployed_tree = excluded.deployed_tree,
+    head_commit = excluded.head_commit, head_tree = excluded.head_tree, behind = excluded.behind,
+    status = excluded.status, reason_code = excluded.reason_code, reason_detail = excluded.reason_detail,
+    checked_at = excluded.checked_at, error_since = excluded.error_since,
+    consecutive_failures = excluded.consecutive_failures, pending_commit = excluded.pending_commit,
+    next_check_at = excluded.next_check_at
+`
+
+type UpsertStackGitStateParams struct {
+	StackID             string
+	DeployedCommit      string
+	DeployedTree        string
+	HeadCommit          string
+	HeadTree            string
+	Behind              int64
+	Status              string
+	ReasonCode          string
+	ReasonDetail        string
+	CheckedAt           sql.NullInt64
+	ErrorSince          sql.NullInt64
+	ConsecutiveFailures int64
+	PendingCommit       string
+	NextCheckAt         sql.NullInt64
+}
+
+// The one write of a sync check's answer (gitsync's state writer): every column, the row made if a restore left none.
+func (q *Queries) UpsertStackGitState(ctx context.Context, arg UpsertStackGitStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertStackGitState,
+		arg.StackID,
+		arg.DeployedCommit,
+		arg.DeployedTree,
+		arg.HeadCommit,
+		arg.HeadTree,
+		arg.Behind,
+		arg.Status,
+		arg.ReasonCode,
+		arg.ReasonDetail,
+		arg.CheckedAt,
+		arg.ErrorSince,
+		arg.ConsecutiveFailures,
+		arg.PendingCommit,
+		arg.NextCheckAt,
+	)
+	return err
 }

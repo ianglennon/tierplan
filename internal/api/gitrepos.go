@@ -53,6 +53,9 @@ type GitDeps struct {
 	Log     *slog.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// OnCheck, when set, is called when the sync check a request started has ended, with the stack, what it found and
+	// the error of Bayplan's own storage if there was one. Tests use it to know that a check is over.
+	OnCheck func(stackID string, outcome gitsync.Outcome, err error)
 }
 
 // GitTestRequest is the body of a repository test: an address, for a server with a private

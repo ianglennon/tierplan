@@ -36,7 +36,19 @@ type gitStackFix struct {
 
 func newGitStackFix(t *testing.T) *gitStackFix {
 	t.Helper()
-	f, e := stackEnv(t, nil)
+	return newGitStackFixWith(t, nil)
+}
+
+// newGitStackFixWith is newGitStackFix for a test that sets a field of the fixture before the router is built.
+func newGitStackFixWith(t *testing.T, tune func(*envFix)) *gitStackFix {
+	t.Helper()
+	var f *envFix
+	var e envBody
+	if tune == nil {
+		f, e = stackEnv(t, nil)
+	} else {
+		f, e = stackEnvTuned(t, tune)
+	}
 	admin := f.asAdmin(t)
 	repo := gittest.NewRepo(t)
 	sha := repo.Commit(t, map[string]string{

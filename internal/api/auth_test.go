@@ -116,6 +116,10 @@ type authFixture struct {
 	// gitClient is the client behind the git test routes (plan 09-01); nil builds a go-git one that
 	// dials through registryEgress.
 	gitClient gitx.Client
+	// gitOnCheck is told when a sync check a request started has ended (plan 09-14); gitSync is the service behind
+	// the git routes, set when the routes are built.
+	gitOnCheck func(stackID string, outcome gitsync.Outcome, err error)
+	gitSync    *gitsync.Service
 	// envSvc, when set, is the environment registry behind the environment
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
@@ -338,6 +342,17 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		AgentAllowInsecure: f.agentAllowInsecure,
 		Updater:            f.updater, ServerVersion: f.serverVersion, Log: log,
 	})
+	gitx.InstallTransport(registry.NewEgressPolicy(nil))
+	gitClient := f.gitClient
+	if gitClient == nil {
+		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log, Root: t.TempDir()})
+	}
+	gitConns := gitconn.NewStore(f.st, f.v, f.clk.now)
+	gitDeps := api.GitDeps{
+		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now, OnCheck: f.gitOnCheck,
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Log: log, Now: f.clk.now}),
+	}
+	f.gitSync = gitDeps.Sync
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
 			Envs: f.envSvc, Checker: checker, Clusters: f.clusters, Now: f.envWarningsNow, Log: log,
@@ -385,6 +400,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
+			GitConns: gitConns, GitSync: gitDeps.Sync,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.
@@ -434,16 +450,6 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
-	gitx.InstallTransport(registry.NewEgressPolicy(nil))
-	gitClient := f.gitClient
-	if gitClient == nil {
-		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log, Root: t.TempDir()})
-	}
-	gitConns := gitconn.NewStore(f.st, f.v, f.clk.now)
-	gitDeps := api.GitDeps{
-		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now,
-		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Log: log, Now: f.clk.now}),
-	}
 	api.RegisterGit(r, gitDeps)
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterGitStacks(r, f.stackDeps, gitDeps)

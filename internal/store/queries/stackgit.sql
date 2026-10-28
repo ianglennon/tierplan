@@ -39,3 +39,20 @@ WHERE s.env_id = ? ORDER BY s.name;
 
 -- name: CountStacksUsingRepo :one
 SELECT count(*) FROM stack_git WHERE repo_id = ?;
+
+-- name: UpsertStackGitState :exec
+-- The one write of a sync check's answer (gitsync's state writer): every column, the row made if a restore left none.
+INSERT INTO stack_git_state (stack_id, deployed_commit, deployed_tree, head_commit, head_tree, behind, status, reason_code,
+                             reason_detail, checked_at, error_since, consecutive_failures, pending_commit, next_check_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
+    deployed_commit = excluded.deployed_commit, deployed_tree = excluded.deployed_tree,
+    head_commit = excluded.head_commit, head_tree = excluded.head_tree, behind = excluded.behind,
+    status = excluded.status, reason_code = excluded.reason_code, reason_detail = excluded.reason_detail,
+    checked_at = excluded.checked_at, error_since = excluded.error_since,
+    consecutive_failures = excluded.consecutive_failures, pending_commit = excluded.pending_commit,
+    next_check_at = excluded.next_check_at;
+
+-- name: SetStackGitChecked :execrows
+-- A check that found nothing new: only the time it looked changes.
+UPDATE stack_git_state SET checked_at = ? WHERE stack_id = ?;

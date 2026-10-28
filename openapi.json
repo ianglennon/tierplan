@@ -13417,6 +13417,10 @@
             "description": "The environment the stack belongs to",
             "type": "string"
           },
+          "git": {
+            "$ref": "#/components/schemas/StackGitSummary",
+            "description": "Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"
+          },
           "hasDraft": {
             "description": "True when the draft holds changes that have not been deployed",
             "type": "boolean"
@@ -14105,6 +14109,139 @@
         ],
         "type": "object"
       },
+      "StackGitCheckBody": {
+        "additionalProperties": false,
+        "properties": {
+          "checking": {
+            "description": "True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "checking"
+        ],
+        "type": "object"
+      },
+      "StackGitSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "autoDeploy": {
+            "description": "True when a commit that changes the folder is deployed automatically",
+            "type": "boolean"
+          },
+          "autoDeployPaused": {
+            "description": "True when automatic deploys are paused: after a roll back, or because the owner lacks a permission",
+            "type": "boolean"
+          },
+          "behind": {
+            "description": "How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "behindCapped": {
+            "description": "True when behind is the most that is counted: there may be more commits",
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "description": "When the stack was last checked, RFC 3339 UTC; left out when it never was",
+            "format": "date-time",
+            "type": "string"
+          },
+          "checking": {
+            "description": "True while a check of the stack runs now",
+            "type": "boolean"
+          },
+          "deployedSha": {
+            "description": "The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository",
+            "type": "string"
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in; empty for the root",
+            "type": "string"
+          },
+          "headSha": {
+            "description": "The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was",
+            "type": "string"
+          },
+          "reasonCode": {
+            "description": "Why the status is error, or a note on behind (source_changed); left out when there is no reason. fetch_failed: the repository can't be reached or refused the credential. host_key_changed, host_key_untrusted: the ssh host key. ref_gone: the branch or tag no longer exists. folder_gone: the folder is not in the repository. checks_failed: the new commit fails the checks. source_changed: the stack follows another repository, ref or folder than the one deployed. auto_deploy_blocked, auto_deploy_failed: an automatic deploy was held back or failed",
+            "enum": [
+              "fetch_failed",
+              "host_key_changed",
+              "host_key_untrusted",
+              "ref_gone",
+              "folder_gone",
+              "checks_failed",
+              "source_changed",
+              "auto_deploy_blocked",
+              "auto_deploy_failed"
+            ],
+            "type": "string"
+          },
+          "reasonDetail": {
+            "description": "A sentence on the reason, never text from the server; left out when there is no reason",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the stack follows",
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names: a branch or a tag, which are followed, or a commit, which is fixed and never behind",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoHost": {
+            "description": "The host of the repository's address, such as github.com; empty when it could not be read",
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository the stack follows",
+            "type": "string"
+          },
+          "repoName": {
+            "description": "The repository's name; empty when it could not be read",
+            "type": "string"
+          },
+          "repoPath": {
+            "description": "The repository's path on that host without the leading slash and the .git, such as acme/stacks; empty when it could not be read",
+            "type": "string"
+          },
+          "status": {
+            "description": "unknown: never checked, or nothing deployed to compare with. in_sync: the stack's folder at the head is the deployed one, even if the head has moved. behind: the folder has changed. error: the last check could not be made, and reasonCode says why; what is deployed keeps running",
+            "enum": [
+              "unknown",
+              "in_sync",
+              "behind",
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoId",
+          "repoName",
+          "repoHost",
+          "repoPath",
+          "refKind",
+          "ref",
+          "folder",
+          "deployedSha",
+          "headSha",
+          "behind",
+          "behindCapped",
+          "status",
+          "checking",
+          "autoDeploy",
+          "autoDeployPaused"
+        ],
+        "type": "object"
+      },
       "StackHistoryPreviewBody": {
         "additionalProperties": false,
         "properties": {
@@ -14165,6 +14302,10 @@
           "drift": {
             "$ref": "#/components/schemas/StackDriftSummaryBody",
             "description": "Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services"
+          },
+          "git": {
+            "$ref": "#/components/schemas/StackGitSummary",
+            "description": "Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"
           },
           "hasDraft": {
             "description": "True when the draft holds changes that have not been deployed",
@@ -27314,6 +27455,130 @@
         "summary": "Reveal a secret stack file's saved content",
         "tags": [
           "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git": {
+      "get": {
+        "description": "The stack's git settings (repository with its name, host and path, ref, folder, auto-deploy) and the answer of its last check: the commit that is deployed, the head the check saw, how many commits that changed the stack's folder it is behind, its status (unknown, in_sync, behind or error) with the reason of an error, when it was checked, and whether a check runs now. Nothing is read from the repository: this answers from what the last check stored. A stack that is not from a repository is 409 stack_not_git; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
+        "operationId": "getStackGit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitSummary"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Where a git stack stands against its repository",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/check": {
+      "post": {
+        "description": "Starts a check and answers 202 at once: it fetches the tracked ref and compares the hash of the stack's folder at the head with the deployed revision's, then stores the head, the count of commits behind, the status and the time. It deploys nothing and makes no draft and no revision. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline, so asking again and again costs one fetch. Read the answer from the stack's git route or its list entry, whose checking is true until the check ends. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Needs stacks.read (Viewer).",
+        "operationId": "checkStackGit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitCheckBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check a git stack against its repository now",
+        "tags": [
+          "stacks",
+          "git"
         ]
       }
     },

@@ -255,6 +255,66 @@ func (r Repo) GitState(ctx context.Context, stackID string) (GitState, error) {
 	return gitStateOf(row), nil
 }
 
+// GitStates reads the last check of every git stack of an environment, by stack ID. A git stack that was never
+// checked, or whose state a restore did not carry, has no entry: it reads as GitStatusUnknown. It is one query.
+func (r Repo) GitStates(ctx context.Context, envID string) (map[string]GitState, error) {
+	rows, err := r.Store.RQ.ListStackGitStatesByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("list the git states: %w", err)
+	}
+	out := make(map[string]GitState, len(rows))
+	for _, row := range rows {
+		out[row.StackID] = gitStateOf(sqlc.StackGitState(row))
+	}
+	return out, nil
+}
+
+// WriteGitState stores the answer of a check of a git stack: all of its columns, and the row itself if a restore left
+// none. A write that only moves the time of the check (the same answer as the one stored, looked at again) changes
+// the one column. Only gitsync's state writer calls it, so that what is new in an answer is judged in one place.
+func (r Repo) WriteGitState(ctx context.Context, s GitState) error {
+	if err := r.Store.Q.UpsertStackGitState(ctx, sqlc.UpsertStackGitStateParams{
+		StackID: s.StackID, DeployedCommit: s.DeployedCommit, DeployedTree: s.DeployedTree, HeadCommit: s.HeadCommit,
+		HeadTree: s.HeadTree, Behind: int64(s.Behind), Status: s.Status, ReasonCode: s.ReasonCode, ReasonDetail: s.ReasonDetail,
+		CheckedAt: nullUnixNano(s.CheckedAt), ErrorSince: nullUnixNano(s.ErrorSince), ConsecutiveFailures: int64(s.ConsecutiveFailures),
+		PendingCommit: s.PendingCommit, NextCheckAt: nullUnixNano(s.NextCheckAt),
+	}); err != nil {
+		return fmt.Errorf("write the git state: %w", err)
+	}
+	return nil
+}
+
+// TouchGitChecked records that a check looked at the stack again and found what it already held.
+func (r Repo) TouchGitChecked(ctx context.Context, stackID string, at time.Time) error {
+	n, err := r.Store.Q.SetStackGitChecked(ctx, sqlc.SetStackGitCheckedParams{CheckedAt: nullUnixNano(&at), StackID: stackID})
+	if err != nil {
+		return fmt.Errorf("touch the git state: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// DeployedGit is where the stack's newest good revision came from: its commit, the tree hash of its folder and its
+// source (the repository, ref and folder it was made with). The deployed commit and tree of a check come from here and
+// never from the stack's current settings, which a review may have changed since (RESEARCH Pitfall 8). It reports
+// false when the stack has no good revision, or the newest one was not made from a repository.
+func (r Repo) DeployedGit(ctx context.Context, stackID string) (GitRevision, bool, error) {
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GitRevision{}, false, nil
+	}
+	if err != nil {
+		return GitRevision{}, false, fmt.Errorf("read the deployed revision: %w", err)
+	}
+	rev := gitRevisionOf(row)
+	if rev.isZero() {
+		return GitRevision{}, false, nil
+	}
+	return rev, true, nil
+}
+
 // ErrNoGit means the stack has no git settings: it is not a stack from a repository.
 var ErrNoGit = errors.New("stackops: the stack is not from a git repository")
 
@@ -280,6 +340,13 @@ func gitStateOf(row sqlc.StackGitState) GitState {
 		ErrorSince: unixNanoPtr(row.ErrorSince), ConsecutiveFailures: int(row.ConsecutiveFailures),
 		PendingCommit: row.PendingCommit, NextCheckAt: unixNanoPtr(row.NextCheckAt),
 	}
+}
+
+func nullUnixNano(t *time.Time) sql.NullInt64 {
+	if t == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: t.UnixNano(), Valid: true}
 }
 
 func unixNanoPtr(n sql.NullInt64) *time.Time {

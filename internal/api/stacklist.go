@@ -469,6 +469,10 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 	if err != nil {
 		return envStackRows{}, err
 	}
+	gits, err := d.gitSummaries(ctx, envID)
+	if err != nil {
+		return envStackRows{}, err
+	}
 	reads := newStackReads(ctx, d, envID)
 	out := envStackRows{rows: make([]stackRow, 0, len(list))}
 	for _, st := range list {
@@ -477,6 +481,7 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, self
 		g, hasG := done[st.ID]
 		item, services := stackItemWithServices(reads, st, l, hasL, k, hasK, g, hasG, drafts[st.ID].Pending)
 		item.Drift = d.driftOf(ctx, repo, st)
+		item.Git = gits[st.ID]
 		r := stackRow{item: item, envID: envID, envName: envName}
 		if hasG {
 			r.deployedAt = g.EndedAt

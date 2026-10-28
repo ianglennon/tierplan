@@ -8,6 +8,7 @@ package gitsync
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/gitconn"
@@ -26,6 +27,9 @@ type Deps struct {
 	Log  *slog.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Joined, when set, is called each time a caller starts or joins the check of a stack, with how many callers wait on
+	// it now. A test uses it to know that every caller has joined before it lets the check finish.
+	Joined func(stackID string, waiting int)
 }
 
 // Service imports the files of a stack from a repository folder.
@@ -35,11 +39,16 @@ type Service struct {
 	repo  stackops.Repo
 	log   *slog.Logger
 	now   func() time.Time
+
+	joined func(stackID string, waiting int)
+	mu     sync.Mutex
+	// checking holds the sync checks in flight, by stack ID: a second request for the same stack joins the first.
+	checking map[string]*checkCall
 }
 
 // New returns a Service.
 func New(d Deps) *Service {
-	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, now: d.Now}
+	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, now: d.Now, joined: d.Joined, checking: map[string]*checkCall{}}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

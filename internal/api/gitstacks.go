@@ -138,6 +138,7 @@ func RegisterGitStacks(r *httpx.Router, s StacksDeps, g GitDeps) {
 	if g.Log == nil {
 		g.Log = s.Log
 	}
+	registerStackGit(r, s, g)
 	limiter := &checkLimiter{}
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkGitStackSource", Method: http.MethodPost, Path: "/api/env/{envId}/git-stacks/check",

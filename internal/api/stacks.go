@@ -18,6 +18,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -142,6 +144,10 @@ type StacksDeps struct {
 	DriftRecheck func(envID, stackID string)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// GitConns and GitSync fill the git part of a git stack's list entry and detail: the repository's name and
+	// address, and whether a sync check runs now. Nil leaves them empty.
+	GitConns *gitconn.Store
+	GitSync  *gitsync.Service
 	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
 	// router. Nil makes such a deploy refuse with environment_not_found.
 	Envs httpx.EnvResolver
@@ -221,6 +227,8 @@ type StackItem struct {
 	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
 	// Drift is the newest drift check of a stack Bayplan manages.
 	Drift *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services"`
+	// Git is where a git stack stands against its repository.
+	Git *StackGitSummary `json:"git,omitempty" doc:"Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"`
 	// Unmanaged is set on a stack found on the engine that Bayplan did not make (D-07).
 	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
 }
@@ -597,6 +605,11 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	}
 	if draft.Pending {
 		detail.DraftSavedAt, detail.DraftSavedBy = rfc3339(draft.At), draft.By
+	}
+	if st.Source.Kind == stacks.SourceGit {
+		if detail.Git, err = d.gitSummaryOfStack(ctx, st.ID); err != nil {
+			return StackDetail{}, err
+		}
 	}
 	back, hasBack, err := repo.RollbackInfo(ctx, st.ID)
 	if err != nil {
