@@ -24,7 +24,9 @@ type URL struct {
 	Scheme string
 	// Host is the lower-cased host without brackets or port.
 	Host string
-	// Port is the port, or 0 for the scheme's default.
+	// User is the user name of an ssh address (git in git@host:path); empty for https.
+	User string
+	// Port is the port, the scheme's default (443, 22) when the address has none.
 	Port int
 	// Path is the repository path.
 	Path string

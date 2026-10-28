@@ -195,3 +195,94 @@ func TestAGitTestThatFailsIsAResultThatNamesTheHostOnly(t *testing.T) {
 		t.Errorf("the answer carries the address or raw error text: %s", rec.Body)
 	}
 }
+
+func TestGitAddressTestRefusals(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	srv := publicRepo(t, gittest.HTTPOptions{})
+
+	// An address or an authority the server will not use is a 422 that names the field and a code.
+	for _, tc := range []struct{ name, url, ca, location, code string }{
+		{"file scheme", "file:///etc/passwd", "", "body.url", "url_unsupported"},
+		{"a bare path", "/etc/passwd", "", "body.url", "url_unsupported"},
+		{"git scheme", "git://git.example.org/x.git", "", "body.url", "url_unsupported"},
+		{"plain http", "http://git.example.org/x.git", "", "body.url", "url_unsupported"},
+		{"an option", "-oProxyCommand=touch /tmp/x", "", "body.url", "url_unsupported"},
+		{"no host", "https:///x.git", "", "body.url", "url_unsupported"},
+		{"no address", "", "", "body.url", "url_unsupported"},
+		{"a control character", "https://git.example.org/x\x00.git", "", "body.url", "url_unsupported"},
+		{"a password in the address", "https://ci:hunter2-secret@git.example.org/x.git", "", "body.url", "url_userinfo"},
+		{"a CA that is not a certificate", srv.URL, "this is not a certificate", "body.caPem", "ca_invalid"},
+		{"a CA over the size limit", srv.URL, srv.CAPEM + strings.Repeat("#", 64<<10), "body.caPem", "ca_too_large"},
+	} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/git/repos/test", gitTestBody(tc.url, tc.ca))
+		p := decodeProblem(t, rec)
+		if rec.Code != http.StatusUnprocessableEntity || p.Type != "validation_failed" || len(p.Errors) != 1 || p.Errors[0].Location != tc.location || p.Errors[0].Message != tc.code {
+			t.Errorf("%s: %d %s, want 422 validation_failed %s %s", tc.name, rec.Code, rec.Body, tc.location, tc.code)
+		}
+		if strings.Contains(rec.Body.String(), "hunter2-secret") {
+			t.Errorf("%s: the answer carries the password from the address: %s", tc.name, rec.Body)
+		}
+	}
+	// The refusal text is the screens' wording.
+	rec := f.credCall(t, admin, http.MethodPost, "/api/git/repos/test", gitTestBody("file:///etc", ""))
+	if !strings.Contains(rec.Body.String(), "url_unsupported") {
+		t.Errorf("the body does not carry the code: %s", rec.Body)
+	}
+
+	// A refused submission reaches no server and spends none of the 10 tests a minute.
+	for range 12 {
+		f.credCall(t, admin, http.MethodPost, "/api/git/repos/test", gitTestBody("file:///etc", ""))
+	}
+	if rec := f.credCall(t, admin, http.MethodPost, "/api/git/repos/test", gitTestBody(srv.URL, srv.CAPEM)); rec.Code != http.StatusOK {
+		t.Errorf("a valid test after 13 refused ones: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
+
+func TestGitAddressTestFailuresAreFixedCodesAndNeverRawText(t *testing.T) {
+	t.Parallel()
+	f := newAuthFixture(t, config.Config{})
+	admin := f.asAdmin(t)
+	const password = "basic-auth-password-0123456789"
+	locked := publicRepo(t, gittest.HTTPOptions{BasicAuth: &[2]string{"ci-user", password}})
+	open := publicRepo(t, gittest.HTTPOptions{})
+
+	for _, tc := range []struct {
+		name, url, ca, code, host string
+		reachable, signedIn, refs string
+	}{
+		{"a private CA that was not supplied", open.URL, "", "cert_untrusted", "127.0.0.1", "failed", "not_checked", "not_checked"},
+		{"a server that asks for a sign-in", locked.URL, locked.CAPEM, "auth_refused", "127.0.0.1", "passed", "failed", "not_checked"},
+		{"a repository that is not there", strings.Replace(open.URL, "repo.git", "missing.git", 1), open.CAPEM, "not_found", "127.0.0.1", "passed", "not_needed", "failed"},
+		{"a metadata address", "https://169.254.169.254/latest.git", "", "egress_blocked", "169.254.169.254", "failed", "not_checked", "not_checked"},
+	} {
+		rec := f.credCall(t, admin, http.MethodPost, "/api/git/repos/test", gitTestBody(tc.url, tc.ca))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: %d %s, want 200 (a failed test is a result)", tc.name, rec.Code, rec.Body)
+			continue
+		}
+		got := decodeGitTest(t, rec)
+		if got.Failure == nil || got.Failure.Code != tc.code || got.Failure.Host != tc.host {
+			t.Errorf("%s: failure = %+v, want %s at %s", tc.name, got.Failure, tc.code, tc.host)
+		}
+		if got.Steps.Reachable.State != tc.reachable || got.Steps.SignedIn.State != tc.signedIn || got.Steps.Refs.State != tc.refs {
+			t.Errorf("%s: steps = %+v, want %s / %s / %s", tc.name, got.Steps, tc.reachable, tc.signedIn, tc.refs)
+		}
+		if len(got.Branches) != 0 || len(got.Tags) != 0 {
+			t.Errorf("%s: a failed test lists %v %v", tc.name, got.Branches, got.Tags)
+		}
+		for _, leak := range []string{password, "x509", "dial tcp", "certificate", "lookup", "unknown authority", "repo.git", "info/refs"} {
+			if strings.Contains(rec.Body.String(), leak) {
+				t.Errorf("%s: the answer carries %q: %s", tc.name, leak, rec.Body)
+			}
+		}
+	}
+	// Nothing about the failures reached the server's log either.
+	logs := f.logs.String()
+	for _, leak := range []string{password, "x509", "dial tcp"} {
+		if strings.Contains(logs, leak) {
+			t.Errorf("the log carries %q", leak)
+		}
+	}
+}

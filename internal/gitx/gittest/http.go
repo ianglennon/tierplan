@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/pem"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cgi" //nolint:gosec // G504: the httpoxy warning is for Go before 1.6.3; the CGI here is a test fixture serving git-http-backend
 	"net/http/httptest"
@@ -90,11 +91,14 @@ func NewHTTPServer(tb testing.TB, r *Repo, o HTTPOptions) *HTTPServer {
 		}
 		backend.ServeHTTP(w, req)
 	})
+	s.srv = httptest.NewUnstartedServer(h)
+	// A client that refuses the certificate is the point of some tests, not a server error to log.
+	s.srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	if o.TLS {
-		s.srv = httptest.NewTLSServer(h)
+		s.srv.StartTLS()
 		s.CAPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.srv.Certificate().Raw}))
 	} else {
-		s.srv = httptest.NewServer(h)
+		s.srv.Start()
 	}
 	tb.Cleanup(s.srv.Close)
 	s.URL = s.srv.URL + "/" + filepath.Base(r.bare)
