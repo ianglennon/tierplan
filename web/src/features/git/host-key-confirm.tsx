@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import { Check, Copy, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Check, CircleX, Copy, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { GitTestResult } from "@/api/git";
@@ -167,5 +167,61 @@ export function TrustedKeyLine({ fingerprint }: { fingerprint: string }) {
       </TooltipTrigger>
       <TooltipContent className="max-w-sm font-mono break-all">{fingerprint}</TooltipContent>
     </Tooltip>
+  );
+}
+
+interface HostKeyChangedProps {
+  hostKey: TestedHostKey;
+  host: string;
+  // Whether the caller may trust a new key for this repository (an administrator of its scope).
+  // Without it the Alert only explains.
+  canRetrust: boolean;
+  onRetrust: () => void;
+}
+
+// HostKeyChanged is the hard stop: the host shows another key than the one a person trusted. Bayplan
+// sent no credential and will not until an administrator trusts the new key on purpose. It is the
+// offline kind of Alert and role=alert, so it is announced at once.
+export function HostKeyChanged({ hostKey, host, canRetrust, onRetrust }: HostKeyChangedProps) {
+  const t = useT();
+  return (
+    <Alert variant="destructive" role="alert">
+      <CircleX aria-hidden="true" />
+      <AlertTitle>{t("git.hostKey.changed.title", { host })}</AlertTitle>
+      <AlertDescription>
+        <div className="flex flex-col gap-3">
+          <p>{t("git.hostKey.changed.body")}</p>
+          <dl className="flex flex-col gap-2">
+            {hostKey.savedFingerprint ? (
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs">{t("git.hostKey.changed.saved")}</dt>
+                <dd>
+                  <code className="font-mono text-xs break-all">{hostKey.savedFingerprint}</code>
+                </dd>
+              </div>
+            ) : null}
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-xs">{t("git.hostKey.changed.presented")}</dt>
+              <dd>
+                <code className="font-mono text-xs break-all">{hostKey.fingerprint}</code>
+              </dd>
+            </div>
+          </dl>
+          {canRetrust ? (
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="max-md:h-11"
+                onClick={onRetrust}
+              >
+                {t("git.hostKey.changed.retrust")}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </AlertDescription>
+    </Alert>
   );
 }

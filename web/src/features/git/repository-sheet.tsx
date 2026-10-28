@@ -40,7 +40,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { addressKind, hostOf, validateGitAddress } from "@/features/git/address-rules";
 import { CredentialSheet } from "@/features/git/credential-sheet";
 import { useManageReason } from "@/features/git/git-table-parts";
-import { HostKeyConfirm, TrustedKeyLine } from "@/features/git/host-key-confirm";
+import { HostKeyChanged, HostKeyConfirm, TrustedKeyLine } from "@/features/git/host-key-confirm";
 import { RepoTestResult } from "@/features/git/repo-test-result";
 import { hostKeyState, LastTestCell } from "@/features/git/repository-table";
 import {
@@ -54,6 +54,7 @@ import {
   TOUCH_HEIGHT,
   useScopeChoices,
 } from "@/features/git/sheet-parts";
+import { TrustNewKeyDialog } from "@/features/git/trust-new-key-dialog";
 import { CredentialBadge } from "@/features/registries/credential-badge";
 import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -253,6 +254,8 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   } | null>(null);
   // The fingerprint of a prompt the person answered "Don't trust it" to.
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+  // The Trust the new key dialog, opened from the changed-key Alert.
+  const [retrusting, setRetrusting] = useState(false);
   const { choices, ready } = useScopeChoices("repoSheet");
   const me = useMe();
   const credentialList = useQuery(gitCredentialsQuery);
@@ -741,7 +744,14 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                   </div>
                 ) : null}
                 {tested ? <RepoTestResult result={tested.result} stale={stale} /> : null}
-                {keyResult ? (
+                {keyResult?.state === "changed" ? (
+                  <HostKeyChanged
+                    hostKey={keyResult}
+                    host={testedHost}
+                    canRetrust={repo !== undefined && !repo.readOnly}
+                    onRetrust={() => setRetrusting(true)}
+                  />
+                ) : keyResult ? (
                   <HostKeyConfirm
                     hostKey={keyResult}
                     host={testedHost}
@@ -830,6 +840,17 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
           </fieldset>
         </form>
       </SheetFrame>
+      {repo && keyResult?.state === "changed" ? (
+        <TrustNewKeyDialog
+          repository={{ id: repo.id, host: testedHost, scope: repo.scope }}
+          savedFingerprint={keyResult.savedFingerprint}
+          presented={{ key: keyResult.key, fingerprint: keyResult.fingerprint }}
+          open={retrusting}
+          onClose={() => setRetrusting(false)}
+          // The old answer is for a key that is no longer the one that matters.
+          onDone={() => setTested(null)}
+        />
+      ) : null}
       <DiscardDialog
         open={discarding}
         onOpenChange={setDiscarding}

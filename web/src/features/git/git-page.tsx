@@ -9,6 +9,7 @@ import { environmentsQuery } from "@/api/environments";
 import {
   type GitCredential,
   type GitRepo,
+  type GitRequestError,
   gitCredentialsQuery,
   gitReposQuery,
   useTestGitRepo,
@@ -27,7 +28,8 @@ import {
 } from "@/features/git/git-table-parts";
 import { useFailureReason } from "@/features/git/repo-test-result";
 import { PlaceholderRepositorySheet, RepositorySheet } from "@/features/git/repository-sheet";
-import { RepositoryTable } from "@/features/git/repository-table";
+import { hostKeyState, RepositoryTable } from "@/features/git/repository-table";
+import { type PresentedKey, TrustNewKeyDialog } from "@/features/git/trust-new-key-dialog";
 import {
   hasPermission,
   useAnyEnvironmentPermission,
@@ -36,7 +38,7 @@ import {
   usePermission,
 } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
-import { toastError, toastSuccess } from "@/lib/toast";
+import { toastError, toastInfo, toastSuccess } from "@/lib/toast";
 import { z } from "@/lib/zod-config";
 
 // The longest value a search parameter holds that is an ID: a UUID is 36.
@@ -150,6 +152,12 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
   // The repository or credential whose delete confirmation is open.
   const [deletingRepo, setDeletingRepo] = useState<GitRepo | null>(null);
   const [deletingCredential, setDeletingCredential] = useState<GitCredential | null>(null);
+  // The repository whose changed host key is being trusted, with the key the host showed just now.
+  const [retrusting, setRetrusting] = useState<{
+    repo: GitRepo;
+    savedFingerprint: string;
+    presented: PresentedKey;
+  } | null>(null);
 
   const me = useMe();
   // The Scope filter lists the environments the user can read git connections on. The server
@@ -215,16 +223,53 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
             );
           }
         },
-        onError: (err) =>
-          toastError(
-            t(
-              err.status === 429
-                ? "git.test.errors.rateLimited"
-                : err.status === 403
-                  ? "git.test.errors.permission"
-                  : "git.test.errors.generic",
-            ),
-          ),
+        onError: testFailed,
+        onSettled: () => setTestingId(null),
+      },
+    );
+  }
+
+  function testFailed(err: GitRequestError) {
+    toastError(
+      t(
+        err.status === 429
+          ? "git.test.errors.rateLimited"
+          : err.status === 403
+            ? "git.test.errors.permission"
+            : "git.test.errors.generic",
+      ),
+    );
+  }
+
+  // Re-trust host key… is the row action for a key that changed or was never trusted. A key that
+  // was never trusted is confirmed in the sheet, where the fingerprint is shown and Save keeps it.
+  // A changed one is read again from the host: the key to trust is the one the host shows now, not
+  // one remembered from an earlier test, and the destructive confirm shows both.
+  function retrust(repo: GitRepo) {
+    if (hostKeyState(repo) !== "changed") {
+      onSearchChange({ repo: repo.id });
+      return;
+    }
+    if (tester.isPending) return;
+    setTestingId(repo.id);
+    tester.mutate(
+      { id: repo.id, envId: repo.scope.envId ?? undefined },
+      {
+        onSuccess: (result) => {
+          const key = result.hostKey;
+          if (key.state === "changed" && key.key) {
+            setRetrusting({
+              repo,
+              savedFingerprint: key.savedFingerprint || (repo.hostKey?.fingerprint ?? ""),
+              presented: { key: key.key, fingerprint: key.fingerprint },
+            });
+          } else if (result.failure) {
+            toastError(t("git.repos.testToast.failed", { reason: reason(result.failure) }));
+          } else {
+            toastInfo(t("git.hostKey.retrust.unchanged", { host: repo.host }));
+          }
+        },
+        onError: testFailed,
         onSettled: () => setTestingId(null),
       },
     );
@@ -297,6 +342,7 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
             void navigate({ to: "/git/credentials", search: { credential: id } })
           }
           onTest={test}
+          onRetrust={retrust}
           onDelete={setDeletingRepo}
           testingId={testingId}
           rowStates={repoRows}
@@ -328,6 +374,13 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
           // Deleting the repository whose sheet is open leaves nothing to show.
           if (deletingRepo && deletingRepo.id === search.repo) closeSheet();
         }}
+      />
+      <TrustNewKeyDialog
+        repository={retrusting?.repo ?? null}
+        savedFingerprint={retrusting?.savedFingerprint ?? ""}
+        presented={retrusting?.presented ?? null}
+        open={retrusting !== null}
+        onClose={() => setRetrusting(null)}
       />
       <DeleteCredentialDialog
         credential={deletingCredential}

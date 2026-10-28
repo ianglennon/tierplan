@@ -51,6 +51,7 @@
       "viewDetails": "View details",
       "edit": "Edit",
       "test": "Test",
+      "retrustHostKey": "Re-trust host key…",
       "delete": "Delete…",
       "noCredential": "None (public)",
       "notTested": "Not tested",
@@ -242,7 +243,29 @@
       "confirmed": "Key trusted. It is saved with the repository.",
       "builtin": "Matches the built-in key for {{host}}.",
       "trusted": "Trusted",
-      "trustedKey": "Trusted key"
+      "trustedKey": "Trusted key",
+      "changed": {
+        "title": "The host key for {{host}} has changed",
+        "body": "Bayplan stopped, because this can mean someone is intercepting the connection.",
+        "saved": "Saved key",
+        "presented": "Presented key",
+        "retrust": "Re-trust host key…"
+      },
+      "retrust": {
+        "title": "Trust the new key for {{host}}?",
+        "body": "The key for {{host}} changed. Only continue if you know why, for example you rebuilt the server. Bayplan will record who trusted it.",
+        "saved": "Saved key",
+        "new": "New key",
+        "keep": "Keep the old key",
+        "confirm": "Trust the new key",
+        "pending": "Trusting…",
+        "done": "Trusted the new key for {{host}}.",
+        "unchanged": "The host key for {{host}} matches the saved key again.",
+        "permission": "You don't have permission to trust this host key.",
+        "gone": "This repository no longer exists.",
+        "invalid": "That isn't a host key Bayplan can read.",
+        "generic": "Couldn't trust the key. Try again."
+      }
     },
     "repoSheet": {
       "add": {

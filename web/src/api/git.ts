@@ -272,3 +272,32 @@ export function useTestGitRepo() {
     false,
   );
 }
+
+// What trusting a host key is given: the repository, its layer's environment (absent for the
+// instance), and the key exactly as a test showed it (hostKey.key of an untrusted or changed
+// answer), after the person compared its fingerprint.
+export interface TrustHostKeyVariables {
+  id: string;
+  envId?: string;
+  hostKey: string;
+}
+
+// useTrustGitHostKey stores the key a person confirmed as the one the repository's host is trusted
+// by, replacing the earlier one. It is the only way a changed key is accepted, and the server
+// records who did it. The lists are read again whatever the answer: the repository's Host key and
+// Last test change.
+export function useTrustGitHostKey() {
+  return useGitMutation<GitRepo, TrustHostKeyVariables>(({ id, envId, hostKey }) =>
+    run("POST", () =>
+      envId
+        ? api.POST("/api/env/{envId}/git/repos/{repoId}/trust-host-key", {
+            params: { path: { envId, repoId: id } },
+            body: { hostKey },
+          })
+        : api.POST("/api/git/repos/{repoId}/trust-host-key", {
+            params: { path: { repoId: id } },
+            body: { hostKey },
+          }),
+    ),
+  );
+}

@@ -186,6 +186,9 @@ interface RepositoryTableProps {
   // Opens a credential's sheet (the Credential cell is a link to it).
   onOpenCredential?: (id: string) => void;
   onTest: (repo: GitRepo) => void;
+  // "Re-trust host key…": offered to those who may manage a row whose key changed or was never
+  // trusted.
+  onRetrust?: (repo: GitRepo) => void;
   onDelete: (repo: GitRepo) => void;
   // The ID of a row that appeared while the page was open, highlighted for 1.5 s.
   rowStates?: ReadonlyMap<string, RowState>;
@@ -212,6 +215,7 @@ export function RepositoryTable({
   onOpen,
   onOpenCredential,
   onTest,
+  onRetrust,
   onDelete,
   rowStates,
   testingId,
@@ -369,6 +373,12 @@ export function RepositoryTable({
                   >
                     {t("git.repos.test")}
                   </DropdownMenuItem>
+                  {onRetrust &&
+                  (hostKeyState(r) === "changed" || hostKeyState(r) === "untrusted") ? (
+                    <DropdownMenuItem className="max-md:min-h-11" onSelect={() => onRetrust(r)}>
+                      {t("git.repos.retrustHostKey")}
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator />
                   <NeedsTooltip reason={inUse}>
                     <DropdownMenuItem
