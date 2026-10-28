@@ -197,6 +197,14 @@ func (s *Service) read(ctx context.Context, req ImportRequest, held string) (Imp
 	// The check sees every overlay, so one that clashes with a repository file is named. What is stored is the files
 	// the compose files need and the overlays that fill a path the repository lacks.
 	checkFiles := slices.Clone(read)
+	// A needed path that is a link not followed, or sits behind a submodule or such a link, is in the repository: its
+	// own blocking problem names it (linkProblems), so the check is not also told that it is missing.
+	for _, p := range needed.Paths {
+		if !repoFiles[p] && behindLink(p, all) {
+			repoFiles[p] = true
+			checkFiles = append(checkFiles, stacks.File{Path: p, Origin: stacks.OriginRepo})
+		}
+	}
 	var stored []stacks.File
 	for _, f := range read {
 		if slices.Contains(needed.Paths, f.Path) {
@@ -333,6 +341,16 @@ func cleanLocation(folder string, compose []string) (string, []string, error) {
 		out = append(out, clean)
 	}
 	return folder, out, nil
+}
+
+// behindLink reports whether the path p, or a folder above it, is a submodule or a link that was not followed.
+func behindLink(p string, f gitx.Folder) bool {
+	for at := p; at != "." && at != "/" && at != ""; at = path.Dir(at) {
+		if link, ok := f.Links[at]; ok && !link.Followed {
+			return true
+		}
+	}
+	return false
 }
 
 // linkProblems are the blocking problems of a stack file that is a submodule or a link that was not followed, or
