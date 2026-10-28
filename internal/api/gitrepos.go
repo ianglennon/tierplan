@@ -5,14 +5,19 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -29,28 +34,41 @@ const namesShown = 20
 type GitDeps struct {
 	// Git is the client the tests list a repository with. Nil answers 503 git_unavailable.
 	Git gitx.Client
-	Log *slog.Logger
+	// Conns keeps the git credentials and repositories. Nil answers 503 git_unavailable on their
+	// routes, so the routes are always registered.
+	Conns *gitconn.Store
+	// Envs names the environment of an environment connection.
+	Envs *envs.Service
+	// Audit records every change and every test that signs in with a credential.
+	Audit *audit.Writer
+	// Checker decides who may see and manage which connections.
+	Checker *rbac.Checker
+	Log     *slog.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
 
-// GitTestRequest is the body of a repository test: an address and, for a server with a private
-// certificate authority, that authority. It never carries a credential: a test of a public
-// repository is the whole of this plan, and signing in follows with the credentials.
+// GitTestRequest is the body of a repository test: an address, for a server with a private
+// certificate authority that authority, and optionally the saved credential to sign in with. It
+// never carries a token: a credential is picked by ID.
 type GitTestRequest struct {
-	URL   string `json:"url" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
-	CAPEM string `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
+	URL          string `json:"url" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
+	CAPEM        string `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
+	CredentialID string `json:"credentialId,omitempty" maxLength:"64" doc:"The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested"`
 }
 
 // TestGitAddressInput is the request of the instance test route.
 type TestGitAddressInput struct {
-	Body GitTestRequest
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      GitTestRequest
 }
 
 // TestGitAddressEnvInput is the request of the environment test route.
 type TestGitAddressEnvInput struct {
 	EnvironmentPathInput
-	Body GitTestRequest
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      GitTestRequest
 }
 
 // GitTestStepBody is the outcome of one step of a repository test.
@@ -90,38 +108,34 @@ type GitTestOutput struct {
 	Body         GitTestResultBody
 }
 
-// testGitAddress validates a submission and lists the repository's branches and tags from this
-// server. It writes nothing (Phase 9 D-04).
-func testGitAddress(ctx context.Context, d GitDeps, limiter *testLimiter, req GitTestRequest) (*GitTestOutput, error) {
-	p := httpx.PrincipalFrom(ctx)
-	if p == nil {
-		return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
-	}
-	if d.Git == nil {
-		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
-	}
-	// The address and the authority are checked before the limiter is spent: a refused submission
-	// reaches no server.
-	if err := validateGitTest(req); err != nil {
-		return nil, err
-	}
-	if !limiter.allow(p.ID) {
-		return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
-	}
-	refs, err := d.Git.LsRemote(ctx, gitx.Remote{URL: req.URL, CAPEM: req.CAPEM})
+// gitTestOutcome is a finished ls-remote: the answer, and the failure that is nil when it passed.
+type gitTestOutcome struct {
+	out     *GitTestOutput
+	failure *gitx.Error
+}
+
+// lsRemote lists the remote and words the answer. signedIn says a credential was used, so the
+// sign-in step reads passed rather than not_needed. An error is a failure that is not a *gitx.Error:
+// the caller answers 500.
+func (d GitDeps) lsRemote(ctx context.Context, rem gitx.Remote, signedIn bool) (gitTestOutcome, error) {
+	refs, err := d.Git.LsRemote(ctx, rem)
 	out := &GitTestOutput{CacheControl: "no-store", Body: GitTestResultBody{Branches: []string{}, Tags: []string{}}}
 	if err != nil {
 		var ge *gitx.Error
 		if !errors.As(err, &ge) {
 			// The text of an unknown error could carry the address or a token: log its type only.
 			d.Log.Error("git test failed unexpectedly", "error_type", fmt.Sprintf("%T", err))
-			return nil, huma.Error500InternalServerError("internal error")
+			return gitTestOutcome{}, huma.Error500InternalServerError("internal error")
 		}
 		out.Body.Steps, out.Body.Failure = failedSteps(ge.Code), &GitTestFailureBody{Code: string(ge.Code), Host: ge.Host}
-		return out, nil
+		return gitTestOutcome{out: out, failure: ge}, nil
+	}
+	signIn := "not_needed"
+	if signedIn {
+		signIn = "passed"
 	}
 	out.Body.Steps = GitTestStepsBody{
-		Reachable: GitTestStepBody{State: "passed"}, SignedIn: GitTestStepBody{State: "not_needed"}, Refs: GitTestStepBody{State: "passed"},
+		Reachable: GitTestStepBody{State: "passed"}, SignedIn: GitTestStepBody{State: signIn}, Refs: GitTestStepBody{State: "passed"},
 	}
 	for _, b := range refs.Branches[:min(len(refs.Branches), namesShown)] {
 		out.Body.Branches = append(out.Body.Branches, b.Name)
@@ -130,7 +144,88 @@ func testGitAddress(ctx context.Context, d GitDeps, limiter *testLimiter, req Gi
 		out.Body.Tags = append(out.Body.Tags, t.Name)
 	}
 	out.Body.BranchCount, out.Body.TagCount, out.Body.DefaultBranch = len(refs.Branches), len(refs.Tags), refs.Default
-	return out, nil
+	return gitTestOutcome{out: out}, nil
+}
+
+// testGitAddress validates a submission and lists the repository's branches and tags from this
+// server. It writes nothing (Phase 9 D-04), except that a test that signs in with a saved
+// credential is audited: sending a credential to an address is worth a record. envID is the
+// environment of the route, empty for the instance's, and decides which credentials may be picked.
+func testGitAddress(ctx context.Context, d GitDeps, limiter *testLimiter, userAgent, envID string, req GitTestRequest) (*GitTestOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+	}
+	if d.Git == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	if req.CredentialID != "" && d.Conns == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	// The address and the authority are checked before the limiter is spent: a refused submission
+	// reaches no server.
+	if err := validateGitTest(req); err != nil {
+		return nil, err
+	}
+	rem := gitx.Remote{URL: req.URL, CAPEM: req.CAPEM}
+	var cred *gitconn.Credential
+	if req.CredentialID != "" {
+		r, c, err := d.Conns.RemoteFor(ctx, envID, req.URL, req.CAPEM, req.CredentialID)
+		if err != nil {
+			return nil, d.gitFail("pick the credential to test with", err)
+		}
+		rem, cred = r, &c
+	}
+	if !limiter.allow(p.ID) {
+		return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
+	}
+	res, err := d.lsRemote(ctx, rem, cred != nil)
+	if err != nil {
+		return nil, err
+	}
+	if cred != nil {
+		details := map[string]string{
+			"layer": layerOf(envID), "host": hostOf(req.URL), "credential": cred.Name, "credential_layer": cred.Layer(),
+		}
+		if err := d.auditTest(ctx, p, userAgent, envID, "", details, res.failure); err != nil {
+			return nil, err
+		}
+	}
+	return res.out, nil
+}
+
+// layerOf is the layer a route works in.
+func layerOf(envID string) string {
+	if envID == "" {
+		return gitconn.LayerInstance
+	}
+	return gitconn.LayerEnvironment
+}
+
+// hostOf is the host of a repository address, empty when it does not parse.
+func hostOf(url string) string {
+	u, err := gitx.ValidateURL(url)
+	if err != nil {
+		return ""
+	}
+	return u.Host
+}
+
+// auditTest records a test that signed in with a credential, with the code of its failure.
+func (d GitDeps) auditTest(ctx context.Context, p *rbac.Principal, userAgent, envID, repoID string, details map[string]string, failure *gitx.Error) error {
+	entry := audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionGitRepoTested, TargetType: gitRepoTargetType, TargetID: repoID, EnvID: envID,
+		Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+	}
+	if failure != nil {
+		entry.Result, entry.Reason = audit.ResultFailure, string(failure.Code)
+		details["code"] = entry.Reason
+	}
+	if err := d.Audit.Record(ctx, entry); err != nil {
+		d.Log.Error("could not audit a git test", "host", details["host"], "error", err)
+		return huma.Error500InternalServerError("internal error")
+	}
+	return nil
 }
 
 // failedSteps says which step a failure stopped at.
@@ -192,7 +287,7 @@ func RegisterGit(r *httpx.Router, d GitDeps) {
 			"422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).",
 		Tags: []string{"git"},
 	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *TestGitAddressInput) (*GitTestOutput, error) {
-		return testGitAddress(ctx, d, limiter, in.Body)
+		return testGitAddress(ctx, d, limiter, in.UserAgent, "", in.Body)
 	})
 
 	httpx.Register(r, huma.Operation{
@@ -201,9 +296,316 @@ func RegisterGit(r *httpx.Router, d GitDeps) {
 		Path:        "/api/env/{envId}/git/repos/test",
 		Summary:     "Test a git repository address from the server, for an environment",
 		Description: "As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. " +
-			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Writes nothing.",
+			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. credentialId may name an instance credential or one of this environment (credential_scope otherwise). " +
+			"Writes nothing unless it signs in with a credential, which is audited as git.repo_tested.",
 		Tags: []string{"git"},
 	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *TestGitAddressEnvInput) (*GitTestOutput, error) {
-		return testGitAddress(ctx, d, limiter, in.Body)
+		return testGitAddress(ctx, d, limiter, in.UserAgent, in.EnvID, in.Body)
+	})
+
+	registerGitCredentials(r, d)
+	registerGitRepos(r, d, limiter)
+}
+
+// GitRepoRequest is the body of adding or changing a git repository.
+type GitRepoRequest struct {
+	Name         string  `json:"name,omitempty" maxLength:"256" doc:"What the repository is called, unique among the repositories of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid"`
+	URL          string  `json:"url,omitempty" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
+	CredentialID *string `json:"credentialId,omitempty" maxLength:"64" doc:"The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope"`
+	CAPEM        string  `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
+}
+
+// GitRepoCredentialBody is the credential a repository uses.
+type GitRepoCredentialBody struct {
+	ID    string              `json:"id" doc:"The credential's ID"`
+	Name  string              `json:"name" doc:"Its name"`
+	Scope CredentialScopeBody `json:"scope" doc:"Where it can be used"`
+}
+
+// GitRepoTestBody is the outcome of the last test of a saved repository.
+type GitRepoTestBody struct {
+	At   time.Time `json:"at" format:"date-time" doc:"When it was tested"`
+	OK   bool      `json:"ok" doc:"Whether the test passed"`
+	Code string    `json:"code" doc:"When it failed, the stable code it failed with; empty when it passed"`
+}
+
+// GitRepoBody is a git repository as the browser sees it.
+type GitRepoBody struct {
+	ID         string                          `json:"id" doc:"The repository's ID"`
+	Scope      CredentialScopeBody             `json:"scope" doc:"Where it can be used: every environment, or one"`
+	Name       string                          `json:"name" doc:"Its name, unique within its scope"`
+	URL        string                          `json:"url" doc:"Its address"`
+	Host       string                          `json:"host" doc:"The host of its address"`
+	Credential Nullable[GitRepoCredentialBody] `json:"credential" doc:"The credential picked for it; null for a public repository"`
+	CAPEM      string                          `json:"caPem" doc:"The custom certificate authority in PEM, public material, for people who may manage the repository; empty for everyone else and when there is none"`
+	HasCA      bool                            `json:"hasCa" doc:"Whether the repository carries a custom certificate authority, whoever is asking"`
+	LastTest   Nullable[GitRepoTestBody]       `json:"lastTest" doc:"The last test of the saved repository; null when it was never tested"`
+	UsedBy     int                             `json:"usedBy" doc:"How many stacks use it"`
+	ReadOnly   bool                            `json:"readOnly" doc:"True when the caller may see the repository but not change or delete it"`
+	CreatedAt  time.Time                       `json:"createdAt" format:"date-time" doc:"When it was added"`
+	UpdatedAt  time.Time                       `json:"updatedAt" format:"date-time" doc:"When it was last changed"`
+}
+
+// GitRepoOutput wraps GitRepoBody for huma.
+type GitRepoOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         GitRepoBody
+}
+
+// CreateGitRepoInput is the request of the instance create route.
+type CreateGitRepoInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      GitRepoRequest
+}
+
+// CreateEnvGitRepoInput is the request of the environment create route.
+type CreateEnvGitRepoInput struct {
+	EnvironmentPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      GitRepoRequest
+}
+
+// GitRepoPathInput names one repository.
+type GitRepoPathInput struct {
+	RepoID string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// GitEnvRepoPathInput names one repository under an environment.
+type GitEnvRepoPathInput struct {
+	EnvironmentPathInput
+	RepoID string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// TestGitRepoInput is the request of the instance test-a-saved-repository route.
+type TestGitRepoInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// TestGitEnvRepoInput is the request of the environment test-a-saved-repository route.
+type TestGitEnvRepoInput struct {
+	EnvironmentPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// gitRepoBody maps a stored repository to its body. readOnly is the caller's.
+func (d GitDeps) gitRepoBody(ctx context.Context, r gitconn.Repo, readOnly bool) GitRepoBody {
+	b := GitRepoBody{
+		ID: r.ID, Scope: d.scopeBody(ctx, r.EnvID), Name: r.Name, URL: r.URL, Host: r.Host(), HasCA: r.CAPEM != "",
+		UsedBy: r.UsedBy, ReadOnly: readOnly, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}
+	if !readOnly {
+		b.CAPEM = r.CAPEM
+	}
+	if r.CredentialID != "" {
+		b.Credential = Some(GitRepoCredentialBody{ID: r.CredentialID, Name: r.CredentialName, Scope: d.scopeBody(ctx, r.CredentialEnvID)})
+	}
+	if r.LastTest != nil {
+		b.LastTest = Some(GitRepoTestBody{At: r.LastTest.At, OK: r.LastTest.OK, Code: r.LastTest.Code})
+	}
+	return b
+}
+
+// gitRepoAuditDetails is what the audit row of a repository change records: its name, its layer, the
+// host of its address (never the whole address), the credential it uses by name and layer, and
+// whether it has its own CA, so an environment repository that uses an instance credential is
+// visible in the log.
+func gitRepoAuditDetails(r gitconn.Repo) map[string]string {
+	details := map[string]string{
+		"name": r.Name, "layer": r.Layer(), "host": r.Host(), "credential": r.CredentialName, "custom_ca": strconv.FormatBool(r.CAPEM != ""),
+	}
+	if r.CredentialID != "" {
+		details["credential_layer"] = gitconn.LayerInstance
+		if r.CredentialEnvID != "" {
+			details["credential_layer"] = gitconn.LayerEnvironment
+		}
+	}
+	return details
+}
+
+// createGitRepo stores a repository of the instance layer (envID empty) or of one environment and
+// audits it in the same transaction.
+func (d GitDeps) createGitRepo(ctx context.Context, p *rbac.Principal, envID, userAgent string, req GitRepoRequest) (*GitRepoOutput, error) {
+	in := gitconn.RepoInput{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM}
+	if envID != "" {
+		in.EnvID = &envID
+	}
+	r, err := d.Conns.CreateRepo(ctx, in, p.ID, func(ctx context.Context, tx *sql.Tx, r gitconn.Repo) error {
+		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoCreated, gitRepoTargetType, r.ID, envID, gitRepoAuditDetails(r))
+	})
+	if err != nil {
+		return nil, d.gitFail("create repository", err)
+	}
+	return &GitRepoOutput{CacheControl: "no-store", Body: d.gitRepoBody(ctx, r, false)}, nil
+}
+
+// lookupRepo reads a repository the route may name: one of the layer of envID (the instance's when
+// it is empty). A repository of any other layer is answered exactly like one that does not exist.
+func (d GitDeps) lookupRepo(ctx context.Context, envID, id string) (gitconn.Repo, error) {
+	r, err := d.Conns.GetRepo(ctx, id)
+	if err != nil {
+		return gitconn.Repo{}, err
+	}
+	if r.EnvID != envID {
+		return gitconn.Repo{}, gitconn.ErrNotFound
+	}
+	return r, nil
+}
+
+// repoFail words an error of the store for a repository route.
+func (d GitDeps) repoFail(what string, err error) error {
+	if errors.Is(err, gitconn.ErrNotFound) {
+		return httpx.Problem(http.StatusNotFound, problemRepositoryNotFound, "repository not found")
+	}
+	return d.gitFail(what, err)
+}
+
+// testSavedRepo tests a saved repository with its credential, from this server: it lists its
+// branches and tags, records the outcome on the repository and audits it. A test that failed is
+// still a 200. The token is opened in memory for this one call.
+func (d GitDeps) testSavedRepo(ctx context.Context, limiter *testLimiter, userAgent, envID, repoID string) (*GitTestOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+	}
+	if d.Git == nil || d.Conns == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo, err := d.lookupRepo(ctx, envID, repoID)
+	if err != nil {
+		return nil, d.repoFail("get repository to test", err)
+	}
+	if !limiter.allow(p.ID) {
+		return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
+	}
+	rem, err := d.Conns.Remote(ctx, repo)
+	if err != nil {
+		return nil, d.repoFail("open the credential to test", err)
+	}
+	res, err := d.lsRemote(ctx, rem, repo.CredentialID != "")
+	if err != nil {
+		return nil, err
+	}
+	var code gitx.Code
+	if res.failure != nil {
+		code = res.failure.Code
+	}
+	if err := d.Conns.RecordTest(ctx, repo.ID, res.failure == nil, code); err != nil {
+		d.Log.Error("could not store the result of a repository test", "repository", repo.ID, "error", err)
+	}
+	details := gitRepoAuditDetails(repo)
+	delete(details, "custom_ca")
+	if err := d.auditTest(ctx, p, userAgent, envID, repo.ID, details, res.failure); err != nil {
+		return nil, err
+	}
+	return res.out, nil
+}
+
+// registerGitRepos registers the repository routes.
+func registerGitRepos(r *httpx.Router, d GitDeps, limiter *testLimiter) {
+	unavailable := func() error {
+		return httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	const createDoc = "A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. " +
+		"422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); " +
+		"409 name_taken when another repository of the scope has the name. "
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "createGitRepoInstance",
+		Method:        http.MethodPost,
+		Path:          "/api/git/repos",
+		Summary:       "Add an instance git repository",
+		DefaultStatus: http.StatusCreated,
+		Description: "Stores a repository that stacks of every environment can use. " + createDoc +
+			"An instance repository may use only an instance credential (credential_scope otherwise). Needs git.instance. Audited as git.repo_created with the host of its address and the credential's name and scope.",
+		Tags: []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *CreateGitRepoInput) (*GitRepoOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, unavailable()
+		}
+		return d.createGitRepo(ctx, p, "", in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "createGitRepo",
+		Method:        http.MethodPost,
+		Path:          "/api/env/{envId}/git/repos",
+		Summary:       "Add a git repository to an environment",
+		DefaultStatus: http.StatusCreated,
+		Description: "Stores a repository that stacks of this environment can use. " + createDoc +
+			"An environment repository may use a credential of its own environment or an instance credential, and no other environment's (credential_scope). " +
+			"Needs git.manage on the environment (its Admin, or an instance admin). Audited as git.repo_created with the environment, the host of its address and the credential's name and scope.",
+		Tags: []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *CreateEnvGitRepoInput) (*GitRepoOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, unavailable()
+		}
+		return d.createGitRepo(ctx, p, in.EnvID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getGitRepo",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/git/repos/{repoId}",
+		Summary:     "Read one git repository of an environment",
+		Description: "A repository of this environment, or an instance repository that applies to it (readOnly unless the caller holds git.instance). Needs git.read on the environment. " +
+			"A repository of another environment answers 404 repository_not_found, exactly like one that does not exist. No secret is ever included.",
+		Tags: []string{"git"},
+	}, rbac.Require(rbac.PermGitRead), func(ctx context.Context, in *GitEnvRepoPathInput) (*GitRepoOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, unavailable()
+		}
+		repo, err := d.Conns.GetRepo(ctx, in.RepoID)
+		if err == nil && repo.EnvID != "" && repo.EnvID != in.EnvID {
+			err = gitconn.ErrNotFound
+		}
+		if err != nil {
+			return nil, d.repoFail("get repository", err)
+		}
+		v, err := gitViewerOf(ctx, d.Checker, p)
+		if err != nil {
+			return nil, d.gitFail("effective permissions", err)
+		}
+		return &GitRepoOutput{CacheControl: "no-store", Body: d.gitRepoBody(ctx, repo, !v.manages(repo.EnvID))}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testGitRepoInstance",
+		Method:      http.MethodPost,
+		Path:        "/api/git/repos/{repoId}/test",
+		Summary:     "Test a saved instance git repository from the server",
+		Description: "Runs the same test as testing an address, on the saved repository with its saved credential, and records when it ran, whether it passed and the code it failed with. " +
+			"A test that failed is a 200 with failure.code and failure.host. Needs git.instance. A repository of an environment answers 404 repository_not_found here. " +
+			"At most 10 tests a minute per user across all the test routes: 429 rate_limited. Audited as git.repo_tested with the host, the credential's name and scope and the code of a failure.",
+		Tags: []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *TestGitRepoInput) (*GitTestOutput, error) {
+		return d.testSavedRepo(ctx, limiter, in.UserAgent, "", in.RepoID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "testGitRepo",
+		Method:      http.MethodPost,
+		Path:        "/api/env/{envId}/git/repos/{repoId}/test",
+		Summary:     "Test a saved git repository of an environment from the server",
+		Description: "As testing an instance repository, for a repository of this environment. Needs git.manage on the environment (its Admin, or an instance admin). " +
+			"A repository of another environment, or of the instance, answers 404 repository_not_found. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. " +
+			"Audited as git.repo_tested with the environment.",
+		Tags: []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *TestGitEnvRepoInput) (*GitTestOutput, error) {
+		return d.testSavedRepo(ctx, limiter, in.UserAgent, in.EnvID, in.RepoID)
 	})
 }

@@ -196,6 +196,22 @@
         "credential_deleted": "Registry credential deleted",
         "credential_tested": "Registry credential tested"
       },
+      "git": {
+        "credential_created": "Git credential added",
+        "credential_created_named": "Added git credential {{name}}",
+        "credential_updated": "Git credential changed",
+        "credential_updated_named": "Changed git credential {{name}}",
+        "credential_deleted": "Git credential deleted",
+        "credential_deleted_named": "Deleted git credential {{name}}",
+        "repo_created": "Git repository added",
+        "repo_created_named": "Added repository {{name}}",
+        "repo_updated": "Git repository changed",
+        "repo_updated_named": "Changed repository {{name}}",
+        "repo_deleted": "Git repository deleted",
+        "repo_deleted_named": "Deleted repository {{name}}",
+        "repo_tested": "Git repository tested",
+        "repo_tested_named": "Tested repository {{name}}"
+      },
       "logs": {
         "viewed": "Container logs viewed",
         "downloaded": "Container logs downloaded"

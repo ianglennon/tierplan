@@ -365,6 +365,59 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase9DetailKeys maps every Phase 9 action to the detail keys the plans that record it must use, for the same
+// reason as phase3DetailKeys. A credential row names what was stored and never the token or the private key, nor
+// any part of it: the name, the layer (instance or environment), the type (https or ssh) and the username; an
+// SSH credential also its fingerprint. An update adds the names of the fields that changed, the secret only as the
+// word secret (plan 09-04, GIT-01). A repository row names the repository, its layer, the host of its address
+// (never the whole address), the credential it uses by name and layer, and whether it has a custom CA; an update
+// adds the changed fields and, when the address moved, the host it pointed at before. A test of a saved
+// repository records its host, the credential used and the code of a failure.
+var phase9DetailKeys = map[string][]string{
+	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
+	audit.ActionGitCredentialUpdated: {"name", "layer", "type", "username", "fingerprint", "changed"},
+	audit.ActionGitCredentialDeleted: {"name", "layer", "type", "username", "fingerprint"},
+	audit.ActionGitRepoCreated:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca"},
+	audit.ActionGitRepoUpdated:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca", "changed", "host_from"},
+	audit.ActionGitRepoDeleted:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca"},
+	audit.ActionGitRepoTested:        {"name", "layer", "host", "credential", "credential_layer", "code"},
+}
+
+func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase9DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase9DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"git.credential_created": audit.ActionGitCredentialCreated,
+		"git.credential_updated": audit.ActionGitCredentialUpdated,
+		"git.credential_deleted": audit.ActionGitCredentialDeleted,
+		"git.repo_created":       audit.ActionGitRepoCreated,
+		"git.repo_updated":       audit.ActionGitRepoUpdated,
+		"git.repo_deleted":       audit.ActionGitRepoDeleted,
+		"git.repo_tested":        audit.ActionGitRepoTested,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase5DetailKeys {

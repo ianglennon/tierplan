@@ -131,6 +131,43 @@ type Environment struct {
 	RestartLoopWindowMinutes int64
 }
 
+type GitCredential struct {
+	ID              string
+	EnvID           sql.NullString
+	Name            string
+	Type            string
+	Username        string
+	SecretSealed    string
+	SecretLast4     string
+	PublicKey       string
+	Fingerprint     string
+	LastUseAt       sql.NullInt64
+	LastFailureAt   sql.NullInt64
+	LastFailureCode string
+	CreatedAt       int64
+	UpdatedAt       int64
+	CreatedBy       string
+}
+
+type GitRepo struct {
+	ID               string
+	EnvID            sql.NullString
+	Name             string
+	Url              string
+	CredentialID     sql.NullString
+	CaPem            string
+	HostKey          string
+	HostKeyFp        string
+	HostKeyTrustedBy string
+	HostKeyTrustedAt sql.NullInt64
+	LastTestAt       sql.NullInt64
+	LastTestOk       sql.NullInt64
+	LastTestCode     string
+	CreatedAt        int64
+	UpdatedAt        int64
+	CreatedBy        string
+}
+
 type OwnedResource struct {
 	Kind          string
 	ResourceID    string

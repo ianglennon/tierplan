@@ -63,6 +63,13 @@ var Tables = map[string]Class{
 	// registered in vault.SealedColumns, so RewrapAll moves it with the rest.
 	"registry_credentials": Included,
 
+	// Git connections (Phase 9): credentials and the repositories that use them. The credential's
+	// token or private key is sealed under the credential's ID and registered in
+	// vault.SealedColumns, so RewrapAll moves it with the rest. A repository holds an address, a
+	// public CA bundle and the host key a person trusted; no secret.
+	"git_credentials": Included, // secret_sealed is re-wrapped by RewrapAll
+	"git_repos":       Included,
+
 	// Restart-loop mutes (Phase 6): which flagged services and containers a user chose to stop
 	// being told about. They belong to their environment and hold no secret; the thresholds are
 	// columns of environments and travel with it.

@@ -141,6 +141,13 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.value_revealed",
   "stack.adopted",
   "stack.drift_accepted",
+  "git.credential_created",
+  "git.credential_updated",
+  "git.credential_deleted",
+  "git.repo_created",
+  "git.repo_updated",
+  "git.repo_deleted",
+  "git.repo_tested",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -169,6 +176,7 @@ const ENV_SCOPED_PREFIXES = [
   "secret.",
   "config.",
   "stack.",
+  "git.",
 ];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
@@ -303,6 +311,10 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   }
   if (key === "stack.drift_accepted" && details?.stack) {
     return t("audit.actions.stack.drift_accepted_named", { name: details.stack });
+  }
+  // A git connection change names the credential or repository it was about.
+  if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {
+    return t(`audit.actions.${key}_named`, { name: details.name });
   }
   return KNOWN_ACTIONS.includes(key) ? t(`audit.actions.${key}`) : key;
 }

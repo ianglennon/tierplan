@@ -39,6 +39,10 @@ var SealedColumns = []SealedColumn{
 		Context: func(keys []string) string { return ContextRegistryCred + keys[0] },
 	},
 	{
+		Table: "git_credentials", Column: "secret_sealed", KeyColumns: []string{"id"},
+		Context: func(keys []string) string { return ContextGitCred + keys[0] },
+	},
+	{
 		Table: "stack_snapshot_vars", Column: "value_sealed", KeyColumns: []string{"snapshot_id", "name"},
 		Context: func(keys []string) string { return ContextStackVar + keys[0] + "/" + keys[1] },
 	},

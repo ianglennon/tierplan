@@ -29,6 +29,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/datadir"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -437,7 +438,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if gitClient == nil {
 		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log})
 	}
-	api.RegisterGit(r, api.GitDeps{Git: gitClient, Log: log})
+	api.RegisterGit(r, api.GitDeps{
+		Git: gitClient, Conns: gitconn.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log,
+	})
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),

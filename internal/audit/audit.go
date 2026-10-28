@@ -189,6 +189,13 @@ const (
 	ActionStackValueRevealed         = "stack.value_revealed"
 	ActionStackAdopted               = "stack.adopted"
 	ActionStackDriftAccepted         = "stack.drift_accepted"
+	ActionGitCredentialCreated       = "git.credential_created" //nolint:gosec // G101: an action name, not a credential
+	ActionGitCredentialUpdated       = "git.credential_updated" //nolint:gosec // G101: an action name, not a credential
+	ActionGitCredentialDeleted       = "git.credential_deleted" //nolint:gosec // G101: an action name, not a credential
+	ActionGitRepoCreated             = "git.repo_created"
+	ActionGitRepoUpdated             = "git.repo_updated"
+	ActionGitRepoDeleted             = "git.repo_deleted"
+	ActionGitRepoTested              = "git.repo_tested"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

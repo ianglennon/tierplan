@@ -804,6 +804,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a git credential to an environment
+         * @description Stores a git sign-in that repositories of this environment can pick, and no other environment's. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid); 409 name_taken when another credential of the scope has the name. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404. Audited as git.credential_created with the environment, without the secret.
+         */
+        post: operations["createGitCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a git repository to an environment
+         * @description Stores a repository that stacks of this environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An environment repository may use a credential of its own environment or an instance credential, and no other environment's (credential_scope). Needs git.manage on the environment (its Admin, or an instance admin). Audited as git.repo_created with the environment, the host of its address and the credential's name and scope.
+         */
+        post: operations["createGitRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/git/repos/test": {
         parameters: {
             query?: never;
@@ -815,9 +855,49 @@ export interface paths {
         put?: never;
         /**
          * Test a git repository address from the server, for an environment
-         * @description As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. Writes nothing.
+         * @description As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. credentialId may name an instance credential or one of this environment (credential_scope otherwise). Writes nothing unless it signs in with a credential, which is audited as git.repo_tested.
          */
         post: operations["testGitAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git repository of an environment
+         * @description A repository of this environment, or an instance repository that applies to it (readOnly unless the caller holds git.instance). Needs git.read on the environment. A repository of another environment answers 404 repository_not_found, exactly like one that does not exist. No secret is ever included.
+         */
+        get: operations["getGitRepo"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a saved git repository of an environment from the server
+         * @description As testing an instance repository, for a repository of this environment. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, or of the instance, answers 404 repository_not_found. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as git.repo_tested with the environment.
+         */
+        post: operations["testGitRepo"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2812,6 +2892,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/git/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add an instance git credential
+         * @description Stores a git sign-in that repositories of every environment can pick. A repository uses a credential only when it names it: nothing is matched by address. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid); 409 name_taken when another credential of the scope has the name. Needs git.instance, which only instance admins hold. Audited as git.credential_created without the secret.
+         */
+        post: operations["createGitCredentialInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add an instance git repository
+         * @description Stores a repository that stacks of every environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An instance repository may use only an instance credential (credential_scope otherwise). Needs git.instance. Audited as git.repo_created with the host of its address and the credential's name and scope.
+         */
+        post: operations["createGitRepoInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/repos/test": {
         parameters: {
             query?: never;
@@ -2826,6 +2946,26 @@ export interface paths {
          * @description Lists the branches and tags of a repository over HTTPS from the Bayplan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).
          */
         post: operations["testGitAddressInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a saved instance git repository from the server
+         * @description Runs the same test as testing an address, on the saved repository with its saved credential, and records when it ran, whether it passed and the code it failed with. A test that failed is a 200 with failure.code and failure.host. Needs git.instance. A repository of an environment answers 404 repository_not_found here. At most 10 tests a minute per user across all the test routes: 429 rate_limited. Audited as git.repo_tested with the host, the credential's name and scope and the code of a failure.
+         */
+        post: operations["testGitRepoInstance"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5883,6 +6023,127 @@ export interface components {
             /** @description The compose service the note is about; empty when it concerns the whole file */
             service: string;
         };
+        GitCredentialBody: {
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /** @description For an ssh credential, the SHA256 fingerprint of that key; empty for https */
+            fingerprint: string;
+            /** @description The credential's ID */
+            id: string;
+            /** @description The last 4 characters of an https token, or empty when it is shorter than 12 characters and for an ssh key. The page shows •••• before it */
+            last4: string;
+            /** @description The last time the git server refused it and has not accepted it since; null when there was none */
+            lastFailure: components["schemas"]["CredentialFailureBody"] | null;
+            /**
+             * Format: date-time
+             * @description When a test last signed in with it; null when it never did
+             */
+            lastUseAt: string | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description For an ssh credential, the public key in authorized_keys form, to add to the repository's deploy keys; empty for https */
+            publicKey: string;
+            /** @description True when the caller may see the credential but not change or delete it */
+            readOnly: boolean;
+            /** @description Where it can be used: every environment, or one */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * @description https for a token, ssh for a deploy key
+             * @enum {string}
+             */
+            type: "https" | "ssh";
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many repositories use it
+             */
+            usedBy: number;
+            /** @description The user name sent with a token; git for an ssh key unless set */
+            username: string;
+        };
+        GitCredentialRequest: {
+            /** @description What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters */
+            secret?: string;
+            /** @description https for a token, ssh for a deploy key; 422 type_invalid for anything else */
+            type?: string;
+            /** @description The user name the git server expects with a token (required for https: 422 username_required). Your host decides what it needs here. Defaults to git for an ssh key */
+            username?: string;
+        };
+        GitRepoBody: {
+            /** @description The custom certificate authority in PEM, public material, for people who may manage the repository; empty for everyone else and when there is none */
+            caPem: string;
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /** @description The credential picked for it; null for a public repository */
+            credential: components["schemas"]["GitRepoCredentialBody"] | null;
+            /** @description Whether the repository carries a custom certificate authority, whoever is asking */
+            hasCa: boolean;
+            /** @description The host of its address */
+            host: string;
+            /** @description The repository's ID */
+            id: string;
+            /** @description The last test of the saved repository; null when it was never tested */
+            lastTest: components["schemas"]["GitRepoTestBody"] | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description True when the caller may see the repository but not change or delete it */
+            readOnly: boolean;
+            /** @description Where it can be used: every environment, or one */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /** @description Its address */
+            url: string;
+            /**
+             * Format: int64
+             * @description How many stacks use it
+             */
+            usedBy: number;
+        };
+        GitRepoCredentialBody: {
+            /** @description The credential's ID */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description Where it can be used */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
+        GitRepoRequest: {
+            /** @description A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
+            caPem?: string;
+            /** @description The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope */
+            credentialId?: string;
+            /** @description What the repository is called, unique among the repositories of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
+            url?: string;
+        };
+        GitRepoTestBody: {
+            /**
+             * Format: date-time
+             * @description When it was tested
+             */
+            at: string;
+            /** @description When it failed, the stable code it failed with; empty when it passed */
+            code: string;
+            /** @description Whether the test passed */
+            ok: boolean;
+        };
         GitTestFailureBody: {
             /**
              * @description Why the test failed
@@ -5895,6 +6156,8 @@ export interface components {
         GitTestRequest: {
             /** @description A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
             caPem?: string;
+            /** @description The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested */
+            credentialId?: string;
             /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
             url: string;
         };
@@ -12703,6 +12966,80 @@ export interface operations {
             };
         };
     };
+    createGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     testGitAddress: {
         parameters: {
             query?: never;
@@ -12718,6 +13055,76 @@ export interface operations {
                 "application/json": components["schemas"]["GitTestRequest"];
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -16931,6 +17338,74 @@ export interface operations {
             };
         };
     };
+    createGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     testGitAddressInstance: {
         parameters: {
             query?: never;
@@ -16943,6 +17418,39 @@ export interface operations {
                 "application/json": components["schemas"]["GitTestRequest"];
             };
         };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
