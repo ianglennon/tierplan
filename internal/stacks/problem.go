@@ -48,6 +48,11 @@ const (
 	// CodeObjectTooLarge is a secret or config with more content than the target takes.
 	CodeObjectTooLarge = "object_too_large"
 
+	// The rules of a stack made from a git repository (D-07, D-09, D-10); see gitlint.go.
+
+	// CodeEnvSecretLike is a key of the repository's .env whose name looks like a secret (a warning).
+	CodeEnvSecretLike = "env_secret_like"
+
 	// The target-aware lint (STK-03); see package lint.
 	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget
 	CodeBlockingKey              = lint.CodeBlockingKey

@@ -77,12 +77,35 @@ const ComposeFile = "compose.yaml"
 // MaxFileBytes is the largest stack file Bayplan loads or stores.
 const MaxFileBytes = 1 << 20
 
+// FileOrigin says where a stack file came from (D-09). An inline stack's files are all OriginInline; a
+// stack made from a git repository has files of the repository and overlay files that fill the paths the
+// repository lacks.
+type FileOrigin string
+
+// The origins of a file.
+const (
+	// OriginInline is a file typed or uploaded into Bayplan: the origin of every file of an inline or
+	// adopted stack, and the zero value.
+	OriginInline FileOrigin = ""
+	// OriginRepo is a file of the repository the stack was made from.
+	OriginRepo FileOrigin = "repo"
+	// OriginOverlay is a file Bayplan holds for a path the repository does not have. It may never
+	// shadow a repository file (D-09).
+	OriginOverlay FileOrigin = "overlay"
+)
+
+// DotEnvFile is the file at the stack root whose values a stack from a repository takes as defaults
+// (D-07).
+const DotEnvFile = ".env"
+
 // File is one file of a stack's working copy. A secret file is stored sealed and never shown
 // without secrets.reveal.
 type File struct {
 	Path    string
 	Content []byte
 	Secret  bool
+	// Origin is where the file came from. The zero value is an inline file.
+	Origin FileOrigin
 }
 
 // Var is one variable of the stack's table. A secret variable is interpolated like any other,

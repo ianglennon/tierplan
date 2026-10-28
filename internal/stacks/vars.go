@@ -19,10 +19,12 @@ import (
 // server, so the text is written here and a test in package api holds the two equal.
 const Hidden = "<hidden>"
 
-// The sources a resolved variable's value comes from (D-01): the stack's table, the default written
-// in the compose file, or nowhere.
+// The sources a resolved variable's value comes from (D-01, D-07): the stack's table, the .env
+// committed in the repository a git stack came from, the default written in the compose file, or
+// nowhere.
 const (
 	SourceTable   = "table"
+	SourceRepoEnv = "repo-env"
 	SourceDefault = "default"
 	SourceUnset   = "unset"
 )
@@ -54,10 +56,13 @@ type VarRef struct {
 // for a variable of the table that no file refers to; Required is true when the variable has no
 // value in the table and no default, so a deploy cannot go ahead.
 type ResolvedVar struct {
-	Name       string
-	Value      string
-	Source     string
-	Secret     bool
+	Name   string
+	Value  string
+	Source string
+	Secret bool
+	// SecretLike is true for a value taken from the repository's .env whose name looks like a secret
+	// (SecretLikeName). Its Value is Hidden, as a secret variable's is.
+	SecretLike bool
 	Required   bool
 	Unused     bool
 	Default    string
@@ -271,18 +276,37 @@ func lineOf(n *yaml.Node, name string) int {
 // table, sorted by name. The precedence is the stack's table, then the default written in the
 // compose file (D-01); the Bayplan server's own environment never takes part. A table entry with
 // no value counts as no value, so the default is used and, with no default, the variable is
-// required. A secret's value is Hidden.
+// required. A secret's value is Hidden. It is ResolveVarsLayered with no repository .env.
 func ResolveVars(refs []VarRef, vars []Var) []ResolvedVar {
+	return ResolveVarsLayered(refs, vars, nil)
+}
+
+// ResolveVarsLayered is ResolveVars for a stack made from a git repository: a value resolves from the
+// table first, then from the repository's .env (repoEnv, see RepoEnv), then from the default written in
+// the compose file, and a variable with none of them is unset and Required (D-07, GIT-08). A blank
+// value in the table or in the .env is no value. A repoEnv value whose name looks like a secret is
+// Hidden and marked SecretLike, because it is committed to the repository but must not be echoed.
+func ResolveVarsLayered(refs []VarRef, vars []Var, repoEnv map[string]string) []ResolvedVar {
 	table := make(map[string]Var, len(vars))
 	for _, v := range vars {
 		table[v.Name] = v
 	}
-	lookup := func(name string) (string, bool) {
+	fromTable := func(name string) (string, bool) {
 		v, ok := table[name]
 		if !ok || v.Value == "" {
 			return "", false
 		}
 		return v.Value, true
+	}
+	fromRepo := func(name string) (string, bool) {
+		v, ok := repoEnv[name]
+		return v, ok && v != ""
+	}
+	lookup := func(name string) (string, bool) {
+		if v, ok := fromTable(name); ok {
+			return v, true
+		}
+		return fromRepo(name)
 	}
 	out := make([]ResolvedVar, 0, len(refs)+len(vars))
 	seen := make(map[string]bool, len(refs))
@@ -291,9 +315,16 @@ func ResolveVars(refs []VarRef, vars []Var) []ResolvedVar {
 		rv := ResolvedVar{Name: r.Name, Default: r.Default, HasDefault: r.HasDefault, Places: r.Places}
 		tv := table[r.Name]
 		rv.Secret = tv.Secret
-		switch value, ok := lookup(r.Name); {
-		case ok:
-			rv.Value, rv.Source = value, SourceTable
+		tableValue, inTable := fromTable(r.Name)
+		repoValue, inRepo := fromRepo(r.Name)
+		switch {
+		case inTable:
+			rv.Value, rv.Source = tableValue, SourceTable
+		case inRepo:
+			rv.Value, rv.Source = repoValue, SourceRepoEnv
+			if SecretLikeName(r.Name) {
+				rv.SecretLike, rv.Value = true, Hidden
+			}
 		case r.HasDefault:
 			rv.Value, rv.Source = substituteDefault(r.Default, lookup), SourceDefault
 		default:

@@ -89,6 +89,10 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	contents := in.Copy.ComposeContents()
 	file := contents[0].Path
 	res.SecretFiles = secretFilePaths(in.Copy)
+	// The committed .env of a stack from a repository is read once here and layered under the table
+	// (D-07). An unreadable one is reported below, before the load.
+	repoEnv, repoEnvErr := RepoEnv(in.Copy)
+	gitCopy := hasRepoFiles(in.Copy.Files)
 	if ps := composeFileProblems(in.Copy, contents); len(ps) > 0 {
 		res.Problems = ps.Sorted()
 		return res
@@ -98,6 +102,10 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		// The raw YAML is judged before the loader sees it: a file that names a file of the
 		// server, or that is too complex to read, is refused here and never loaded.
 		found, refs := PrescanFiles(contents, in.Copy.multiFile(), NewFileSet(in.Copy.Files))
+		if _, ok := repoDotEnv(in.Copy.Files); ok {
+			// A .env the repository holds is read (D-07), so it is not unused.
+			refs = append(refs, DotEnvFile)
+		}
 		res.UnusedFiles = unusedFiles(in.Copy.Files, in.Copy.ComposePaths(), refs)
 		if found.Errors() > 0 {
 			res.Problems = found.Sorted()
@@ -107,8 +115,13 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		if slices.Contains(res.UnusedFiles, dotenvFile) {
 			res.Problems = append(res.Problems, dotenvNotRead())
 		}
-		res.Variables = ResolveVars(Refs(in.Copy), in.Copy.Vars)
+		res.Variables = ResolveVarsLayered(Refs(in.Copy), in.Copy.Vars, repoEnv)
 		res.Problems = append(res.Problems, variableProblems(res.Variables, file)...)
+	}
+	if repoEnvErr != nil {
+		res.Problems = append(res.Problems, repoEnvProblem(repoEnvErr))
+		res.Problems = res.Problems.Sorted()
+		return res
 	}
 	loaded, err := Load(ctx, LoadInput(in))
 	if err != nil {
@@ -141,7 +154,7 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	// env_file is read here, once, from the stack's own files (D-05, Pitfall 4): after this the
 	// project has none, so no engine, SDK or converter reads one a second way. An unreadable file
 	// is a blocking error at its key; the rest of the check goes on without it.
-	if err := ResolveEnvFiles(loaded.Project, NewFileSet(in.Copy.Files), tableValues(in.Copy.Vars)); err != nil {
+	if err := ResolveEnvFiles(loaded.Project, NewFileSet(in.Copy.Files), layeredValues(in.Copy.Vars, repoEnv)); err != nil {
 		res.Problems = append(res.Problems, envFileProblem(err, idx))
 	}
 	if in.Target == TargetStandalone {
@@ -156,6 +169,9 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	stripBuild(loaded.Project)
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found, file)...)
+	if gitCopy {
+		res.Problems = append(res.Problems, GitLint(in.Copy, loaded)...)
+	}
 	if in.Target == TargetSwarm {
 		res.Problems = append(res.Problems, swarmNameProblems(loaded.Project, idx, in.Name)...)
 	}
@@ -272,7 +288,7 @@ func secretFilePaths(c WorkingCopy) []string {
 
 // dotenvFile is the name of the file a Compose project directory reads on its own, and Bayplan
 // does not.
-const dotenvFile = ".env"
+const dotenvFile = DotEnvFile
 
 // dotenvNotRead is the warning for a stack file called .env that nothing uses. Compose reads a .env
 // beside the compose file by itself; Bayplan reads variables from the table only (D-01), so a
@@ -297,6 +313,49 @@ func tableValues(vars []Var) func(string) (string, bool) {
 		v, ok := table[name]
 		return v, ok
 	}
+}
+
+// layeredValues is tableValues with the repository's .env under the table: the lookup an env_file's
+// ${NAME} uses in a stack from a repository, in the order the compose files are interpolated.
+func layeredValues(vars []Var, repoEnv map[string]string) func(string) (string, bool) {
+	table := tableValues(vars)
+	return func(name string) (string, bool) {
+		if v, ok := table(name); ok {
+			return v, true
+		}
+		v, ok := repoEnv[name]
+		return v, ok && v != ""
+	}
+}
+
+// hasRepoFiles reports whether any of the files came from a git repository, which is what makes the
+// working copy a git stack for the rules of GitLint.
+func hasRepoFiles(files []File) bool {
+	for _, f := range files {
+		if f.Origin == OriginRepo {
+			return true
+		}
+	}
+	return false
+}
+
+// repoEnvProblem is the blocking error for a repository .env that cannot be read. It names the file and,
+// when known, the line, and never quotes the file.
+func repoEnvProblem(err error) Problem {
+	p := Problem{
+		Severity: SeverityError, Code: CodeEnvFileInvalid, File: DotEnvFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: ".env can't be read. Write each line as NAME=value.",
+	}
+	var ef *EnvFileError
+	if errors.As(err, &ef) && ef.Line > 0 {
+		p.Line, p.EndLine = ef.Line, ef.Line
+		p.Message = fmt.Sprintf(".env has a line Bayplan can't read (line %d). Write each line as NAME=value.", ef.Line)
+	}
+	if errors.Is(err, ErrFileTooLarge) {
+		p.Code = CodeComposeTooLarge
+		p.Message = ".env is over 1 MiB. Split it up or remove what it doesn't need."
+	}
+	return p
 }
 
 // envFileProblem is the blocking error for an env_file ResolveEnvFiles could not resolve, marked at

@@ -36,6 +36,9 @@ type EnvFileError struct {
 }
 
 func (e *EnvFileError) Error() string {
+	if e.Service == "" {
+		return "stacks: " + strconv.Quote(e.Path) + ": " + e.Err.Error()
+	}
 	return "stacks: service " + e.Service + ": env_file " + strconv.Quote(e.Path) + ": " + e.Err.Error()
 }
 
@@ -154,4 +157,37 @@ func resolveService(name string, svc types.ServiceConfig, files FileSet, lookup 
 		}
 	}
 	return env, nil
+}
+
+// repoDotEnv is the .env at the stack root when it is a file of the repository. An inline or overlay
+// .env is not one (D-07): only a committed .env supplies defaults.
+func repoDotEnv(files []File) (File, bool) {
+	for _, f := range files {
+		if f.Path == DotEnvFile && f.Origin == OriginRepo {
+			return f, true
+		}
+	}
+	return File{}, false
+}
+
+// RepoEnv parses the .env at the stack root of a stack made from a git repository (D-07). It is read
+// only when the file's origin is OriginRepo: an inline stack's .env, and an overlay .env, supply
+// nothing. A ${NAME} inside a value is looked up in the stack's table. The server's own environment is
+// never read. A working copy with no repository .env returns a nil map.
+//
+// A file over MaxFileBytes is a *FileError and one the .env parser refuses is an *EnvFileError for
+// ".env" with the line (0 when unknown); neither holds a value from the file.
+func RepoEnv(c WorkingCopy) (map[string]string, error) {
+	f, ok := repoDotEnv(c.Files)
+	if !ok {
+		return nil, nil
+	}
+	if len(f.Content) > MaxFileBytes {
+		return nil, &FileError{Path: DotEnvFile, Err: ErrFileTooLarge}
+	}
+	vars, err := dotenv.ParseWithLookup(bytes.NewReader(f.Content), tableValues(c.Vars))
+	if err != nil {
+		return nil, &EnvFileError{Path: DotEnvFile, Line: errorLine(err, f.Content), Err: ErrEnvFileInvalid}
+	}
+	return vars, nil
 }

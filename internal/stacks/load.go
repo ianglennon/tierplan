@@ -84,6 +84,8 @@ type Loaded struct {
 //   - paths are not resolved, and the working directory does not exist;
 //   - the ports: and expose: ranges are measured before compose-go expands them (PortBudget).
 //
+// A stack made from a repository also takes the repository's .env as defaults below the table (RepoEnv).
+//
 // A compose file over MaxFileBytes is refused with ErrTooLarge (in a *FileError naming it) before it is parsed. compose-go runs
 // on its own goroutine: Load returns at the deadline without waiting for it, and a panic inside it
 // is ErrLoadPanicked.
@@ -99,7 +101,19 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	if err := portBudgetFiles(contents, in.Copy.Vars); err != nil {
 		return nil, err
 	}
-	env := make(types.Mapping, len(in.Copy.Vars))
+	// The environment is the repository's .env under the table (D-07): a stack made from a repository
+	// takes its defaults from the committed .env, and a value in the table beats it. A .env that cannot
+	// be read refuses the load, so a deploy never goes ahead with half of its defaults.
+	repoEnv, err := RepoEnv(in.Copy)
+	if err != nil {
+		return nil, err
+	}
+	env := make(types.Mapping, len(in.Copy.Vars)+len(repoEnv))
+	for name, value := range repoEnv {
+		if value != "" {
+			env[name] = value
+		}
+	}
 	for _, v := range in.Copy.Vars {
 		if v.Value != "" {
 			env[v.Name] = v.Value
