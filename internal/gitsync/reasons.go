@@ -77,6 +77,8 @@ func detailOf(code ReasonCode, err error) string {
 			return "The server's certificate isn't trusted."
 		case gitx.CodeEgressBlocked:
 			return "Bayplan isn't allowed to connect to this address."
+		case gitx.CodeUnreachable:
+			return "The server couldn't be reached."
 		case gitx.CodeTimeout:
 			return "The server took too long to answer."
 		case gitx.CodeTooLarge:

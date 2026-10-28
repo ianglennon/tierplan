@@ -5,12 +5,14 @@ package gitsync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // Outcome is what a sync check found.
@@ -126,16 +128,19 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 	if err != nil {
 		return "", err
 	}
-	repo, err := s.conns.GetRepo(ctx, sg.RepoID)
-	if err != nil {
-		return "", fmt.Errorf("read the repository: %w", err)
-	}
 	now := s.now().UTC()
 	next := prev
 	next.CheckedAt = &now
 	next.DeployedCommit, next.DeployedTree = "", ""
 	if deployed {
 		next.DeployedCommit, next.DeployedTree = dep.Commit, dep.Tree
+	}
+	if gitx.RefKind(sg.RefKind) == gitx.RefCommit {
+		return s.checkFixed(ctx, st, sg, prev, next, dep, deployed)
+	}
+	repo, err := s.conns.GetRepo(ctx, sg.RepoID)
+	if err != nil {
+		return "", fmt.Errorf("read the repository: %w", err)
 	}
 
 	rem, err := s.conns.Remote(ctx, repo)
@@ -176,8 +181,22 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 		if err != nil {
 			return s.fail(ctx, st, prev, next, reasonOf(err), err)
 		}
+		// A base that is not an ancestor (a force-push, a tag moved elsewhere) is behind by at least the commit that
+		// replaced it. A walk that stopped at the cap reads as the cap: the count is then "this many or more", and
+		// behind >= BehindCap is how the screens know to say so.
 		next.Status, next.Behind = stackops.GitStatusBehind, max(touch.Count, 1)
+		if touch.Capped {
+			next.Behind = BehindCap
+		}
 		out = OutcomeBehind
+		// The head changes the folder, so its files must pass the checks before anyone is asked to deploy them.
+		problem, err := s.headProblem(ctx, st, sg, head)
+		if err != nil {
+			return s.failWith(ctx, st, prev, withHead(next, head.SHA, tree), reasonOf(err), detailOf(reasonOf(err), err))
+		}
+		if problem != "" {
+			return s.failWith(ctx, st, prev, withHead(next, head.SHA, tree), ReasonChecksFailed, problem)
+		}
 	}
 	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
 		return "", err
@@ -189,12 +208,100 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 // the head and how far behind the stack was, since the last good deployed state keeps running (D-16). The time the
 // error began and the run of failures are worked out by writeState.
 func (s *Service) fail(ctx context.Context, st stackops.Stack, prev, next stackops.GitState, code ReasonCode, cause error) (Outcome, error) {
-	next.Status, next.ReasonCode, next.ReasonDetail = stackops.GitStatusError, string(code), detailOf(code, cause)
 	next.HeadCommit, next.HeadTree, next.Behind = prev.HeadCommit, prev.HeadTree, prev.Behind
+	return s.failWith(ctx, st, prev, next, code, detailOf(code, cause))
+}
+
+// failWith is fail for a check that did learn the head: next keeps what it holds and takes the error and its sentence.
+func (s *Service) failWith(ctx context.Context, st stackops.Stack, prev, next stackops.GitState, code ReasonCode, detail string) (Outcome, error) {
+	next.Status, next.ReasonCode, next.ReasonDetail = stackops.GitStatusError, string(code), detail
 	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
 		return "", err
 	}
 	return OutcomeError, nil
+}
+
+func withHead(g stackops.GitState, commit, tree string) stackops.GitState {
+	g.HeadCommit, g.HeadTree = commit, tree
+	return g
+}
+
+// checkFixed is the check of a stack that follows one commit. That commit can't move, so there is nothing to fetch and
+// nothing to be behind (D-12): the stack is in sync with what it was deployed from. A commit other than the deployed
+// one is a change of source, which a person reviews (RESEARCH Pitfall 8).
+func (s *Service) checkFixed(ctx context.Context, st stackops.Stack, sg stackops.StackGit, prev, next stackops.GitState, dep stackops.GitRevision, deployed bool) (Outcome, error) {
+	next.HeadCommit, next.HeadTree, next.Behind = sg.Ref, "", 0
+	next.Status = stackops.GitStatusUnknown
+	next.ReasonCode, next.ReasonDetail = "", ""
+	out := OutcomeSkipped
+	switch {
+	case !deployed:
+	case sourceChanged(sg, dep):
+		next.Status, next.Behind = stackops.GitStatusBehind, 1
+		next.ReasonCode, next.ReasonDetail = string(ReasonSourceChanged), detailOf(ReasonSourceChanged, nil)
+		out = OutcomeBehind
+	default:
+		next.HeadCommit, next.HeadTree = dep.Commit, dep.Tree
+		next.Status = stackops.GitStatusInSync
+		out = OutcomeInSync
+	}
+	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// maxProblemChars is the longest problem sentence kept as the detail of a failed check.
+const maxProblemChars = 300
+
+// headProblem reads the stack's files at the head with the stack's variables and overlay files and runs the checks a
+// deploy would: it answers the first blocking problem, or "" when the head passes. A file the compose files need that
+// neither the repository nor an overlay holds counts as one. An error is a failure to read the repository, not a
+// failed check.
+func (s *Service) headProblem(ctx context.Context, st stackops.Stack, sg stackops.StackGit, head gitx.Commit) (string, error) {
+	draft, err := s.repo.Draft(ctx, st.ID)
+	if err != nil {
+		return "", err
+	}
+	var overlays []Overlay
+	for _, f := range draft.Copy.Files {
+		if f.Origin == stacks.OriginOverlay {
+			overlays = append(overlays, Overlay{Path: f.Path, Content: f.Content})
+		}
+	}
+	imp, err := s.read(ctx, ImportRequest{
+		EnvID: st.EnvID, RepoID: sg.RepoID, RefKind: gitx.RefCommit, Ref: head.SHA, Folder: sg.Folder, ComposeFiles: sg.ComposeFiles,
+		Name: st.Name, Target: st.Target, Vars: draft.Copy.Vars, Overlays: overlays,
+	}, head.SHA)
+	if err != nil {
+		var pe *PathError
+		var fe *stacks.FileError
+		var le *gitx.LimitError
+		if errors.As(err, &pe) || errors.As(err, &fe) || errors.As(err, &le) {
+			return clipProblem(err.Error()), nil
+		}
+		return "", err
+	}
+	for _, p := range stacks.Problems(imp.Problems).Sorted() {
+		if p.Severity != stacks.SeverityError {
+			continue
+		}
+		if p.File != "" {
+			return clipProblem(p.File + ": " + p.Message), nil
+		}
+		return clipProblem(p.Message), nil
+	}
+	if len(imp.Missing) > 0 {
+		return clipProblem(imp.Missing[0] + " isn't in the repository."), nil
+	}
+	return "", nil
+}
+
+func clipProblem(s string) string {
+	if r := []rune(s); len(r) > maxProblemChars {
+		return string(r[:maxProblemChars])
+	}
+	return s
 }
 
 // sourceChanged says whether the settings a stack follows now differ from where its deployed revision came from.
