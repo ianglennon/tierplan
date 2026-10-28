@@ -58,7 +58,7 @@ func Check(ctx context.Context, in CheckInput) CheckResult {
 	// No secret reaches an answer: the sentences of the problems and the values of the rows are
 	// passed through the stack's masker whatever produced them (RESEARCH Pitfall 10). The loaded
 	// project is not an answer; it is what a deploy reads, and it keeps the real values.
-	m := NewMasker(in.Copy.Vars, in.Copy.maskFiles())
+	m := NewMasker(in.Copy.Vars, in.Copy.MaskFiles())
 	MaskProblems(res.Problems, m)
 	for i := range res.Variables {
 		res.Variables[i].Default = m.Mask(res.Variables[i].Default)

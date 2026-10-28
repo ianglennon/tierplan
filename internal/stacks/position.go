@@ -18,6 +18,13 @@ import (
 // for the compose file, exported so the lint tests can index a file the schema would refuse.
 func NewPositionIndex(src []byte) (*PositionIndex, error) { return parseIndex(src) }
 
+// NewPositionIndexOf is NewPositionIndex over the compose files of a working copy, in merge order. A
+// position it reports names the compose file it is in (lint.Pos.File) when the copy names its compose
+// files; the last file that has a key is the one reported, because a later file wins in the merge.
+func NewPositionIndexOf(contents []ComposeContent) (*PositionIndex, error) {
+	return parseIndexOf(contents)
+}
+
 // PositionIndex implements lint.Index over the stored YAML.
 var _ lint.Index = (*PositionIndex)(nil)
 

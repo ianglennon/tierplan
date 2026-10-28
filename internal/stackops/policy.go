@@ -13,6 +13,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac/swarmspec"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/lint"
 )
 
 // CodeNeedsAdmin is the code of the blocking problem for a host-escalation setting the caller may
@@ -54,8 +55,8 @@ type PolicyResult struct {
 }
 
 // Policy judges the host access a stack asks for, on the values a deploy would use (AUTH-10, D-13).
-// It runs the compose rules over compose.yaml with the stack's variables filled in, each finding at
-// the line the value was written, and then the service rules over each converted service, which
+// It runs the compose rules over each compose file of the stack (compose.yaml for an inline stack) with the
+// stack's variables filled in, each finding at the file and line the value was written, and then the service rules over each converted service, which
 // catch what the compose file only implies (the swarm's host network attached by name). A setting
 // of the second kind is listed at its service when the compose rules did not already name that
 // service. Below env Admin each setting is refused; an env Admin or an instance admin may deploy
@@ -67,32 +68,38 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 	if d.Checker == nil || caller.Principal == nil {
 		return PolicyResult{}, ErrNoPolicy
 	}
-	src := copy.Compose()
-	m := stacks.NewMasker(copy.Vars, copy.Files)
-	dec, err := d.Checker.CheckComposeDeployResolved(ctx, caller.Principal, envID, src, tableLookup(copy.Vars))
-	if err != nil {
-		return PolicyResult{}, err
-	}
+	contents := copy.ComposeContents()
+	m := stacks.NewMasker(copy.Vars, copy.MaskFiles())
 	var res PolicyResult
-	if dec.Reason == rbac.ReasonComposeUnreadable {
-		res.Refused = true
-		res.Problems = append(res.Problems, stacks.Problem{
-			Severity: stacks.SeverityError, Code: CodePolicyUnreadable, Message: dec.Message, File: stacks.ComposeFile,
-			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		})
-		return res, nil
-	}
 	kinds := map[string]bool{}
 	flagged := map[string]bool{}
-	if !dec.Allowed {
-		for _, f := range dec.Findings {
-			res.add(m, describeFinding(f), f.Key, f.Line, f.Column)
-			kinds[kindOf(f.Rule)] = true
-			flagged[f.Service] = true
+	// Each compose file is judged on its own, and what any of them asks for counts: the rules read the raw
+	// YAML of a file, as they read every document of a file with several, so a setting split into an override
+	// file is seen where it is written. A setting an override file turns off again is still refused (the
+	// rules fail closed); the merge is never needed to find one.
+	for _, cf := range contents {
+		dec, err := d.Checker.CheckComposeDeployResolved(ctx, caller.Principal, envID, cf.Content, tableLookup(copy.Vars))
+		if err != nil {
+			return PolicyResult{}, err
+		}
+		if dec.Reason == rbac.ReasonComposeUnreadable {
+			res.Refused = true
+			res.Problems = append(res.Problems, stacks.Problem{
+				Severity: stacks.SeverityError, Code: CodePolicyUnreadable, Message: dec.Message, File: cf.Path,
+				Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+			})
+			return res, nil
+		}
+		if !dec.Allowed {
+			for _, f := range dec.Findings {
+				res.add(m, cf.Path, describeFinding(f), f.Key, f.Line, f.Column)
+				kinds[kindOf(f.Rule)] = true
+				flagged[f.Service] = true
+			}
 		}
 	}
 
-	ix, _ := stacks.NewPositionIndex(src)
+	ix, _ := stacks.NewPositionIndexOf(contents)
 	networks := make(map[string]string, len(plan.Networks))
 	for _, n := range plan.Networks {
 		networks[n.Name] = n.Driver
@@ -117,7 +124,7 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 			res.Refused = true
 			res.Problems = append(res.Problems, stacks.Problem{
 				Severity: stacks.SeverityError, Code: CodePolicyUnreadable, Message: "The service " + sp.Short + " can't be read for the policy check.",
-				File: stacks.ComposeFile, Key: "services." + sp.Short, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+				File: contents[0].Path, Key: "services." + sp.Short, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 			})
 			continue
 		}
@@ -126,11 +133,12 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 			if flagged[sp.Short] {
 				continue
 			}
-			line, col := 1, 1
+			file, line, col := contents[0].Path, 1, 1
 			if pos, ok := ix.Lookup("services." + sp.Short); ok {
 				line, col = pos.Line, pos.Col
+				file = fileOfPos(pos, file)
 			}
-			res.add(m, describeSpecFinding(f), "services."+sp.Short, line, col)
+			res.add(m, file, describeSpecFinding(f), "services."+sp.Short, line, col)
 		}
 	}
 
@@ -150,31 +158,33 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 // an Admin for. plan is the converted swarm stack, or the empty plan for a standalone host. Every text goes through
 // the masker of the working copy.
 func (d Deps) HostAccess(copy stacks.WorkingCopy, plan convert.Plan) (PolicyResult, error) {
-	src := copy.Compose()
-	m := stacks.NewMasker(copy.Vars, copy.Files)
+	contents := copy.ComposeContents()
+	m := stacks.NewMasker(copy.Vars, copy.MaskFiles())
 	var res PolicyResult
 	kinds := map[string]bool{}
 	list := func(text, file string, line int) {
 		res.Entries = append(res.Entries, PolicyEntry{Text: m.Mask(text), File: file, Line: line})
 	}
-	findings, err := compose.CheckResolved(src, tableLookup(copy.Vars))
-	if err != nil {
-		list("a compose file that can't be read for the policy check", stacks.ComposeFile, 1)
-		kinds[KindUnresolvedValue] = true
-		findings = nil
-	}
 	flagged := map[string]bool{}
-	for _, f := range findings {
-		text := describeFinding(f)
-		if f.Service != "" {
-			text += " in " + f.Service
+	for _, cf := range contents {
+		findings, err := compose.CheckResolved(cf.Content, tableLookup(copy.Vars))
+		if err != nil {
+			list("a compose file that can't be read for the policy check", cf.Path, 1)
+			kinds[KindUnresolvedValue] = true
+			continue
 		}
-		list(text, stacks.ComposeFile, f.Line)
-		kinds[kindOf(f.Rule)] = true
-		flagged[f.Service] = true
+		for _, f := range findings {
+			text := describeFinding(f)
+			if f.Service != "" {
+				text += " in " + f.Service
+			}
+			list(text, cf.Path, f.Line)
+			kinds[kindOf(f.Rule)] = true
+			flagged[f.Service] = true
+		}
 	}
 
-	ix, _ := stacks.NewPositionIndex(src)
+	ix, _ := stacks.NewPositionIndexOf(contents)
 	networks := make(map[string]string, len(plan.Networks))
 	for _, n := range plan.Networks {
 		networks[n.Name] = n.Driver
@@ -189,11 +199,12 @@ func (d Deps) HostAccess(copy stacks.WorkingCopy, plan convert.Plan) (PolicyResu
 			if flagged[sp.Short] {
 				continue
 			}
-			line := 1
+			file, line := contents[0].Path, 1
 			if pos, ok := ix.Lookup("services." + sp.Short); ok {
 				line = pos.Line
+				file = fileOfPos(pos, file)
 			}
-			list(describeSpecFinding(f)+" in "+sp.Short, stacks.ComposeFile, line)
+			list(describeSpecFinding(f)+" in "+sp.Short, file, line)
 		}
 	}
 	for _, k := range kindOrder {
@@ -205,14 +216,23 @@ func (d Deps) HostAccess(copy stacks.WorkingCopy, plan convert.Plan) (PolicyResu
 }
 
 // add records one refused setting as an entry and a blocking problem, masked.
-func (r *PolicyResult) add(m stacks.Masker, text, key string, line, col int) {
+func (r *PolicyResult) add(m stacks.Masker, file, text, key string, line, col int) {
 	text = m.Mask(text)
 	r.Refused = true
-	r.Entries = append(r.Entries, PolicyEntry{Text: text, File: stacks.ComposeFile, Line: line})
+	r.Entries = append(r.Entries, PolicyEntry{Text: text, File: file, Line: line})
 	r.Problems = append(r.Problems, stacks.Problem{
 		Severity: stacks.SeverityError, Code: CodeNeedsAdmin, Message: "This needs Admin: " + text + ".",
-		File: stacks.ComposeFile, Key: m.Mask(key), Line: line, Col: col, EndLine: line, EndCol: col + 1,
+		File: file, Key: m.Mask(key), Line: line, Col: col, EndLine: line, EndCol: col + 1,
 	})
+}
+
+// fileOfPos is the compose file a position is in, or fallback when the index covers a single file and so names
+// none.
+func fileOfPos(pos lint.Pos, fallback string) string {
+	if pos.File != "" {
+		return pos.File
+	}
+	return fallback
 }
 
 // tableLookup is the lookup of the stack's variables a deploy interpolates with: a variable with a

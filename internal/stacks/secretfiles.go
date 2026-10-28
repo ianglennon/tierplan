@@ -118,10 +118,10 @@ func MarkSecretFilesFor(files []File, base []File, composeFiles []string) []File
 	return out
 }
 
-// maskFiles are the files a masker is built from. For a stack with named compose files the secrets are
+// MaskFiles are the files a masker is built from. For a stack with named compose files the secrets are
 // found in all of them, because NewMasker reads compose.yaml only; a stack with the one compose.yaml is
 // handed on as it is.
-func (w WorkingCopy) maskFiles() []File {
+func (w WorkingCopy) MaskFiles() []File {
 	if !w.multiFile() {
 		return w.Files
 	}

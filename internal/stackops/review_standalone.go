@@ -84,7 +84,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		}
 	}
 	pinned := d.resolvePins(ctx, in.EnvID, items, standaloneLivePins(live.Containers), stored, update, d.nodeReader(in.EnvID, node))
-	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (the host is not reachable, the agent refused).
 		rv.Problems = append(rv.Problems, stacks.Problem{

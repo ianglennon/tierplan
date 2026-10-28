@@ -72,6 +72,7 @@ func (d Deps) AcceptLive(ctx context.Context, repo Repo, in AcceptLiveInput) (Ac
 
 	// The revision's files keep their order, with compose.yaml replaced where it was. RebuildLive has already
 	// checked the file beside them and the revision's variables, as a deploy would load it.
+	// The rebuilt file is the whole definition, merged, so the result is a stack of the one compose.yaml.
 	next := stacks.WorkingCopy{Files: slices.Clone(deployed.Copy.Files), Vars: slices.Clone(deployed.Copy.Vars)}
 	if i := slices.IndexFunc(next.Files, func(f stacks.File) bool { return f.Path == stacks.ComposeFile }); i >= 0 {
 		next.Files[i].Content = res.YAML
@@ -103,7 +104,7 @@ func baseOf(ctx context.Context, st Stack, copy stacks.WorkingCopy) (*rebuild.Ba
 	}
 	base := &rebuild.Base{
 		Project: loaded.Project, SecretValues: map[string]string{},
-		ImageText: rebuild.ImageTextOf(copy.Compose()),
+		ImageText: imageTextOf(copy),
 	}
 	// Two secret variables with one value are written as the one whose name sorts first, so the same input gives
 	// the same file.
@@ -118,4 +119,15 @@ func baseOf(ctx context.Context, st Stack, copy stacks.WorkingCopy) (*rebuild.Ba
 		}
 	}
 	return base, nil
+}
+
+// imageTextOf is the image of each service as the working copy's compose files wrote it: the image a later
+// compose file gives a service replaces an earlier one's, as in the merge.
+func imageTextOf(copy stacks.WorkingCopy) map[string]string {
+	contents := copy.ComposeContents()
+	composes := make([][]byte, len(contents))
+	for i, c := range contents {
+		composes[i] = c.Content
+	}
+	return rebuild.ImageTextOfFiles(composes...)
 }

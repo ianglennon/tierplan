@@ -301,23 +301,47 @@ func registryHost(text string) string {
 // author wrote it.
 func sameImageText(a, b string) bool { return stacks.SameImageText(a, b) }
 
-// placeProblems gives each problem about a key of the compose file the line and column of that
-// key, so the editor and the review can mark it. A problem whose key the file does not have, or a
-// file that cannot be indexed, keeps no position.
+// placeProblems gives each problem about a key of compose.yaml the line and column of that key, so the editor
+// and the review can mark it. A problem whose key the file does not have, or a file that cannot be indexed,
+// keeps no position. It is for the callers that hold the stack's files and nothing else; one that holds the
+// working copy uses placeProblemsOf.
 func placeProblems(files stacks.FileSet, ps stacks.Problems) stacks.Problems {
 	f, ok := files[stacks.ComposeFile]
 	if !ok || len(ps) == 0 {
 		return ps
 	}
-	ix, err := stacks.NewPositionIndex(f.Content)
+	return placeProblemsOf(stacks.WorkingCopy{Files: []stacks.File{f}}, ps)
+}
+
+// placeProblemsOf is placeProblems for a working copy. A problem is written against compose.yaml; for a stack
+// with named compose files the key is looked up in all of them, the last file that has it first (it wins in the
+// merge), the problem takes that file, and a problem whose key none has is moved to the first compose file.
+func placeProblemsOf(c stacks.WorkingCopy, ps stacks.Problems) stacks.Problems {
+	if len(ps) == 0 {
+		return ps
+	}
+	named := len(c.ComposeFiles) > 0
+	if !named && !slices.ContainsFunc(c.Files, func(f stacks.File) bool { return f.Path == stacks.ComposeFile }) {
+		return ps
+	}
+	ix, err := stacks.NewPositionIndexOf(c.ComposeContents())
 	if err != nil {
 		return ps
 	}
+	first := c.ComposePaths()[0]
 	out := make(stacks.Problems, len(ps))
 	copy(out, ps)
 	for i := range out {
-		if pos, found := ix.Lookup(out[i].Key); found && out[i].File == stacks.ComposeFile {
+		if out[i].File != stacks.ComposeFile {
+			continue
+		}
+		if pos, found := ix.Lookup(out[i].Key); found {
 			out[i].Line, out[i].Col, out[i].EndLine, out[i].EndCol = pos.Line, pos.Col, pos.EndLine, pos.EndCol
+			if pos.File != "" {
+				out[i].File = pos.File
+			}
+		} else if named && !slices.Contains(c.ComposeFiles, stacks.ComposeFile) {
+			out[i].File = first
 		}
 	}
 	return out
