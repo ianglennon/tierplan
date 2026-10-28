@@ -4932,6 +4932,179 @@
         ],
         "type": "object"
       },
+      "GitStackCheckBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "$ref": "#/components/schemas/GitStackCommitBody",
+            "description": "The commit the check read; send its sha back as commit to check again without a fetch"
+          },
+          "missing": {
+            "description": "The paths the compose files need that the repository lacks and no overlay path fills. The page asks for the contents of each as an overlay file",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notImported": {
+            "description": "The first 50 names, relative to the folder, of the files the stack does not need: they are not stored",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notImportedTotal": {
+            "description": "How many files of the folder are not imported",
+            "format": "int64",
+            "type": "integer"
+          },
+          "problems": {
+            "description": "Everything the check found, blocking and warnings, ordered by file and line. A blocking one means the stack could not be deployed as it stands",
+            "items": {
+              "$ref": "#/components/schemas/StackProblemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "services": {
+            "description": "The services the compose files declare, sorted. Empty when they did not load",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "vars": {
+            "description": "Every variable the compose files use and every variable sent, ordered by name",
+            "items": {
+              "$ref": "#/components/schemas/GitStackVariableBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "commit",
+          "services",
+          "problems",
+          "vars",
+          "missing",
+          "notImported",
+          "notImportedTotal"
+        ],
+        "type": "object"
+      },
+      "GitStackCheckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The commit.sha an earlier check answered for this ref. When the server's mirror holds it the check reads the mirror and fetches nothing; otherwise, and when it is not a full 40-hex commit ID, the ref is fetched",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "composeFiles": {
+            "description": "The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "name": {
+            "description": "The stack's name, when the person has typed one; it only matters to the swarm name rules. A name the target refuses is ignored here: the create refuses it",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "overlayPaths": {
+            "description": "The paths of the overlay files the person means to add, never their contents: those are sent once, when the stack is created. A path the compose files need that an overlay fills is not missing; one the repository holds is the blocking problem overlay_clash. 422 file_path_invalid for a path that is not a path inside the stack",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ref": {
+            "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "vars": {
+            "description": "The variables typed so far. A value here beats the same name in the folder's .env",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "repoId",
+          "refKind",
+          "ref",
+          "composeFiles"
+        ],
+        "type": "object"
+      },
+      "GitStackCommitBody": {
+        "additionalProperties": false,
+        "properties": {
+          "sha": {
+            "description": "The full 40-hex commit ID",
+            "type": "string"
+          },
+          "when": {
+            "description": "When the commit was made",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "when"
+        ],
+        "type": "object"
+      },
       "GitStackCreateBody": {
         "additionalProperties": false,
         "properties": {
@@ -5009,6 +5182,17 @@
             "maxLength": 255,
             "type": "string"
           },
+          "overlays": {
+            "description": "Files Bayplan holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB",
+            "items": {
+              "$ref": "#/components/schemas/GitStackOverlayBody"
+            },
+            "maxItems": 50,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "ref": {
             "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse",
             "maxLength": 2048,
@@ -5046,6 +5230,95 @@
           "refKind",
           "ref",
           "composeFiles"
+        ],
+        "type": "object"
+      },
+      "GitStackOverlayBody": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "description": "The file's text, at most 1 MiB (422 file_too_large). It is stored sealed as a secret file and never shown again",
+            "type": "string",
+            "writeOnly": true
+          },
+          "path": {
+            "description": "The file's path inside the stack folder, as a path in a compose file writes it: relative, no .. or . name, no leading or doubled slash, no backslash or colon. 422 file_path_invalid otherwise. A path the repository holds is not stored: it is the blocking problem overlay_clash and the repository's file stands",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "type": "object"
+      },
+      "GitStackVariableBody": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "description": "The default written in a compose file, when hasDefault is true; \u003chidden\u003e for a secret-like name",
+            "type": "string"
+          },
+          "hasDefault": {
+            "description": "True when a reference in a compose file writes a default, even an empty one",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The variable's name",
+            "type": "string"
+          },
+          "places": {
+            "description": "Where the compose files use the variable, ordered by file and line",
+            "items": {
+              "$ref": "#/components/schemas/StackPlaceBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "required": {
+            "description": "True when the variable has no value from the table, the .env or a default, so the page must ask for one. The deploy is refused until it has",
+            "type": "boolean"
+          },
+          "secret": {
+            "description": "True when the variable is marked secret in the table",
+            "type": "boolean"
+          },
+          "secretLike": {
+            "description": "True when the name looks like a secret (PASSWORD, TOKEN, KEY and the like): its value is never shown",
+            "type": "boolean"
+          },
+          "source": {
+            "description": "Where the value comes from: table (the variables sent), repo-env (the folder's .env), default (the ${NAME:-default} written in a compose file) or unset (nowhere)",
+            "enum": [
+              "table",
+              "repo-env",
+              "default",
+              "unset"
+            ],
+            "type": "string"
+          },
+          "unused": {
+            "description": "True when the variable is in the table and no compose file uses it",
+            "type": "boolean"
+          },
+          "value": {
+            "description": "The value a deploy would use. \u003chidden\u003e for a secret variable and for one whose name looks like a secret, whatever its source; empty when there is none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value",
+          "source",
+          "required",
+          "secret",
+          "secretLike",
+          "unused",
+          "default",
+          "hasDefault",
+          "places"
         ],
         "type": "object"
       },
@@ -20820,6 +21093,68 @@
           }
         },
         "summary": "Create a stack from a folder of a git repository",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/git-stacks/check": {
+      "post": {
+        "description": "Reads the folder at the ref the way creating a stack from it would, and answers, without saving anything: the commit the ref resolved to, the services found, every problem (blocking ones and warnings, with file and line), the variables with the value a deploy would use and where it comes from (table, repo-env, default or unset) and whether it is required, the paths the compose files need that the repository lacks (missing), and the files of the folder that are not imported. A secret variable, and a value whose name looks like a secret, is \u003chidden\u003e. A variable that is required has no value from the variables sent, the folder's .env or a default: the page asks for it. Overlay files are sent as paths only, never their contents. When commit is the sha an earlier check answered and the server's mirror holds it, nothing is fetched. At most 60 checks a minute per user: 429 rate_limited. Fails like creating a stack from the folder does: 404 repository_not_found; 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_path_invalid, file_too_large or stack_too_large. Needs stacks.create (Admin).",
+        "operationId": "checkGitStackSource",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitStackCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStackCheckBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Check what a repository folder would give as a stack",
         "tags": [
           "stacks",
           "git"

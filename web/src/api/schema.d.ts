@@ -824,6 +824,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git-stacks/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check what a repository folder would give as a stack
+         * @description Reads the folder at the ref the way creating a stack from it would, and answers, without saving anything: the commit the ref resolved to, the services found, every problem (blocking ones and warnings, with file and line), the variables with the value a deploy would use and where it comes from (table, repo-env, default or unset) and whether it is required, the paths the compose files need that the repository lacks (missing), and the files of the folder that are not imported. A secret variable, and a value whose name looks like a secret, is <hidden>. A variable that is required has no value from the variables sent, the folder's .env or a default: the page asks for it. Overlay files are sent as paths only, never their contents. When commit is the sha an earlier check answered and the server's mirror holds it, nothing is fetched. At most 60 checks a minute per user: 429 rate_limited. Fails like creating a stack from the folder does: 404 repository_not_found; 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_path_invalid, file_too_large or stack_too_large. Needs stacks.create (Admin).
+         */
+        post: operations["checkGitStackSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/git/credentials": {
         parameters: {
             query?: never;
@@ -6389,6 +6409,57 @@ export interface components {
             /** @description Whether the test passed */
             ok: boolean;
         };
+        GitStackCheckBody: {
+            /** @description The commit the check read; send its sha back as commit to check again without a fetch */
+            commit: components["schemas"]["GitStackCommitBody"];
+            /** @description The paths the compose files need that the repository lacks and no overlay path fills. The page asks for the contents of each as an overlay file */
+            missing: string[] | null;
+            /** @description The first 50 names, relative to the folder, of the files the stack does not need: they are not stored */
+            notImported: string[] | null;
+            /**
+             * Format: int64
+             * @description How many files of the folder are not imported
+             */
+            notImportedTotal: number;
+            /** @description Everything the check found, blocking and warnings, ordered by file and line. A blocking one means the stack could not be deployed as it stands */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The services the compose files declare, sorted. Empty when they did not load */
+            services: string[] | null;
+            /** @description Every variable the compose files use and every variable sent, ordered by name */
+            vars: components["schemas"]["GitStackVariableBody"][] | null;
+        };
+        GitStackCheckRequest: {
+            /** @description The commit.sha an earlier check answered for this ref. When the server's mirror holds it the check reads the mirror and fetches nothing; otherwise, and when it is not a full 40-hex commit ID, the ref is fetched */
+            commit?: string;
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The stack's name, when the person has typed one; it only matters to the swarm name rules. A name the target refuses is ignored here: the create refuses it */
+            name?: string;
+            /** @description The paths of the overlay files the person means to add, never their contents: those are sent once, when the stack is created. A path the compose files need that an overlay fills is not missing; one the repository holds is the blocking problem overlay_clash. 422 file_path_invalid for a path that is not a path inside the stack */
+            overlayPaths?: string[] | null;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description The variables typed so far. A value here beats the same name in the folder's .env */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
+        GitStackCommitBody: {
+            /** @description The full 40-hex commit ID */
+            sha: string;
+            /**
+             * Format: date-time
+             * @description When the commit was made
+             */
+            when: string;
+        };
         GitStackCreateBody: {
             /** @description The full 40-hex commit ID the ref resolved to; the draft holds the folder's files at this commit */
             commit: string;
@@ -6416,6 +6487,8 @@ export interface components {
             folder?: string;
             /** @description The stack's name, held to the rule of the environment's target, as for a stack made in Bayplan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash) */
             name: string;
+            /** @description Files Bayplan holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB */
+            overlays?: components["schemas"]["GitStackOverlayBody"][] | null;
             /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
             ref: string;
             /**
@@ -6427,6 +6500,37 @@ export interface components {
             repoId: string;
             /** @description The stack's variables. A value here beats the same name in the folder's .env */
             vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
+        GitStackOverlayBody: {
+            /** @description The file's text, at most 1 MiB (422 file_too_large). It is stored sealed as a secret file and never shown again */
+            content: string;
+            /** @description The file's path inside the stack folder, as a path in a compose file writes it: relative, no .. or . name, no leading or doubled slash, no backslash or colon. 422 file_path_invalid otherwise. A path the repository holds is not stored: it is the blocking problem overlay_clash and the repository's file stands */
+            path: string;
+        };
+        GitStackVariableBody: {
+            /** @description The default written in a compose file, when hasDefault is true; <hidden> for a secret-like name */
+            default: string;
+            /** @description True when a reference in a compose file writes a default, even an empty one */
+            hasDefault: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description Where the compose files use the variable, ordered by file and line */
+            places: components["schemas"]["StackPlaceBody"][] | null;
+            /** @description True when the variable has no value from the table, the .env or a default, so the page must ask for one. The deploy is refused until it has */
+            required: boolean;
+            /** @description True when the variable is marked secret in the table */
+            secret: boolean;
+            /** @description True when the name looks like a secret (PASSWORD, TOKEN, KEY and the like): its value is never shown */
+            secretLike: boolean;
+            /**
+             * @description Where the value comes from: table (the variables sent), repo-env (the folder's .env), default (the ${NAME:-default} written in a compose file) or unset (nowhere)
+             * @enum {string}
+             */
+            source: "table" | "repo-env" | "default" | "unset";
+            /** @description True when the variable is in the table and no compose file uses it */
+            unused: boolean;
+            /** @description The value a deploy would use. <hidden> for a secret variable and for one whose name looks like a secret, whatever its source; empty when there is none */
+            value: string;
         };
         GitTestFailureBody: {
             /**
@@ -13328,6 +13432,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitStackCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkGitStackSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitStackCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStackCheckBody"];
                 };
             };
             /** @description Error */

@@ -441,7 +441,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	gitConns := gitconn.NewStore(f.st, f.v, f.clk.now)
 	gitDeps := api.GitDeps{
-		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log,
+		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now,
 		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Log: log, Now: f.clk.now}),
 	}
 	api.RegisterGit(r, gitDeps)

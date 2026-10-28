@@ -52,6 +52,16 @@ type ImportRequest struct {
 	Name   string
 	Target stacks.Target
 	Vars   []stacks.Var
+	// Overlays are the files Bayplan holds for paths the repository does not have (D-09). They are stored sealed, as
+	// secret files with origin overlay. An overlay for a path the repository holds is not stored: it would shadow the
+	// repository's file, so it is reported as the blocking problem overlay_clash and the repository's file stands.
+	Overlays []Overlay
+}
+
+// Overlay is a file of Bayplan's own for a path the repository lacks.
+type Overlay struct {
+	Path    string
+	Content []byte
 }
 
 // Import is the files of a stack read from a repository folder at one commit.
@@ -70,6 +80,14 @@ type Import struct {
 	Problems []stacks.Problem
 	// Source says where the files came from.
 	Source stackops.GitSource
+	// Variables are the rows of the variables pane: every ${VAR} the compose files use and every variable of the table,
+	// with the value a deploy would use and where it comes from. A secret or secret-like value is hidden.
+	Variables []stacks.ResolvedVar
+	// Services are the names of the services the compose files declare, sorted; none when they did not load.
+	Services []string
+	// Missing are the paths the compose files need that the repository lacks and no overlay fills, sorted. A path that
+	// may be absent (the folder's .env, an env_file with required: false) is not one.
+	Missing []string
 }
 
 // Copy is the working copy of the import with vars as its variables.
@@ -87,6 +105,12 @@ func (i Import) Revision() stackops.GitRevision {
 // reads the object database by the commit's ID, so a branch that moves meanwhile changes nothing. A repository of
 // another environment is gitconn.ErrNotFound.
 func (s *Service) Import(ctx context.Context, req ImportRequest) (Import, error) {
+	return s.read(ctx, req, "")
+}
+
+// read is Import. held, when it is the full ID of a commit the mirror already holds, is used without any fetch;
+// otherwise the ref is fetched.
+func (s *Service) read(ctx context.Context, req ImportRequest, held string) (Import, error) {
 	repo, err := s.conns.GetRepo(ctx, req.RepoID)
 	if err != nil {
 		return Import{}, err
@@ -98,15 +122,22 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (Import, error)
 	if err != nil {
 		return Import{}, err
 	}
+	overlays, err := cleanOverlays(req.Overlays)
+	if err != nil {
+		return Import{}, err
+	}
 	rem, err := s.conns.Remote(ctx, repo)
 	if err != nil {
 		return Import{}, err
 	}
 	mirror := gitx.MirrorID(repo.ID)
-	commit, err := s.git.FetchRef(ctx, mirror, rem, req.RefKind, req.Ref)
-	s.recordUse(ctx, repo, err)
-	if err != nil {
-		return Import{}, err
+	commit, ok := s.heldCommit(ctx, mirror, rem, held, folder)
+	if !ok {
+		commit, err = s.git.FetchRef(ctx, mirror, rem, req.RefKind, req.Ref)
+		s.recordUse(ctx, repo, err)
+		if err != nil {
+			return Import{}, err
+		}
 	}
 	tree, err := s.git.FolderTree(ctx, mirror, commit.SHA, folder)
 	if err != nil {
@@ -140,41 +171,131 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (Import, error)
 	// names, which is all the check needs.
 	loaded, _ := stacks.Load(ctx, stacks.LoadInput{Name: req.Name, Target: req.Target, Copy: copy})
 	needed := stacks.ReferencedPaths(loaded, copy)
-	wanted := make(map[string]bool, len(needed.Paths))
+	wanted := make(map[string]bool, len(needed.Paths)+len(overlays))
 	for _, p := range needed.Paths {
 		wanted[p] = true
+	}
+	// A path an overlay fills is read too, so that a repository file at that path is found and the overlay refused.
+	for _, o := range overlays {
+		wanted[o.Path] = true
 	}
 	all, err := s.git.ReadFolder(ctx, mirror, commit.SHA, folder, func(rel string) bool { return wanted[rel] }, gitx.ReadLimits{})
 	if err != nil {
 		return Import{}, err
 	}
-	copy.Files = nil
+	repoFiles := map[string]bool{}
+	var read []stacks.File
 	for _, f := range all.Files {
 		if f.Kind != gitx.EntryFile {
 			continue
 		}
-		copy.Files = append(copy.Files, stacks.File{Path: f.Path, Content: f.Content, Origin: stacks.OriginRepo})
+		repoFiles[f.Path] = true
+		read = append(read, stacks.File{Path: f.Path, Content: f.Content, Origin: stacks.OriginRepo})
 	}
 	problems = append(problems, linkProblems(needed.Paths, all)...)
+
+	// The check sees every overlay, so one that clashes with a repository file is named. What is stored is the files
+	// the compose files need and the overlays that fill a path the repository lacks.
+	checkFiles := slices.Clone(read)
+	var stored []stacks.File
+	for _, f := range read {
+		if slices.Contains(needed.Paths, f.Path) {
+			stored = append(stored, f)
+		}
+	}
+	filled := map[string]bool{}
+	for _, o := range overlays {
+		f := stacks.File{Path: o.Path, Content: o.Content, Secret: true, Origin: stacks.OriginOverlay}
+		checkFiles = append(checkFiles, f)
+		if repoFiles[o.Path] {
+			continue
+		}
+		filled[o.Path] = true
+		stored = append(stored, f)
+	}
 	// The server decides which files are secret: the ones the compose files use under secrets: (UI-SPEC).
-	copy.Files = stacks.MarkSecretFilesFor(copy.Files, nil, composeFiles)
-	if err := stacks.CheckFilesFor(copy.Files, composeFiles); err != nil {
+	stored = stacks.MarkSecretFilesFor(stored, nil, composeFiles)
+	if err := stacks.CheckFilesFor(stored, composeFiles); err != nil {
 		return Import{}, err
 	}
+	copy.Files = stacks.MarkSecretFilesFor(checkFiles, nil, composeFiles)
 	res := stacks.Check(ctx, stacks.CheckInput{Name: req.Name, Target: req.Target, Copy: copy})
 	problems = append(problems, res.Problems...)
+
+	var missing []string
+	for _, p := range needed.Paths {
+		if !repoFiles[p] && !filled[p] && !slices.Contains(needed.Optional, p) {
+			missing = append(missing, p)
+		}
+	}
+	var services []string
+	if res.Loaded != nil && res.Loaded.Project != nil {
+		for name := range res.Loaded.Project.Services {
+			services = append(services, name)
+		}
+		slices.Sort(services)
+	}
 
 	ref := req.Ref
 	if req.RefKind == gitx.RefCommit {
 		ref = commit.SHA
 	}
 	return Import{
-		Commit: commit, Tree: tree, Files: copy.Files, NotImported: all.Others, NotImportedTotal: all.OthersTotal,
-		Problems: problems,
+		Commit: commit, Tree: tree, Files: stored, NotImported: all.Others, NotImportedTotal: all.OthersTotal,
+		Problems: problems, Variables: res.Variables, Services: services, Missing: missing,
 		Source: stackops.GitSource{
 			RepoID: repo.ID, RepoName: repo.Name, RefKind: string(req.RefKind), Ref: ref, Folder: folder, ComposeFiles: composeFiles,
 		},
 	}, nil
+}
+
+// heldCommit answers the commit with the full ID sha when the mirror already holds it and has the folder, reading
+// the object database only. It is not held for anything else, and then the ref is fetched. It never reaches the
+// network: a full ID the mirror holds is looked up locally before any fetch is thought of.
+func (s *Service) heldCommit(ctx context.Context, mirror gitx.MirrorID, rem gitx.Remote, sha, folder string) (gitx.Commit, bool) {
+	if !fullSHA(sha) {
+		return gitx.Commit{}, false
+	}
+	if _, err := s.git.FolderTree(ctx, mirror, sha, folder); err != nil {
+		return gitx.Commit{}, false
+	}
+	c, err := s.git.FetchRef(ctx, mirror, rem, gitx.RefCommit, sha)
+	if err != nil || c.SHA != sha {
+		return gitx.Commit{}, false
+	}
+	return c, true
+}
+
+// fullSHA reports whether s is a full commit ID: 40 lower-case hex digits.
+func fullSHA(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// cleanOverlays validates the overlay files before any network call: each path is a path inside the stack, none is
+// named twice, and none is over the size of a file.
+func cleanOverlays(in []Overlay) ([]Overlay, error) {
+	seen := make(map[string]bool, len(in))
+	for _, o := range in {
+		if err := stacks.ValidPath(o.Path); err != nil {
+			return nil, err
+		}
+		if seen[o.Path] {
+			return nil, &stacks.FileError{Path: o.Path, Err: stacks.ErrPathTaken}
+		}
+		seen[o.Path] = true
+		if len(o.Content) > stacks.MaxFileBytes {
+			return nil, &stacks.FileError{Path: o.Path, Err: stacks.ErrFileTooLarge}
+		}
+	}
+	return in, nil
 }
 
 // recordUse remembers what the fetch showed of the repository's credential. A failure to write it is logged, never
