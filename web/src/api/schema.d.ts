@@ -811,7 +811,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the git credentials that apply to an environment
+         * @description This environment's own credentials and the instance credentials, which are readOnly unless the caller holds git.instance. Needs git.read on the environment. No secret is ever included.
+         */
+        get: operations["listEnvGitCredentials"];
         put?: never;
         /**
          * Add a git credential to an environment
@@ -824,6 +828,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git/credentials/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git credential of an environment
+         * @description A credential of this environment, or an instance credential (readOnly unless the caller holds git.instance). Needs git.read on the environment. A credential of another environment answers 404 credential_not_found.
+         */
+        get: operations["getGitCredential"];
+        /**
+         * Change an environment's git credential
+         * @description The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes.
+         */
+        put: operations["updateGitCredential"];
+        post?: never;
+        /**
+         * Delete an environment's git credential
+         * @description Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here.
+         */
+        delete: operations["deleteGitCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/git/repos": {
         parameters: {
             query?: never;
@@ -831,7 +863,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the git repositories that apply to an environment
+         * @description This environment's own repositories and the instance repositories, which are readOnly unless the caller holds git.instance. Needs git.read on the environment.
+         */
+        get: operations["listEnvGitRepos"];
         put?: never;
         /**
          * Add a git repository to an environment
@@ -876,9 +912,17 @@ export interface paths {
          * @description A repository of this environment, or an instance repository that applies to it (readOnly unless the caller holds git.instance). Needs git.read on the environment. A repository of another environment answers 404 repository_not_found, exactly like one that does not exist. No secret is ever included.
          */
         get: operations["getGitRepo"];
-        put?: never;
+        /**
+         * Change an environment's git repository
+         * @description The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        put: operations["updateGitRepo"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete an environment's git repository
+         * @description Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        delete: operations["deleteGitRepo"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2899,7 +2943,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the git credentials the signed-in user may see
+         * @description An instance admin sees every credential. Anyone who holds git.read on at least one environment sees the instance credentials (readOnly) and the credentials of the environments they can read; readOnly is false for the credentials they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listGitCredentials"];
         put?: never;
         /**
          * Add an instance git credential
@@ -2912,6 +2960,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/git/credentials/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git credential
+         * @description The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.
+         */
+        get: operations["getGitCredentialInstance"];
+        /**
+         * Change an instance git credential
+         * @description The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist.
+         */
+        put: operations["updateGitCredentialInstance"];
+        post?: never;
+        /**
+         * Delete an instance git credential
+         * @description Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here.
+         */
+        delete: operations["deleteGitCredentialInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/git/repos": {
         parameters: {
             query?: never;
@@ -2919,7 +2995,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the git repositories the signed-in user may see
+         * @description An instance admin sees every repository. Anyone who holds git.read on at least one environment sees the instance repositories (readOnly) and the repositories of the environments they can read; readOnly is false for the ones they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listGitRepos"];
         put?: never;
         /**
          * Add an instance git repository
@@ -2947,6 +3027,34 @@ export interface paths {
          */
         post: operations["testGitAddressInstance"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git repository
+         * @description The repository as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 repository_not_found.
+         */
+        get: operations["getGitRepoInstance"];
+        /**
+         * Change an instance git repository
+         * @description The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        put: operations["updateGitRepoInstance"];
+        post?: never;
+        /**
+         * Delete an instance git repository
+         * @description Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        delete: operations["deleteGitRepoInstance"];
         options?: never;
         head?: never;
         patch?: never;
@@ -6068,6 +6176,10 @@ export interface components {
             /** @description The user name sent with a token; git for an ssh key unless set */
             username: string;
         };
+        GitCredentialListBody: {
+            /** @description Instance credentials first, then each environment's, by name */
+            items: components["schemas"]["GitCredentialBody"][] | null;
+        };
         GitCredentialRequest: {
             /** @description What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
@@ -6122,6 +6234,10 @@ export interface components {
             name: string;
             /** @description Where it can be used */
             scope: components["schemas"]["CredentialScopeBody"];
+        };
+        GitRepoListBody: {
+            /** @description Instance repositories first, then each environment's, by name */
+            items: components["schemas"]["GitRepoBody"][] | null;
         };
         GitRepoRequest: {
             /** @description A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
@@ -12966,6 +13082,39 @@ export interface operations {
             };
         };
     };
+    listEnvGitCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     createGitCredential: {
         parameters: {
             query?: never;
@@ -12990,6 +13139,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvGitRepos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoListBody"];
                 };
             };
             /** @description Error */
@@ -13100,6 +13388,77 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GitRepoBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {
@@ -17338,6 +17697,36 @@ export interface operations {
             };
         };
     };
+    listGitCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     createGitCredentialInstance: {
         parameters: {
             query?: never;
@@ -17359,6 +17748,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listGitRepos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoListBody"];
                 };
             };
             /** @description Error */
@@ -17428,6 +17947,106 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GitTestResultBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

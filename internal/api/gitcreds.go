@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -100,6 +101,19 @@ func (v gitViewer) holds(envID string, p rbac.Perm) bool {
 
 // admin reports an instance admin, who holds every global permission.
 func (v gitViewer) admin() bool { return slices.Contains(v.global, rbac.PermGitInstance) }
+
+// sees reports whether a connection of envID (empty for the instance's) is visible to the caller:
+// an instance admin sees everything; anyone who can read git on an environment sees the instance
+// connections and that environment's own.
+func (v gitViewer) sees(envID string) bool {
+	if v.admin() {
+		return true
+	}
+	if envID == "" {
+		return v.anyRead
+	}
+	return v.holds(envID, rbac.PermGitRead)
+}
 
 // manages reports whether the caller may change connections of envID: the instance layer is for
 // instance admins alone, an environment's for its Admin and instance admins.
@@ -281,5 +295,255 @@ func registerGitCredentials(r *httpx.Router, d GitDeps) {
 			return nil, unavailable()
 		}
 		return d.createGitCredential(ctx, p, in.EnvID, in.UserAgent, in.Body)
+	})
+}
+
+// GitCredentialPathInput names one credential.
+type GitCredentialPathInput struct {
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
+// GitEnvCredentialPathInput names one credential under an environment.
+type GitEnvCredentialPathInput struct {
+	EnvironmentPathInput
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
+// UpdateGitCredentialInput is the request of the instance update route.
+type UpdateGitCredentialInput struct {
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+	Body         GitCredentialRequest
+}
+
+// UpdateEnvGitCredentialInput is the request of the environment update route.
+type UpdateEnvGitCredentialInput struct {
+	EnvironmentPathInput
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+	Body         GitCredentialRequest
+}
+
+// DeleteGitCredentialInput is the request of the instance delete route.
+type DeleteGitCredentialInput struct {
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
+// DeleteEnvGitCredentialInput is the request of the environment delete route.
+type DeleteEnvGitCredentialInput struct {
+	EnvironmentPathInput
+	UserAgent    string `header:"User-Agent" hidden:"true"`
+	CredentialID string `path:"credentialId" maxLength:"64" doc:"The credential's ID"`
+}
+
+// listGitCredentials lists the credentials of every layer the caller sees. envID, when set, limits
+// the list to the instance's credentials and that environment's own.
+func (d GitDeps) listGitCredentials(ctx context.Context, p *rbac.Principal, envID string) (*GitCredentialListOutput, error) {
+	v, err := gitViewerOf(ctx, d.Checker, p)
+	if err != nil {
+		return nil, d.gitFail("effective permissions", err)
+	}
+	all, err := d.Conns.ListCredentials(ctx)
+	if err != nil {
+		return nil, d.gitFail("list credentials", err)
+	}
+	items := make([]GitCredentialBody, 0, len(all))
+	for _, c := range all {
+		if (envID == "" || c.EnvID == "" || c.EnvID == envID) && v.sees(c.EnvID) {
+			items = append(items, d.gitCredentialBody(ctx, c, !v.manages(c.EnvID)))
+		}
+	}
+	return &GitCredentialListOutput{CacheControl: "no-store", Body: GitCredentialListBody{Items: items}}, nil
+}
+
+// getGitCredential reads one credential the caller may see. envID, when set, limits it to the
+// instance's credentials and that environment's own.
+func (d GitDeps) getGitCredential(ctx context.Context, p *rbac.Principal, envID, id string) (*GitCredentialOutput, error) {
+	v, err := gitViewerOf(ctx, d.Checker, p)
+	if err != nil {
+		return nil, d.gitFail("effective permissions", err)
+	}
+	c, err := d.Conns.GetCredential(ctx, id)
+	if err == nil && (!v.sees(c.EnvID) || (envID != "" && c.EnvID != "" && c.EnvID != envID)) {
+		err = gitconn.ErrNotFound
+	}
+	if err != nil {
+		return nil, d.gitFail("get credential", err)
+	}
+	return &GitCredentialOutput{CacheControl: "no-store", Body: d.gitCredentialBody(ctx, c, !v.manages(c.EnvID))}, nil
+}
+
+// updateGitCredential changes a credential of one layer (envID empty for the instance's) and audits
+// it in the same transaction.
+func (d GitDeps) updateGitCredential(ctx context.Context, p *rbac.Principal, envID, id, userAgent string, req GitCredentialRequest) (*GitCredentialOutput, error) {
+	c, _, err := d.Conns.UpdateCredential(ctx, envID, id,
+		gitconn.CredentialUpdate{Name: req.Name, Type: req.Type, Username: req.Username, Secret: req.Secret},
+		func(ctx context.Context, tx *sql.Tx, c gitconn.Credential, changed []string) error {
+			details := gitCredentialAuditDetails(c)
+			details["changed"] = strings.Join(changed, ",")
+			return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitCredentialUpdated, gitCredentialTargetType, c.ID, envID, details)
+		})
+	if err != nil {
+		return nil, d.gitFail("update credential", err)
+	}
+	return &GitCredentialOutput{CacheControl: "no-store", Body: d.gitCredentialBody(ctx, c, false)}, nil
+}
+
+// deleteGitCredential removes a credential of one layer that no repository uses and audits it.
+func (d GitDeps) deleteGitCredential(ctx context.Context, p *rbac.Principal, envID, id, userAgent string) error {
+	_, err := d.Conns.DeleteCredential(ctx, envID, id, func(ctx context.Context, tx *sql.Tx, c gitconn.Credential) error {
+		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitCredentialDeleted, gitCredentialTargetType, c.ID, envID, gitCredentialAuditDetails(c))
+	})
+	if err != nil {
+		return d.gitFail("delete credential", err)
+	}
+	return nil
+}
+
+// registerGitCredentialManagement registers listing, reading, changing and deleting credentials.
+func registerGitCredentialManagement(r *httpx.Router, d GitDeps) {
+	unavailable := func() error {
+		return httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	// guard answers the common prelude of the handlers: a signed-in caller and a server with the store.
+	guard := func(ctx context.Context) (*rbac.Principal, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, unavailable()
+		}
+		return p, nil
+	}
+	const putDoc = "The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, " +
+		"which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. " +
+		"422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. " +
+		"Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. "
+	const deleteDoc = "Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. " +
+		"One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. "
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listGitCredentials",
+		Method:      http.MethodGet,
+		Path:        "/api/git/credentials",
+		Summary:     "List the git credentials the signed-in user may see",
+		Description: "An instance admin sees every credential. Anyone who holds git.read on at least one environment sees the instance credentials (readOnly) and the credentials of the environments " +
+			"they can read; readOnly is false for the credentials they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.",
+		Tags: []string{"git"},
+	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*GitCredentialListOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.listGitCredentials(ctx, p, "")
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listEnvGitCredentials",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/git/credentials",
+		Summary:     "List the git credentials that apply to an environment",
+		Description: "This environment's own credentials and the instance credentials, which are readOnly unless the caller holds git.instance. Needs git.read on the environment. No secret is ever included.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitRead), func(ctx context.Context, in *EnvironmentPathInput) (*GitCredentialListOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.listGitCredentials(ctx, p, in.EnvID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getGitCredentialInstance",
+		Method:      http.MethodGet,
+		Path:        "/api/git/credentials/{credentialId}",
+		Summary:     "Read one git credential",
+		Description: "The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.",
+		Tags:        []string{"git"},
+	}, rbac.SelfService, func(ctx context.Context, in *GitCredentialPathInput) (*GitCredentialOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.getGitCredential(ctx, p, "", in.CredentialID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getGitCredential",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/git/credentials/{credentialId}",
+		Summary:     "Read one git credential of an environment",
+		Description: "A credential of this environment, or an instance credential (readOnly unless the caller holds git.instance). Needs git.read on the environment. A credential of another environment answers 404 credential_not_found.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitRead), func(ctx context.Context, in *GitEnvCredentialPathInput) (*GitCredentialOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.getGitCredential(ctx, p, in.EnvID, in.CredentialID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateGitCredentialInstance",
+		Method:      http.MethodPut,
+		Path:        "/api/git/credentials/{credentialId}",
+		Summary:     "Change an instance git credential",
+		Description: putDoc + "Needs git.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *UpdateGitCredentialInput) (*GitCredentialOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.updateGitCredential(ctx, p, "", in.CredentialID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateGitCredential",
+		Method:      http.MethodPut,
+		Path:        "/api/env/{envId}/git/credentials/{credentialId}",
+		Summary:     "Change an environment's git credential",
+		Description: putDoc + "Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *UpdateEnvGitCredentialInput) (*GitCredentialOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.updateGitCredential(ctx, p, in.EnvID, in.CredentialID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteGitCredentialInstance",
+		Method:        http.MethodDelete,
+		Path:          "/api/git/credentials/{credentialId}",
+		Summary:       "Delete an instance git credential",
+		DefaultStatus: http.StatusNoContent,
+		Description:   deleteDoc + "Needs git.instance. A credential of an environment answers 404 credential_not_found here.",
+		Tags:          []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *DeleteGitCredentialInput) (*struct{}, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return nil, d.deleteGitCredential(ctx, p, "", in.CredentialID, in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteGitCredential",
+		Method:        http.MethodDelete,
+		Path:          "/api/env/{envId}/git/credentials/{credentialId}",
+		Summary:       "Delete an environment's git credential",
+		DefaultStatus: http.StatusNoContent,
+		Description:   deleteDoc + "Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here.",
+		Tags:          []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *DeleteEnvGitCredentialInput) (*struct{}, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return nil, d.deleteGitCredential(ctx, p, in.EnvID, in.CredentialID, in.UserAgent)
 	})
 }

@@ -10,6 +10,20 @@ import (
 	"database/sql"
 )
 
+const clearGitCredentialOutcome = `-- name: ClearGitCredentialOutcome :execrows
+UPDATE git_credentials SET last_use_at = NULL, last_failure_at = NULL, last_failure_code = '' WHERE id = ?
+`
+
+// Forgets when a credential last signed in and the last refusal after its secret, type or user
+// name changed: they were seen with something that no longer applies.
+func (q *Queries) ClearGitCredentialOutcome(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearGitCredentialOutcome, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearGitRepoTest = `-- name: ClearGitRepoTest :execrows
 UPDATE git_repos SET last_test_at = NULL, last_test_ok = NULL, last_test_code = '' WHERE id = ?
 `

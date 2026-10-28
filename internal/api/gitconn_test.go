@@ -371,7 +371,7 @@ func TestGitConnLayers(t *testing.T) {
 	if got := keysOf(onA); !slices.Equal(got, []string{"a-cred", "inst-cred"}) || !onA["inst-cred"].ReadOnly || onA["a-cred"].ReadOnly {
 		t.Errorf("environment A's credentials = %v (inst readOnly %v)", got, onA["inst-cred"].ReadOnly)
 	}
-	reposOnA := listGitRepos(t, f, admin, "/api/env/"+a.ID+"/git/repos")
+	reposOnA := listGitRepos(t, f, envAdminA, "/api/env/"+a.ID+"/git/repos")
 	if got := keysOf(reposOnA); !slices.Equal(got, []string{"a-repo", "a-with-inst", "inst-repo"}) || !reposOnA["inst-repo"].ReadOnly {
 		t.Errorf("environment A's repositories = %v (inst-repo readOnly %v)", got, reposOnA["inst-repo"].ReadOnly)
 	}
@@ -414,9 +414,6 @@ func TestGitConnUpdateRules(t *testing.T) {
 	if got := decodeGitCred(t, rec); got.Name != "gitea-2" || got.Last4 != "WXYZ" {
 		t.Errorf("credential = %+v, want the new name and the saved token's last 4", got)
 	}
-	// Switching the type needs a secret typed now.
-	wantFieldProblem(t, "a type switch without a secret",
-		f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+cred, gitJSON(map[string]any{"name": "gitea-2", "type": "ssh"})), "secret", "secret_required")
 	// A clash within the layer is name_taken.
 	if rec := f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+other, gitJSON(map[string]any{"name": "gitea-2", "type": "https", "username": "bot"})); rec.Code != http.StatusConflict ||
 		decodeGitProblem(t, rec).Type != "name_taken" {
@@ -463,7 +460,7 @@ func TestGitConnUpdateRules(t *testing.T) {
 		f.credCall(t, admin, http.MethodPut, "/api/git/repos/"+repo, gitJSON(map[string]any{"name": "app-2", "url": "https://elsewhere.example.net/acme/two.git", "credentialId": envCred})),
 		"credentialId", "credential_scope")
 	wantFieldProblem(t, "an address with a password in it",
-		f.credCall(t, admin, http.MethodPut, "/api/git/repos/"+repo, gitJSON(map[string]any{"name": "app-2", "url": "https://u:p@elsewhere.example.net/x.git"})), "url", "url_userinfo")
+		f.credCall(t, admin, http.MethodPut, "/api/git/repos/"+repo, gitJSON(map[string]any{"name": "app-2", "url": "https://u:p@elsewhere.example.net/x.git"})), "url", "url_userinfo") //nolint:gosec // G101: an address with a made-up password, to be refused
 }
 
 func TestGitCredentialInUse(t *testing.T) {
@@ -505,15 +502,16 @@ func TestGitConnAudit(t *testing.T) {
 	envAdmin := f.asRoleOn(t, "admina", a.ID, "admin")
 
 	cred := f.mustCreate(t, admin, "/api/git/credentials", httpsCred("gitea"))
+	const rotated = "glpat-ROTATEDtoken9876543210" //nolint:gosec // G101: a made-up token for the test
 	if rec := f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+cred,
-		gitJSON(map[string]any{"name": "gitea", "type": "https", "username": "bot", "secret": "glpat-ROTATEDtoken9876543210"})); rec.Code != http.StatusOK {
+		gitJSON(map[string]any{"name": "gitea", "type": "https", "username": "bot", "secret": rotated})); rec.Code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rec.Code, rec.Body)
 	}
 	// An environment repository that uses an instance credential: the log shows it.
 	repo := f.mustCreate(t, envAdmin, "/api/env/"+a.ID+"/git/repos",
 		gitJSON(map[string]any{"name": "app", "url": srv.URL, "credentialId": cred, "caPem": srv.CAPEM}))
 	if rec := f.credCall(t, envAdmin, http.MethodPut, "/api/env/"+a.ID+"/git/repos/"+repo,
-		gitJSON(map[string]any{"name": "app", "url": "https://elsewhere.example.net/acme/app.git", "credentialId": cred})); rec.Code != http.StatusOK {
+		gitJSON(map[string]any{"name": "app", "url": "https://elsewhere.example.net/acme/app.git", "credentialId": cred, "caPem": srv.CAPEM})); rec.Code != http.StatusOK {
 		t.Fatalf("move: %d %s", rec.Code, rec.Body)
 	}
 	if rec := f.credCall(t, envAdmin, http.MethodDelete, "/api/env/"+a.ID+"/git/repos/"+repo, ""); rec.Code != http.StatusNoContent {

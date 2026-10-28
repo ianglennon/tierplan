@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -304,7 +305,9 @@ func RegisterGit(r *httpx.Router, d GitDeps) {
 	})
 
 	registerGitCredentials(r, d)
+	registerGitCredentialManagement(r, d)
 	registerGitRepos(r, d, limiter)
+	registerGitRepoManagement(r, d)
 }
 
 // GitRepoRequest is the body of adding or changing a git repository.
@@ -607,5 +610,237 @@ func registerGitRepos(r *httpx.Router, d GitDeps, limiter *testLimiter) {
 		Tags: []string{"git"},
 	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *TestGitEnvRepoInput) (*GitTestOutput, error) {
 		return d.testSavedRepo(ctx, limiter, in.UserAgent, in.EnvID, in.RepoID)
+	})
+}
+
+// GitRepoListBody is the repositories the caller may see.
+type GitRepoListBody struct {
+	Items []GitRepoBody `json:"items" doc:"Instance repositories first, then each environment's, by name"`
+}
+
+// GitRepoListOutput wraps GitRepoListBody for huma.
+type GitRepoListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         GitRepoListBody
+}
+
+// UpdateGitRepoInput is the request of the instance update route.
+type UpdateGitRepoInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+	Body      GitRepoRequest
+}
+
+// UpdateEnvGitRepoInput is the request of the environment update route.
+type UpdateEnvGitRepoInput struct {
+	EnvironmentPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+	Body      GitRepoRequest
+}
+
+// DeleteGitRepoInput is the request of the instance delete route.
+type DeleteGitRepoInput struct {
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// DeleteEnvGitRepoInput is the request of the environment delete route.
+type DeleteEnvGitRepoInput struct {
+	EnvironmentPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	RepoID    string `path:"repoId" maxLength:"64" doc:"The repository's ID"`
+}
+
+// listGitRepos lists the repositories of every layer the caller sees. envID, when set, limits the
+// list to the instance's repositories and that environment's own.
+func (d GitDeps) listGitRepos(ctx context.Context, p *rbac.Principal, envID string) (*GitRepoListOutput, error) {
+	v, err := gitViewerOf(ctx, d.Checker, p)
+	if err != nil {
+		return nil, d.gitFail("effective permissions", err)
+	}
+	all, err := d.Conns.ListRepos(ctx)
+	if err != nil {
+		return nil, d.gitFail("list repositories", err)
+	}
+	items := make([]GitRepoBody, 0, len(all))
+	for _, r := range all {
+		if (envID == "" || r.EnvID == "" || r.EnvID == envID) && v.sees(r.EnvID) {
+			items = append(items, d.gitRepoBody(ctx, r, !v.manages(r.EnvID)))
+		}
+	}
+	return &GitRepoListOutput{CacheControl: "no-store", Body: GitRepoListBody{Items: items}}, nil
+}
+
+// updateGitRepo changes a repository of one layer (envID empty for the instance's) and audits it in
+// the same transaction. A change of host also records the host it pointed at before.
+func (d GitDeps) updateGitRepo(ctx context.Context, p *rbac.Principal, envID, id, userAgent string, req GitRepoRequest) (*GitRepoOutput, error) {
+	cur, err := d.lookupRepo(ctx, envID, id)
+	if err != nil {
+		return nil, d.repoFail("get repository to update", err)
+	}
+	r, _, err := d.Conns.UpdateRepo(ctx, envID, id,
+		gitconn.RepoUpdate{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM},
+		func(ctx context.Context, tx *sql.Tx, r gitconn.Repo, changed []string) error {
+			details := gitRepoAuditDetails(r)
+			details["changed"] = strings.Join(changed, ",")
+			if r.Host() != cur.Host() {
+				// Where the repository pointed before, so a redirect of it is on record (T-09-14).
+				details["host_from"] = cur.Host()
+			}
+			return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoUpdated, gitRepoTargetType, r.ID, envID, details)
+		})
+	if err != nil {
+		return nil, d.repoFail("update repository", err)
+	}
+	return &GitRepoOutput{CacheControl: "no-store", Body: d.gitRepoBody(ctx, r, false)}, nil
+}
+
+// deleteGitRepo removes a repository of one layer and audits it.
+func (d GitDeps) deleteGitRepo(ctx context.Context, p *rbac.Principal, envID, id, userAgent string) error {
+	_, err := d.Conns.DeleteRepo(ctx, envID, id, func(ctx context.Context, tx *sql.Tx, r gitconn.Repo) error {
+		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoDeleted, gitRepoTargetType, r.ID, envID, gitRepoAuditDetails(r))
+	})
+	if err != nil {
+		return d.repoFail("delete repository", err)
+	}
+	return nil
+}
+
+// registerGitRepoManagement registers listing, reading, changing and deleting repositories.
+func registerGitRepoManagement(r *httpx.Router, d GitDeps) {
+	guard := func(ctx context.Context) (*rbac.Principal, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		if d.Conns == nil {
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+		}
+		return p, nil
+	}
+	const putDoc = "The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). " +
+		"When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. " +
+		"The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. " +
+		"Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. "
+	const deleteDoc = "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. "
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listGitRepos",
+		Method:      http.MethodGet,
+		Path:        "/api/git/repos",
+		Summary:     "List the git repositories the signed-in user may see",
+		Description: "An instance admin sees every repository. Anyone who holds git.read on at least one environment sees the instance repositories (readOnly) and the repositories of the environments " +
+			"they can read; readOnly is false for the ones they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.",
+		Tags: []string{"git"},
+	}, rbac.SelfService, func(ctx context.Context, _ *struct{}) (*GitRepoListOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.listGitRepos(ctx, p, "")
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "listEnvGitRepos",
+		Method:      http.MethodGet,
+		Path:        "/api/env/{envId}/git/repos",
+		Summary:     "List the git repositories that apply to an environment",
+		Description: "This environment's own repositories and the instance repositories, which are readOnly unless the caller holds git.instance. Needs git.read on the environment.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitRead), func(ctx context.Context, in *EnvironmentPathInput) (*GitRepoListOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.listGitRepos(ctx, p, in.EnvID)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getGitRepoInstance",
+		Method:      http.MethodGet,
+		Path:        "/api/git/repos/{repoId}",
+		Summary:     "Read one git repository",
+		Description: "The repository as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 repository_not_found.",
+		Tags:        []string{"git"},
+	}, rbac.SelfService, func(ctx context.Context, in *GitRepoPathInput) (*GitRepoOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		v, err := gitViewerOf(ctx, d.Checker, p)
+		if err != nil {
+			return nil, d.gitFail("effective permissions", err)
+		}
+		repo, err := d.Conns.GetRepo(ctx, in.RepoID)
+		if err == nil && !v.sees(repo.EnvID) {
+			err = gitconn.ErrNotFound
+		}
+		if err != nil {
+			return nil, d.repoFail("get repository", err)
+		}
+		return &GitRepoOutput{CacheControl: "no-store", Body: d.gitRepoBody(ctx, repo, !v.manages(repo.EnvID))}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateGitRepoInstance",
+		Method:      http.MethodPut,
+		Path:        "/api/git/repos/{repoId}",
+		Summary:     "Change an instance git repository",
+		Description: putDoc + "Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *UpdateGitRepoInput) (*GitRepoOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.updateGitRepo(ctx, p, "", in.RepoID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateGitRepo",
+		Method:      http.MethodPut,
+		Path:        "/api/env/{envId}/git/repos/{repoId}",
+		Summary:     "Change an environment's git repository",
+		Description: putDoc + "Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+		Tags:        []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *UpdateEnvGitRepoInput) (*GitRepoOutput, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return d.updateGitRepo(ctx, p, in.EnvID, in.RepoID, in.UserAgent, in.Body)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteGitRepoInstance",
+		Method:        http.MethodDelete,
+		Path:          "/api/git/repos/{repoId}",
+		Summary:       "Delete an instance git repository",
+		DefaultStatus: http.StatusNoContent,
+		Description:   deleteDoc + "Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+		Tags:          []string{"git"},
+	}, rbac.Require(rbac.PermGitInstance), func(ctx context.Context, in *DeleteGitRepoInput) (*struct{}, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return nil, d.deleteGitRepo(ctx, p, "", in.RepoID, in.UserAgent)
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID:   "deleteGitRepo",
+		Method:        http.MethodDelete,
+		Path:          "/api/env/{envId}/git/repos/{repoId}",
+		Summary:       "Delete an environment's git repository",
+		DefaultStatus: http.StatusNoContent,
+		Description:   deleteDoc + "Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+		Tags:          []string{"git"},
+	}, rbac.Require(rbac.PermGitManage), func(ctx context.Context, in *DeleteEnvGitRepoInput) (*struct{}, error) {
+		p, err := guard(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return nil, d.deleteGitRepo(ctx, p, in.EnvID, in.RepoID, in.UserAgent)
 	})
 }

@@ -112,3 +112,8 @@ DELETE FROM git_repos WHERE id = sqlc.arg(id) AND env_id IS sqlc.narg(env_id) RE
 -- Remembers the outcome of the last test of the saved repository. code is a stable code, never
 -- text from the git server.
 UPDATE git_repos SET last_test_at = ?, last_test_ok = ?, last_test_code = ? WHERE id = ?;
+
+-- name: ClearGitCredentialOutcome :execrows
+-- Forgets when a credential last signed in and the last refusal after its secret, type or user
+-- name changed: they were seen with something that no longer applies.
+UPDATE git_credentials SET last_use_at = NULL, last_failure_at = NULL, last_failure_code = '' WHERE id = ?;

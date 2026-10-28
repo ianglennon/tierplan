@@ -4611,6 +4611,25 @@
         ],
         "type": "object"
       },
+      "GitCredentialListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Instance credentials first, then each environment's, by name",
+            "items": {
+              "$ref": "#/components/schemas/GitCredentialBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "GitCredentialRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4747,6 +4766,25 @@
           "id",
           "name",
           "scope"
+        ],
+        "type": "object"
+      },
+      "GitRepoListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Instance repositories first, then each environment's, by name",
+            "items": {
+              "$ref": "#/components/schemas/GitRepoBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
         ],
         "type": "object"
       },
@@ -20377,6 +20415,55 @@
       }
     },
     "/api/env/{envId}/git/credentials": {
+      "get": {
+        "description": "This environment's own credentials and the instance credentials, which are readOnly unless the caller holds git.instance. Needs git.read on the environment. No secret is ever included.",
+        "operationId": "listEnvGitCredentials",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the git credentials that apply to an environment",
+        "tags": [
+          "git"
+        ]
+      },
       "post": {
         "description": "Stores a git sign-in that repositories of this environment can pick, and no other environment's. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid); 409 name_taken when another credential of the scope has the name. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404. Audited as git.credential_created with the environment, without the secret.",
         "operationId": "createGitCredential",
@@ -20437,7 +20524,234 @@
         ]
       }
     },
+    "/api/env/{envId}/git/credentials/{credentialId}": {
+      "delete": {
+        "description": "Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here.",
+        "operationId": "deleteGitCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an environment's git credential",
+        "tags": [
+          "git"
+        ]
+      },
+      "get": {
+        "description": "A credential of this environment, or an instance credential (readOnly unless the caller holds git.instance). Needs git.read on the environment. A credential of another environment answers 404 credential_not_found.",
+        "operationId": "getGitCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one git credential of an environment",
+        "tags": [
+          "git"
+        ]
+      },
+      "put": {
+        "description": "The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes.",
+        "operationId": "updateGitCredential",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an environment's git credential",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/env/{envId}/git/repos": {
+      "get": {
+        "description": "This environment's own repositories and the instance repositories, which are readOnly unless the caller holds git.instance. Needs git.read on the environment.",
+        "operationId": "listEnvGitRepos",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the git repositories that apply to an environment",
+        "tags": [
+          "git"
+        ]
+      },
       "post": {
         "description": "Stores a repository that stacks of this environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An environment repository may use a credential of its own environment or an instance credential, and no other environment's (credential_scope). Needs git.manage on the environment (its Admin, or an instance admin). Audited as git.repo_created with the environment, the host of its address and the credential's name and scope.",
         "operationId": "createGitRepo",
@@ -20560,6 +20874,52 @@
       }
     },
     "/api/env/{envId}/git/repos/{repoId}": {
+      "delete": {
+        "description": "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+        "operationId": "deleteGitRepo",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an environment's git repository",
+        "tags": [
+          "git"
+        ]
+      },
       "get": {
         "description": "A repository of this environment, or an instance repository that applies to it (readOnly unless the caller holds git.instance). Needs git.read on the environment. A repository of another environment answers 404 repository_not_found, exactly like one that does not exist. No secret is ever included.",
         "operationId": "getGitRepo",
@@ -20616,6 +20976,76 @@
           }
         },
         "summary": "Read one git repository of an environment",
+        "tags": [
+          "git"
+        ]
+      },
+      "put": {
+        "description": "The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.",
+        "operationId": "updateGitRepo",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitRepoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an environment's git repository",
         "tags": [
           "git"
         ]
@@ -28060,6 +28490,43 @@
       }
     },
     "/api/git/credentials": {
+      "get": {
+        "description": "An instance admin sees every credential. Anyone who holds git.read on at least one environment sees the instance credentials (readOnly) and the credentials of the environments they can read; readOnly is false for the credentials they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.",
+        "operationId": "listGitCredentials",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the git credentials the signed-in user may see",
+        "tags": [
+          "git"
+        ]
+      },
       "post": {
         "description": "Stores a git sign-in that repositories of every environment can pick. A repository uses a credential only when it names it: nothing is matched by address. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid); 409 name_taken when another credential of the scope has the name. Needs git.instance, which only instance admins hold. Audited as git.credential_created without the secret.",
         "operationId": "createGitCredentialInstance",
@@ -28108,7 +28575,192 @@
         ]
       }
     },
+    "/api/git/credentials/{credentialId}": {
+      "delete": {
+        "description": "Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here.",
+        "operationId": "deleteGitCredentialInstance",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an instance git credential",
+        "tags": [
+          "git"
+        ]
+      },
+      "get": {
+        "description": "The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.",
+        "operationId": "getGitCredentialInstance",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one git credential",
+        "tags": [
+          "git"
+        ]
+      },
+      "put": {
+        "description": "The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist.",
+        "operationId": "updateGitCredentialInstance",
+        "parameters": [
+          {
+            "description": "The credential's ID",
+            "in": "path",
+            "name": "credentialId",
+            "required": true,
+            "schema": {
+              "description": "The credential's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitCredentialBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an instance git credential",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/git/repos": {
+      "get": {
+        "description": "An instance admin sees every repository. Anyone who holds git.read on at least one environment sees the instance repositories (readOnly) and the repositories of the environments they can read; readOnly is false for the ones they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.",
+        "operationId": "listGitRepos",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the git repositories the signed-in user may see",
+        "tags": [
+          "git"
+        ]
+      },
       "post": {
         "description": "Stores a repository that stacks of every environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An instance repository may use only an instance credential (credential_scope otherwise). Needs git.instance. Audited as git.repo_created with the host of its address and the credential's name and scope.",
         "operationId": "createGitRepoInstance",
@@ -28201,6 +28853,154 @@
           }
         },
         "summary": "Test a git repository address from the server",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/git/repos/{repoId}": {
+      "delete": {
+        "description": "Removes the repository. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+        "operationId": "deleteGitRepoInstance",
+        "parameters": [
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Delete an instance git repository",
+        "tags": [
+          "git"
+        ]
+      },
+      "get": {
+        "description": "The repository as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 repository_not_found.",
+        "operationId": "getGitRepoInstance",
+        "parameters": [
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one git repository",
+        "tags": [
+          "git"
+        ]
+      },
+      "put": {
+        "description": "The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.instance. A repository of an environment answers 404 repository_not_found here.",
+        "operationId": "updateGitRepoInstance",
+        "parameters": [
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitRepoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRepoBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change an instance git repository",
         "tags": [
           "git"
         ]

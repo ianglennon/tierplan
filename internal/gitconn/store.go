@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -467,18 +469,185 @@ func boolInt(b bool) int64 {
 	return 0
 }
 
-// errNotImplemented is what the operations of the next step answer until they exist.
-var errNotImplemented = errors.New("gitconn: not implemented")
-
 // CredentialUpdate is what a person types to change a credential: everything but the layer, which
 // a credential never leaves. Secret empty means keep the saved one.
 type CredentialUpdate struct {
 	Name, Type, Username, Secret string
 }
 
-// UpdateHook runs inside the transaction that stores a change to a credential, with the credential
-// as it now is and the names of the fields that changed.
+// UpdateHook runs inside the transaction that stores a change to a credential, after the write, with
+// the credential as it now is and the names of the fields that changed. An error rolls the change
+// back: the audit row of an update is written here, so a change never exists without it.
 type UpdateHook func(ctx context.Context, tx *sql.Tx, c Credential, changed []string) error
+
+// UpdateCredential changes a credential of one layer (envID empty for the instance's); a credential
+// of any other layer is ErrNotFound and nothing is read back, changed or hooked. An empty Secret
+// keeps the saved one: its envelope is not read or touched. Switching the type needs a secret typed
+// now (*ValidationError, secret: secret_required), so a token is never kept as a key. A new Secret
+// is sealed again under the credential's own ID and what is shown of it replaced. It returns the
+// credential as it now is and the names of the fields that changed, sorted (name, secret, type,
+// username); the secret is only ever the word secret. A form that changes nothing writes nothing,
+// runs no hook and returns no changed fields. A clash within the layer is ErrNameTaken. The input
+// is never logged.
+func (s *Store) UpdateCredential(ctx context.Context, envID, id string, in CredentialUpdate, hook UpdateHook) (Credential, []string, error) {
+	now := s.now().UTC().UnixNano()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("gitconn: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetGitCredential(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("gitconn: read: %w", err)
+	}
+	cur := credentialOf(row)
+	if cur.EnvID != envID {
+		return Credential{}, nil, ErrNotFound
+	}
+	clean, errs := validCredential(CredentialInput{Name: in.Name, Type: in.Type, Username: in.Username, Secret: in.Secret}, false)
+	if len(errs) == 0 && clean.Secret == "" && clean.Type != cur.Type {
+		errs = append(errs, FieldError{"secret", CodeSecretRequired})
+	}
+	if len(errs) > 0 {
+		return Credential{}, nil, &ValidationError{Fields: errs}
+	}
+
+	var changed []string
+	for _, f := range []struct {
+		name string
+		diff bool
+	}{
+		{"name", clean.Name != cur.Name},
+		{"secret", clean.Secret != ""},
+		{"type", clean.Type != cur.Type},
+		{"username", clean.Username != cur.Username},
+	} {
+		if f.diff {
+			changed = append(changed, f.name)
+		}
+	}
+	if len(changed) == 0 {
+		return cur, nil, nil
+	}
+
+	var n int64
+	if envID == "" {
+		n, err = q.UpdateGitCredentialInstance(ctx, sqlc.UpdateGitCredentialInstanceParams{
+			Name: clean.Name, Type: clean.Type, Username: clean.Username, UpdatedAt: now, ID: id,
+		})
+	} else {
+		// The statement is bounded to the environment too, so the check above is not the only thing
+		// keeping another layer's credential out of reach.
+		n, err = q.UpdateGitCredentialInEnv(ctx, sqlc.UpdateGitCredentialInEnvParams{
+			Name: clean.Name, Type: clean.Type, Username: clean.Username, UpdatedAt: now, ID: id, EnvID: nullString(envID),
+		})
+	}
+	if err != nil {
+		return Credential{}, nil, writeError(err)
+	}
+	if n == 0 {
+		return Credential{}, nil, ErrNotFound
+	}
+	if slices.Contains(changed, "secret") {
+		sealed, err := s.v.Seal(vault.ContextGitCred+id, []byte(clean.Secret))
+		if err != nil {
+			return Credential{}, nil, fmt.Errorf("gitconn: seal the secret: %w", err)
+		}
+		if _, err := q.UpdateGitCredentialSecret(ctx, sqlc.UpdateGitCredentialSecretParams{
+			SecretSealed: sealed, SecretLast4: clean.last4, PublicKey: clean.publicKey, Fingerprint: clean.fingerprint,
+			UpdatedAt: now, ID: id,
+		}); err != nil {
+			return Credential{}, nil, fmt.Errorf("gitconn: store the secret: %w", err)
+		}
+	}
+	// A use or a refusal seen with the old secret, type or user name says nothing about the new one.
+	if slices.Contains(changed, "secret") || slices.Contains(changed, "type") || slices.Contains(changed, "username") {
+		if _, err := q.ClearGitCredentialOutcome(ctx, id); err != nil {
+			return Credential{}, nil, fmt.Errorf("gitconn: clear the last outcome: %w", err)
+		}
+	}
+	row, err = q.GetGitCredential(ctx, id)
+	if err != nil {
+		return Credential{}, nil, fmt.Errorf("gitconn: read back: %w", err)
+	}
+	c := credentialOf(row)
+	if hook != nil {
+		if err := hook(ctx, tx, c, changed); err != nil {
+			return Credential{}, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Credential{}, nil, fmt.Errorf("gitconn: commit: %w", err)
+	}
+	return c, changed, nil
+}
+
+// DeleteCredential removes a credential of one layer (envID empty for the instance's), running hook
+// (which may be nil) in the same transaction with the credential as it was. A credential of any
+// other layer, or one that is gone, is ErrNotFound, so a repeated delete is safe. A credential
+// that repositories use is an *InUseError with their count, and nothing is removed.
+func (s *Store) DeleteCredential(ctx context.Context, envID, id string, hook TxHook) (Credential, error) {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Credential{}, fmt.Errorf("gitconn: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetGitCredential(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, ErrNotFound
+	}
+	if err != nil {
+		return Credential{}, fmt.Errorf("gitconn: read: %w", err)
+	}
+	c := credentialOf(row)
+	if c.EnvID != envID {
+		return Credential{}, ErrNotFound
+	}
+	// The write connection is the only writer, so the count cannot change before the delete. The
+	// foreign key (ON DELETE NO ACTION) is the backstop.
+	used, err := q.CountReposUsingCredential(ctx, nullString(id))
+	if err != nil {
+		return Credential{}, fmt.Errorf("gitconn: count the repositories that use it: %w", err)
+	}
+	if used > 0 {
+		return Credential{}, &InUseError{Count: int(used)}
+	}
+	if _, err := q.DeleteGitCredential(ctx, sqlc.DeleteGitCredentialParams{ID: id, EnvID: nullString(envID)}); errors.Is(err, sql.ErrNoRows) {
+		return Credential{}, ErrNotFound
+	} else if err != nil {
+		return Credential{}, fmt.Errorf("gitconn: delete: %w", err)
+	}
+	if hook != nil {
+		if err := hook(ctx, tx, c); err != nil {
+			return Credential{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Credential{}, fmt.Errorf("gitconn: commit: %w", err)
+	}
+	return c, nil
+}
+
+// ListCredentials returns every credential of every layer: the instance's first, then each
+// environment's, by name.
+func (s *Store) ListCredentials(ctx context.Context) ([]Credential, error) {
+	rows, err := s.st.RQ.ListGitCredentials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gitconn: list credentials: %w", err)
+	}
+	out := make([]Credential, len(rows))
+	for i, r := range rows {
+		out[i] = credentialOf(sqlc.GetGitCredentialRow(r))
+	}
+	return out, nil
+}
 
 // RepoUpdate is what a person types to change a repository. CredentialID nil keeps the saved
 // credential (unless the address moved to another host), an empty string picks none.
@@ -491,32 +660,162 @@ type RepoUpdate struct {
 // RepoUpdateHook is UpdateHook for a repository.
 type RepoUpdateHook func(ctx context.Context, tx *sql.Tx, r Repo, changed []string) error
 
-// UpdateCredential changes a credential of one layer (envID empty for the instance's).
-func (s *Store) UpdateCredential(ctx context.Context, envID, id string, in CredentialUpdate, hook UpdateHook) (Credential, []string, error) {
-	return Credential{}, nil, errNotImplemented
-}
-
-// DeleteCredential removes a credential of one layer that no repository uses.
-func (s *Store) DeleteCredential(ctx context.Context, envID, id string, hook TxHook) (Credential, error) {
-	return Credential{}, errNotImplemented
-}
-
-// ListCredentials returns every credential of every layer.
-func (s *Store) ListCredentials(ctx context.Context) ([]Credential, error) {
-	return nil, errNotImplemented
-}
-
-// UpdateRepo changes a repository of one layer (envID empty for the instance's).
+// UpdateRepo changes a repository of one layer (envID empty for the instance's); one of any other
+// layer is ErrNotFound. A credential must be one the layer rule allows (credential_scope). When the
+// address moves to another host or port, a saved credential is kept only if the request names a
+// credential again (the same one, another, or none with an empty ID): else *ValidationError
+// (credentialId: credential_reselect), so a token the person picked for one server is never aimed
+// at another by an edit that did not mention it. It returns the repository as it now is and the
+// names of the fields that changed, sorted (ca_pem, credential, name, url). A form that changes
+// nothing writes nothing and runs no hook. The last test is forgotten when the address, the
+// credential or the CA changed: it was seen against something that no longer applies.
 func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate, hook RepoUpdateHook) (Repo, []string, error) {
-	return Repo{}, nil, errNotImplemented
+	now := s.now().UTC().UnixNano()
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Repo{}, nil, fmt.Errorf("gitconn: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetGitRepo(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return Repo{}, nil, fmt.Errorf("gitconn: read: %w", err)
+	}
+	cur := repoOf(row)
+	if cur.EnvID != envID {
+		return Repo{}, nil, ErrNotFound
+	}
+	name, url, ca, _, errs := validRepo(in.Name, in.URL, in.CAPEM)
+	if len(errs) > 0 {
+		return Repo{}, nil, &ValidationError{Fields: errs}
+	}
+	cred := cur.CredentialID
+	if in.CredentialID != nil {
+		cred = strings.TrimSpace(*in.CredentialID)
+	}
+	if in.CredentialID == nil && cur.CredentialID != "" && destinationOf(cur.URL) != destinationOf(url) {
+		return Repo{}, nil, invalid("credentialId", CodeCredentialReselect)
+	}
+	if cred, err = s.pickedCredential(ctx, q, envID, cred); err != nil {
+		return Repo{}, nil, err
+	}
+
+	var changed []string
+	for _, f := range []struct {
+		name string
+		diff bool
+	}{
+		{"ca_pem", ca != cur.CAPEM},
+		{"credential", cred != cur.CredentialID},
+		{"name", name != cur.Name},
+		{"url", url != cur.URL},
+	} {
+		if f.diff {
+			changed = append(changed, f.name)
+		}
+	}
+	if len(changed) == 0 {
+		return cur, nil, nil
+	}
+
+	var n int64
+	if envID == "" {
+		n, err = q.UpdateGitRepoInstance(ctx, sqlc.UpdateGitRepoInstanceParams{
+			Name: name, Url: url, CredentialID: nullString(cred), CaPem: ca, UpdatedAt: now, ID: id,
+		})
+	} else {
+		n, err = q.UpdateGitRepoInEnv(ctx, sqlc.UpdateGitRepoInEnvParams{
+			Name: name, Url: url, CredentialID: nullString(cred), CaPem: ca, UpdatedAt: now, ID: id, EnvID: nullString(envID),
+		})
+	}
+	if err != nil {
+		return Repo{}, nil, writeError(err)
+	}
+	if n == 0 {
+		return Repo{}, nil, ErrNotFound
+	}
+	if slices.Contains(changed, "ca_pem") || slices.Contains(changed, "credential") || slices.Contains(changed, "url") {
+		if _, err := q.ClearGitRepoTest(ctx, id); err != nil {
+			return Repo{}, nil, fmt.Errorf("gitconn: clear the last test: %w", err)
+		}
+	}
+	row, err = q.GetGitRepo(ctx, id)
+	if err != nil {
+		return Repo{}, nil, fmt.Errorf("gitconn: read back: %w", err)
+	}
+	r := repoOf(row)
+	if hook != nil {
+		if err := hook(ctx, tx, r, changed); err != nil {
+			return Repo{}, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Repo{}, nil, fmt.Errorf("gitconn: commit: %w", err)
+	}
+	return r, changed, nil
 }
 
-// DeleteRepo removes a repository of one layer.
+// destinationOf is where an address connects to: its host and port.
+func destinationOf(rawURL string) string {
+	u, err := gitx.ValidateURL(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	return u.Host + ":" + strconv.Itoa(u.Port)
+}
+
+// DeleteRepo removes a repository of one layer (envID empty for the instance's), running hook
+// (which may be nil) in the same transaction with the repository as it was. One of any other layer,
+// or one that is gone, is ErrNotFound.
 func (s *Store) DeleteRepo(ctx context.Context, envID, id string, hook RepoHook) (Repo, error) {
-	return Repo{}, errNotImplemented
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+
+	row, err := q.GetGitRepo(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, ErrNotFound
+	}
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: read: %w", err)
+	}
+	r := repoOf(row)
+	if r.EnvID != envID {
+		return Repo{}, ErrNotFound
+	}
+	if _, err := q.DeleteGitRepo(ctx, sqlc.DeleteGitRepoParams{ID: id, EnvID: nullString(envID)}); errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, ErrNotFound
+	} else if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: delete: %w", err)
+	}
+	if hook != nil {
+		if err := hook(ctx, tx, r); err != nil {
+			return Repo{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Repo{}, fmt.Errorf("gitconn: commit: %w", err)
+	}
+	return r, nil
 }
 
-// ListRepos returns every repository of every layer.
+// ListRepos returns every repository of every layer: the instance's first, then each
+// environment's, by name.
 func (s *Store) ListRepos(ctx context.Context) ([]Repo, error) {
-	return nil, errNotImplemented
+	rows, err := s.st.RQ.ListGitRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gitconn: list repositories: %w", err)
+	}
+	out := make([]Repo, len(rows))
+	for i, r := range rows {
+		out[i] = repoOf(sqlc.GetGitRepoRow(r))
+	}
+	return out, nil
 }

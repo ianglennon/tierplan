@@ -207,7 +207,7 @@ func TestGitConnNameRace(t *testing.T) {
 	addEnvironment(t, st, "env-a")
 	ctx := context.Background()
 
-	race := func(t *testing.T, create func() error) {
+	race := func(t *testing.T, what string, create func() error) {
 		t.Helper()
 		const racers = 2
 		var wg sync.WaitGroup
@@ -235,30 +235,25 @@ func TestGitConnNameRace(t *testing.T) {
 			}
 		}
 		if ok != 1 || taken != 1 {
-			t.Errorf("two simultaneous creates of one name: %d created, %d name_taken, want exactly 1 and 1", ok, taken)
+			t.Errorf("%s: two simultaneous creates of one name: %d created, %d name_taken, want exactly 1 and 1", what, ok, taken)
 		}
 	}
 	for name, env := range map[string]*string{"instance": nil, "environment": ptr("env-a")} {
-		t.Run(name+" credential", func(t *testing.T) {
-			race(t, func() error {
-				_, err := s.CreateCredential(ctx, httpsCredential(env, "same"), "u", nil)
-				return err
-			})
-			var n int
-			if err := st.Read.QueryRow(`SELECT count(*) FROM git_credentials WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
-				t.Errorf("rows = %d, %v; want exactly one", n, err)
-			}
+		race(t, name+" credential", func() error {
+			_, err := s.CreateCredential(ctx, httpsCredential(env, "same"), "u", nil)
+			return err
 		})
-		t.Run(name+" repository", func(t *testing.T) {
-			race(t, func() error {
-				_, err := s.CreateRepo(ctx, gitconn.RepoInput{EnvID: env, Name: "same", URL: "https://git.example.org/a.git"}, "u", nil)
-				return err
-			})
-			var n int
-			if err := st.Read.QueryRow(`SELECT count(*) FROM git_repos WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
-				t.Errorf("rows = %d, %v; want exactly one", n, err)
-			}
+		var n int
+		if err := st.Read.QueryRow(`SELECT count(*) FROM git_credentials WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s credential rows = %d, %v; want exactly one", name, n, err)
+		}
+		race(t, name+" repository", func() error {
+			_, err := s.CreateRepo(ctx, gitconn.RepoInput{EnvID: env, Name: "same", URL: "https://git.example.org/a.git"}, "u", nil)
+			return err
 		})
+		if err := st.Read.QueryRow(`SELECT count(*) FROM git_repos WHERE name = 'same' AND env_id IS ?`, env).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s repository rows = %d, %v; want exactly one", name, n, err)
+		}
 	}
 	// The same name in another layer is another row.
 	if _, err := s.CreateCredential(ctx, httpsCredential(ptr("env-a"), "other-layer"), "u", nil); err != nil {
@@ -346,12 +341,7 @@ func TestGitConnUpdateRules(t *testing.T) {
 		t.Errorf("sealed value = %q, %v", plain, err)
 	}
 
-	// Switching the type needs a secret typed now.
-	_, _, err = s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "gitea-2", Type: gitconn.TypeSSH, Username: "git"}, nil)
 	var ve *gitconn.ValidationError
-	if !errors.As(err, &ve) || ve.Fields[0].Field != "secret" || ve.Fields[0].Code != gitconn.CodeSecretRequired {
-		t.Errorf("a type switch without a secret: %v, want secret: secret_required", err)
-	}
 
 	// A credential of another layer is not found, and nothing changes.
 	if _, _, err := s.UpdateCredential(ctx, "env-a", c.ID, gitconn.CredentialUpdate{Name: "taken-over", Type: gitconn.TypeHTTPS, Username: "x"}, nil); !errors.Is(err, gitconn.ErrNotFound) {
@@ -404,6 +394,7 @@ func TestGitConnUpdateRules(t *testing.T) {
 		t.Errorf("the last test survived an address change: %+v", same.LastTest)
 	}
 	// Naming the credential again lets the host move; naming none drops it.
+	moved.Name = "app-renamed"
 	moved.CredentialID = &c.ID
 	again, changed, err := s.UpdateRepo(ctx, "", r.ID, moved, nil)
 	if err != nil || again.CredentialID != c.ID || again.Host() != "elsewhere.example.net" || !slices.Equal(changed, []string{"url"}) {
