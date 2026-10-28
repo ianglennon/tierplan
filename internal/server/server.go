@@ -756,7 +756,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Git over HTTPS dials through the same policy. go-git keeps its protocols in a package variable, so the
 	// transport is installed once, here, before any route can run a git call (Phase 9, T-09-01).
 	gitx.InstallTransport(registryEgress)
-	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log})
+	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,

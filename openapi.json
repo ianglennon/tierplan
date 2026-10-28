@@ -4656,6 +4656,59 @@
         },
         "type": "object"
       },
+      "GitRefBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The 40-hex commit ID; for an annotated tag the commit the tag points at",
+            "type": "string"
+          },
+          "name": {
+            "description": "The short name: main, v1.2",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "commit"
+        ],
+        "type": "object"
+      },
+      "GitRefsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "branches": {
+            "description": "Every branch, in name order",
+            "items": {
+              "$ref": "#/components/schemas/GitRefBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "defaultBranch": {
+            "description": "The branch HEAD points at; empty when the server does not say",
+            "type": "string"
+          },
+          "tags": {
+            "description": "Every tag, in name order",
+            "items": {
+              "$ref": "#/components/schemas/GitRefBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "defaultBranch",
+          "branches",
+          "tags"
+        ],
+        "type": "object"
+      },
       "GitRepoBody": {
         "additionalProperties": false,
         "properties": {
@@ -5075,6 +5128,81 @@
           "reachable",
           "signedIn",
           "refs"
+        ],
+        "type": "object"
+      },
+      "GitTreeBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capped": {
+            "description": "True when entries holds fewer than total",
+            "type": "boolean"
+          },
+          "commit": {
+            "description": "The full 40-hex commit ID the ref resolved to",
+            "type": "string"
+          },
+          "committedAt": {
+            "description": "When that commit was made",
+            "format": "date-time",
+            "type": "string"
+          },
+          "entries": {
+            "description": "Folders first, then everything else, each by name; at most 500",
+            "items": {
+              "$ref": "#/components/schemas/GitTreeEntryBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "The folder, without a leading or trailing slash; empty for the root",
+            "type": "string"
+          },
+          "total": {
+            "description": "How many entries the folder has",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commit",
+          "committedAt",
+          "path",
+          "entries",
+          "total",
+          "capped"
+        ],
+        "type": "object"
+      },
+      "GitTreeEntryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "hasCompose": {
+            "description": "For a folder, whether it directly holds compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml; false for everything else",
+            "type": "boolean"
+          },
+          "kind": {
+            "description": "A symlink and a submodule are only reported; they are never followed",
+            "enum": [
+              "dir",
+              "file",
+              "symlink",
+              "submodule"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "The entry's name within the folder",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "hasCompose"
         ],
         "type": "object"
       },
@@ -21156,6 +21284,68 @@
         ]
       }
     },
+    "/api/env/{envId}/git/repos/{repoId}/refs": {
+      "get": {
+        "description": "Every branch and tag of a repository usable in this environment (its own, or an instance repository), each with its commit (an annotated tag is peeled to its commit) and the default branch, read from the git server with the repository's credential. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. A failure is 422 with the code as its type (unreachable, auth_refused, not_found, cert_untrusted, host_key_changed, host_key_untrusted, egress_blocked, timeout, too_large) and the host in its errors.",
+        "operationId": "listGitRefs",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitRefsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the branches and tags of a git repository",
+        "tags": [
+          "git"
+        ]
+      }
+    },
     "/api/env/{envId}/git/repos/{repoId}/test": {
       "post": {
         "description": "As testing an instance repository, for a repository of this environment. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, or of the instance, answers 404 repository_not_found. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as git.repo_tested with the environment.",
@@ -21213,6 +21403,107 @@
           }
         },
         "summary": "Test a saved git repository of an environment from the server",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/git/repos/{repoId}/tree": {
+      "get": {
+        "description": "Fetches the ref into the server's bare mirror of the repository (only that ref, never every branch) and lists a folder of the commit it resolves to: the commit and its time, and the entries, folders first and then by name, at most 500 (total and capped say when there are more). A folder with a compose file in it has hasCompose. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. 422 ref_invalid for a ref name git would refuse (before any git call); 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; otherwise 422 with the code of the failure as its type and the host in its errors, as for listing refs.",
+        "operationId": "browseGitTree",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The repository's ID",
+            "in": "path",
+            "name": "repoId",
+            "required": true,
+            "schema": {
+              "description": "The repository's ID",
+              "maxLength": 64,
+              "type": "string"
+            }
+          },
+          {
+            "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+            "explode": false,
+            "in": "query",
+            "name": "refKind",
+            "required": true,
+            "schema": {
+              "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+              "enum": [
+                "branch",
+                "tag",
+                "commit"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse, one with control characters or '..', one starting with '-', or one over 255 bytes",
+            "explode": false,
+            "in": "query",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse, one with control characters or '..', one starting with '-', or one over 255 bytes",
+              "maxLength": 2048,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The folder to list; the root when empty",
+            "explode": false,
+            "in": "query",
+            "name": "path",
+            "schema": {
+              "description": "The folder to list; the root when empty",
+              "maxLength": 4096,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitTreeBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List a folder of a git repository at a branch, tag or commit",
         "tags": [
           "git"
         ]

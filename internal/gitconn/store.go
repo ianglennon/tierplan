@@ -444,6 +444,27 @@ func (s *Store) RecordTest(ctx context.Context, repoID string, ok bool, code git
 	return nil
 }
 
+// RecordUse remembers what a call that used the credential showed of it, now: code empty is a call
+// that signed in, which clears an earlier refusal; auth_refused is a refusal and is remembered. Any
+// other failure says nothing about the credential and is not recorded. An empty credentialID (a
+// public repository) and a credential deleted meanwhile are not errors.
+func (s *Store) RecordUse(ctx context.Context, credentialID string, code gitx.Code) error {
+	if credentialID == "" || (code != "" && code != gitx.CodeAuthRefused) {
+		return nil
+	}
+	at := sql.NullInt64{Int64: s.now().UTC().UnixNano(), Valid: true}
+	var err error
+	if code == "" {
+		_, err = s.st.Q.SetGitCredentialUse(ctx, sqlc.SetGitCredentialUseParams{LastUseAt: at, ID: credentialID})
+	} else {
+		_, err = s.st.Q.SetGitCredentialFailure(ctx, sqlc.SetGitCredentialFailureParams{LastFailureAt: at, LastFailureCode: string(code), ID: credentialID})
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("gitconn: record the use of credential %s: %w", credentialID, err)
+	}
+	return nil
+}
+
 // writeError maps a unique-index failure to ErrNameTaken: the only unique rule besides the ID is
 // the name within a layer.
 func writeError(err error) error {

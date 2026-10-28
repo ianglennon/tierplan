@@ -34,10 +34,11 @@ const (
 	CodeRefMissing       Code = "ref_missing"
 	CodeTimeout          Code = "timeout"
 	CodeTooLarge         Code = "too_large"
-	// The next three are for the plans that read a mirror.
-	CodeFolderMissing Code = "folder_missing"
-	CodeFileMissing   Code = "file_missing"
-	CodeCommitMissing Code = "commit_missing"
+	// The next four are for the plans that read a mirror.
+	CodeFolderMissing   Code = "folder_missing"
+	CodeFileMissing     Code = "file_missing"
+	CodeCommitMissing   Code = "commit_missing"
+	CodeCommitAmbiguous Code = "commit_ambiguous"
 )
 
 // ErrCAInvalid is what a certificate authority that is not a PEM certificate is refused with.

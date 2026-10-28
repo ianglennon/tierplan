@@ -13,6 +13,8 @@ package gitx
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -105,12 +107,75 @@ type RefList struct {
 	HostKey *PresentedKey
 }
 
-// Client is what Bayplan asks of git. Later plans add the mirror and read methods.
+// MirrorID names a server-side mirror. It is the repository's ID (a UUID), never a part of its
+// address, so the directory a mirror lives in cannot be steered by what a person types.
+type MirrorID string
+
+// RefKind is what a ref names when a mirror is asked for it.
+type RefKind string
+
+// The kinds of ref a mirror can be asked for.
+const (
+	RefBranch RefKind = "branch"
+	RefTag    RefKind = "tag"
+	// RefCommit is a commit by its ID, in full or by a prefix of 7 to 40 hex characters.
+	RefCommit RefKind = "commit"
+)
+
+// Commit is a commit a ref resolved to.
+type Commit struct {
+	// SHA is the full 40-hex commit ID.
+	SHA  string
+	When time.Time
+}
+
+// EntryKind is what a tree entry is.
+type EntryKind string
+
+// The kinds of tree entry. A symlink and a submodule are only ever reported, never followed.
+const (
+	EntryDir       EntryKind = "dir"
+	EntryFile      EntryKind = "file"
+	EntrySymlink   EntryKind = "symlink"
+	EntrySubmodule EntryKind = "submodule"
+)
+
+// Entry is one thing in a folder of a commit.
+type Entry struct {
+	Name string
+	Kind EntryKind
+	// HasCompose is set on a folder that directly holds compose.yaml, compose.yml,
+	// docker-compose.yaml or docker-compose.yml.
+	HasCompose bool
+}
+
+// Dir is a folder of a commit: its entries, folders first and then by name, at most the limit it
+// was read with.
+type Dir struct {
+	Path    string
+	Entries []Entry
+	// Total is how many entries the folder has; Capped says Entries holds fewer.
+	Total  int
+	Capped bool
+}
+
+// Client is what Bayplan asks of git.
 type Client interface {
 	// LsRemote lists the branches and tags of a remote without a clone. An error is a *Error (a
 	// fixed Code and the host) or one of ErrURLUnsupported, ErrURLUserinfo, ErrCAInvalid and
 	// ErrCATooLarge for input that was refused before any connection was made.
 	LsRemote(ctx context.Context, r Remote) (RefList, error)
+	// FetchRef brings one ref of r into the mirror m (created on first use) and returns the commit
+	// it points at: a branch or tag is fetched alone, never every branch; a commit is looked up by
+	// asking for it and then for all heads and tags. ErrRefInvalid for a name ValidRefName refuses;
+	// otherwise a *Error (ref_missing, commit_missing, commit_ambiguous or a transport code) or the
+	// input errors of LsRemote.
+	FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind, ref string) (Commit, error)
+	// ReadDir lists the folder dir ("" is the root) of the commit sha in the mirror m, reading the
+	// object database only. A commit the mirror does not hold is commit_missing and a folder the
+	// commit does not hold, or a path that is a file, is folder_missing. limit caps the entries
+	// returned (500 when it is not positive).
+	ReadDir(ctx context.Context, m MirrorID, sha, dir string, limit int) (Dir, error)
 }
 
 // Options builds a GoGit.
@@ -121,12 +186,19 @@ type Options struct {
 	Policy registry.EgressPolicy
 	// Log receives what the client does, without addresses or secrets. Nil is slog.Default().
 	Log *slog.Logger
+	// Root is the directory the mirrors live in ({data}/git). Without it FetchRef and ReadDir
+	// answer ErrNoMirrorRoot.
+	Root string
 }
 
 // GoGit is the Client that uses go-git. InstallTransport must have run once in the process.
 type GoGit struct {
 	policy registry.EgressPolicy
 	log    *slog.Logger
+	root   string
+
+	mu    sync.Mutex
+	locks map[MirrorID]*sync.RWMutex
 }
 
 // NewGoGit returns a client that dials through o.Policy.
@@ -135,7 +207,7 @@ func NewGoGit(o Options) *GoGit {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &GoGit{policy: o.Policy, log: log}
+	return &GoGit{policy: o.Policy, log: log, root: o.Root, locks: map[MirrorID]*sync.RWMutex{}}
 }
 
 var _ Client = (*GoGit)(nil)

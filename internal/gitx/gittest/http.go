@@ -25,6 +25,10 @@ type HTTPOptions struct {
 	TLS bool
 	// BasicAuth, when set, is the user name and password a request must carry.
 	BasicAuth *[2]string
+	// AllowAnySHA1 lets a client ask for a commit by its ID even when no branch or tag reaches it
+	// (uploadpack.allowAnySHA1InWant), as GitHub does. Without it such a request is refused, as
+	// most servers do.
+	AllowAnySHA1 bool
 }
 
 // HTTPServer is a git smart-HTTP server for one repository.
@@ -74,6 +78,9 @@ func NewHTTPServer(tb testing.TB, r *Repo, o HTTPOptions) *HTTPServer {
 			"GIT_CONFIG_GLOBAL=/dev/null",
 			"HOME=" + filepath.Dir(r.bare),
 		},
+	}
+	if o.AllowAnySHA1 {
+		backend.Env = append(backend.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=uploadpack.allowAnySHA1InWant", "GIT_CONFIG_VALUE_0=true")
 	}
 	s := &HTTPServer{}
 	h := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

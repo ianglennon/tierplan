@@ -436,7 +436,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	gitx.InstallTransport(registry.NewEgressPolicy(nil))
 	gitClient := f.gitClient
 	if gitClient == nil {
-		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log})
+		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log, Root: t.TempDir()})
 	}
 	api.RegisterGit(r, api.GitDeps{
 		Git: gitClient, Conns: gitconn.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log,

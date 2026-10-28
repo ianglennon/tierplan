@@ -348,6 +348,7 @@ func RegisterGit(r *httpx.Router, d GitDeps) {
 	registerGitCredentialManagement(r, d)
 	registerGitRepos(r, d, limiter)
 	registerGitRepoManagement(r, d)
+	registerGitBrowse(r, d)
 }
 
 // GitRepoRequest is the body of adding or changing a git repository.

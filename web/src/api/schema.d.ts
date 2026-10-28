@@ -928,6 +928,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git/repos/{repoId}/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the branches and tags of a git repository
+         * @description Every branch and tag of a repository usable in this environment (its own, or an instance repository), each with its commit (an annotated tag is peeled to its commit) and the default branch, read from the git server with the repository's credential. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. A failure is 422 with the code as its type (unreachable, auth_refused, not_found, cert_untrusted, host_key_changed, host_key_untrusted, egress_blocked, timeout, too_large) and the host in its errors.
+         */
+        get: operations["listGitRefs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/git/repos/{repoId}/test": {
         parameters: {
             query?: never;
@@ -942,6 +962,26 @@ export interface paths {
          * @description As testing an instance repository, for a repository of this environment. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, or of the instance, answers 404 repository_not_found. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as git.repo_tested with the environment.
          */
         post: operations["testGitRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a folder of a git repository at a branch, tag or commit
+         * @description Fetches the ref into the server's bare mirror of the repository (only that ref, never every branch) and lists a folder of the commit it resolves to: the commit and its time, and the entries, folders first and then by name, at most 500 (total and capped say when there are more). A folder with a compose file in it has hasCompose. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. 422 ref_invalid for a ref name git would refuse (before any git call); 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; otherwise 422 with the code of the failure as its type and the host in its errors, as for listing refs.
+         */
+        get: operations["browseGitTree"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6230,6 +6270,20 @@ export interface components {
             /** @description The user name the git server expects with a token (required for https: 422 username_required). Your host decides what it needs here. Defaults to git for an ssh key */
             username?: string;
         };
+        GitRefBody: {
+            /** @description The 40-hex commit ID; for an annotated tag the commit the tag points at */
+            commit: string;
+            /** @description The short name: main, v1.2 */
+            name: string;
+        };
+        GitRefsBody: {
+            /** @description Every branch, in name order */
+            branches: components["schemas"]["GitRefBody"][] | null;
+            /** @description The branch HEAD points at; empty when the server does not say */
+            defaultBranch: string;
+            /** @description Every tag, in name order */
+            tags: components["schemas"]["GitRefBody"][] | null;
+        };
         GitRepoBody: {
             /** @description The custom certificate authority in PEM, public material, for people who may manage the repository; empty for everyone else and when there is none */
             caPem: string;
@@ -6383,6 +6437,37 @@ export interface components {
             reachable: components["schemas"]["GitTestStepBody"];
             refs: components["schemas"]["GitTestStepBody"];
             signedIn: components["schemas"]["GitTestStepBody"];
+        };
+        GitTreeBody: {
+            /** @description True when entries holds fewer than total */
+            capped: boolean;
+            /** @description The full 40-hex commit ID the ref resolved to */
+            commit: string;
+            /**
+             * Format: date-time
+             * @description When that commit was made
+             */
+            committedAt: string;
+            /** @description Folders first, then everything else, each by name; at most 500 */
+            entries: components["schemas"]["GitTreeEntryBody"][] | null;
+            /** @description The folder, without a leading or trailing slash; empty for the root */
+            path: string;
+            /**
+             * Format: int64
+             * @description How many entries the folder has
+             */
+            total: number;
+        };
+        GitTreeEntryBody: {
+            /** @description For a folder, whether it directly holds compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml; false for everything else */
+            hasCompose: boolean;
+            /**
+             * @description A symlink and a submodule are only reported; they are never followed
+             * @enum {string}
+             */
+            kind: "dir" | "file" | "symlink" | "submodule";
+            /** @description The entry's name within the folder */
+            name: string;
         };
         GitTrustHostKeyRequest: {
             /** @description The SSH host key to trust, in authorized_keys form (hostKey.key of a test that answered untrusted or changed), after comparing its fingerprint with the one the host's administrator publishes. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for a repository whose address is not ssh */
@@ -13549,6 +13634,41 @@ export interface operations {
             };
         };
     };
+    listGitRefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRefsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     testGitRepo: {
         parameters: {
             query?: never;
@@ -13571,6 +13691,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseGitTree: {
+        parameters: {
+            query: {
+                /** @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters */
+                refKind: "branch" | "tag" | "commit";
+                /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse, one with control characters or '..', one starting with '-', or one over 255 bytes */
+                ref: string;
+                /** @description The folder to list; the root when empty */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTreeBody"];
                 };
             };
             /** @description Error */

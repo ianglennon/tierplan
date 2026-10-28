@@ -93,6 +93,31 @@ func (r *Repo) Commit(tb testing.TB, files map[string]string, msg string) string
 	return sha
 }
 
+// Symlink makes name in the working tree a symbolic link to target, for the next Commit to pick up.
+func (r *Repo) Symlink(tb testing.TB, name, target string) {
+	tb.Helper()
+	p := filepath.Join(r.work, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		tb.Fatal(err)
+	}
+	if err := os.Symlink(target, p); err != nil {
+		tb.Fatal(err)
+	}
+}
+
+// Submodule makes name in the working tree a nested repository with one commit, which the next
+// Commit records as a submodule entry (a gitlink, mode 160000).
+func (r *Repo) Submodule(tb testing.TB, name string) {
+	tb.Helper()
+	p := filepath.Join(r.work, filepath.FromSlash(name))
+	if err := os.MkdirAll(p, 0o750); err != nil {
+		tb.Fatal(err)
+	}
+	r.git(tb, p, "init", "-b", "main")
+	r.git(tb, p, "config", "commit.gpgsign", "false")
+	r.git(tb, p, "commit", "--allow-empty", "-m", "nested")
+}
+
 // Tag makes the tag name at the commit sha in the bare repository. An annotated tag is a tag
 // object with a message; a lightweight one is a plain reference.
 func (r *Repo) Tag(tb testing.TB, name, sha string, annotated bool) {

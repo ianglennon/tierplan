@@ -141,8 +141,12 @@ func TestGitAddressTestIsForAnAdminOfTheEnvironmentOrTheInstance(t *testing.T) {
 	}
 }
 
-// countingGit answers every listing with an empty repository and counts the calls.
-type countingGit struct{ calls atomic.Int64 }
+// countingGit answers every listing with an empty repository and counts the calls. It does not
+// mirror anything: the embedded nil client would panic if a test asked it to.
+type countingGit struct {
+	gitx.Client
+	calls atomic.Int64
+}
 
 func (c *countingGit) LsRemote(context.Context, gitx.Remote) (gitx.RefList, error) {
 	c.calls.Add(1)
