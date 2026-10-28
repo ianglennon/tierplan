@@ -4,8 +4,10 @@
 package stacks
 
 import (
+	"bytes"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // secretWords are the _-separated segments of a variable name that make it look like a secret.
@@ -35,13 +37,136 @@ func envSecretLikeMessage(name string) string {
 
 // GitLint judges the rules that only a stack made from a git repository has (D-07, D-09, D-10). It is
 // pure: it reads the working copy it is given, whose files carry their Origin, and opens nothing.
-// loaded may be nil, for a copy whose compose files did not load. The problems are not sorted.
+// loaded may be nil, for a copy whose compose files did not load. The problems are sorted by file and
+// line.
 //
-// This part of the rules warns about a secret-like key in the repository's .env. A key the table
-// already overrides with a value is not reported: the warning's own advice has been followed.
+//   - overlay_clash: a path that is both a repository file and an overlay file (D-09);
+//   - repo_file_missing: a file an env_file, a secrets file: or a configs file: names that is neither a
+//     repository file nor an overlay file; an env_file with required: false may be absent;
+//   - git_lfs_pointer: a repository file whose content is a Git LFS pointer (D-10);
+//   - env_secret_like: a key of the repository's .env whose name looks like a secret (D-07). A key the
+//     table already overrides with a value is not reported: the warning's own advice has been followed.
 func GitLint(c WorkingCopy, _ *Loaded) []Problem {
-	var out []Problem
+	var out Problems
+	out = append(out, overlayClashProblems(c.Files)...)
+	out = append(out, repoFileMissingProblems(c)...)
+	out = append(out, lfsPointerProblems(c.Files)...)
 	out = append(out, envSecretLikeProblems(c)...)
+	return out.Sorted()
+}
+
+// overlayClashProblems are the blocking problems of the paths that are both a repository file and an
+// overlay file, in path order.
+func overlayClashProblems(files []File) Problems {
+	repo, overlay := map[string]bool{}, map[string]bool{}
+	for _, f := range files {
+		switch f.Origin {
+		case OriginRepo:
+			repo[f.Path] = true
+		case OriginOverlay:
+			overlay[f.Path] = true
+		}
+	}
+	var paths []string
+	for p := range repo {
+		if overlay[p] {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	out := make(Problems, 0, len(paths))
+	for _, p := range paths {
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeOverlayClash, File: p, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+			Message: p + " exists in the repository and as an overlay file. Remove the overlay file or rename it.",
+		})
+	}
+	return out
+}
+
+// refUse is one place a compose file refers to a stack file: an env_file entry, a top-level secrets
+// file: or a top-level configs file:.
+type refUse struct {
+	// Ref is the path as the compose file wrote it and Path is it without a leading "./".
+	Ref, Path string
+	// Optional is true for an env_file with required: false.
+	Optional bool
+	// Compose is the compose file, Key what names the file (env_file, secrets.X.file) and Line and Col
+	// where the value is written.
+	Compose, Key string
+	Line, Col    int
+}
+
+// referencedUses lists every file the compose files name, in file then document order, whether or not
+// the stack has it. It walks the raw YAML, so it needs no load and reads no file. A compose file that
+// is not YAML, or is too large or too complex to walk, names none; the others are still read.
+func referencedUses(contents []ComposeContent) []refUse {
+	var out []refUse
+	for _, cf := range contents {
+		if len(cf.Content) > MaxFileBytes {
+			continue
+		}
+		roots, ok := decodeRoots(cf.Content)
+		if !ok {
+			continue
+		}
+		var uses []refUse
+		w := &walker{budget: maxBudget, file: cf.Path, uses: &uses}
+		failed := false
+		for _, root := range roots {
+			if w.measure(root, 0); w.err != nil {
+				failed = true
+				break
+			}
+		}
+		for _, root := range roots {
+			if failed {
+				break
+			}
+			if w.document(root); w.err != nil {
+				failed = true
+			}
+		}
+		if !failed {
+			out = append(out, uses...)
+		}
+	}
+	return out
+}
+
+// repoFileMissingProblems are the blocking problems of the files the compose files need that the
+// working copy does not hold, as a repository file or as an overlay file. They offer the overlay.
+func repoFileMissingProblems(c WorkingCopy) Problems {
+	have := make(map[string]bool, len(c.Files))
+	for _, f := range c.Files {
+		have[f.Path] = true
+	}
+	var out Problems
+	for _, u := range referencedUses(c.ComposeContents()) {
+		if u.Optional || ValidPath(u.Path) != nil || have[u.Path] {
+			continue
+		}
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeRepoFileMissing, File: u.Compose, Key: u.Key, Action: ActionAddOverlay,
+			Line: u.Line, Col: u.Col, EndLine: u.Line, EndCol: u.Col + max(utf8.RuneCountInString(u.Ref), 1),
+			Message: u.Path + " isn't in the repository.",
+		})
+	}
+	return out
+}
+
+// lfsPointerProblems are the blocking problems of the repository files that are Git LFS pointers, in
+// path order. An overlay file is Bayplan's own and is not judged.
+func lfsPointerProblems(files []File) Problems {
+	var out Problems
+	for _, f := range files {
+		if f.Origin == OriginRepo && IsLFSPointer(f.Content) {
+			out = append(out, Problem{
+				Severity: SeverityError, Code: CodeLFSPointer, File: f.Path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+				Message: f.Path + " is a Git LFS pointer. Bayplan doesn't support Git LFS.",
+			})
+		}
+	}
 	return out
 }
 
@@ -152,15 +277,37 @@ func envSecretLikeValues(files []File) []string {
 	return out
 }
 
-// gitLFSPrefix starts every Git LFS pointer file.
-const gitLFSPrefix = "version https://git-lfs.github.com/spec/v1"
+// The size and the place of a Git LFS pointer: a pointer is a few lines of text that begins with the
+// version line.
+const (
+	gitLFSPrefix       = "version https://git-lfs.github.com/spec/v1"
+	maxLFSPointerBytes = 1024
+	lfsPrefixWindow    = 200
+)
 
-// IsLFSPointer reports whether content is a Git LFS pointer rather than the file it stands for.
-func IsLFSPointer(content []byte) bool { return false }
+// IsLFSPointer reports whether content is a Git LFS pointer rather than the file it stands for: under
+// 1 KiB, and starting with the LFS version line within its first 200 bytes.
+func IsLFSPointer(content []byte) bool {
+	if len(content) == 0 || len(content) >= maxLFSPointerBytes {
+		return false
+	}
+	return bytes.HasPrefix(content[:min(len(content), lfsPrefixWindow)], []byte(gitLFSPrefix))
+}
 
-// SubmoduleProblem is the blocking problem for a path that is a git submodule (D-10).
-func SubmoduleProblem(path string) Problem { return Problem{} }
+// SubmoduleProblem is the blocking problem for a path that is a git submodule (D-10). The importer
+// raises it for a path the repository records as a submodule.
+func SubmoduleProblem(path string) Problem {
+	return Problem{
+		Severity: SeverityError, Code: CodeSubmodule, File: path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: path + " is a submodule. Bayplan doesn't support submodules.",
+	}
+}
 
 // SymlinkOutsideProblem is the blocking problem for a link in the repository that points outside the
-// stack folder (D-10).
-func SymlinkOutsideProblem(path string) Problem { return Problem{} }
+// stack folder (D-10). The importer raises it for a link it will not follow.
+func SymlinkOutsideProblem(path string) Problem {
+	return Problem{
+		Severity: SeverityError, Code: CodeSymlinkOutside, File: path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: path + " is a link to somewhere outside the stack folder.",
+	}
+}

@@ -184,6 +184,9 @@ type walker struct {
 	// git is true for a working copy with named compose files: include and extends then say to add
 	// the file to the stack's compose files (D-26).
 	git bool
+	// uses, when set, collects every file a compose file refers to (see referencedUses), whether or not
+	// the stack has it.
+	uses *[]refUse
 }
 
 // fileName is the path of the compose file being walked.
@@ -444,6 +447,9 @@ func (w *walker) fileRef(key string, v val, optional bool) {
 		width = 1
 	}
 	path := strings.TrimPrefix(ref, "./")
+	if w.uses != nil {
+		*w.uses = append(*w.uses, refUse{Ref: ref, Path: path, Optional: optional, Compose: w.fileName(), Key: key, Line: line, Col: col})
+	}
 	problem := Problem{Severity: SeverityError, File: w.fileName(), Key: key, Line: line, Col: col, EndLine: line, EndCol: col + max(width, 1)}
 	switch {
 	case ValidPath(path) != nil:

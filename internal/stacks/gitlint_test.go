@@ -107,7 +107,7 @@ configs:
 	for _, p := range got {
 		msgs = append(msgs, p.Message)
 	}
-	want := []string{"conf/nginx.conf isn't in the repository.", "db_pw.txt isn't in the repository."}
+	want := []string{"db_pw.txt isn't in the repository.", "conf/nginx.conf isn't in the repository."} // in file order
 	if strings.Join(msgs, "|") != strings.Join(want, "|") {
 		t.Errorf("messages = %q, want %q (the optional env_file is not reported)", msgs, want)
 	}

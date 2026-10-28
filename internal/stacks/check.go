@@ -79,7 +79,18 @@ func MaskProblems(ps Problems, m Masker) {
 	}
 }
 
+// check is checkCore plus the rules that only a stack made from a git repository has (GitLint). They run
+// on whatever the core found, so a repository file that is an LFS pointer is named even when it is the
+// reason the compose file would not load.
 func check(ctx context.Context, in CheckInput) CheckResult {
+	res := checkCore(ctx, in)
+	if hasRepoFiles(in.Copy.Files) {
+		res.Problems = append(res.Problems, GitLint(in.Copy, res.Loaded)...).Sorted()
+	}
+	return res
+}
+
+func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	var res CheckResult
 	if in.Deadline <= 0 {
 		in.Deadline = checkTimeout
@@ -102,6 +113,10 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 		// The raw YAML is judged before the loader sees it: a file that names a file of the
 		// server, or that is too complex to read, is refused here and never loaded.
 		found, refs := PrescanFiles(contents, in.Copy.multiFile(), NewFileSet(in.Copy.Files))
+		if gitCopy {
+			// GitLint names a missing file in the repository's words and offers the overlay.
+			found = withoutMissingReferences(found)
+		}
 		if _, ok := repoDotEnv(in.Copy.Files); ok {
 			// A .env the repository holds is read (D-07), so it is not unused.
 			refs = append(refs, DotEnvFile)
@@ -155,7 +170,10 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	// project has none, so no engine, SDK or converter reads one a second way. An unreadable file
 	// is a blocking error at its key; the rest of the check goes on without it.
 	if err := ResolveEnvFiles(loaded.Project, NewFileSet(in.Copy.Files), layeredValues(in.Copy.Vars, repoEnv)); err != nil {
-		res.Problems = append(res.Problems, envFileProblem(err, idx))
+		// A file a repository stack lacks is GitLint's to report, in the repository's words.
+		if !gitCopy || !errors.Is(err, ErrEnvFileMissing) {
+			res.Problems = append(res.Problems, envFileProblem(err, idx))
+		}
 	}
 	if in.Target == TargetStandalone {
 		res.Problems = append(res.Problems, oversizeObjects(loaded.Project, NewFileSet(in.Copy.Files), in.Copy.Vars, idx)...)
@@ -169,9 +187,6 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	stripBuild(loaded.Project)
 	res.Loaded = loaded
 	res.Problems = append(append(res.Problems, binds...), lintProblems(found, file)...)
-	if gitCopy {
-		res.Problems = append(res.Problems, GitLint(in.Copy, loaded)...)
-	}
 	if in.Target == TargetSwarm {
 		res.Problems = append(res.Problems, swarmNameProblems(loaded.Project, idx, in.Name)...)
 	}
@@ -313,6 +328,15 @@ func tableValues(vars []Var) func(string) (string, bool) {
 		v, ok := table[name]
 		return v, ok
 	}
+}
+
+// withoutMissingReferences drops the file_missing problems the prescan raises for an env_file, a secrets
+// file: or a configs file: (they carry the key that names the file), leaving the ones about the compose
+// files themselves.
+func withoutMissingReferences(ps Problems) Problems {
+	return slices.DeleteFunc(slices.Clone(ps), func(p Problem) bool {
+		return p.Code == CodeFileMissing && p.Key != ""
+	})
 }
 
 // layeredValues is tableValues with the repository's .env under the table: the lookup an env_file's
