@@ -2,15 +2,18 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import {
+  type GitCredential,
   type GitRepo,
   type GitRepoRequest,
   type GitRequestError,
   type GitTestResult,
+  gitCredentialsQuery,
   useCreateGitRepo,
   useTestGitAddress,
   useUpdateGitRepo,
@@ -25,13 +28,16 @@ import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { validateGitAddress } from "@/features/git/address-rules";
+import { addressKind, validateGitAddress } from "@/features/git/address-rules";
+import { CredentialSheet } from "@/features/git/credential-sheet";
 import { useManageReason } from "@/features/git/git-table-parts";
 import { RepoTestResult } from "@/features/git/repo-test-result";
 import { hostKeyState, LastTestCell } from "@/features/git/repository-table";
@@ -47,6 +53,7 @@ import {
   useScopeChoices,
 } from "@/features/git/sheet-parts";
 import { CredentialBadge } from "@/features/registries/credential-badge";
+import { hasPermission, useMe } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -61,6 +68,10 @@ const MAX_NAME = 64;
 
 // The credential select's value for "None (public repository)": the Select cannot hold "".
 export const NO_CREDENTIAL = "none";
+// ...and for the "Add a credential…" item, which opens the credential sheet and is never a value.
+const ADD_CREDENTIAL = "add-credential";
+
+const byName = (a: GitCredential, b: GitCredential) => a.name.localeCompare(b.name);
 
 // Messages are i18n keys, never literals (D-65).
 const schema = z
@@ -161,10 +172,10 @@ interface PlaceholderProps {
   retrying: boolean;
 }
 
-// RepositorySheetPlaceholder stands in for a sheet whose repository is not at hand: field
+// PlaceholderRepositorySheet stands in for a sheet whose repository is not at hand: field
 // skeletons while the list loads, the load error with Retry, or the Gone state for a repository
 // that was deleted while its sheet was open.
-export function RepositorySheetPlaceholder({
+export function PlaceholderRepositorySheet({
   state,
   onClose,
   onRetry,
@@ -230,6 +241,12 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   // it out.
   const [tested, setTested] = useState<{ result: GitTestResult; key: string } | null>(null);
   const { choices, ready } = useScopeChoices("repoSheet");
+  const me = useMe();
+  const credentialList = useQuery(gitCredentialsQuery);
+  // The credential sheet opened over this one, and the credential it just saved (the list reads it
+  // again, but the pick must not wait for that).
+  const [addingCredential, setAddingCredential] = useState(false);
+  const [added, setAdded] = useState<GitCredential | null>(null);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: defaults,
@@ -240,6 +257,39 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
   const scope = form.watch("scope");
   const [url, credentialId, caPem] = form.watch(["url", "credentialId", "caPem"]);
   const pending = create.isPending || update.isPending;
+
+  // The credentials this repository may use (D-02): an environment repository, those of its own
+  // environment and the instance's; an instance repository, only the instance's. Options that do
+  // not apply are not listed.
+  const repoEnvId = envOfScope(repo ? scopeValue(repo) : scope);
+  const usable = useMemo(() => {
+    const all = [...(credentialList.data ?? [])];
+    if (added && !all.some((c) => c.id === added.id)) all.push(added);
+    return {
+      own: repoEnvId ? all.filter((c) => c.scope.envId === repoEnvId).sort(byName) : [],
+      instance: all.filter((c) => c.scope.kind === "instance").sort(byName),
+    };
+  }, [credentialList.data, added, repoEnvId]);
+  const picked = [...usable.own, ...usable.instance].find((c) => c.id === credentialId);
+  // Adding a credential here needs the right to add one in the scope it would have.
+  const canAddCredential = repoEnvId
+    ? hasPermission(me.data, "git.manage", repoEnvId)
+    : hasPermission(me.data, "git.instance");
+  // A hint, not a rule: an SSH key with an https address and a token with an ssh address cannot
+  // work together, but saving never depends on it (D-04).
+  const kind = addressKind(url);
+  const mismatch =
+    picked?.type === "ssh" && kind === "https"
+      ? "sshWithHttps"
+      : picked?.type === "https" && kind === "ssh"
+        ? "httpsWithSsh"
+        : null;
+
+  // A credential picked for another scope does not carry over when the scope changes.
+  useEffect(() => {
+    if (editing || credentialId === NO_CREDENTIAL || !credentialList.isSuccess) return;
+    if (!picked) form.setValue("credentialId", NO_CREDENTIAL);
+  }, [editing, credentialId, credentialList.isSuccess, picked, form]);
 
   const testKey = JSON.stringify([url.trim(), credentialId, caPem.trim()]);
   const latestTestKey = useRef(testKey);
@@ -532,7 +582,16 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                   control={form.control}
                   name="credentialId"
                   render={({ field }) => (
-                    <Select value={field.value} onValueChange={(next) => field.onChange(next)}>
+                    <Select
+                      value={field.value}
+                      onValueChange={(next) => {
+                        // Radix answers "" when the value is set to an item it has not mounted yet
+                        // (a credential just added): that is not a choice.
+                        if (next === "") return;
+                        if (next === ADD_CREDENTIAL) setAddingCredential(true);
+                        else field.onChange(next);
+                      }}
+                    >
                       <SelectTrigger id={`${ids}-credential`} className="w-full max-md:h-11">
                         <SelectValue />
                       </SelectTrigger>
@@ -540,6 +599,47 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                         <SelectItem value={NO_CREDENTIAL}>
                           {t("git.repoSheet.credential.none")}
                         </SelectItem>
+                        {repoEnvId ? (
+                          <>
+                            {usable.own.length > 0 ? (
+                              <SelectGroup>
+                                <SelectLabel>{t("git.repoSheet.credential.thisScope")}</SelectLabel>
+                                {usable.own.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            ) : null}
+                            {usable.instance.length > 0 ? (
+                              <SelectGroup>
+                                <SelectLabel>{t("git.repoSheet.credential.instance")}</SelectLabel>
+                                {usable.instance.map((c) => (
+                                  <SelectItem key={c.id} value={c.id}>
+                                    {c.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            ) : null}
+                          </>
+                        ) : (
+                          usable.instance.map((c) => (
+                            <SelectItem key={c.id} value={c.id}>
+                              {c.name}
+                            </SelectItem>
+                          ))
+                        )}
+                        {/* The saved credential, while the list has not (or no longer) named it. */}
+                        {field.value !== NO_CREDENTIAL && !picked ? (
+                          <SelectItem value={field.value}>
+                            {repo?.credential?.name ?? t("git.repoSheet.credential.gone")}
+                          </SelectItem>
+                        ) : null}
+                        {canAddCredential ? (
+                          <SelectItem value={ADD_CREDENTIAL}>
+                            {t("git.repoSheet.credential.add")}
+                          </SelectItem>
+                        ) : null}
                       </SelectContent>
                     </Select>
                   )}
@@ -547,6 +647,11 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
                 <FieldDescription id={`${ids}-credential-helper`}>
                   {t("git.repoSheet.credential.helper")}
                 </FieldDescription>
+                {mismatch ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t(`git.repoSheet.credential.${mismatch}`)}
+                  </p>
+                ) : null}
                 {errors.credentialId ? (
                   <FieldError id={`${ids}-credentialId-error`}>
                     {errorOf("credentialId")}
@@ -664,6 +769,17 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
         copy="repoSheet"
         onDiscard={close}
       />
+      {addingCredential ? (
+        <CredentialSheet
+          mode="add"
+          scopes={repoEnvId ? [repoEnvId, INSTANCE] : [INSTANCE]}
+          onSaved={(c) => {
+            setAdded(c);
+            form.setValue("credentialId", c.id, { shouldDirty: true });
+          }}
+          onClose={() => setAddingCredential(false)}
+        />
+      ) : null}
     </>
   );
 }

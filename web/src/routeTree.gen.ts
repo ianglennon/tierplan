@@ -22,6 +22,7 @@ import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppStacksRouteImport } from './routes/_app/stacks'
 import { Route as AppEnvEnvIdRouteImport } from './routes/_app/env/$envId'
+import { Route as AppGitCredentialsRouteImport } from './routes/_app/git_.credentials'
 import { Route as AppRegistriesBrowseRouteImport } from './routes/_app/registries_.browse'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app/settings/index'
 import { Route as AppSettingsAboutRouteImport } from './routes/_app/settings/about'
@@ -173,6 +174,11 @@ const AppStacksRoute = AppStacksRouteImport.update({
 const AppEnvEnvIdRoute = AppEnvEnvIdRouteImport.update({
   id: '/env/$envId',
   path: '/env/$envId',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppGitCredentialsRoute = AppGitCredentialsRouteImport.update({
+  id: '/git_/credentials',
+  path: '/git/credentials',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRegistriesBrowseRoute = AppRegistriesBrowseRouteImport.update({
@@ -693,6 +699,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRouteWithChildren
   '/stacks': typeof AppStacksRoute
   '/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/git/credentials': typeof AppGitCredentialsRoute
   '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
   '/settings/access': typeof AppSettingsAccessRouteWithChildren
@@ -793,6 +800,7 @@ export interface FileRoutesByTo {
   '/registries': typeof AppRegistriesRoute
   '/stacks': typeof AppStacksRoute
   '/': typeof AppIndexRoute
+  '/git/credentials': typeof AppGitCredentialsRoute
   '/registries/browse': typeof AppRegistriesBrowseRoute
   '/settings/about': typeof AppSettingsAboutRoute
   '/settings/backup': typeof AppSettingsBackupRoute
@@ -885,6 +893,7 @@ export interface FileRoutesById {
   '/_app/stacks': typeof AppStacksRoute
   '/_app/': typeof AppIndexRoute
   '/_app/env/$envId': typeof AppEnvEnvIdRouteWithChildren
+  '/_app/git_/credentials': typeof AppGitCredentialsRoute
   '/_app/registries_/browse': typeof AppRegistriesBrowseRoute
   '/_app/settings/about': typeof AppSettingsAboutRoute
   '/_app/settings/access': typeof AppSettingsAccessRouteWithChildren
@@ -989,6 +998,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/stacks'
     | '/env/$envId'
+    | '/git/credentials'
     | '/registries/browse'
     | '/settings/about'
     | '/settings/access'
@@ -1089,6 +1099,7 @@ export interface FileRouteTypes {
     | '/registries'
     | '/stacks'
     | '/'
+    | '/git/credentials'
     | '/registries/browse'
     | '/settings/about'
     | '/settings/backup'
@@ -1180,6 +1191,7 @@ export interface FileRouteTypes {
     | '/_app/stacks'
     | '/_app/'
     | '/_app/env/$envId'
+    | '/_app/git_/credentials'
     | '/_app/registries_/browse'
     | '/_app/settings/about'
     | '/_app/settings/access'
@@ -1373,6 +1385,13 @@ declare module '@tanstack/react-router' {
       path: '/env/$envId'
       fullPath: '/env/$envId'
       preLoaderRoute: typeof AppEnvEnvIdRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/git_/credentials': {
+      id: '/_app/git_/credentials'
+      path: '/git/credentials'
+      fullPath: '/git/credentials'
+      preLoaderRoute: typeof AppGitCredentialsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/registries_/browse': {
@@ -2366,6 +2385,7 @@ interface AppRouteChildren {
   AppStacksRoute: typeof AppStacksRoute
   AppIndexRoute: typeof AppIndexRoute
   AppEnvEnvIdRoute: typeof AppEnvEnvIdRouteWithChildren
+  AppGitCredentialsRoute: typeof AppGitCredentialsRoute
   AppRegistriesBrowseRoute: typeof AppRegistriesBrowseRoute
 }
 
@@ -2378,6 +2398,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppStacksRoute: AppStacksRoute,
   AppIndexRoute: AppIndexRoute,
   AppEnvEnvIdRoute: AppEnvEnvIdRouteWithChildren,
+  AppGitCredentialsRoute: AppGitCredentialsRoute,
   AppRegistriesBrowseRoute: AppRegistriesBrowseRoute,
 }
 

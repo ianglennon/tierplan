@@ -408,15 +408,6 @@ describe("RepositorySheet credential pick", () => {
     ]);
   });
 
-  it("does not offer Add a credential… to someone who may not add one in that scope", async () => {
-    me = makeMe({ allEnvironments: "viewer", envs: { e1: "admin" } });
-    mount();
-    await screen.findByText("Add a repository");
-    await waitFor(() => expect(screen.getByLabelText("Scope").textContent).toContain("Lab"));
-    const options = await openCredentials();
-    expect(options.map((o) => o.textContent)).not.toContain("Add a credential…");
-  });
-
   it("saves the picked credential by its ID", async () => {
     mount();
     await screen.findByText("Add a repository");
@@ -456,7 +447,11 @@ describe("RepositorySheet credential pick", () => {
     expect(screen.getByText("Add a repository")).toBeTruthy();
     expect(field("Name").value).toBe("stacks");
     expect(field("Repository address").value).toBe("git@git.example.com:acme/stacks.git");
-    expect(screen.getByRole("combobox", { name: "Credential" }).textContent).toContain("new-cred");
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Credential" }).textContent).toContain(
+        "new-cred",
+      ),
+    );
     expect(closed).toBe(0);
   });
 

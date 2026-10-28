@@ -413,6 +413,8 @@
       "done": "Deleted repository {{name}}.",
       "gone": "{{name}} was already deleted.",
       "permission": "You don't have permission to delete this repository.",
+      "inUse_one": "Used by {{count}} stack. Point it at another repository first.",
+      "inUse_other": "Used by {{count}} stacks. Point them at another repository first.",
       "generic": "Couldn't delete the repository. Try again."
     },
     "deleteCred": {

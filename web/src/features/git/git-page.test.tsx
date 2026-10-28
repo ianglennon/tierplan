@@ -10,11 +10,13 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitPage, type GitSearch, type GitSearchPatch } from "@/features/git/git-page";
 import "@/i18n";
@@ -96,6 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  toast.dismiss();
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -108,6 +111,7 @@ function mount(tab: "repositories" | "credentials" = "repositories") {
       <TestRouter>
         <TooltipProvider>
           <GitPage tab={tab} search={search} onSearchChange={(patch) => changes.push(patch)} />
+          <Toaster />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,

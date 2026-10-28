@@ -2,17 +2,27 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
-import { type GitRepo, gitReposQuery, useTestGitRepo } from "@/api/git";
+import {
+  type GitCredential,
+  type GitRepo,
+  gitCredentialsQuery,
+  gitReposQuery,
+  useTestGitRepo,
+} from "@/api/git";
 import { NoPermission } from "@/components/full-page-state";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MAX_QUERY } from "@/features/containers/list-search";
+import { CredentialSheet, PlaceholderCredentialSheet } from "@/features/git/credential-sheet";
+import { CredentialTable } from "@/features/git/credential-table";
+import { DeleteCredentialDialog } from "@/features/git/delete-credential-dialog";
+import { DeleteRepositoryDialog } from "@/features/git/delete-repository-dialog";
 import type { GitFiltersPatch, ScopeOption } from "@/features/git/git-table-parts";
 import { useFailureReason } from "@/features/git/repo-test-result";
-import { RepositorySheet, RepositorySheetPlaceholder } from "@/features/git/repository-sheet";
+import { PlaceholderRepositorySheet, RepositorySheet } from "@/features/git/repository-sheet";
 import { RepositoryTable } from "@/features/git/repository-table";
 import {
   hasPermission,
@@ -78,6 +88,20 @@ export function GitTabs() {
             {t("git.tabs.repositories")}
           </Link>
         </TabsTrigger>
+        <TabsTrigger
+          value="credentials"
+          asChild
+          className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+        >
+          <Link
+            to="/git/credentials"
+            activeOptions={{ exact: true }}
+            activeProps={{ "data-active": true }}
+            inactiveProps={{ "data-active": undefined }}
+          >
+            {t("git.tabs.credentials")}
+          </Link>
+        </TabsTrigger>
       </TabsList>
     </Tabs>
   );
@@ -112,13 +136,16 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
   const canAddInstance = usePermission("git.instance");
   const canAddEnvironment = useAnyEnvironmentPermission("git.manage");
   const canAdd = canAddInstance || canAddEnvironment;
+  const navigate = useNavigate();
   const repos = useQuery({ ...gitReposQuery, enabled: allowed });
+  const credentials = useQuery({ ...gitCredentialsQuery, enabled: allowed });
   const environments = useQuery({ ...environmentsQuery, enabled: allowed });
   const tester = useTestGitRepo();
   const reason = useFailureReason();
   const [testingId, setTestingId] = useState<string | null>(null);
-  // The repository whose delete confirmation is open.
-  const [, setDeleting] = useState<GitRepo | null>(null);
+  // The repository or credential whose delete confirmation is open.
+  const [deletingRepo, setDeletingRepo] = useState<GitRepo | null>(null);
+  const [deletingCredential, setDeletingCredential] = useState<GitCredential | null>(null);
 
   const me = useMe();
   // The Scope filter lists the environments the user can read git connections on. The server
@@ -134,15 +161,29 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
 
   // ?repo=new is the add form, which only an instance administrator or an environment Admin has.
   // For anyone else the parameter is dropped, so a shared link shows the list.
-  const addDenied = allowed && !canAdd && search.repo === "new";
+  const sheetKey = tab === "repositories" ? "repo" : "credential";
+  const open = search[sheetKey];
+  const addDenied = allowed && !canAdd && open === "new";
   useEffect(() => {
-    if (addDenied) onSearchChange({ repo: undefined });
-  }, [addDenied, onSearchChange]);
+    if (addDenied) onSearchChange({ [sheetKey]: undefined });
+  }, [addDenied, onSearchChange, sheetKey]);
+
+  // The repositories that use each credential, for the credentials' Used by popover.
+  const usedByNames = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const r of repos.data ?? []) {
+      if (!r.credential) continue;
+      out.set(r.credential.id, [...(out.get(r.credential.id) ?? []), r.name]);
+    }
+    for (const names of out.values()) names.sort((a, b) => a.localeCompare(b));
+    return out;
+  }, [repos.data]);
 
   if (!allowed) return <NoPermission />;
 
-  const closeSheet = () => onSearchChange({ repo: undefined });
+  const closeSheet = () => onSearchChange({ [sheetKey]: undefined });
   const listed = repos.data?.find((r) => r.id === search.repo);
+  const listedCredential = credentials.data?.find((c) => c.id === search.credential);
 
   // Test is the row action: it runs the test of the saved repository and shows the result as a
   // toast. A failed test never changes anything else.
@@ -180,33 +221,47 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
   }
 
   let sheet: React.ReactNode = null;
-  if (search.repo === "new") {
-    sheet = canAdd ? <RepositorySheet mode="add" onClose={closeSheet} /> : null;
-  } else if (search.repo) {
-    if (listed) {
+  if (tab === "repositories") {
+    if (search.repo === "new") {
+      sheet = canAdd ? <RepositorySheet mode="add" onClose={closeSheet} /> : null;
+    } else if (search.repo) {
+      if (listed) {
+        sheet = (
+          <RepositorySheet
+            mode={listed.readOnly ? "view" : "edit"}
+            repo={listed}
+            onClose={closeSheet}
+          />
+        );
+      } else {
+        sheet = (
+          <PlaceholderRepositorySheet
+            state={repos.isPending ? "loading" : repos.isError ? "error" : "gone"}
+            onClose={closeSheet}
+            onRetry={() => void repos.refetch()}
+            retrying={repos.isFetching}
+          />
+        );
+      }
+    }
+  } else if (search.credential === "new") {
+    sheet = canAdd ? <CredentialSheet mode="add" onClose={closeSheet} /> : null;
+  } else if (search.credential) {
+    if (listedCredential) {
       sheet = (
-        <RepositorySheet
-          mode={listed.readOnly ? "view" : "edit"}
-          repo={listed}
+        <CredentialSheet
+          mode={listedCredential.readOnly ? "view" : "edit"}
+          credential={listedCredential}
           onClose={closeSheet}
-        />
-      );
-    } else if (repos.isPending || repos.isError) {
-      sheet = (
-        <RepositorySheetPlaceholder
-          state={repos.isPending ? "loading" : "error"}
-          onClose={closeSheet}
-          onRetry={() => void repos.refetch()}
-          retrying={repos.isFetching}
         />
       );
     } else {
       sheet = (
-        <RepositorySheetPlaceholder
-          state="gone"
+        <PlaceholderCredentialSheet
+          state={credentials.isPending ? "loading" : credentials.isError ? "error" : "gone"}
           onClose={closeSheet}
-          onRetry={() => undefined}
-          retrying={false}
+          onRetry={() => void credentials.refetch()}
+          retrying={credentials.isFetching}
         />
       );
     }
@@ -214,22 +269,61 @@ export function GitPage({ tab = "repositories", search, onSearchChange }: GitPag
 
   return (
     <>
-      <RepositoryTable
-        repos={repos.data}
-        isPending={repos.isPending}
-        isError={repos.isError}
-        isFetching={repos.isFetching}
-        refetch={repos.refetch}
-        filters={{ q: search.q, scope: search.scope }}
-        onFiltersChange={onSearchChange as (patch: GitFiltersPatch) => void}
-        scopes={scopes}
-        canAdd={canAdd}
-        banner={<PageBanner />}
-        onAdd={() => onSearchChange({ repo: "new" })}
-        onOpen={(id) => onSearchChange({ repo: id })}
-        onTest={test}
-        onDelete={setDeleting}
-        testingId={testingId}
+      {tab === "repositories" ? (
+        <RepositoryTable
+          repos={repos.data}
+          isPending={repos.isPending}
+          isError={repos.isError}
+          isFetching={repos.isFetching}
+          refetch={repos.refetch}
+          filters={{ q: search.q, scope: search.scope }}
+          onFiltersChange={onSearchChange as (patch: GitFiltersPatch) => void}
+          scopes={scopes}
+          canAdd={canAdd}
+          banner={<PageBanner />}
+          onAdd={() => onSearchChange({ repo: "new" })}
+          onOpen={(id) => onSearchChange({ repo: id })}
+          onOpenCredential={(id) =>
+            void navigate({ to: "/git/credentials", search: { credential: id } })
+          }
+          onTest={test}
+          onDelete={setDeletingRepo}
+          testingId={testingId}
+        />
+      ) : (
+        <CredentialTable
+          credentials={credentials.data}
+          isPending={credentials.isPending}
+          isError={credentials.isError}
+          isFetching={credentials.isFetching}
+          refetch={credentials.refetch}
+          filters={{ q: search.q, scope: search.scope }}
+          onFiltersChange={onSearchChange as (patch: GitFiltersPatch) => void}
+          scopes={scopes}
+          canAdd={canAdd}
+          banner={<PageBanner />}
+          onAdd={() => onSearchChange({ credential: "new" })}
+          onOpen={(id) => onSearchChange({ credential: id })}
+          onDelete={setDeletingCredential}
+          usedByNames={usedByNames}
+        />
+      )}
+      <DeleteRepositoryDialog
+        repository={deletingRepo}
+        open={deletingRepo !== null}
+        onClose={() => setDeletingRepo(null)}
+        onDone={() => {
+          // Deleting the repository whose sheet is open leaves nothing to show.
+          if (deletingRepo && deletingRepo.id === search.repo) closeSheet();
+        }}
+      />
+      <DeleteCredentialDialog
+        credential={deletingCredential}
+        open={deletingCredential !== null}
+        onClose={() => setDeletingCredential(null)}
+        onDone={() => {
+          if (deletingCredential && deletingCredential.id === search.credential) closeSheet();
+        }}
       />
       {sheet}
     </>

@@ -108,44 +108,6 @@ async function runVoid(method: string, call: () => Promise<Answer<unknown>>): Pr
   }
 }
 
-// A read that is not retried when the caller may not see the row: it answers like one that does
-// not exist (404).
-const retryUnlessGone = (count: number, error: unknown) =>
-  count < 2 && !(error instanceof GitRequestError && error.status === 404);
-
-// gitRepoQuery reads one repository, for the sheet a deep link opens. envId is the environment
-// of its layer (absent for an instance repository).
-export const gitRepoQuery = (envId: string | undefined, id: string) =>
-  queryOptions({
-    queryKey: [...GIT_KEY, "repo", id],
-    queryFn: () =>
-      run<GitRepo>("GET", () =>
-        envId
-          ? api.GET("/api/env/{envId}/git/repos/{repoId}", {
-              params: { path: { envId, repoId: id } },
-            })
-          : api.GET("/api/git/repos/{repoId}", { params: { path: { repoId: id } } }),
-      ),
-    retry: retryUnlessGone,
-  });
-
-// gitCredentialQuery reads one credential, as gitRepoQuery does a repository.
-export const gitCredentialQuery = (envId: string | undefined, id: string) =>
-  queryOptions({
-    queryKey: [...GIT_KEY, "credential", id],
-    queryFn: () =>
-      run<GitCredential>("GET", () =>
-        envId
-          ? api.GET("/api/env/{envId}/git/credentials/{credentialId}", {
-              params: { path: { envId, credentialId: id } },
-            })
-          : api.GET("/api/git/credentials/{credentialId}", {
-              params: { path: { credentialId: id } },
-            }),
-      ),
-    retry: retryUnlessGone,
-  });
-
 // What a create is given: the request and the environment of its layer (absent for the instance).
 export interface CreateVariables<B> {
   body: B;
