@@ -15,6 +15,7 @@ package stacks
 
 import (
 	"regexp"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/loader"
 )
@@ -93,24 +94,64 @@ type Var struct {
 }
 
 // WorkingCopy is what the editor holds and a deploy reads: the stack's files and its variables.
+//
+// A stack is made of one compose file or, for a stack that comes from a git repository, several that
+// merge in order like `docker compose -f a -f b` (D-06). ComposeFiles names them; empty means the one
+// file compose.yaml, which is what an inline stack always has.
 type WorkingCopy struct {
 	Files []File
 	Vars  []Var
+	// ComposeFiles are the paths of the compose files, relative to the stack, in merge order: a key of
+	// a later file wins over the same key of an earlier one. Empty means [ComposeFile]. Every path is
+	// one of Files.
+	ComposeFiles []string
 }
 
-// Compose returns the content of compose.yaml, or an empty (never nil) slice when the working
-// copy has none. The slice is never nil because compose-go reads a file from disk when a config
-// file has nil content.
-func (w WorkingCopy) Compose() []byte {
-	for _, f := range w.Files {
-		if f.Path == ComposeFile {
-			if f.Content == nil {
-				return []byte{}
+// ComposeContent is one compose file of a working copy: its path and its content, which is never nil.
+type ComposeContent struct {
+	Path    string
+	Content []byte
+}
+
+// ComposePaths returns the paths of the compose files in merge order. It is never empty: a working
+// copy with no ComposeFiles has the one file compose.yaml.
+func (w WorkingCopy) ComposePaths() []string {
+	if len(w.ComposeFiles) == 0 {
+		return []string{ComposeFile}
+	}
+	return slices.Clone(w.ComposeFiles)
+}
+
+// ComposeContents returns the compose files in merge order, each with its content from Files. The
+// content is never nil, because compose-go reads a file from disk when a config file has nil content;
+// a listed file the working copy does not hold has an empty one.
+func (w WorkingCopy) ComposeContents() []ComposeContent {
+	paths := w.ComposePaths()
+	out := make([]ComposeContent, len(paths))
+	for i, p := range paths {
+		out[i] = ComposeContent{Path: p, Content: []byte{}}
+		for _, f := range w.Files {
+			if f.Path == p {
+				if f.Content != nil {
+					out[i].Content = f.Content
+				}
+				break
 			}
-			return f.Content
 		}
 	}
-	return []byte{}
+	return out
+}
+
+// multiFile reports whether the working copy names its compose files, as a stack from a git
+// repository does. It selects the wording of the include and extends refusals (D-26).
+func (w WorkingCopy) multiFile() bool { return len(w.ComposeFiles) > 0 }
+
+// Compose returns the content of the first compose file (compose.yaml for an inline stack), or an
+// empty (never nil) slice when the working copy has none. The slice is never nil because compose-go
+// reads a file from disk when a config file has nil content. It is for callers that only ever see an
+// inline stack; a reader of a stack that may come from git goes through ComposeContents.
+func (w WorkingCopy) Compose() []byte {
+	return w.ComposeContents()[0].Content
 }
 
 // maxSwarmName is the longest stack name on a swarm. Swarm names a stack's services and networks

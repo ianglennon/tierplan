@@ -31,7 +31,8 @@ var (
 	ErrFileTooLarge = errors.New("stacks: a file is over the size limit")
 	// ErrStackTooLarge means a stack has too many files or too many bytes.
 	ErrStackTooLarge = errors.New("stacks: the stack's files are over the limit")
-	// ErrComposeMissing means a stack has no compose.yaml.
+	// ErrComposeMissing means a stack does not hold one of its compose files: compose.yaml, or a file
+	// named in its list of compose files.
 	ErrComposeMissing = errors.New("stacks: a stack needs a compose.yaml")
 )
 
@@ -77,8 +78,16 @@ func ValidPath(p string) error {
 
 // CheckFiles reports the first rule the files of a stack break, or nil. The error is a *FileError
 // naming the file at fault (none for a rule about the whole stack). The count is judged before
-// anything else, so a request with a great many files is refused without looking at each.
+// anything else, so a request with a great many files is refused without looking at each. The
+// stack's one compose file is compose.yaml.
 func CheckFiles(files []File) error {
+	return CheckFilesFor(files, nil)
+}
+
+// CheckFilesFor is CheckFiles for a stack whose compose files are named (WorkingCopy.ComposeFiles):
+// each must be a valid path and one of files, and none may be listed twice. A listed file the stack
+// does not hold is ErrComposeMissing naming it. Empty composeFiles is the one compose.yaml.
+func CheckFilesFor(files []File, composeFiles []string) error {
 	if len(files) > MaxFiles {
 		return &FileError{Err: ErrStackTooLarge}
 	}
@@ -100,8 +109,19 @@ func CheckFiles(files []File) error {
 	if total > MaxTotalBytes {
 		return &FileError{Err: ErrStackTooLarge}
 	}
-	if _, ok := seen[ComposeFile]; !ok {
-		return &FileError{Path: ComposeFile, Err: ErrComposeMissing}
+	listed := make(map[string]struct{}, len(composeFiles))
+	paths := WorkingCopy{ComposeFiles: composeFiles}.ComposePaths()
+	for _, p := range paths {
+		if err := ValidPath(p); err != nil {
+			return err
+		}
+		if _, dup := listed[p]; dup {
+			return &FileError{Path: p, Err: ErrPathTaken}
+		}
+		listed[p] = struct{}{}
+		if _, ok := seen[p]; !ok {
+			return &FileError{Path: p, Err: ErrComposeMissing}
+		}
 	}
 	return nil
 }

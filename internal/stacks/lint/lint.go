@@ -65,6 +65,9 @@ const (
 // Pos is a range in a stack file: 1-based line and column of its start, and the end.
 type Pos struct {
 	Line, Col, EndLine, EndCol int
+	// File is the compose file the position is in, when the stack has several; empty means the one
+	// compose file.
+	File string
 }
 
 // Index is what lint needs to know about the stored YAML. Paths are dotted: services.web.deploy.mode.

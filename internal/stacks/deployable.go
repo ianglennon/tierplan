@@ -42,6 +42,6 @@ func Deployable(ctx context.Context, in CheckInput) (*Loaded, error) {
 		return res.Loaded, nil
 	}
 	// A masker is costly for a large secret file, so it is built only for a refusal.
-	MaskProblems(res.Problems, NewMasker(in.Copy.Vars, in.Copy.Files))
+	MaskProblems(res.Problems, NewMasker(in.Copy.Vars, in.Copy.maskFiles()))
 	return nil, &NotDeployableError{Problems: res.Problems.Sorted()}
 }
