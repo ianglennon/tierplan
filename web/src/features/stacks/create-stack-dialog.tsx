@@ -4,6 +4,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
@@ -100,7 +101,7 @@ function schemaFor(needsEnvironment: boolean, rule: NameRule) {
       .min(1, "stacks.create.errors.nameRequired")
       .max(rule.max, rule.error)
       .regex(rule.pattern, rule.error),
-    start: z.enum(["example", "empty", "upload"]),
+    start: z.enum(["example", "empty", "upload", "git"]),
   });
 }
 type Values = z.infer<ReturnType<typeof schemaFor>>;
@@ -221,6 +222,7 @@ function CreateStackForm({
   const rule = ruleFor(swarm);
   ruleRef.current = rule;
   const start = form.watch("start");
+  const watchedName = form.watch("name");
 
   // A name that is already filled is judged again with the rule of the target when the target changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: only a change of the target runs it
@@ -343,6 +345,17 @@ function CreateStackForm({
     // The name is checked again: it may have been taken since the field lost focus.
     const verdict = await check(env, values.name, false);
     if (verdict && !show(verdict, values.name, env)) {
+      setSubmitting(false);
+      return;
+    }
+    // A stack from git is made on the next page, once a repository, a ref and a folder are chosen:
+    // nothing is created here.
+    if (values.start === "git") {
+      void navigate({
+        to: "/env/$envId/git-stacks/new",
+        params: { envId: env },
+        search: { name: values.name },
+      });
       setSubmitting(false);
       return;
     }
@@ -520,14 +533,33 @@ function CreateStackForm({
                   }}
                   aria-label={t("stacks.create.start.label")}
                 >
-                  {(["example", "empty", "upload"] as const).map((value) => (
-                    <div key={value} className="flex items-center gap-2 max-md:min-h-11">
-                      <RadioGroupItem value={value} id={`${ids}-start-${value}`} />
-                      <Label htmlFor={`${ids}-start-${value}`}>
-                        {value === "upload"
-                          ? t("stackLists.create.start.upload")
-                          : t(`stacks.create.start.${value}`)}
-                      </Label>
+                  {(["example", "empty", "upload", "git"] as const).map((value) => (
+                    <div key={value} className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2 max-md:min-h-11">
+                        <RadioGroupItem
+                          value={value}
+                          id={`${ids}-start-${value}`}
+                          aria-describedby={value === "git" ? `${ids}-start-git-helper` : undefined}
+                        />
+                        <Label htmlFor={`${ids}-start-${value}`}>
+                          {value === "upload"
+                            ? t("stackLists.create.start.upload")
+                            : t(`stacks.create.start.${value}`)}
+                        </Label>
+                      </div>
+                      {value === "git" ? (
+                        <p
+                          id={`${ids}-start-git-helper`}
+                          className="ms-6 text-sm break-words text-muted-foreground"
+                        >
+                          {t(
+                            watchedName.trim()
+                              ? "stacks.create.start.gitHelper"
+                              : "stacks.create.start.gitHelperNoName",
+                            { name: watchedName.trim() },
+                          )}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
                 </RadioGroup>
@@ -589,7 +621,16 @@ function CreateStackForm({
         <NeedsTooltip reason={noFile ? t("stackLists.create.chooseFileReason") : undefined}>
           <Button type="submit" className="max-md:h-11" disabled={pending}>
             {pending ? <Spinner aria-hidden="true" /> : null}
-            {pending ? t("stacks.create.pending") : t("stacks.create.submit")}
+            {start === "git" ? (
+              <>
+                {t("stacks.create.chooseRepository")}
+                {pending ? null : <ChevronRight aria-hidden="true" data-icon="inline-end" />}
+              </>
+            ) : pending ? (
+              t("stacks.create.pending")
+            ) : (
+              t("stacks.create.submit")
+            )}
           </Button>
         </NeedsTooltip>
       </DialogFooter>

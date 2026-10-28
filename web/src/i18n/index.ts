@@ -22,6 +22,7 @@ import envsettings from "./en/envsettings.json";
 import events from "./en/events.json";
 import fullpage from "./en/fullpage.json";
 import git from "./en/git.json";
+import gitsource from "./en/gitsource.json";
 import grants from "./en/grants.json";
 import images from "./en/images.json";
 import install from "./en/install.json";
@@ -102,7 +103,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff, gitSource) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -127,6 +128,7 @@ export const resources = {
     events,
     fullpage,
     git,
+    gitSource: gitsource,
     grants,
     images,
     install,

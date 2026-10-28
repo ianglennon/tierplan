@@ -48,6 +48,7 @@ import { Route as AppSettingsAccessUsersRouteImport } from './routes/_app/settin
 import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
 import { Route as AppEnvEnvIdConfigsConfigIdRouteImport } from './routes/_app/env/$envId/configs_.$configId'
 import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_app/env/$envId/containers_.$containerId'
+import { Route as AppEnvEnvIdGitStacksNewRouteImport } from './routes/_app/env/$envId/git-stacks.new'
 import { Route as AppEnvEnvIdImagesImageIdRouteImport } from './routes/_app/env/$envId/images_.$imageId'
 import { Route as AppEnvEnvIdNetworksNetworkIdRouteImport } from './routes/_app/env/$envId/networks_.$networkId'
 import { Route as AppEnvEnvIdNodesNodeIdRouteImport } from './routes/_app/env/$envId/nodes_.$nodeId'
@@ -309,6 +310,11 @@ const AppEnvEnvIdContainersContainerIdRoute =
     path: '/containers/$containerId',
     getParentRoute: () => AppEnvEnvIdRoute,
   } as any)
+const AppEnvEnvIdGitStacksNewRoute = AppEnvEnvIdGitStacksNewRouteImport.update({
+  id: '/git-stacks/new',
+  path: '/git-stacks/new',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
 const AppEnvEnvIdImagesImageIdRoute =
   AppEnvEnvIdImagesImageIdRouteImport.update({
     id: '/images_/$imageId',
@@ -725,6 +731,7 @@ export interface FileRoutesByFullPath {
   '/settings/access/': typeof AppSettingsAccessIndexRoute
   '/env/$envId/configs/$configId': typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
+  '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/images/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   '/env/$envId/networks/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/env/$envId/nodes/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
@@ -822,6 +829,7 @@ export interface FileRoutesByTo {
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
   '/settings/access': typeof AppSettingsAccessIndexRoute
+  '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
   '/settings/access/users/$userId': typeof AppSettingsAccessUsersUserIdRoute
@@ -919,6 +927,7 @@ export interface FileRoutesById {
   '/_app/settings/access/': typeof AppSettingsAccessIndexRoute
   '/_app/env/$envId/configs_/$configId': typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
+  '/_app/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/_app/env/$envId/images_/$imageId': typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   '/_app/env/$envId/networks_/$networkId': typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   '/_app/env/$envId/nodes_/$nodeId': typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
@@ -1024,6 +1033,7 @@ export interface FileRouteTypes {
     | '/settings/access/'
     | '/env/$envId/configs/$configId'
     | '/env/$envId/containers/$containerId'
+    | '/env/$envId/git-stacks/new'
     | '/env/$envId/images/$imageId'
     | '/env/$envId/networks/$networkId'
     | '/env/$envId/nodes/$nodeId'
@@ -1121,6 +1131,7 @@ export interface FileRouteTypes {
     | '/settings/access/users'
     | '/env/$envId'
     | '/settings/access'
+    | '/env/$envId/git-stacks/new'
     | '/env/$envId/services/new'
     | '/settings/access/teams/$teamId'
     | '/settings/access/users/$userId'
@@ -1217,6 +1228,7 @@ export interface FileRouteTypes {
     | '/_app/settings/access/'
     | '/_app/env/$envId/configs_/$configId'
     | '/_app/env/$envId/containers_/$containerId'
+    | '/_app/env/$envId/git-stacks/new'
     | '/_app/env/$envId/images_/$imageId'
     | '/_app/env/$envId/networks_/$networkId'
     | '/_app/env/$envId/nodes_/$nodeId'
@@ -1567,6 +1579,13 @@ declare module '@tanstack/react-router' {
       path: '/containers/$containerId'
       fullPath: '/env/$envId/containers/$containerId'
       preLoaderRoute: typeof AppEnvEnvIdContainersContainerIdRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/git-stacks/new': {
+      id: '/_app/env/$envId/git-stacks/new'
+      path: '/git-stacks/new'
+      fullPath: '/env/$envId/git-stacks/new'
+      preLoaderRoute: typeof AppEnvEnvIdGitStacksNewRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/images_/$imageId': {
@@ -2325,6 +2344,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdIndexRoute: typeof AppEnvEnvIdIndexRoute
   AppEnvEnvIdConfigsConfigIdRoute: typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   AppEnvEnvIdContainersContainerIdRoute: typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
+  AppEnvEnvIdGitStacksNewRoute: typeof AppEnvEnvIdGitStacksNewRoute
   AppEnvEnvIdImagesImageIdRoute: typeof AppEnvEnvIdImagesImageIdRouteWithChildren
   AppEnvEnvIdNetworksNetworkIdRoute: typeof AppEnvEnvIdNetworksNetworkIdRouteWithChildren
   AppEnvEnvIdNodesNodeIdRoute: typeof AppEnvEnvIdNodesNodeIdRouteWithChildren
@@ -2354,6 +2374,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdConfigsConfigIdRoute: AppEnvEnvIdConfigsConfigIdRouteWithChildren,
   AppEnvEnvIdContainersContainerIdRoute:
     AppEnvEnvIdContainersContainerIdRouteWithChildren,
+  AppEnvEnvIdGitStacksNewRoute: AppEnvEnvIdGitStacksNewRoute,
   AppEnvEnvIdImagesImageIdRoute: AppEnvEnvIdImagesImageIdRouteWithChildren,
   AppEnvEnvIdNetworksNetworkIdRoute:
     AppEnvEnvIdNetworksNetworkIdRouteWithChildren,

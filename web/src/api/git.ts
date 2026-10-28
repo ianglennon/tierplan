@@ -6,6 +6,7 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 import { api } from "@/api/client";
 import { type ProblemField, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
+import { invalidateStacks } from "@/api/stacks";
 
 export type GitRepo = components["schemas"]["GitRepoBody"];
 export type GitCredential = components["schemas"]["GitCredentialBody"];
@@ -300,4 +301,100 @@ export function useTrustGitHostKey() {
           }),
     ),
   );
+}
+
+export type GitRefs = components["schemas"]["GitRefsBody"];
+export type GitRef = components["schemas"]["GitRefBody"];
+export type GitTree = components["schemas"]["GitTreeBody"];
+export type GitTreeEntry = components["schemas"]["GitTreeEntryBody"];
+export type GitRefKind = components["schemas"]["GitStackCreateRequest"]["refKind"];
+export type GitStackCreateRequest = components["schemas"]["GitStackCreateRequest"];
+export type GitStackCreated = components["schemas"]["GitStackCreateBody"];
+export type GitStackCheckRequest = components["schemas"]["GitStackCheckRequest"];
+export type GitStackCheck = components["schemas"]["GitStackCheckBody"];
+
+// The ["git", "env", envId, "repos"] query: the repositories a stack of this environment can use,
+// its own and the instance's. The From git page offers these and no other.
+export function gitEnvReposQuery(envId: string) {
+  return queryOptions({
+    queryKey: [...GIT_KEY, "env", envId, "repos"],
+    queryFn: async () => {
+      const list = await run("GET", () =>
+        api.GET("/api/env/{envId}/git/repos", { params: { path: { envId } } }),
+      );
+      return list.items ?? [];
+    },
+    refetchOnWindowFocus: true,
+  });
+}
+
+// The ["git", "refs", ...] query: every branch and tag of one repository, read from the git host.
+// It is a read that talks to another machine, so it is not read again on its own and a failure is
+// not retried: the page says why and offers Retry.
+export function gitRefsQuery(envId: string, repoId: string) {
+  return queryOptions({
+    queryKey: [...GIT_KEY, "refs", envId, repoId],
+    queryFn: async () =>
+      run("GET", () =>
+        api.GET("/api/env/{envId}/git/repos/{repoId}/refs", {
+          params: { path: { envId, repoId } },
+        }),
+      ),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// The ["git", "tree", ...] query: the entries of one folder of a repository at a branch, tag or
+// commit. The key holds the ref and the folder, so each folder is its own entry and stepping back
+// up shows the earlier one at once.
+export function gitTreeQuery(
+  envId: string,
+  repoId: string,
+  refKind: GitRefKind,
+  ref: string,
+  path: string,
+) {
+  return queryOptions({
+    queryKey: [...GIT_KEY, "tree", envId, repoId, refKind, ref, path],
+    queryFn: async () =>
+      run("GET", () =>
+        api.GET("/api/env/{envId}/git/repos/{repoId}/tree", {
+          params: { path: { envId, repoId }, query: { refKind, ref, ...(path ? { path } : {}) } },
+        }),
+      ),
+    retry: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+// useCreateGitStack makes a stack from a folder of a repository. Nothing is deployed. It is never
+// retried (a create whose answer was lost may have happened) and reads the stack lists again
+// whatever the answer.
+export function useCreateGitStack(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<GitStackCreated, GitRequestError, GitStackCreateRequest>({
+    mutationFn: (body) =>
+      run("POST", () =>
+        api.POST("/api/env/{envId}/git-stacks", { params: { path: { envId } }, body }),
+      ),
+    retry: false,
+    gcTime: 0,
+    onSettled: () => invalidateStacks(queryClient, envId),
+  });
+}
+
+// useCheckGitStackSource asks what a folder and its compose files would give, saving nothing.
+// The create page's check summary (09-16) is built on it.
+export function useCheckGitStackSource(envId: string) {
+  return useMutation<GitStackCheck, GitRequestError, GitStackCheckRequest>({
+    mutationFn: (body) =>
+      run("POST", () =>
+        api.POST("/api/env/{envId}/git-stacks/check", { params: { path: { envId } }, body }),
+      ),
+    retry: false,
+    gcTime: 0,
+  });
 }

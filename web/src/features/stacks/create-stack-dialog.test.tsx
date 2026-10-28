@@ -123,6 +123,7 @@ function mount(scope: "env" | "global" = "env") {
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/unmanaged-stacks/$name" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/git-stacks/new" }),
     ]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
@@ -286,6 +287,44 @@ describe("CreateStackDialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
     expect(posts()).toEqual([]);
+  });
+});
+
+describe("CreateStackDialog: a stack from git", () => {
+  it("offers A git repository with its helper, and the footer says Choose repository", async () => {
+    mount();
+    const dialog = await open();
+    typeName(dialog, "web");
+    const radio = within(dialog).getByRole("radio", { name: "A git repository" });
+    expect(radio.getAttribute("aria-describedby")).toBeTruthy();
+    fireEvent.click(radio);
+    expect(dialog.textContent).toContain(
+      "Keep web in sync with a folder in a repository. You choose the repository on the next page.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Choose repository" })).toBeTruthy();
+    expect(within(dialog).queryByRole("button", { name: "Create stack" })).toBeNull();
+  });
+
+  it("opens the From git page with the name and creates nothing", async () => {
+    const { router } = mount();
+    const dialog = await open();
+    typeName(dialog, "web");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "A git repository" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose repository" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/git-stacks/new"));
+    expect(router.state.location.search).toEqual({ name: "web" });
+    expect(posts()).toEqual([]);
+  });
+
+  it("still holds the name to the rule of the target", async () => {
+    const { router } = mount();
+    const dialog = await open();
+    await ready(dialog);
+    typeName(dialog, "my stack");
+    fireEvent.click(within(dialog).getByRole("radio", { name: "A git repository" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Choose repository" }));
+    expect(await within(dialog).findByText(SWARM_SENTENCE)).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/");
   });
 });
 
@@ -530,7 +569,8 @@ describe("CreateStackDialog: upload", () => {
   it("offers Upload a compose file as a third way to start", async () => {
     mount();
     const dialog = await open();
-    expect(within(dialog).getAllByRole("radio")).toHaveLength(3);
+    // Starter example, Empty file, Upload a compose file, and A git repository.
+    expect(within(dialog).getAllByRole("radio")).toHaveLength(4);
     expect(within(dialog).getByRole("radio", { name: "Upload a compose file" })).toBeTruthy();
     expect(within(dialog).queryByRole("button", { name: "Choose file" })).toBeNull();
   });

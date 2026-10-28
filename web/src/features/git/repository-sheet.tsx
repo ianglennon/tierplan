@@ -154,14 +154,28 @@ interface RepositorySheetProps {
   repo?: GitRepo;
   // Called when the sheet is closed, whether it was saved or not. The owner removes the sheet.
   onClose: () => void;
+  // Add mode: called with the repository just saved, before the sheet closes. The From git page
+  // uses it to select what was added.
+  onSaved?: (repo: GitRepo) => void;
+  // Add mode: the scope the form starts in, an environment ID or the instance. Left out, the
+  // first place the caller may add one.
+  defaultScope?: string;
 }
 
 // RepositorySheet is the right-hand panel of one git repository (UI-SPEC "Repository sheet"): the
 // add and edit form for someone who may manage it, and the read-only details of any repository
 // the caller may see. Saving never waits for a test (D-04): a failed last test shows a warning and
 // nothing more. No secret is in this form; a credential is picked, never typed here.
-export function RepositorySheet({ mode, repo, onClose }: RepositorySheetProps) {
-  if (mode === "add") return <FormSheet onClose={onClose} />;
+export function RepositorySheet({
+  mode,
+  repo,
+  onClose,
+  onSaved,
+  defaultScope,
+}: RepositorySheetProps) {
+  if (mode === "add") {
+    return <FormSheet onClose={onClose} onSaved={onSaved} defaultScope={defaultScope} />;
+  }
   if (!repo) return null;
   if (mode === "edit" && !repo.readOnly)
     return <FormSheet key={repo.id} repo={repo} onClose={onClose} />;
@@ -227,11 +241,24 @@ interface Refusal {
 
 // FormSheet is the form of a repository: empty to add one, or filled with the stored fields of the
 // one being edited.
-function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
+function FormSheet({
+  repo,
+  onClose,
+  onSaved,
+  defaultScope,
+}: {
+  repo?: GitRepo;
+  onClose: () => void;
+  onSaved?: (repo: GitRepo) => void;
+  defaultScope?: string;
+}) {
   const t = useT();
   const ids = useId();
   const editing = repo !== undefined;
-  const defaults = useMemo(() => (repo ? valuesOf(repo) : DEFAULTS), [repo]);
+  const defaults = useMemo(
+    () => (repo ? valuesOf(repo) : defaultScope ? { ...DEFAULTS, scope: defaultScope } : DEFAULTS),
+    [repo, defaultScope],
+  );
   const create = useCreateGitRepo();
   const update = useUpdateGitRepo();
   const tester = useTestGitAddress();
@@ -420,6 +447,7 @@ function FormSheet({ repo, onClose }: { repo?: GitRepo; onClose: () => void }) {
       {
         onSuccess: (made) => {
           toastSuccess(t("git.repoSheet.success", { name: made.name }));
+          onSaved?.(made);
           close();
         },
         onError: (err) => setRefusal(refusalOf(err)),
