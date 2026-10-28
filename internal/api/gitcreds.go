@@ -34,7 +34,7 @@ type GitCredentialRequest struct {
 	Name     string `json:"name,omitempty" maxLength:"256" doc:"What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid"`
 	Type     string `json:"type,omitempty" maxLength:"32" doc:"https for a token, ssh for a deploy key; 422 type_invalid for anything else"`
 	Username string `json:"username,omitempty" maxLength:"512" doc:"The user name the git server expects with a token (required for https: 422 username_required). Your host decides what it needs here. Defaults to git for an ssh key"`
-	Secret   string `json:"secret,omitempty" maxLength:"65536" doc:"The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters"`
+	Secret   string `json:"secret,omitempty" maxLength:"65536" doc:"The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key Bayplan can read, key_too_large over 16 KiB"`
 }
 
 // GitCredentialBody is a git credential as the browser sees it. It has no secret field: the token
@@ -252,8 +252,8 @@ func registerGitCredentials(r *httpx.Router, d GitDeps) {
 	unavailable := func() error {
 		return httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
 	}
-	const secretDoc = "The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards. " +
-		"422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid); " +
+	const secretDoc = "The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: an ssh credential shows its public key (authorized_keys form, to add to the repository's deploy keys) and SHA256 fingerprint instead. " +
+		"422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid, key_passphrase, key_invalid, key_too_large); " +
 		"409 name_taken when another credential of the scope has the name. "
 
 	httpx.Register(r, huma.Operation{
@@ -419,7 +419,7 @@ func registerGitCredentialManagement(r *httpx.Router, d GitDeps) {
 	}
 	const putDoc = "The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, " +
 		"which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. " +
-		"422 validation_failed names every field at fault with the same codes as adding; 409 name_taken when another credential of the scope has the name. " +
+		"422 validation_failed names every field at fault with the same codes as adding (an ssh key's key_passphrase, key_invalid and key_too_large included); 409 name_taken when another credential of the scope has the name. " +
 		"Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. "
 	const deleteDoc = "Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. " +
 		"One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. "

@@ -144,6 +144,31 @@ func validCredential(in CredentialInput, wantSecret bool) (cleanCredential, []Fi
 		default:
 			out.last4 = registry.Last4(out.Secret)
 		}
+	case TypeSSH:
+		if out.Username == "" {
+			out.Username = "git"
+		}
+		// The key keeps its own line breaks; only the text around it is trimmed, and the one
+		// trailing newline a PEM block ends with is put back.
+		out.Secret = strings.TrimSpace(in.Secret)
+		if out.Secret == "" {
+			if wantSecret {
+				bad("secret", CodeSecretRequired)
+			}
+			break
+		}
+		key, err := ParsePrivateKey(out.Secret)
+		switch {
+		case errors.Is(err, ErrKeyTooLarge):
+			bad("secret", CodeKeyTooLarge)
+		case errors.Is(err, ErrKeyPassphrase):
+			bad("secret", CodeKeyPassphrase)
+		case err != nil:
+			bad("secret", CodeKeyInvalid)
+		default:
+			out.Secret += "\n"
+			out.publicKey, out.fingerprint = key.AuthorizedKey, key.Fingerprint
+		}
 	default:
 		bad("type", CodeTypeInvalid)
 		out.Secret = strings.TrimSpace(in.Secret)

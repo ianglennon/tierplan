@@ -5,6 +5,7 @@ package gitconn
 
 import (
 	"errors"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -38,5 +39,22 @@ type ParsedKey struct {
 // RSA, ECDSA). It returns ErrKeyTooLarge, ErrKeyPassphrase or ErrKeyInvalid, never an error that
 // carries any part of the text.
 func ParsePrivateKey(pemText string) (ParsedKey, error) {
-	return ParsedKey{}, ErrKeyInvalid
+	if len(pemText) > MaxPrivateKeyBytes {
+		return ParsedKey{}, ErrKeyTooLarge
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(pemText))
+	var missing *ssh.PassphraseMissingError
+	switch {
+	case errors.As(err, &missing):
+		return ParsedKey{}, ErrKeyPassphrase
+	case err != nil:
+		// The error is dropped, not wrapped: the parser's text must not become part of ours.
+		return ParsedKey{}, ErrKeyInvalid
+	}
+	pub := signer.PublicKey()
+	return ParsedKey{
+		Signer:        signer,
+		AuthorizedKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))),
+		Fingerprint:   ssh.FingerprintSHA256(pub),
+	}, nil
 }
