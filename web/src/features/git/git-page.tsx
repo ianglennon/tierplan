@@ -40,10 +40,23 @@ export const repositoriesSearchSchema = z.object({
 
 export type RepositoriesSearch = z.output<typeof repositoriesSearchSchema>;
 
+// The Credentials route's search: the same, with the credential whose sheet is open.
+export const credentialsSearchSchema = z.object({
+  q: z.string().min(1).max(MAX_QUERY).optional().catch(undefined),
+  scope: z.string().min(1).max(MAX_ID).optional().catch(undefined),
+  credential: z.string().min(1).max(MAX_ID).optional().catch(undefined),
+});
+
+export type CredentialsSearch = z.output<typeof credentialsSearchSchema>;
+
+// What the page reads from either tab's search.
+export type GitSearch = RepositoriesSearch & CredentialsSearch;
+
 // A change to the search: a key set to undefined leaves the URL.
 export type RepositoriesSearchPatch = {
-  [K in keyof RepositoriesSearch]?: RepositoriesSearch[K] | undefined;
+  [K in keyof GitSearch]?: GitSearch[K] | undefined;
 };
+export type GitSearchPatch = RepositoriesSearchPatch;
 
 // GitTabs are the Repositories and Credentials tabs: Link triggers, so each is a URL of its own.
 export function GitTabs() {
@@ -82,15 +95,17 @@ function PageBanner() {
 }
 
 interface GitPageProps {
-  search: RepositoriesSearch;
-  onSearchChange: (patch: RepositoriesSearchPatch) => void;
+  // The tab the route shows; Repositories unless the route is /git/credentials.
+  tab?: "repositories" | "credentials";
+  search: GitSearch;
+  onSearchChange: (patch: GitSearchPatch) => void;
 }
 
 // GitPage is the Repositories tab of the Git page, which everyone who can read git connections can
 // open. The server limits the rows to what the caller may see; this only decides what to show.
 // Adding is for an instance administrator (git.instance) and an environment Admin (git.manage),
 // and everyone else sees the same table read-only.
-export function GitPage({ search, onSearchChange }: GitPageProps) {
+export function GitPage({ tab = "repositories", search, onSearchChange }: GitPageProps) {
   const t = useT();
   useDocumentTitle(t("git.title"));
   const allowed = useAnyEnvironmentPermission("git.read");

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import type { GitRepo } from "@/api/git";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RepositorySheet } from "@/features/git/repository-sheet";
@@ -23,6 +24,37 @@ let testStatus: number;
 let testBody: unknown;
 let testGate: Promise<void> | null;
 let closed: number;
+let credentials: unknown[];
+let credentialsPosted: Record<string, unknown>[];
+let put: { path: string; body: Record<string, unknown> }[];
+let putStatus: number;
+let putBody: unknown;
+
+const instance = { kind: "instance", envId: null, envName: null };
+const lab = { kind: "environment", envId: "e1", envName: "Lab" };
+
+const credential = (
+  id: string,
+  name: string,
+  scope: unknown,
+  extra: Record<string, unknown> = {},
+) => ({
+  id,
+  name,
+  scope,
+  type: "https",
+  username: "deploy",
+  last4: "WXYZ",
+  fingerprint: "",
+  publicKey: "",
+  readOnly: false,
+  usedBy: 0,
+  lastFailure: null,
+  lastUseAt: null,
+  createdAt: "2026-10-01T10:00:00Z",
+  updatedAt: "2026-10-01T10:00:00Z",
+  ...extra,
+});
 
 const step = (state: string) => ({ state });
 const passed = {
@@ -54,6 +86,11 @@ beforeEach(() => {
   testBody = passed;
   testGate = null;
   closed = 0;
+  credentials = [];
+  credentialsPosted = [];
+  put = [];
+  putStatus = 200;
+  putBody = {};
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -83,6 +120,24 @@ beforeEach(() => {
         );
       }
       if (url.pathname === "/api/git/repos") return Response.json({ items: [] });
+      if (url.pathname === "/api/git/credentials" && req.method === "POST") {
+        const body = (await req.json()) as Record<string, unknown>;
+        credentialsPosted.push(body);
+        return Response.json(
+          {
+            ...credential("cNew", "new-cred", instance),
+            name: body.name,
+            type: body.type,
+            username: body.username,
+          },
+          { status: 201 },
+        );
+      }
+      if (url.pathname === "/api/git/credentials") return Response.json({ items: credentials });
+      if (/^\/api\/(env\/[^/]+\/)?git\/repos\/[^/]+$/.test(url.pathname) && req.method === "PUT") {
+        put.push({ path: url.pathname, body: (await req.json()) as Record<string, unknown> });
+        return Response.json(putBody, { status: putStatus });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -96,11 +151,12 @@ afterEach(() => {
   client.clear();
 });
 
-function Harness() {
+function Harness({ repo }: { repo?: GitRepo }) {
   const [open, setOpen] = useState(true);
   return open ? (
     <RepositorySheet
-      mode="add"
+      mode={repo ? "edit" : "add"}
+      repo={repo}
       onClose={() => {
         closed += 1;
         setOpen(false);
@@ -109,12 +165,12 @@ function Harness() {
   ) : null;
 }
 
-function mount() {
+function mount(repo?: GitRepo) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <Harness />
+          <Harness repo={repo} />
           <Toaster />
         </TooltipProvider>
       </TestRouter>
@@ -305,5 +361,210 @@ describe("RepositorySheet save", () => {
     });
     expect(await screen.findByText("Added repository homelab-stacks.")).toBeTruthy();
     await waitFor(() => expect(closed).toBe(1));
+  });
+});
+
+const openCredentials = async () => {
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Credential" }), { key: "Enter" });
+  return screen.findAllByRole("option");
+};
+
+describe("RepositorySheet credential pick", () => {
+  beforeEach(() => {
+    credentials = [
+      credential("c-inst", "inst-cred", instance),
+      credential("c-lab", "lab-cred", lab),
+      credential("c-prod", "prod-cred", { kind: "environment", envId: "e2", envName: "Prod" }),
+    ];
+  });
+
+  it("lists None, then this scope's credentials, then Instance credentials, for an environment repository", async () => {
+    me = makeMe({ envs: { e1: "admin" } });
+    mount();
+    await screen.findByText("Add a repository");
+    await waitFor(() => expect(screen.getByLabelText("Scope").textContent).toContain("Lab"));
+    const options = await openCredentials();
+    expect(options.map((o) => o.textContent)).toEqual([
+      "None (public repository)",
+      "lab-cred",
+      "inst-cred",
+      "Add a credential…",
+    ]);
+    expect(screen.getByText("This scope")).toBeTruthy();
+    expect(screen.getByText("Instance")).toBeTruthy();
+  });
+
+  it("lists only Instance credentials for an instance repository", async () => {
+    mount();
+    await screen.findByText("Add a repository");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Scope").textContent).toContain("All environments (instance)"),
+    );
+    const options = await openCredentials();
+    expect(options.map((o) => o.textContent)).toEqual([
+      "None (public repository)",
+      "inst-cred",
+      "Add a credential…",
+    ]);
+  });
+
+  it("does not offer Add a credential… to someone who may not add one in that scope", async () => {
+    me = makeMe({ allEnvironments: "viewer", envs: { e1: "admin" } });
+    mount();
+    await screen.findByText("Add a repository");
+    await waitFor(() => expect(screen.getByLabelText("Scope").textContent).toContain("Lab"));
+    const options = await openCredentials();
+    expect(options.map((o) => o.textContent)).not.toContain("Add a credential…");
+  });
+
+  it("saves the picked credential by its ID", async () => {
+    mount();
+    await screen.findByText("Add a repository");
+    type("Name", "stacks");
+    type("Repository address", "https://git.example.com/acme/stacks.git");
+    const options = await openCredentials();
+    fireEvent.click(options.find((o) => o.textContent === "inst-cred") as HTMLElement);
+    save();
+    await waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({
+      name: "stacks",
+      url: "https://git.example.com/acme/stacks.git",
+      credentialId: "c-inst",
+    });
+  });
+
+  it("opens the credential sheet over the repository sheet and returns with the new credential selected", async () => {
+    mount();
+    await screen.findByText("Add a repository");
+    type("Name", "stacks");
+    type("Repository address", "git@git.example.com:acme/stacks.git");
+    const options = await openCredentials();
+    fireEvent.click(options.find((o) => o.textContent === "Add a credential…") as HTMLElement);
+    expect(await screen.findByText("Add a git credential")).toBeTruthy();
+    const credentialSheet = screen.getByText("Add a git credential").closest('[role="dialog"]');
+    expect(credentialSheet).toBeTruthy();
+    const inSheet = within(credentialSheet as HTMLElement);
+    fireEvent.change(inSheet.getByLabelText("Name"), { target: { value: "new-cred" } });
+    fireEvent.change(inSheet.getByLabelText("Username"), { target: { value: "deploy" } });
+    fireEvent.change(inSheet.getByLabelText("Token"), {
+      target: { value: "ghp_0123456789abcdef" },
+    });
+    fireEvent.click(inSheet.getByRole("button", { name: "Save credential" }));
+    await waitFor(() => expect(credentialsPosted).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByText("Add a git credential")).toBeNull());
+    // The repository sheet is still open with its values, and the new credential is picked.
+    expect(screen.getByText("Add a repository")).toBeTruthy();
+    expect(field("Name").value).toBe("stacks");
+    expect(field("Repository address").value).toBe("git@git.example.com:acme/stacks.git");
+    expect(screen.getByRole("combobox", { name: "Credential" }).textContent).toContain("new-cred");
+    expect(closed).toBe(0);
+  });
+
+  it("hints, in muted text, when an SSH key meets an https address and the reverse, and still saves", async () => {
+    credentials = [
+      credential("c-key", "deploy-key", instance, {
+        type: "ssh",
+        last4: "",
+        fingerprint: "SHA256:abc",
+        publicKey: "ssh-ed25519 AAAA",
+      }),
+      credential("c-tok", "token", instance),
+    ];
+    mount();
+    await screen.findByText("Add a repository");
+    type("Name", "stacks");
+    type("Repository address", "https://git.example.com/acme/stacks.git");
+    let options = await openCredentials();
+    fireEvent.click(options.find((o) => o.textContent === "deploy-key") as HTMLElement);
+    expect(
+      await screen.findByText(
+        "This credential is an SSH key. Use an HTTPS token with an https:// address, or change the address to the ssh form.",
+      ),
+    ).toBeTruthy();
+    type("Repository address", "git@git.example.com:acme/stacks.git");
+    expect(screen.queryByText(/This credential is an SSH key\./)).toBeNull();
+    options = await openCredentials();
+    fireEvent.click(options.find((o) => o.textContent === "token") as HTMLElement);
+    expect(
+      await screen.findByText(
+        "This credential is an HTTPS token. Use an SSH deploy key with an ssh address.",
+      ),
+    ).toBeTruthy();
+    const saveButton = screen.getByRole("button", { name: "Save repository" });
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+const savedRepo = (extra: Record<string, unknown> = {}) =>
+  ({
+    id: "r1",
+    name: "stacks",
+    scope: instance,
+    url: "https://git.example.com/acme/stacks.git",
+    host: "git.example.com",
+    caPem: "",
+    hasCa: false,
+    credential: { id: "c-inst", name: "inst-cred", scope: instance },
+    hostKey: null,
+    lastTest: null,
+    readOnly: false,
+    usedBy: 0,
+    createdAt: "2026-10-01T10:00:00Z",
+    updatedAt: "2026-10-01T10:00:00Z",
+    ...extra,
+  }) as GitRepo;
+
+describe("RepositorySheet edit", () => {
+  beforeEach(() => {
+    credentials = [credential("c-inst", "inst-cred", instance)];
+    putBody = savedRepo();
+  });
+
+  it("re-sends the credential when the address moves to another host", async () => {
+    mount(savedRepo());
+    await screen.findByText("Edit stacks");
+    type("Repository address", "https://other.example.com/acme/stacks.git");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(put).toHaveLength(1));
+    expect(put[0]).toEqual({
+      path: "/api/git/repos/r1",
+      body: {
+        name: "stacks",
+        url: "https://other.example.com/acme/stacks.git",
+        caPem: "",
+        credentialId: "c-inst",
+      },
+    });
+  });
+
+  it("sends an empty credentialId when None is picked", async () => {
+    mount(savedRepo());
+    await screen.findByText("Edit stacks");
+    const options = await openCredentials();
+    fireEvent.click(
+      options.find((o) => o.textContent === "None (public repository)") as HTMLElement,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(put).toHaveLength(1));
+    expect(put[0]?.body.credentialId).toBe("");
+  });
+
+  it("words credential_reselect inline on the Credential field", async () => {
+    putStatus = 422;
+    putBody = {
+      title: "Unprocessable Entity",
+      status: 422,
+      type: "validation_failed",
+      errors: [{ message: "credential_reselect", location: "body.credentialId" }],
+    };
+    mount(savedRepo());
+    await screen.findByText("Edit stacks");
+    type("Repository address", "https://other.example.com/acme/stacks.git");
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    const message = await screen.findByText(
+      "The address moved to another server. Pick the credential again, or choose none.",
+    );
+    expect(message.id).toContain("credentialId-error");
+    expect(closed).toBe(0);
   });
 });

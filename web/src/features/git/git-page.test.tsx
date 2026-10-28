@@ -16,11 +16,7 @@ import { setCsrfToken } from "@/api/client";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  GitPage,
-  type RepositoriesSearch,
-  type RepositoriesSearchPatch,
-} from "@/features/git/git-page";
+import { GitPage, type GitSearch, type GitSearchPatch } from "@/features/git/git-page";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -34,8 +30,12 @@ vi.mock("@/components/version-footer", () => ({ VersionFooter: () => null }));
 let client: QueryClient;
 let me: ReturnType<typeof makeMe>;
 let repos: unknown[];
-let search: RepositoriesSearch;
-let changes: RepositoriesSearchPatch[];
+let credentials: unknown[];
+let deleted: string[];
+let deleteStatus: number;
+let deleteBody: unknown;
+let search: GitSearch;
+let changes: GitSearchPatch[];
 
 const instance = { kind: "instance", envId: null, envName: null };
 const lab = { kind: "environment", envId: "e1", envName: "Lab" };
@@ -61,6 +61,10 @@ const repo = (name: string, extra: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   me = makeMe({ instanceAdmin: true });
   repos = [];
+  credentials = [];
+  deleted = [];
+  deleteStatus = 204;
+  deleteBody = undefined;
   search = {};
   changes = [];
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -70,8 +74,14 @@ beforeEach(() => {
     vi.fn(async (req: Request) => {
       const url = new URL(req.url);
       if (url.pathname === "/api/me") return Response.json(me);
+      if (req.method === "DELETE") {
+        deleted.push(url.pathname);
+        return deleteStatus === 204
+          ? new Response(null, { status: 204 })
+          : Response.json(deleteBody, { status: deleteStatus });
+      }
       if (url.pathname === "/api/git/repos") return Response.json({ items: repos });
-      if (url.pathname === "/api/git/credentials") return Response.json({ items: [] });
+      if (url.pathname === "/api/git/credentials") return Response.json({ items: credentials });
       if (url.pathname === "/api/environments") {
         return Response.json({
           items: [
@@ -92,12 +102,12 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(tab: "repositories" | "credentials" = "repositories") {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <GitPage search={search} onSearchChange={(patch) => changes.push(patch)} />
+          <GitPage tab={tab} search={search} onSearchChange={(patch) => changes.push(patch)} />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -181,6 +191,182 @@ describe("GitPage repositories", () => {
     await screen.findByText("alpha");
     fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
     expect(changes).toEqual([{ repo: "new" }]);
+  });
+});
+
+const credential = (name: string, extra: Record<string, unknown> = {}) => ({
+  id: name,
+  name,
+  scope: instance,
+  type: "https",
+  username: "deploy",
+  last4: "wxyz",
+  fingerprint: "",
+  publicKey: "",
+  readOnly: false,
+  usedBy: 0,
+  lastFailure: null,
+  lastUseAt: null,
+  createdAt: "2026-10-01T10:00:00Z",
+  updatedAt: "2026-10-01T10:00:00Z",
+  ...extra,
+});
+
+const openMenu = (name: string) => {
+  const actions = screen.getByRole("button", { name: `Actions for ${name}` });
+  fireEvent.pointerDown(actions, { button: 0, ctrlKey: false, pointerType: "mouse" });
+  fireEvent.click(actions);
+};
+
+describe("GitPage credentials", () => {
+  it("lists instance credentials first, then by name, with the columns of the UI-SPEC", async () => {
+    credentials = [
+      credential("zeta", {
+        type: "ssh",
+        last4: "",
+        fingerprint: "SHA256:abcdefghijklmnopqrstuvwxyz",
+        username: "git",
+      }),
+      credential("env-cred", { scope: lab }),
+      credential("alpha", { usedBy: 2, lastUseAt: "2026-10-01T10:00:00Z" }),
+      credential("refused", { lastFailure: { at: "2026-10-01T10:00:00Z", code: "denied" } }),
+    ];
+    repos = [
+      repo("r-one", { credential: { id: "alpha", name: "alpha", scope: instance } }),
+      repo("r-two", { credential: { id: "alpha", name: "alpha", scope: instance } }),
+    ];
+    mount("credentials");
+    await screen.findByText("alpha");
+    expect(bodyRows().map((r) => within(r).getAllByRole("cell")[0]?.textContent)).toEqual([
+      "alpha",
+      "refused",
+      "zeta",
+      "env-cred",
+    ]);
+    expect(screen.getAllByRole("columnheader").map((h) => h.textContent?.trim())).toEqual([
+      "Name",
+      "Scope",
+      "Type",
+      "Identity",
+      "Secret",
+      "Used by",
+      "Last use",
+      "Actions",
+    ]);
+    const alpha = bodyRows()[0] as HTMLElement;
+    expect(within(alpha).getByText("HTTPS token")).toBeTruthy();
+    expect(within(alpha).getByText("deploy")).toBeTruthy();
+    expect(within(alpha).getByText("••••wxyz")).toBeTruthy();
+    expect(within(alpha).getByText("2 repositories")).toBeTruthy();
+    const zeta = bodyRows()[2] as HTMLElement;
+    expect(within(zeta).getByText("SSH deploy key")).toBeTruthy();
+    expect(within(zeta).getByText("Private key saved")).toBeTruthy();
+    expect(within(zeta).getByText("SHA256:abcdefghijklmnopqrstuvwxyz")).toBeTruthy();
+    expect(within(bodyRows()[1] as HTMLElement).getByText(/Refused/)).toBeTruthy();
+    expect(screen.getByText("4 credentials")).toBeTruthy();
+  });
+
+  it("opens the Add credential form", async () => {
+    credentials = [credential("alpha")];
+    mount("credentials");
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Add credential" }));
+    expect(changes).toEqual([{ credential: "new" }]);
+  });
+
+  it("lists the repositories that use a credential in the Used by popover", async () => {
+    credentials = [credential("alpha", { usedBy: 2 })];
+    repos = [
+      repo("r-one", { credential: { id: "alpha", name: "alpha", scope: instance } }),
+      repo("r-two", { credential: { id: "alpha", name: "alpha", scope: instance } }),
+    ];
+    mount("credentials");
+    await screen.findByText("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Used by alpha" }));
+    expect(await screen.findByText("r-one")).toBeTruthy();
+    expect(screen.getByText("r-two")).toBeTruthy();
+  });
+});
+
+describe("GitPage delete", () => {
+  it("asks 'Delete “name”?' with a destructive button and deletes the repository", async () => {
+    repos = [repo("alpha")];
+    mount();
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    expect(await screen.findByText("Delete “alpha”?")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Stacks can't be created from it any more. No stack uses it, so nothing else changes.",
+      ),
+    ).toBeTruthy();
+    const confirm = screen.getByRole("button", { name: "Delete repository" });
+    expect(confirm.className).toContain("bg-destructive-fill");
+    fireEvent.click(confirm);
+    await waitFor(() => expect(deleted).toEqual(["/api/git/repos/alpha"]));
+    expect(await screen.findByText("Deleted repository alpha.")).toBeTruthy();
+  });
+
+  it("asks 'Delete “name”?' and deletes an environment credential through its route", async () => {
+    credentials = [credential("lab-cred", { scope: lab })];
+    mount("credentials");
+    await screen.findByText("lab-cred");
+    openMenu("lab-cred");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    expect(await screen.findByText("Delete “lab-cred”?")).toBeTruthy();
+    expect(screen.getByText("Nothing uses it, so no repository changes.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Delete credential" }));
+    await waitFor(() => expect(deleted).toEqual(["/api/env/e1/git/credentials/lab-cred"]));
+  });
+
+  it("keeps a credential in use from being deleted and says why", async () => {
+    credentials = [credential("alpha", { usedBy: 2 })];
+    mount("credentials");
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    const item = await screen.findByRole("menuitem", { name: "Delete…" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("Used by 2 repositories. Pick another credential for them first.").length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(item);
+    expect(screen.queryByText("Delete “alpha”?")).toBeNull();
+    expect(deleted).toEqual([]);
+  });
+
+  it("keeps a repository in use from being deleted and says why", async () => {
+    repos = [repo("alpha", { usedBy: 3 })];
+    mount();
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    const item = await screen.findByRole("menuitem", { name: "Delete…" });
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.getAllByText("Used by 3 stacks. Point them at another repository first.").length,
+    ).toBeGreaterThan(0);
+    fireEvent.click(item);
+    expect(deleted).toEqual([]);
+  });
+
+  it("shows the server's refusal inside the dialog when the credential became in use", async () => {
+    credentials = [credential("alpha")];
+    deleteStatus = 409;
+    deleteBody = {
+      title: "Conflict",
+      status: 409,
+      type: "credential_in_use",
+      errors: [{ location: "conflict.count", message: "2" }],
+    };
+    mount("credentials");
+    await screen.findByText("alpha");
+    openMenu("alpha");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete credential" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Used by 2 repositories. Pick another credential for them first.",
+    );
   });
 });
 
