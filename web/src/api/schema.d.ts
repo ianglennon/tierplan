@@ -804,6 +804,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git-stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a stack from a folder of a git repository
+         * @description Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. Needs stacks.create (Admin).
+         */
+        post: operations["createGitStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/git/credentials": {
         parameters: {
             query?: never;
@@ -6368,6 +6388,45 @@ export interface components {
             code: string;
             /** @description Whether the test passed */
             ok: boolean;
+        };
+        GitStackCreateBody: {
+            /** @description The full 40-hex commit ID the ref resolved to; the draft holds the folder's files at this commit */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft the stack was created with
+             */
+            draftVersion: number;
+            /** @description The first 50 names, relative to the folder, of the files the stack does not need: they are not stored */
+            notImported: string[] | null;
+            /**
+             * Format: int64
+             * @description How many files of the folder are not imported
+             */
+            notImportedTotal: number;
+            /** @description What the check of the imported files found. Nothing is deployed, so problems do not stop the creation; they stop the deploy */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The new stack's ID */
+            stackId: string;
+        };
+        GitStackCreateRequest: {
+            /** @description The compose files, relative to the folder, in merge order: a key of a later file wins over the same key of an earlier one. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The stack's name, held to the rule of the environment's target, as for a stack made in Bayplan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash) */
+            name: string;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description The stack's variables. A value here beats the same name in the folder's .env */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
         };
         GitTestFailureBody: {
             /**
@@ -13232,6 +13291,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitStackCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStackCreateBody"];
                 };
             };
             /** @description Error */

@@ -85,6 +85,12 @@ var Tables = map[string]Class{
 	"stack_snapshot_vars":  Included, // value_sealed is re-wrapped by RewrapAll
 	"stack_deploys":        Included,
 
+	// Git-backed stacks (Phase 9): a stack's repository, ref, folder and sync settings travel with it; the
+	// webhook secret is sealed under the stack's ID and registered in vault.SealedColumns. The state of the
+	// last check is derived, so a restored instance checks again rather than trusting a stale answer.
+	"stack_git":       Included, // webhook_secret_sealed is re-wrapped by RewrapAll
+	"stack_git_state": Excluded, // derived state, re-checked after a restore
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

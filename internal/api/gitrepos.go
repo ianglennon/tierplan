@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
@@ -37,6 +38,9 @@ const namesShown = 20
 type GitDeps struct {
 	// Git is the client the tests list a repository with. Nil answers 503 git_unavailable.
 	Git gitx.Client
+	// Sync reads the files of a stack out of a repository folder. Nil answers 503 git_unavailable on the
+	// create-from-repository route.
+	Sync *gitsync.Service
 	// Conns keeps the git credentials and repositories. Nil answers 503 git_unavailable on their
 	// routes, so the routes are always registered.
 	Conns *gitconn.Store

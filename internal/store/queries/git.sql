@@ -72,7 +72,8 @@ INSERT INTO git_repos (
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
        r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
-       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
+       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id,
+       (SELECT count(*) FROM stack_git g WHERE g.repo_id = r.id) AS used_by
 FROM git_repos r
 LEFT JOIN git_credentials c ON c.id = r.credential_id
 WHERE r.id = ?;
@@ -82,7 +83,8 @@ WHERE r.id = ?;
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
        r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
-       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
+       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id,
+       (SELECT count(*) FROM stack_git g WHERE g.repo_id = r.id) AS used_by
 FROM git_repos r
 LEFT JOIN git_credentials c ON c.id = r.credential_id
 ORDER BY (r.env_id IS NOT NULL), r.env_id, r.name, r.id;

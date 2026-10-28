@@ -176,6 +176,15 @@ type Client interface {
 	// commit does not hold, or a path that is a file, is folder_missing. limit caps the entries
 	// returned (500 when it is not positive).
 	ReadDir(ctx context.Context, m MirrorID, sha, dir string, limit int) (Dir, error)
+	// FolderTree answers the hash of the tree object of the folder dir of the commit sha in the mirror m
+	// (the commit's root tree for the root): it changes when any file under the folder changes and not
+	// otherwise. folder_missing and commit_missing as for ReadDir.
+	FolderTree(ctx context.Context, m MirrorID, sha, dir string) (string, error)
+	// ReadFolder reads the files of the folder dir of the commit sha in the mirror m that want accepts
+	// (it is given each file's path relative to the folder), by the commit's ID and from the object
+	// database only; the other files are counted and the first ones named. A symlink or submodule is
+	// reported and never followed. A *LimitError when a file or the files together break limits.
+	ReadFolder(ctx context.Context, m MirrorID, sha, dir string, want func(rel string) bool, limits ReadLimits) (Folder, error)
 }
 
 // Options builds a GoGit.

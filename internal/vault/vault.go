@@ -63,6 +63,9 @@ const (
 	// another snapshot or another name does not open.
 	ContextStackVar  = "stack-var/v1/"  //nolint:gosec // G101: a sealing context label, not a credential
 	ContextStackFile = "stack-file/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A git stack's webhook secret is sealed under the stack's ID (Phase 9), so a value copied into
+	// another stack's row does not open.
+	ContextGitWebhook = "git-webhook/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "bayplan/key-id/v1"

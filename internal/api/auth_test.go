@@ -30,6 +30,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -438,9 +439,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if gitClient == nil {
 		gitClient = gitx.NewGoGit(gitx.Options{Policy: f.registryEgress, Log: log, Root: t.TempDir()})
 	}
-	api.RegisterGit(r, api.GitDeps{
-		Git: gitClient, Conns: gitconn.NewStore(f.st, f.v, f.clk.now), Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log,
-	})
+	gitConns := gitconn.NewStore(f.st, f.v, f.clk.now)
+	gitDeps := api.GitDeps{
+		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log,
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Log: log, Now: f.clk.now}),
+	}
+	api.RegisterGit(r, gitDeps)
+	if f.envSvc != nil && f.agg != nil {
+		api.RegisterGitStacks(r, f.stackDeps, gitDeps)
+	}
 	regStore := registry.NewStore(f.st, f.v, f.clk.now)
 	api.RegisterTags(r, api.TagsDeps{
 		Resolver: registry.NewResolver(regStore), Tags: registry.NewTagService(nil, f.registryEgress, "test", log),

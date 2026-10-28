@@ -31,6 +31,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
@@ -236,6 +237,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
 	api.RegisterGit(r, d.Git)
+	api.RegisterGitStacks(r, d.Stacks, d.Git)
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
@@ -757,6 +759,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// transport is installed once, here, before any route can run a git call (Phase 9, T-09-01).
 	gitx.InstallTransport(registryEgress)
 	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
+	gitConns := gitconn.NewStore(st, vlt, nil)
+	gitDeps := api.GitDeps{
+		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log,
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Log: log}),
+	}
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -830,7 +837,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
 		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, Log: log},
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
-		Git:           api.GitDeps{Git: gitClient, Conns: gitconn.NewStore(st, vlt, nil), Envs: envSvc, Audit: aud, Checker: checker, Log: log},
+		Git:           gitDeps,
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},

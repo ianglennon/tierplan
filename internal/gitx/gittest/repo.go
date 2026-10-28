@@ -93,6 +93,17 @@ func (r *Repo) Commit(tb testing.TB, files map[string]string, msg string) string
 	return sha
 }
 
+// Tree is the hash of the tree object of the folder dir of the commit sha ("" is the commit's root tree), as
+// the git command line reports it.
+func (r *Repo) Tree(tb testing.TB, sha, dir string) string {
+	tb.Helper()
+	spec := sha + "^{tree}"
+	if dir != "" {
+		spec = sha + ":" + dir
+	}
+	return strings.TrimSpace(r.git(tb, r.bare, "rev-parse", spec))
+}
+
 // Symlink makes name in the working tree a symbolic link to target, for the next Commit to pick up.
 func (r *Repo) Symlink(tb testing.TB, name, target string) {
 	tb.Helper()

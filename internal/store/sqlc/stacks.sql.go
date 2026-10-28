@@ -121,7 +121,8 @@ func (q *Queries) FinishStackDeploy(ctx context.Context, arg FinishStackDeployPa
 }
 
 const getDraft = `-- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'
 `
 
@@ -143,12 +144,18 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 		&i.Origin,
 		&i.RestoredFrom,
 		&i.Platforms,
+		&i.GitCommit,
+		&i.GitTree,
+		&i.GitSource,
+		&i.ComposeFiles,
+		&i.SyncTrigger,
 	)
 	return i, err
 }
 
 const getRevision = `-- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
 `
 
@@ -175,6 +182,11 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 		&i.Origin,
 		&i.RestoredFrom,
 		&i.Platforms,
+		&i.GitCommit,
+		&i.GitTree,
+		&i.GitSource,
+		&i.ComposeFiles,
+		&i.SyncTrigger,
 	)
 	return i, err
 }
@@ -254,7 +266,8 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 }
 
 const goodRevisionBefore = `-- name: GoodRevisionBefore :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1
 `
@@ -284,6 +297,11 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 		&i.Origin,
 		&i.RestoredFrom,
 		&i.Platforms,
+		&i.GitCommit,
+		&i.GitTree,
+		&i.GitSource,
+		&i.ComposeFiles,
+		&i.SyncTrigger,
 	)
 	return i, err
 }
@@ -362,8 +380,8 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const insertSnapshotFile = `-- name: InsertSnapshotFile :exec
-INSERT INTO stack_snapshot_files (snapshot_id, path, content, content_sealed, secret)
-VALUES (?, ?, ?, ?, ?)
+INSERT INTO stack_snapshot_files (snapshot_id, path, content, content_sealed, secret, origin)
+VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertSnapshotFileParams struct {
@@ -372,6 +390,7 @@ type InsertSnapshotFileParams struct {
 	Content       string
 	ContentSealed string
 	Secret        int64
+	Origin        string
 }
 
 func (q *Queries) InsertSnapshotFile(ctx context.Context, arg InsertSnapshotFileParams) error {
@@ -381,6 +400,7 @@ func (q *Queries) InsertSnapshotFile(ctx context.Context, arg InsertSnapshotFile
 		arg.Content,
 		arg.ContentSealed,
 		arg.Secret,
+		arg.Origin,
 	)
 	return err
 }
@@ -606,7 +626,8 @@ func (q *Queries) LatestDoneStackDeploysByEnv(ctx context.Context, envID string)
 }
 
 const latestGoodRevision = `-- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1
 `
@@ -629,6 +650,11 @@ func (q *Queries) LatestGoodRevision(ctx context.Context, stackID string) (Stack
 		&i.Origin,
 		&i.RestoredFrom,
 		&i.Platforms,
+		&i.GitCommit,
+		&i.GitTree,
+		&i.GitSource,
+		&i.ComposeFiles,
+		&i.SyncTrigger,
 	)
 	return i, err
 }
@@ -847,7 +873,7 @@ func (q *Queries) ListRevisions(ctx context.Context, arg ListRevisionsParams) ([
 }
 
 const listSnapshotFiles = `-- name: ListSnapshotFiles :many
-SELECT snapshot_id, path, content, content_sealed, secret FROM stack_snapshot_files
+SELECT snapshot_id, path, content, content_sealed, secret, origin FROM stack_snapshot_files
 WHERE snapshot_id = ? ORDER BY path
 `
 
@@ -866,6 +892,7 @@ func (q *Queries) ListSnapshotFiles(ctx context.Context, snapshotID string) ([]S
 			&i.Content,
 			&i.ContentSealed,
 			&i.Secret,
+			&i.Origin,
 		); err != nil {
 			return nil, err
 		}
@@ -1089,6 +1116,52 @@ func (q *Queries) SetRevisionOutcome(ctx context.Context, arg SetRevisionOutcome
 		arg.Outcome,
 		arg.Rendered,
 		arg.Pins,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotComposeFiles = `-- name: SetSnapshotComposeFiles :execrows
+UPDATE stack_snapshots SET compose_files = ? WHERE id = ?
+`
+
+type SetSnapshotComposeFilesParams struct {
+	ComposeFiles string
+	ID           string
+}
+
+// The ordered compose files of a snapshot, a JSON array of paths ('[]' for an inline stack).
+func (q *Queries) SetSnapshotComposeFiles(ctx context.Context, arg SetSnapshotComposeFilesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotComposeFiles, arg.ComposeFiles, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotGit = `-- name: SetSnapshotGit :execrows
+UPDATE stack_snapshots SET git_commit = ?, git_tree = ?, git_source = ?, sync_trigger = ? WHERE id = ?
+`
+
+type SetSnapshotGitParams struct {
+	GitCommit   string
+	GitTree     string
+	GitSource   string
+	SyncTrigger string
+	ID          string
+}
+
+// What a snapshot of a git stack was made from (D-08): the commit, the tree hash of the folder, the source as JSON
+// and what triggered the deploy of a revision (” for a person).
+func (q *Queries) SetSnapshotGit(ctx context.Context, arg SetSnapshotGitParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotGit,
+		arg.GitCommit,
+		arg.GitTree,
+		arg.GitSource,
+		arg.SyncTrigger,
 		arg.ID,
 	)
 	if err != nil {

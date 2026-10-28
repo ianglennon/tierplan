@@ -148,7 +148,8 @@ const getGitRepo = `-- name: GetGitRepo :one
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
        r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
-       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
+       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id,
+       (SELECT count(*) FROM stack_git g WHERE g.repo_id = r.id) AS used_by
 FROM git_repos r
 LEFT JOIN git_credentials c ON c.id = r.credential_id
 WHERE r.id = ?
@@ -173,6 +174,7 @@ type GetGitRepoRow struct {
 	CreatedBy        string
 	CredentialName   string
 	CredentialEnvID  sql.NullString
+	UsedBy           int64
 }
 
 func (q *Queries) GetGitRepo(ctx context.Context, id string) (GetGitRepoRow, error) {
@@ -197,6 +199,7 @@ func (q *Queries) GetGitRepo(ctx context.Context, id string) (GetGitRepoRow, err
 		&i.CreatedBy,
 		&i.CredentialName,
 		&i.CredentialEnvID,
+		&i.UsedBy,
 	)
 	return i, err
 }
@@ -357,7 +360,8 @@ const listGitRepos = `-- name: ListGitRepos :many
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
        r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
-       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
+       COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id,
+       (SELECT count(*) FROM stack_git g WHERE g.repo_id = r.id) AS used_by
 FROM git_repos r
 LEFT JOIN git_credentials c ON c.id = r.credential_id
 ORDER BY (r.env_id IS NOT NULL), r.env_id, r.name, r.id
@@ -382,6 +386,7 @@ type ListGitReposRow struct {
 	CreatedBy        string
 	CredentialName   string
 	CredentialEnvID  sql.NullString
+	UsedBy           int64
 }
 
 // Instance repositories first, then each environment's, by name.
@@ -413,6 +418,7 @@ func (q *Queries) ListGitRepos(ctx context.Context) ([]ListGitReposRow, error) {
 			&i.CreatedBy,
 			&i.CredentialName,
 			&i.CredentialEnvID,
+			&i.UsedBy,
 		); err != nil {
 			return nil, err
 		}

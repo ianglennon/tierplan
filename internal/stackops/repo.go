@@ -111,7 +111,13 @@ type Snapshot struct {
 	// Platforms are the swarm platforms each service of a revision was deployed with, by swarm service name; a
 	// revision stored before they were recorded, a draft and a service sent none have none (G-08-4).
 	Platforms map[string][]swarm.Platform
-	Copy      stacks.WorkingCopy
+	// Git is where the content of a git stack's snapshot came from: the commit, the tree hash of the folder and
+	// the source (D-08). It is the zero value for an inline or adopted stack.
+	Git GitRevision
+	// SyncTrigger is what started the deploy of a revision that no person started: SyncPoll or SyncWebhook. It is
+	// empty for any other snapshot.
+	SyncTrigger string
+	Copy        stacks.WorkingCopy
 	// IsDraft is true for a draft that is stored. It is false for what Draft answers when the stack
 	// has none: the last good revision, or the starter, so the editor always has content.
 	IsDraft bool
@@ -155,7 +161,9 @@ func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		Origin: row.Origin, RestoredFrom: row.RestoredFrom, IsDraft: row.Kind == KindDraft,
-		Platforms: platformsOf(row),
+		Platforms: platformsOf(row), Git: gitRevisionOf(row), SyncTrigger: row.SyncTrigger,
+		// The ordered compose files are a column of the snapshot; fillContent keeps them when it reads the files.
+		Copy: stacks.WorkingCopy{ComposeFiles: composeFilesOf(row.ID, row.ComposeFiles)},
 	}
 }
 
@@ -455,7 +463,7 @@ func (r Repo) fallback(ctx context.Context, q *sqlc.Queries, stackID string) (Sn
 	}
 	snap := snapshotOf(row)
 	snap.IsDraft, snap.Version, snap.BaseSeq = false, 0, row.Seq
-	if snap.Copy, err = r.readContent(ctx, q, snap.ID); err != nil {
+	if err = r.fillContent(ctx, q, &snap); err != nil {
 		return Snapshot{}, err
 	}
 	return snap, nil
@@ -470,7 +478,7 @@ func (r Repo) readDraft(ctx context.Context, q *sqlc.Queries, stackID string) (S
 		return Snapshot{}, fmt.Errorf("read draft: %w", err)
 	}
 	snap := snapshotOf(row)
-	if snap.Copy, err = r.readContent(ctx, q, snap.ID); err != nil {
+	if err = r.fillContent(ctx, q, &snap); err != nil {
 		return Snapshot{}, err
 	}
 	return snap, nil
@@ -500,7 +508,8 @@ func (r Repo) SaveDraft(ctx context.Context, stackID string, version int64, acto
 	}
 	// The server decides which files are secret, not the browser: a file the compose file uses
 	// under secrets:, or one that is secret already, is stored sealed (UI-SPEC Defaults 6).
-	copy.Files = stacks.MarkSecretFiles(copy.Files, draft.Copy.Files)
+	copy = keepGitShape(draft.Copy, copy)
+	copy.Files = stacks.MarkSecretFilesFor(copy.Files, draft.Copy.Files, copy.ComposeFiles)
 	if sameContent(draft.Copy, copy) {
 		return draft, false, nil
 	}
@@ -583,7 +592,8 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 	if err != nil {
 		return Snapshot{}, false, err
 	}
-	copy.Files = stacks.MarkSecretFiles(copy.Files, base.Copy.Files)
+	copy = keepGitShape(base.Copy, copy)
+	copy.Files = stacks.MarkSecretFilesFor(copy.Files, base.Copy.Files, copy.ComposeFiles)
 	if sameContent(base.Copy, copy) {
 		return base, false, nil
 	}
@@ -601,12 +611,16 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 	if err := r.writeContent(ctx, q, id.String(), copy); err != nil {
 		return Snapshot{}, false, err
 	}
+	// A draft made from the last good revision starts from what that revision was made from.
+	if err := r.copyGit(ctx, q, id.String(), base.Git, ""); err != nil {
+		return Snapshot{}, false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, false, fmt.Errorf("commit: %w", err)
 	}
 	return Snapshot{
 		ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: base.BaseSeq, Version: firstSavedVersion,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: normalise(copy), IsDraft: true,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Git: base.Git, Copy: normalise(copy), IsDraft: true,
 	}, true, nil
 }
 
@@ -662,7 +676,7 @@ func (r Repo) RollbackTarget(ctx context.Context, stackID string) (Snapshot, boo
 		return Snapshot{}, false, err
 	}
 	snap := snapshotOf(row)
-	if snap.Copy, err = r.readContent(ctx, r.Store.RQ, snap.ID); err != nil {
+	if err = r.fillContent(ctx, r.Store.RQ, &snap); err != nil {
 		return Snapshot{}, false, err
 	}
 	return snap, true, nil
@@ -929,7 +943,7 @@ func (r Repo) Revision(ctx context.Context, stackID string, seq int64) (Snapshot
 		return Snapshot{}, fmt.Errorf("read revision: %w", err)
 	}
 	snap := snapshotOf(row)
-	if snap.Copy, err = r.readContent(ctx, r.Store.RQ, snap.ID); err != nil {
+	if err = r.fillContent(ctx, r.Store.RQ, &snap); err != nil {
 		return Snapshot{}, err
 	}
 	return snap, nil
@@ -969,7 +983,7 @@ func (r Repo) LatestGoodRevision(ctx context.Context, stackID string) (Snapshot,
 		return Snapshot{}, false, fmt.Errorf("read revision: %w", err)
 	}
 	snap := snapshotOf(row)
-	if snap.Copy, err = r.readContent(ctx, r.Store.RQ, snap.ID); err != nil {
+	if err = r.fillContent(ctx, r.Store.RQ, &snap); err != nil {
 		return Snapshot{}, false, err
 	}
 	return snap, true, nil
@@ -1190,7 +1204,7 @@ func (r Repo) DraftStates(ctx context.Context, envID string) (map[string]bool, e
 // row-bound context. A file is stored as written; a path may appear once.
 func (r Repo) writeContent(ctx context.Context, q *sqlc.Queries, snapshotID string, copy stacks.WorkingCopy) error {
 	for _, f := range copy.Files {
-		row := sqlc.InsertSnapshotFileParams{SnapshotID: snapshotID, Path: f.Path}
+		row := sqlc.InsertSnapshotFileParams{SnapshotID: snapshotID, Path: f.Path, Origin: string(f.Origin)}
 		if f.Secret {
 			sealed, err := r.Vault.Seal(fileContext(snapshotID, f.Path), f.Content)
 			if err != nil {
@@ -1219,6 +1233,47 @@ func (r Repo) writeContent(ctx context.Context, q *sqlc.Queries, snapshotID stri
 			return fmt.Errorf("store variable %s: %w", v.Name, err)
 		}
 	}
+	composeFiles, err := json.Marshal(nonNil(copy.ComposeFiles))
+	if err != nil {
+		return fmt.Errorf("encode the compose files: %w", err)
+	}
+	if _, err := q.SetSnapshotComposeFiles(ctx, sqlc.SetSnapshotComposeFilesParams{ComposeFiles: string(composeFiles), ID: snapshotID}); err != nil {
+		return fmt.Errorf("store the compose files: %w", err)
+	}
+	return nil
+}
+
+// nonNil returns s, or an empty slice for nil, so it encodes as [] and never as null.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// composeFilesOf reads the stored compose file list of a snapshot. A list that is not valid JSON reads as none and
+// is logged: a snapshot must stay readable, and none is the one compose.yaml of an inline stack.
+func composeFilesOf(snapshotID, raw string) []string {
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		slog.Default().Warn("could not read the compose files of a stack snapshot", "snapshot", snapshotID, "error", err)
+		return nil
+	}
+	return out
+}
+
+// fillContent reads the files and variables of snap and puts them in snap.Copy, keeping the compose file list
+// snapshotOf read from the row.
+func (r Repo) fillContent(ctx context.Context, q *sqlc.Queries, snap *Snapshot) error {
+	wc, err := r.readContent(ctx, q, snap.ID)
+	if err != nil {
+		return err
+	}
+	wc.ComposeFiles = snap.Copy.ComposeFiles
+	snap.Copy = wc
 	return nil
 }
 
@@ -1230,7 +1285,7 @@ func (r Repo) readContent(ctx context.Context, q *sqlc.Queries, snapshotID strin
 		return wc, fmt.Errorf("read files: %w", err)
 	}
 	for _, f := range files {
-		file := stacks.File{Path: f.Path, Content: []byte(f.Content), Secret: f.Secret != 0}
+		file := stacks.File{Path: f.Path, Content: []byte(f.Content), Secret: f.Secret != 0, Origin: stacks.FileOrigin(f.Origin)}
 		if file.Secret {
 			plain, err := r.Vault.Open(fileContext(snapshotID, f.Path), f.ContentSealed)
 			if err != nil {
@@ -1262,8 +1317,9 @@ func (r Repo) readContent(ctx context.Context, q *sqlc.Queries, snapshotID strin
 // nil, so two working copies with the same meaning compare and store the same.
 func normalise(wc stacks.WorkingCopy) stacks.WorkingCopy {
 	out := stacks.WorkingCopy{
-		Files: slices.Clone(wc.Files),
-		Vars:  slices.Clone(wc.Vars),
+		Files:        slices.Clone(wc.Files),
+		Vars:         slices.Clone(wc.Vars),
+		ComposeFiles: slices.Clone(wc.ComposeFiles),
 	}
 	for i := range out.Files {
 		if out.Files[i].Content == nil {
@@ -1279,6 +1335,6 @@ func normalise(wc stacks.WorkingCopy) stacks.WorkingCopy {
 func sameContent(a, b stacks.WorkingCopy) bool {
 	a, b = normalise(a), normalise(b)
 	return slices.EqualFunc(a.Files, b.Files, func(x, y stacks.File) bool {
-		return x.Path == y.Path && x.Secret == y.Secret && string(x.Content) == string(y.Content)
-	}) && slices.Equal(a.Vars, b.Vars)
+		return x.Path == y.Path && x.Secret == y.Secret && x.Origin == y.Origin && string(x.Content) == string(y.Content)
+	}) && slices.Equal(a.Vars, b.Vars) && slices.Equal(a.ComposeFiles, b.ComposeFiles)
 }

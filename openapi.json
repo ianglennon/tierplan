@@ -4932,6 +4932,123 @@
         ],
         "type": "object"
       },
+      "GitStackCreateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full 40-hex commit ID the ref resolved to; the draft holds the folder's files at this commit",
+            "type": "string"
+          },
+          "draftVersion": {
+            "description": "The version of the draft the stack was created with",
+            "format": "int64",
+            "type": "integer"
+          },
+          "notImported": {
+            "description": "The first 50 names, relative to the folder, of the files the stack does not need: they are not stored",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "notImportedTotal": {
+            "description": "How many files of the folder are not imported",
+            "format": "int64",
+            "type": "integer"
+          },
+          "problems": {
+            "description": "What the check of the imported files found. Nothing is deployed, so problems do not stop the creation; they stop the deploy",
+            "items": {
+              "$ref": "#/components/schemas/StackProblemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "stackId": {
+            "description": "The new stack's ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stackId",
+          "draftVersion",
+          "commit",
+          "notImported",
+          "notImportedTotal",
+          "problems"
+        ],
+        "type": "object"
+      },
+      "GitStackCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "composeFiles": {
+            "description": "The compose files, relative to the folder, in merge order: a key of a later file wins over the same key of an earlier one. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "name": {
+            "description": "The stack's name, held to the rule of the environment's target, as for a stack made in Bayplan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash)",
+            "maxLength": 255,
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "vars": {
+            "description": "The stack's variables. A value here beats the same name in the folder's .env",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "repoId",
+          "refKind",
+          "ref",
+          "composeFiles"
+        ],
+        "type": "object"
+      },
       "GitTestFailureBody": {
         "additionalProperties": false,
         "properties": {
@@ -20644,6 +20761,68 @@
         "summary": "The recent Docker events of an environment",
         "tags": [
           "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/git-stacks": {
+      "post": {
+        "description": "Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. Needs stacks.create (Admin).",
+        "operationId": "createGitStack",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitStackCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitStackCreateBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Create a stack from a folder of a git repository",
+        "tags": [
+          "stacks",
+          "git"
         ]
       }
     },

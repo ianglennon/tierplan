@@ -645,6 +645,33 @@ func stackNameTakenProblem(name, envName string) error {
 	}
 }
 
+// stackNameFree refuses a name the environment already uses. A name the environment uses for something Bayplan does
+// not manage is refused (D-12): Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's
+// own stacks holds is 409 stack_name_taken, and its objects are never a clash.
+func (d StacksDeps) stackNameFree(ctx context.Context, envID, envName string, target stacks.Target, name string) error {
+	own, err := d.repo().Stacks(ctx, envID)
+	if err != nil {
+		return stackInternal(d, "list", envID, err)
+	}
+	if stackNameTaken(own, target, name) {
+		return stackNameTakenProblem(name, envName)
+	}
+	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+		foreign, err := d.ops().ForeignStack(ctx, envID, target, name, "")
+		if err != nil {
+			return snapshotProblem(d.Log, envID, err)
+		}
+		if foreign {
+			return &huma.ErrorModel{
+				Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+				Detail: stackops.NameClashMessage(name),
+				Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
+			}
+		}
+	}
+	return nil
+}
+
 func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*StackDetailOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
@@ -674,28 +701,8 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemFileTooLarge, "A file is at most 1 MiB.")
 	}
 
-	// A name the environment already uses for something Bayplan does not manage is refused (D-12):
-	// Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's own
-	// stacks holds is the create's own refusal below, and its objects are never a clash.
-	own, err := d.repo().Stacks(ctx, env.ID)
-	if err != nil {
-		return nil, stackInternal(d, "list", env.ID, err)
-	}
-	if stackNameTaken(own, target, name) {
-		return nil, stackNameTakenProblem(name, env.Name)
-	}
-	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
-		foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
-		if err != nil {
-			return nil, snapshotProblem(d.Log, env.ID, err)
-		}
-		if foreign {
-			return nil, &huma.ErrorModel{
-				Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-				Detail: stackops.NameClashMessage(name),
-				Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
-			}
-		}
+	if err := d.stackNameFree(ctx, env.ID, env.Name, target, name); err != nil {
+		return nil, err
 	}
 
 	st, _, err := d.repo().CreateStack(ctx, env.ID, name, target, p.Name, stacks.WorkingCopy{

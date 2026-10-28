@@ -274,6 +274,48 @@ type StackDeploy struct {
 	Code          string
 }
 
+type StackGit struct {
+	StackID                string
+	RepoID                 string
+	RefKind                string
+	Ref                    string
+	Folder                 string
+	ComposeFiles           string
+	PollEnabled            int64
+	PollIntervalS          int64
+	AutoDeploy             int64
+	AutoDeployPausedReason string
+	AutoDeployPausedSeq    int64
+	WebhookFlavour         string
+	WebhookPlacement       string
+	WebhookTokenHash       string
+	WebhookSecretSealed    string
+	WebhookSecretLast4     string
+	WebhookCreatedBy       string
+	WebhookLastAt          sql.NullInt64
+	WebhookLastResult      string
+	PendingConvert         int64
+	CreatedAt              int64
+	UpdatedAt              int64
+}
+
+type StackGitState struct {
+	StackID             string
+	DeployedCommit      string
+	DeployedTree        string
+	HeadCommit          string
+	HeadTree            string
+	Behind              int64
+	Status              string
+	ReasonCode          string
+	ReasonDetail        string
+	CheckedAt           sql.NullInt64
+	ErrorSince          sql.NullInt64
+	ConsecutiveFailures int64
+	PendingCommit       string
+	NextCheckAt         sql.NullInt64
+}
+
 type StackSnapshot struct {
 	ID           string
 	StackID      string
@@ -289,6 +331,11 @@ type StackSnapshot struct {
 	Origin       string
 	RestoredFrom int64
 	Platforms    string
+	GitCommit    string
+	GitTree      string
+	GitSource    string
+	ComposeFiles string
+	SyncTrigger  string
 }
 
 type StackSnapshotFile struct {
@@ -297,6 +344,7 @@ type StackSnapshotFile struct {
 	Content       string
 	ContentSealed string
 	Secret        int64
+	Origin        string
 }
 
 type StackSnapshotVar struct {
