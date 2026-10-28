@@ -1,0 +1,66 @@
+{
+  "stackAdoptCheck": {
+    "card": {
+      "title": "What happens on the first deploy",
+      "checking": "Checking {{name}}…"
+    },
+    "clean": "Nothing will change except Bayplan's ownership labels.",
+    "gaps": {
+      "title_one": "{{count}} difference will change on the first deploy.",
+      "title_other": "{{count}} differences will change on the first deploy.",
+      "sub": "You can still adopt. Nothing changes until you deploy.",
+      "caption": "Differences in {{name}}",
+      "running": "Running now",
+      "after": "After the first deploy",
+      "region": "Differences by service"
+    },
+    "ownershipOnly": {
+      "services_one": "{{count}} service will be recreated to take Bayplan ownership labels (brief restart).",
+      "services_other": "{{count}} services will be recreated to take Bayplan ownership labels (brief restart).",
+      "containers_one": "{{count}} container will be recreated to take Bayplan ownership labels (brief restart).",
+      "containers_other": "{{count}} containers will be recreated to take Bayplan ownership labels (brief restart).",
+      "show": "Show services"
+    },
+    "error": {
+      "title": "Couldn't check {{name}} against what's running.",
+      "body": "Check the connection and try again. Nothing was changed.",
+      "busy": "Too many checks are running. Try again in a moment.",
+      "retry": "Retry check"
+    },
+    "off": {
+      "failed": "Adopt is off until {{name}} has been checked."
+    },
+    "ownership": {
+      "title": "How the pieces are treated",
+      "caption": "How each piece of {{name}} is treated",
+      "counts": {
+        "networks_one": "{{count}} network",
+        "networks_other": "{{count}} networks",
+        "volumes_one": "{{count}} volume",
+        "volumes_other": "{{count}} volumes",
+        "secrets_one": "{{count}} secret",
+        "secrets_other": "{{count}} secrets",
+        "configs_one": "{{count}} config",
+        "configs_other": "{{count}} configs"
+      },
+      "columns": {
+        "kind": "Kind",
+        "name": "Name",
+        "treatment": "Treatment"
+      },
+      "kind": {
+        "network": "Network",
+        "volume": "Volume",
+        "secret": "Secret",
+        "config": "Config"
+      },
+      "owned": "Owned by the stack",
+      "external": "External. Bayplan doesn't change it.",
+      "notStackOwned": "Not stack-owned. Move it to a stack file to rotate it."
+    },
+    "policy": {
+      "title": "Deploying this stack needs Admin",
+      "body": "It uses settings that need Admin: {{list}}. Adopting is fine, but later deploys need an Admin."
+    }
+  }
+}

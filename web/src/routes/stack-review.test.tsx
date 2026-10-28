@@ -316,7 +316,12 @@ describe("from the editor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and deploy" }));
     expect(await screen.findByRole("heading", { name: "Review web" })).toBeTruthy();
     expect(router.state.location.pathname).toBe("/env/e1/stacks/s1/review");
-    expect(sent.filter((s) => s.method === "PUT")).toHaveLength(1);
+    // Only the draft's PUTs count: on a loaded host the test can outlast the 2 s after which the
+    // environment is recorded as recently opened, which is a PUT of its own.
+    const draftPuts = sent.filter(
+      (s) => s.method === "PUT" && s.path === "/api/env/e1/stacks/s1/draft",
+    );
+    expect(draftPuts).toHaveLength(1);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 

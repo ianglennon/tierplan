@@ -1,0 +1,23 @@
+{
+  "stackRevertsDrift": {
+    "title_one": "This deploy reverts {{count}} change made outside the stack",
+    "title_other": "This deploy reverts {{count}} changes made outside the stack",
+    "title_update_one": "This update reverts {{count}} change made outside the stack",
+    "title_update_other": "This update reverts {{count}} changes made outside the stack",
+    "title_rollback_one": "This roll back reverts {{count}} change made outside the stack",
+    "title_rollback_other": "This roll back reverts {{count}} changes made outside the stack",
+    "body": "Your draft puts these back to what was deployed. Check that none of them is a hot-fix you want to keep.",
+    "body_rollback": "The revision you're rolling back to puts these back to what was deployed. Check that none of them is a hot-fix you want to keep.",
+    "list": "Changes made outside the stack that this deploy reverts",
+    "list_rollback": "Changes made outside the stack that this roll back reverts",
+    "arrow": "to",
+    "unset": "not set",
+    "created": "no longer runs. The deploy creates it again.",
+    "removed": "runs under this stack but isn't in the deployed revision or your draft. The deploy removes it.",
+    "showAll": "Show all {{count}}",
+    "showFewer": "Show fewer",
+    "unavailable": "Couldn't check for drift; the changes below are still accurate.",
+    "summary": "Reverts drift: {{count}}",
+    "drifted": "Drifted"
+  }
+}

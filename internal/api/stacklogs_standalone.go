@@ -53,14 +53,15 @@ func (c stackContainer) live() bool {
 	return false
 }
 
-// containersOf reads the containers the stack owns from a host's list: those of its Compose
-// project that carry its ID, one-off containers left out.
+// containersOf reads the containers the stack owns from a host's list, by Ownership: those of its Compose
+// project that carry its ID (every one of the project for a stack found by its labels), and those the host CLI
+// added to the project without Bayplan's labels (docker compose up --scale) beside a container the stack owns
+// (stackops.SplitProject, G-08-6). Another stack's containers and a project the stack owns none of stay out, and
+// so do one-off containers and containers with no service label.
 func containersOf(st stackops.Stack, all []dockerx.ContainerRow) []stackContainer {
+	mine, unlabelled, _ := stackops.SplitProject(stackops.OwnershipOf(st), all, func(c dockerx.ContainerRow) map[string]string { return c.Labels })
 	var out []stackContainer
-	for _, c := range all {
-		if c.Labels[stacks.LabelComposeProject] != st.Name || c.Labels[stacks.LabelStackID] != st.ID {
-			continue
-		}
+	for _, c := range append(mine, unlabelled...) {
 		if strings.EqualFold(c.Labels[labelComposeOneOff], "true") {
 			continue
 		}

@@ -382,3 +382,71 @@ func TestAStoredShellLimitOutsideItsRangeOrNotANumberLoadsAsTheDefault(t *testin
 		t.Fatalf("loaded = %v and %d, want the defaults", i.ShellIdle(), i.ShellCap())
 	}
 }
+
+func setKept(t *testing.T, i *instance.Instance, st *store.Store, n int) error {
+	t.Helper()
+	tx, err := st.Write.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := i.SetStackRevisionsKeptTx(context.Background(), tx, st.Q, n); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return nil
+}
+
+func TestStackRevisionsKeptBounds(t *testing.T) {
+	i, st := load(t, config.Config{})
+	if i.StackRevisionsKept() != 20 {
+		t.Fatalf("default = %d, want 20", i.StackRevisionsKept())
+	}
+	// The ends of the range are stored; the values just outside are refused and never cached.
+	for _, n := range []int{5, 200} {
+		if err := setKept(t, i, st, n); err != nil {
+			t.Fatalf("%d was refused: %v", n, err)
+		}
+	}
+	for _, n := range []int{4, 201, 0, -1} {
+		if err := setKept(t, i, st, n); err == nil {
+			t.Errorf("%d was stored, want a refusal", n)
+		}
+	}
+	i.ApplyStackRevisionsKept(4)
+	i.ApplyStackRevisionsKept(201)
+	if i.StackRevisionsKept() != 20 {
+		t.Fatalf("after Apply of out-of-range values = %d, want the default kept", i.StackRevisionsKept())
+	}
+}
+
+func TestStackRevisionsKeptPersistsAndAppliesOnlyAfterTheCommit(t *testing.T) {
+	i, st := load(t, config.Config{})
+	if err := setKept(t, i, st, 7); err != nil {
+		t.Fatal(err)
+	}
+	if i.StackRevisionsKept() != 20 {
+		t.Fatalf("before Apply = %d, want the cache untouched", i.StackRevisionsKept())
+	}
+	i.ApplyStackRevisionsKept(7)
+	if i.StackRevisionsKept() != 7 {
+		t.Fatalf("after Apply = %d, want 7", i.StackRevisionsKept())
+	}
+	if again := mustLoad(t, st, config.Config{}); again.StackRevisionsKept() != 7 {
+		t.Fatalf("reloaded = %d, want 7", again.StackRevisionsKept())
+	}
+}
+
+func TestAStoredStackRevisionsKeptOutsideItsRangeOrNotANumberLoadsAsTheDefault(t *testing.T) {
+	for _, v := range []string{"3", "9999", "many"} {
+		st := storetest.New(t)
+		if _, err := st.Write.Exec(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, 0)`, instance.SettingStackRevisionsKept, v); err != nil {
+			t.Fatal(err)
+		}
+		if i := mustLoad(t, st, config.Config{}); i.StackRevisionsKept() != 20 {
+			t.Errorf("stored %q loaded as %d, want the default 20", v, i.StackRevisionsKept())
+		}
+	}
+}

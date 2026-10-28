@@ -32,14 +32,39 @@ func ObjectHash(name string, content []byte) string {
 // <stack>_<name>_<hash>, where hash is ObjectHash(name, content). The <stack>_<name> part is cut
 // so that the whole name fits the 64 characters a swarm allows, and any trailing "_", "." or "-"
 // the cut leaves is dropped, so the name still ends in a letter or digit before "_<hash>" and
-// matches the rule the agent holds object names to. The hash is never cut. Stack names start with
-// a letter or digit (NameValid), so the cut part is never empty.
+// matches the rule the agent holds object names to. The hash is never cut.
+//
+// The stack part is made safe first: a character outside letters, digits, "_", "." and "-" becomes "-",
+// and leading characters that are not a letter or digit are dropped (a stack part left empty becomes
+// "stack"). The stack-name rule (NameValid) already keeps such characters out and makes every name start
+// with a letter or digit, so for a valid name this changes nothing; it is the defence in depth that keeps a
+// hashed name inside the agent's rule for any input (D-48, T-08-38).
 func ObjectName(stack, name string, content []byte) (full, hash string) {
 	hash = ObjectHash(name, content)
 	suffix := "_" + hash
-	prefix := stack + "_" + name
+	prefix := safeStackPart(stack) + "_" + name
 	if room := maxObjectName - len(suffix); len(prefix) > room {
 		prefix = strings.TrimRight(prefix[:room], "_.-")
 	}
 	return prefix + suffix, hash
+}
+
+// safeStackPart is the stack's name as the first part of an object name: see ObjectName.
+func safeStackPart(stack string) string {
+	var b strings.Builder
+	for _, r := range stack {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.TrimLeftFunc(b.String(), func(r rune) bool {
+		return r == '_' || r == '.' || r == '-'
+	})
+	if out == "" {
+		return "stack"
+	}
+	return out
 }

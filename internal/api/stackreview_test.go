@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -289,8 +291,10 @@ func TestReviewHidesASecretThatChangedAndNamesItsPath(t *testing.T) {
 	}
 	for _, side := range []map[string]any{rv.Services[0].Current, rv.Services[0].Next} {
 		b, _ := json.Marshal(side)
-		if !strings.Contains(string(b), `API_KEY=\u003chidden\u003e`) || !strings.Contains(string(b), "MODE=prod") {
-			t.Errorf("a side = %s, want API_KEY hidden and MODE shown", b)
+		// An Operator holds no secrets.reveal, so every value of the running service is withheld, not only the stack's
+		// secret ones (D-47); the names stay.
+		if !strings.Contains(string(b), `API_KEY=\u003chidden\u003e`) || !strings.Contains(string(b), `MODE=\u003chidden\u003e`) || strings.Contains(string(b), "MODE=prod") {
+			t.Errorf("a side = %s, want every environment value hidden and the names shown", b)
 		}
 	}
 }
@@ -533,8 +537,13 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 	list := answerOf[struct {
 		Items []stackAnswer `json:"items"`
 	}](t, admin.do(http.MethodGet, "stacks", ""))
-	if len(list.Items) != 0 {
-		t.Errorf("stacks = %+v, a refused create stores nothing", list.Items)
+	// The foreign stack is listed as unmanaged (STK-12); only a managed row would be one the
+	// refused create stored.
+	for _, it := range list.Items {
+		if it.Managed || it.Name != "taken" {
+			t.Errorf("stacks = %+v, want only the foreign stack as unmanaged: a refused create stores nothing", list.Items)
+			break
+		}
 	}
 	if rec := admin.createStack(`{"name":"free"}`); rec.Code != http.StatusCreated {
 		t.Errorf("create of a free name: %d %s", rec.Code, rec.Body)
@@ -736,7 +745,7 @@ func TestConcurrentDraftNeedsAcknowledgement(t *testing.T) {
 	repo := stackops.Repo{Store: f.st, Vault: f.v}
 	saveCompose(t, operator, st.ID, concurrentFixture("staging"), secret("second-secret-value"))
 	ctx := testsupport.Context(t)
-	rev, err := repo.NewRevision(ctx, st.ID, "bob")
+	rev, err := repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1029,6 +1038,10 @@ func TestUpdateModeChangesOnlyTheChosenServices(t *testing.T) {
 	if row == nil || row.Details["mode"] != "update" || row.Result != "success" {
 		t.Errorf("stack.deployed = %+v, want a successful update", row)
 	}
+	// The revision it took says it was an Update images deploy; the first one was a plain deploy.
+	if revs := answerOf[stackRevisionsAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/revisions", "")); len(revs.Items) != 2 || revs.Items[0].Origin != "update" || revs.Items[1].Origin != "deploy" {
+		t.Errorf("revisions = %+v, want the update on top of a deploy", revs.Items)
+	}
 
 	// Afterwards web runs the new digest, api still the old, and the stored pins say so.
 	rv, code, raw = operator.reviewStack(st.ID, `{}`)
@@ -1130,4 +1143,378 @@ func TestReviewAnswerNeverQuotesPartOfASecret(t *testing.T) {
 		messages = append(messages, p.Message)
 	}
 	stackstest.NoSecretRun(t, "Password2024!", messages...)
+}
+
+// Reviewing a roll back to a chosen revision (plan 08-03, STK-08, D-02, D-05).
+
+func TestReviewRollbackModeRefusals(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rv")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployThenCancel(t, operator, st, composeWeb128)
+	writes := len(f.fake.Writes())
+
+	cases := []struct {
+		name, body, problem string
+		status              int
+	}{
+		{"no revision", `{"mode":"rollback"}`, "revision_required", http.StatusUnprocessableEntity},
+		{"unknown revision", `{"mode":"rollback","revision":99}`, "revision_not_found", http.StatusNotFound},
+		{"failed revision", `{"mode":"rollback","revision":2}`, "revision_not_good", http.StatusConflict},
+	}
+	for _, c := range cases {
+		rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", c.body)
+		if rec.Code != c.status || problemType(t, rec) != c.problem {
+			t.Errorf("%s: %d %s, want %d %s", c.name, rec.Code, rec.Body, c.status, c.problem)
+		}
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRollbackModeShowsTheStoredDigestsAndAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rv")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	pin127 := f.revisions(t, st.ID)[0].Pins
+	var pins map[string]string
+	if err := json.Unmarshal([]byte(pin127), &pins); err != nil {
+		t.Fatal(err)
+	}
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("c", 64))
+	lookups := len(f.fake.DistributionRefs())
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"rollback","revision":1}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	var extra struct {
+		Revision    int64 `json:"revision"`
+		DeployedSeq int64 `json:"deployedSeq"`
+	}
+	if err := json.Unmarshal([]byte(body), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra.Revision != 1 || extra.DeployedSeq != 2 {
+		t.Errorf("revision %d, deployedSeq %d, want 1 and 2", extra.Revision, extra.DeployedSeq)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a roll back review asks no registry", lookups, n)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "pinned" || rv.Images[0].Note != "revision" || !strings.HasSuffix(pins["rv_web"], rv.Images[0].Digest) {
+		t.Errorf("images = %+v, want the one image pinned to revision 1's digest %s", rv.Images, pins["rv_web"])
+	}
+	if rv.Pins["rv_web"] != pins["rv_web"] {
+		t.Errorf("pins = %v, want revision 1's %v", rv.Pins, pins)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Change != "changed" {
+		t.Errorf("services = %+v, want the one service changed back", rv.Services)
+	}
+	if rv.Concurrent != nil {
+		t.Errorf("concurrent = %+v, a roll back review has none", rv.Concurrent)
+	}
+	if rv.YAML.ChangedLines == 0 {
+		t.Errorf("yaml = %+v, want the rendering of revision 1 against the deployed one", rv.YAML)
+	}
+}
+
+func TestReviewRollbackModeJudgesHostAccessOnTheChosenRevision(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "esc")
+	// The Admin deployed host access as revision 1; a plainer revision 2 runs now.
+	f.deployGood(t, admin, st.ID, hostAccessCompose)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"rollback","revision":1}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	blocked := false
+	for _, p := range rv.Problems {
+		blocked = blocked || (p.Code == "needs_admin" && p.Severity == "error")
+	}
+	if !blocked || len(rv.NeedsAdmin) == 0 {
+		t.Errorf("problems %+v needsAdmin %v, want a blocking needs_admin for an operator", rv.Problems, rv.NeedsAdmin)
+	}
+	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/rollback", `{"revision":1}`)
+	if rec.Code != http.StatusForbidden || problemType(t, rec) != "privileged_compose" {
+		t.Errorf("an operator's roll back to revision 1: %d %s, want 403 privileged_compose", rec.Code, rec.Body)
+	}
+	if rv, code, body := admin.reviewStack(st.ID, `{"mode":"rollback","revision":1}`); code != http.StatusOK || len(rv.NeedsAdmin) != 0 {
+		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
+	}
+}
+
+// Reviewing a restore of the deployed revision (plan 08-23, STK-14, D-23).
+
+func TestReviewRestoreModeIsTheDriftAndAsksNoRegistry(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rr")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+	f.deployGood(t, operator, st.ID, composeWeb128)
+	// Somebody outside Bayplan scaled the service; the registry's tag has moved on since the deploy.
+	f.editLiveService(t, e, "rr", "web", scaleTo(4))
+	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("c", 64))
+	lookups, writes := len(f.fake.DistributionRefs()), len(f.fake.Writes())
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"restore"}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	var extra struct {
+		Revision    int64 `json:"revision"`
+		DeployedSeq int64 `json:"deployedSeq"`
+	}
+	if err := json.Unmarshal([]byte(body), &extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra.Revision != 2 || extra.DeployedSeq != 2 {
+		t.Errorf("revision %d, deployedSeq %d, want the deployed revision, 2, for both", extra.Revision, extra.DeployedSeq)
+	}
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v", rv.Problems)
+	}
+	if len(rv.Services) != 1 || rv.Services[0].Change != "changed" || rv.Services[0].Short != "web" {
+		t.Errorf("services = %+v, want the one scaled service, changed: that is the drift", rv.Services)
+	}
+	if len(rv.Images) != 1 || rv.Images[0].State != "pinned" || rv.Images[0].Note != "revision" {
+		t.Errorf("images = %+v, want the one image pinned to what the revision stored", rv.Images)
+	}
+	if n := len(f.fake.DistributionRefs()); n != lookups {
+		t.Errorf("distribution checks went from %d to %d, a restore review asks no registry", lookups, n)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRestoreModeRefusesAStackWithNothingDeployed(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rn")
+	writes := len(f.fake.Writes())
+
+	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/review", `{"mode":"restore"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_deployed_revision" {
+		t.Errorf("restore review of a stack never deployed: %d %s, want 409 no_deployed_revision", rec.Code, rec.Body)
+	}
+	if n := len(f.fake.Writes()); n != writes {
+		t.Errorf("writes went from %d to %d, a review writes nothing", writes, n)
+	}
+}
+
+func TestReviewRestoreModeJudgesHostAccessForTheCaller(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "re")
+	f.deployGood(t, admin, st.ID, hostAccessCompose)
+
+	rv, code, body := operator.reviewStack(st.ID, `{"mode":"restore"}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	if len(rv.NeedsAdmin) == 0 {
+		t.Errorf("needsAdmin = %v, want the host access the deployed revision uses, which an operator may not deploy", rv.NeedsAdmin)
+	}
+	if rv, code, body := admin.reviewStack(st.ID, `{"mode":"restore"}`); code != http.StatusOK || len(rv.NeedsAdmin) != 0 {
+		t.Errorf("an admin's review: %d %s, want no needsAdmin", code, body)
+	}
+}
+
+// revertsAnswer is the Reverts drift part of a review answer (plan 08-25, D-25).
+type revertsAnswer struct {
+	Summary struct {
+		RevertsDrift int `json:"revertsDrift"`
+	} `json:"summary"`
+	RevertsDrift []struct {
+		Service, Change, Path, Live, Desired string
+		Cause                                *struct{ Action, By string }
+	} `json:"revertsDrift"`
+	RevertsDriftUnavailable bool `json:"revertsDriftUnavailable"`
+}
+
+func revertsOf(t *testing.T, body string) revertsAnswer {
+	t.Helper()
+	var a revertsAnswer
+	if err := json.Unmarshal([]byte(body), &a); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	return a
+}
+
+func TestReviewAnswerListsWhatTheDeployWouldRevertAndNeverBlocksIt(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	st := newStack(t, admin, "rvd")
+	f.deployGood(t, operator, st.ID, composeWeb127)
+
+	// Right after a deploy there is nothing to revert, and the answer says so with an empty list, not a missing one.
+	_, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	clean := revertsOf(t, body)
+	if clean.RevertsDrift == nil || len(clean.RevertsDrift) != 0 || clean.Summary.RevertsDrift != 0 || clean.RevertsDriftUnavailable {
+		t.Errorf("a review right after a deploy = %+v, want an empty list and nothing unavailable", clean)
+	}
+
+	// Somebody scales the service outside the stack. The draft is unchanged, so the deploy would scale it back.
+	f.editLiveService(t, e, "rvd", "web", scaleTo(4))
+	_, code, body = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	got := revertsOf(t, body)
+	if len(got.RevertsDrift) != 1 || got.Summary.RevertsDrift != 1 || got.RevertsDriftUnavailable {
+		t.Fatalf("a review of a scaled service = %+v, want the one revert", got)
+	}
+	r := got.RevertsDrift[0]
+	if r.Service != "web" || r.Change != "changed" || r.Path != "Mode.Replicated.Replicas" || r.Live != "4" || r.Desired != "1" || r.Cause != nil {
+		t.Errorf("row = %+v, want web's replicas 4 -> 1 with no cause (nothing in the audit log explains it)", r)
+	}
+
+	// The section is a warning: the deploy of that very review is accepted and puts the value back.
+	rv, _, _ := operator.reviewStack(st.ID, `{}`)
+	version := draftVersion(t, operator, st.ID)
+	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("deploy with a revert in its review = %+v, want it done", job)
+	}
+	_, code, body = operator.reviewStack(st.ID, `{}`)
+	if after := revertsOf(t, body); code != http.StatusOK || len(after.RevertsDrift) != 0 {
+		t.Errorf("review after the deploy = %d %+v, want nothing left to revert", code, after)
+	}
+}
+
+// reviewLiveKey and reviewLivePW are what somebody outside Bayplan put on the stack's service: a new key and a new password
+// on the command line. They are made-up values the test must never find in an answer.
+const (
+	reviewLiveKey = "key-live-77aa"
+	reviewLivePW  = "pw-live-3a9c" //nolint:gosec // a made-up value
+)
+
+// reviewRedactFixture deploys two revisions of a stack that carries values, then changes the running service by hand.
+func reviewRedactFixture(t *testing.T) (f *envFix, st stackSummaryRef, operator, revealer *roleCaller) {
+	t.Helper()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator = f.caller(t, e, "operator-1", "operator")
+	revealer = f.revealCaller(t, e, "revealer-1")
+	s := newStack(t, admin, "rvr")
+	f.deployGood(t, operator, s.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	f.deployGood(t, operator, s.ID, liveValuesCompose("nginx:1.28-alpine", "two"))
+	f.editLiveService(t, e, "rvr", "web", func(spec *swarm.ServiceSpec) {
+		setEnv("API_KEY", reviewLiveKey)(spec)
+		spec.TaskTemplate.ContainerSpec.Args = []string{"nginx", "--pw=" + reviewLivePW}
+	})
+	return f, stackSummaryRef{ID: s.ID}, operator, revealer
+}
+
+// stackSummaryRef is the one field of a created stack the review tests use.
+type stackSummaryRef struct{ ID string }
+
+// TestReviewMasksLiveValuesForACallerWithoutSecretsRevealInEveryMode: a review of a deploy, a roll back or a restore
+// lists the running service's settings and the outside changes a deploy would put back. A caller who holds
+// stacks.deploy and not secrets.reveal gets neither the running values nor the revision's, as the drift and the History
+// changes routes already answer (D-39, D-47); one who holds it gets them all.
+func TestReviewMasksLiveValuesForACallerWithoutSecretsRevealInEveryMode(t *testing.T) {
+	t.Parallel()
+	_, st, operator, revealer := reviewRedactFixture(t)
+	secrets := append(slices.Clone(liveValues), reviewLiveKey, reviewLivePW)
+
+	for _, mode := range []string{`{}`, `{"mode":"rollback","revision":1}`, `{"mode":"restore"}`} {
+		_, code, masked := operator.reviewStack(st.ID, mode)
+		if code != http.StatusOK {
+			t.Fatalf("review %s as an operator: %d %s", mode, code, masked)
+		}
+		// The rendered YAML and the files are the stack's own text, which anyone who may read the stack reads; the
+		// running settings and the outside changes are not, so no value may be in those sections.
+		var sections map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(masked), &sections); err != nil {
+			t.Fatalf("decode %s: %v", masked, err)
+		}
+		for _, name := range []string{"services", "revertsDrift"} {
+			for _, v := range secrets {
+				if strings.Contains(string(sections[name]), v) {
+					t.Errorf("review %s: the value %q reached a caller without secrets.reveal in %s: %s", mode, v, name, sections[name])
+				}
+			}
+		}
+		for _, v := range []string{reviewLiveKey, reviewLivePW} {
+			if strings.Contains(masked, v) {
+				t.Errorf("review %s: the running value %q reached a caller without secrets.reveal: %s", mode, v, masked)
+			}
+		}
+		_, code, full := revealer.reviewStack(st.ID, mode)
+		if code != http.StatusOK {
+			t.Fatalf("review %s as a revealer: %d %s", mode, code, full)
+		}
+		if !strings.Contains(full, reviewLiveKey) || !strings.Contains(full, reviewLivePW) {
+			t.Errorf("review %s: a caller with secrets.reveal lacks the running values: %s", mode, full)
+		}
+	}
+
+	// The outside changes a deploy would put back are rows with their paths; the values are withheld.
+	_, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	rows := revertsOf(t, body).RevertsDrift
+	if len(rows) < 2 {
+		t.Fatalf("reverts = %+v, want the key and the command", rows)
+	}
+	for _, r := range rows {
+		if r.Live == reviewLiveKey || r.Live == reviewLivePW || strings.Contains(r.Live, "pw-live") || strings.Contains(r.Desired, "key-two") || strings.Contains(r.Desired, "pw-two") {
+			t.Errorf("row %+v carries a value", r)
+		}
+	}
+	hiddenKey := false
+	for _, r := range rows {
+		hiddenKey = hiddenKey || r.Path == "TaskTemplate.ContainerSpec.Env[API_KEY]" && r.Live == "<hidden>" && r.Desired == "<hidden>"
+	}
+	if !hiddenKey {
+		t.Errorf("reverts = %+v, want the API_KEY row with both sides <hidden>", rows)
+	}
+}
+
+// TestAReviewTheCallerSawMaskedStillDeploys: the deploy takes the draft version and the pins of the review, neither of
+// which is derived from the masked body.
+func TestAReviewTheCallerSawMaskedStillDeploys(t *testing.T) {
+	t.Parallel()
+	f, st, operator, _ := reviewRedactFixture(t)
+	rv, code, body := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, body)
+	}
+	if strings.Contains(body, reviewLiveKey) {
+		t.Fatalf("the review was not masked: %s", body)
+	}
+	version := draftVersion(t, operator, st.ID)
+	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("deploy of a masked review = %+v, want done", job)
+	}
 }

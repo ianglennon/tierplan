@@ -980,6 +980,20 @@ const problemOf = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// The counts the panel shows. The panel copies them into its sr-only live region a moment later,
+// so a global text query finds two once a loaded run outlasts that delay: this one skips the region.
+function shownCounts(text: string): HTMLElement[] {
+  return screen.queryAllByText(text).filter((el) => el.getAttribute("role") !== "status");
+}
+
+async function findShownCounts(text: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const shown = shownCounts(text);
+    expect(shown).toHaveLength(1);
+    return shown[0] as HTMLElement;
+  });
+}
+
 describe("the Problems panel", () => {
   it("counts the problems and names each row by severity, message, file and line", async () => {
     server.check = () => Response.json({ problems: [problemOf()], unusedFiles: [] });
@@ -989,13 +1003,13 @@ describe("the Problems panel", () => {
       name: "Error: Line 3: found character that cannot start any token, compose.yaml line 3",
     });
     expect(row.textContent).toContain("compose.yaml:3");
-    expect(screen.getByText("1 error, 0 warnings")).toBeTruthy();
+    expect(shownCounts("1 error, 0 warnings")).toHaveLength(1);
   });
 
   it("says there are no problems when the check finds none", async () => {
     mount();
     await ready();
-    expect(await screen.findByText("No problems")).toBeTruthy();
+    expect(await findShownCounts("No problems")).toBeTruthy();
   });
 
   it("opens the file of a problem and puts the cursor on its line when it is clicked", async () => {
@@ -1041,7 +1055,7 @@ describe("the Problems panel", () => {
     typeIntoEditor("services: {}\n");
     fireEvent.click(saveButton());
     await screen.findByText("Saved the draft of tracer.");
-    await screen.findByText("2 errors, 0 warnings");
+    await findShownCounts("2 errors, 0 warnings");
     expect(header.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -1153,12 +1167,12 @@ describe("the Problems panel", () => {
         : Response.json({ problems: [problemOf()], unusedFiles: [] });
     mount();
     await ready();
-    await screen.findByText("1 error, 0 warnings");
+    await findShownCounts("1 error, 0 warnings");
     fail = true;
     typeIntoEditor(`${COMPOSE}# more\n`);
     fireEvent.click(saveButton());
     await screen.findByText("Couldn't check the stack. It will retry.");
-    expect(screen.getByText("1 error, 0 warnings")).toBeTruthy();
+    expect(shownCounts("1 error, 0 warnings")).toHaveLength(1);
   });
 
   it("shows Checking… while the server has not answered", async () => {

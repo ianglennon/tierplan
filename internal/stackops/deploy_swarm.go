@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -18,6 +19,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // The items of a swarm deploy job, in order.
@@ -135,13 +137,20 @@ type SwarmDeployInput struct {
 	// other service keeps the digest it runs.
 	Update map[string]bool
 	// Reviewed, when not nil, are the images a review chose, by swarm service name: the deploy uses
-	// exactly these, after checking each against what it would decide itself (ReviewedPins), and
-	// makes no registry lookup. Nil means the deploy looks the images up itself.
+	// exactly these digests, after checking each against what it would decide itself (ReviewedPins), and
+	// asks no registry to choose or change a digest. The platforms of a looked-up image are the ones its review found,
+	// asked of the registry again, once, only when the server no longer holds them (Deps.Platforms; an answer of none is
+	// held too), and a registry that cannot answer then stops the deploy (accepted 2026-10-27). Nil means the deploy
+	// looks the images up itself.
 	Reviewed map[string]string
 	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by
 	// swarm service name, and are used as they are. They are not compared with what the swarm runs now
 	// (the point is to move it back), and no registry is asked for anything (STK-07, T-07-93).
 	Rollback bool
+	// RestoredPlatforms, for a Rollback, is the revision's own record of the platforms its services ran with, by swarm
+	// service name (Snapshot.Platforms). They are sent as they are and no registry is asked. A service the record
+	// says nothing for keeps the platforms the swarm runs when it runs the same image (G-08-4, T-08-101).
+	RestoredPlatforms map[string][]swarm.Platform
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -180,6 +189,9 @@ type PinStore interface {
 	GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error)
 	// SetPins stores the pinned reference of each service on a revision.
 	SetPins(ctx context.Context, snapshotID string, pins map[string]string) error
+	// SetPlatforms stores on a revision the platforms each service was sent with, by swarm service name, so a roll
+	// back can send them again without a registry (P7 D-14, T-07-93). A service sent none is left out.
+	SetPlatforms(ctx context.Context, snapshotID string, platforms map[string][]swarm.Platform) error
 }
 
 var _ PinStore = Repo{}
@@ -318,7 +330,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
 	existingNets, allNets, existingSvcs, live := owned.Networks, owned.AllNetworks, owned.Services, owned.Objects
-	if clash(in.Stack.ID, in.Stack.Name, existingNets, existingSvcs, live) {
+	if own := OwnershipOf(in.Stack); clash(own, existingNets, existingSvcs, live) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
 	// The whole picture of what is about to happen goes into the job now: the networks and objects
@@ -370,7 +382,11 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		if errors.As(err, &invalid) {
 			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
 		}
-		pinned = PinOutcome{Pins: pins}
+		// A rollback sends its revision's own record; a pin that record says nothing for takes the last good revision's
+		// record for its digest, else the running service's (G-08-4).
+		pinned = PinOutcome{Pins: withStoredPlatforms(pins, in.RestoredPlatforms)}
+		storedPlatforms(pinned.Pins, stored)
+		carryPlatforms(pinned.Pins, byName)
 	} else if in.Reviewed != nil {
 		pins, err := d.ReviewedPins(ctx, in.EnvID, planned.Services, byName, stored, in.Update, in.Reviewed)
 		var invalid *PinsInvalidError
@@ -380,9 +396,19 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		case err != nil:
 			return fail(ItemLookup, codeOf(ctx, err), "")
 		}
+		// The review's order: a digest the stack's last good revision recorded platforms for is sent those; a digest the
+		// swarm already runs has its platforms there; only the rest are read from the memo or the registry.
+		pinPlatforms(pins, stored, byName)
+		if code, name, msg := d.reviewedPlatforms(ctx, in.EnvID, swarmItems(planned.Services), pins, d.clusterReader(in.EnvID)); code != "" {
+			return failWith(ItemLookup, code, name, msg)
+		}
 		pinned = PinOutcome{Pins: pins}
 	} else {
 		pinned = d.ResolvePins(ctx, in.EnvID, planned.Services, byName, stored, in.Update)
+		// A service keeps the platforms of the image it runs; they belong to the image, so a pin that names another one
+		// borrows none (G-08-4, T-08-97). What the last good revision recorded for the digest comes first (T-08-111),
+		// as in the review.
+		pinPlatforms(pinned.Pins, stored, byName)
 	}
 	res.Pins, res.Problems = pinned.Pins, placeProblems(in.Files, pinned.Problems)
 	if pinned.Blocked() {
@@ -398,6 +424,9 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if in.Pins != nil && in.RevisionID != "" {
 		if err := in.Pins.SetPins(ctx, in.RevisionID, pinned.Refs()); err != nil {
 			d.log().Error("could not store the pins of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		}
+		if err := in.Pins.SetPlatforms(ctx, in.RevisionID, pinned.Platforms()); err != nil {
+			d.log().Error("could not store the platforms of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		}
 	}
 	r.Finish(ItemLookup, jobs.ItemDone, "", "", map[string]string{"images": strconv.Itoa(len(pinned.Pins))})
@@ -439,8 +468,8 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 		prog.start(idService + sp.Name)
 		// The image is the pinned one, never the text; an update keeps the counter that makes
 		// the swarm replace tasks, so a redeploy that changed nothing replaces nothing.
-		if p, ok := pinned.Pins[sp.Name]; ok && sp.Spec.TaskTemplate.ContainerSpec != nil {
-			sp.Spec.TaskTemplate.ContainerSpec.Image = p.Ref
+		if p, ok := pinned.Pins[sp.Name]; ok {
+			sp.Spec = withPin(sp.Spec, p)
 		}
 		if update {
 			sp.Spec.TaskTemplate.ForceUpdate = liveForceUpdate(existing.Spec)
@@ -637,19 +666,23 @@ func (d Deps) authFor(ctx context.Context, envID, image string) (string, error) 
 // clash reports whether the swarm holds an object under this stack's namespace that another
 // stack, or none of Bayplan's, owns: a stack of that name that Bayplan does not manage (D-12).
 // objects are the secrets and configs the deploy read; only those under the namespace count.
-func clash(stackID, stackName string, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
+//
+// What is foreign is decided by the Ownership predicate (plan 08-16, D-16): a network or service the stack owns is
+// not, and neither is a network, secret or config an adopted stack recorded when it was adopted, whatever
+// bayplan.stack.id it carries. A managed stack is judged by its own ID alone, as before.
+func clash(own Ownership, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
 	for _, n := range nets {
-		if n.Labels[stacks.LabelStackID] != stackID {
+		if !own.OwnsNetwork(n.Name, n.Labels) && !own.Knows(rebuild.KindNetwork, n.Name) {
 			return true
 		}
 	}
 	for _, s := range svcs {
-		if s.Labels[stacks.LabelStackID] != stackID {
+		if !own.OwnsWorkload(s.Labels) {
 			return true
 		}
 	}
 	for _, o := range objects {
-		if o.Labels[stacks.LabelSwarmNamespace] == stackName && o.Labels[stacks.LabelStackID] != stackID {
+		if o.Labels[stacks.LabelSwarmNamespace] == own.Name && !own.OwnsObject(o.Labels) && !own.Knows(string(o.Kind), o.Name) {
 			return true
 		}
 	}

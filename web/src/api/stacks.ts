@@ -53,6 +53,8 @@ export type StackResourceContainer = components["schemas"]["StackContainerResour
 export type StackResourceNetwork = components["schemas"]["StackNetworkResourceBody"];
 export type StackResourceVolume = components["schemas"]["StackVolumeResourceBody"];
 export type StackResourceObject = components["schemas"]["StackObjectResourceBody"];
+export type StackUnmanaged = components["schemas"]["StackUnmanagedBody"];
+export type StackKindCounts = components["schemas"]["StackKindCountsBody"];
 export type AllStacks = components["schemas"]["AllStacksBody"];
 export type AllStacksGroup = components["schemas"]["AllStacksGroup"];
 export type FailedEnvironment = components["schemas"]["FailedEnvironmentBody"];
@@ -121,6 +123,8 @@ export function isStackGone(error: unknown): boolean {
 export interface StackFilters {
   q?: string;
   status?: string;
+  // managed or unmanaged; absent lists both.
+  kind?: "managed" | "unmanaged";
   sort?: "name" | "state" | "lastDeployed";
   dir?: "asc" | "desc";
 }
@@ -656,9 +660,10 @@ export async function revealFile(envId: string, stackId: string, path: string): 
   }
 }
 
-// What a review is of: the saved draft (deploy), or a newly looked-up digest for some services
-// (update).
-export type ReviewMode = "deploy" | "update";
+// What a review is of: the saved draft (deploy), a newly looked-up digest for some services (update), or
+// an earlier revision with the digests it stored (rollback), or the deployed revision again to put back what was
+// changed outside the stack (restore).
+export type ReviewMode = "deploy" | "update" | "rollback" | "restore";
 
 // ReviewRequestError is a review the server refused or that got no answer. The status is 0 when
 // the server could not be reached; the type is the problem type it named (target_changed,
@@ -677,8 +682,16 @@ export class ReviewRequestError extends Error {
 // The query key of one review. Under its own prefix and not under stackKey: a refresh of the page
 // (a poll, the events feed) must not look the digests up again behind a review that holds the
 // ones the person is looking at.
-export function reviewKey(envId: string, stackId: string, mode: ReviewMode, services: string[]) {
-  return ["stack-review", envId, stackId, mode, services.join(",")] as const;
+// A roll back review adds the revision it restores, so two revisions are two reviews.
+export function reviewKey(
+  envId: string,
+  stackId: string,
+  mode: ReviewMode,
+  services: string[],
+  revision?: number,
+) {
+  const base = ["stack-review", envId, stackId, mode, services.join(",")] as const;
+  return revision === undefined ? base : ([...base, revision] as const);
 }
 
 // The review of a stack: what a deploy would change against what is running, the images with the
@@ -692,14 +705,20 @@ export function reviewQuery(
   stackId: string,
   mode: ReviewMode = "deploy",
   services: string[] = [],
+  revision?: number,
 ) {
   return queryOptions({
-    queryKey: reviewKey(envId, stackId, mode, services),
+    queryKey: reviewKey(envId, stackId, mode, services, revision),
     queryFn: async ({ signal }): Promise<StackReview> => {
       try {
         const res = await api.POST("/api/env/{envId}/stacks/{stackId}/review", {
           params: { path: { envId, stackId } },
-          body: mode === "update" ? { mode, services } : { mode },
+          body:
+            mode === "update"
+              ? { mode, services }
+              : mode === "rollback"
+                ? { mode, revision }
+                : { mode },
           signal,
         });
         if (!res.data) {

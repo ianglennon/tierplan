@@ -7,6 +7,7 @@ import { SquareStack } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { isStackGone, stackQuery } from "@/api/stacks";
+import { isUnmanagedGone, managedStackIdOf, unmanagedStackQuery } from "@/api/unmanaged-stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -24,12 +25,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import {
+  NotAdoptableNote,
+  OrphanIdNote,
+  PortainerAdvice,
+  UnmanagedNote,
+} from "@/features/stack-unmanaged/unmanaged-notes";
 import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { StackActions, StoppedAlertWithStart } from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
+import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -37,7 +45,9 @@ import { useT } from "@/i18n/use-t";
 // The steps of a deploy, which the Review and the console routes show instead of the tab bar.
 export type StackFlow = "review" | "deploy";
 
-interface StackDetailLayoutProps {
+interface ManagedLayoutProps {
+  // Absent or "managed" is the page of a stack Bayplan manages.
+  variant?: "managed";
   envId: string;
   stackId: string;
   // The tab under the header. The route passes its Outlet; a test passes its own.
@@ -48,6 +58,17 @@ interface StackDetailLayoutProps {
   // True on the Editor tab, which is where the draft banner's Open editor would lead.
   editing?: boolean;
 }
+
+// The page of a stack Bayplan did not make (D-09): read-only, found by its label, named by its name and not an ID.
+interface UnmanagedLayoutProps {
+  variant: "unmanaged";
+  envId: string;
+  // The swarm namespace or the Compose project. The router built it, encoded.
+  name: string;
+  children?: ReactNode;
+}
+
+export type StackDetailLayoutProps = ManagedLayoutProps | UnmanagedLayoutProps;
 
 // The tabs of the page, in the order they show. Each is a child route of the page under
 // stacks_.$stackId.*; the Overview is the page's own address.
@@ -62,6 +83,12 @@ const TABS = [
     id: "editor",
     to: "/env/$envId/stacks/$stackId/editor",
     labelKey: "stacks.detail.tabs.editor",
+    exact: false,
+  },
+  {
+    id: "history",
+    to: "/env/$envId/stacks/$stackId/history",
+    labelKey: "stackHistory.tab",
     exact: false,
   },
   {
@@ -132,6 +159,46 @@ function DeployAction({ envId, stackId }: { envId: string; stackId: string }) {
   );
 }
 
+// AdoptAction is the unmanaged page's one action (UI-SPEC "Unmanaged stack page"): Adopt stack, which opens the
+// Adopt page. An Env Admin gets a link; anyone else sees it off with the role it takes, and a stack that cannot be
+// adopted (Bayplan's own, an agent's, a name its target cannot hold) with the server's reason. A user whose
+// permissions are not known yet sees nothing rather than a button that may turn off. The muted line under it says
+// what to do to remove the stack, since there is no Remove here (D-10).
+function AdoptAction({
+  envId,
+  name,
+  adoptable,
+  reason,
+}: {
+  envId: string;
+  name: string;
+  adoptable: boolean;
+  reason: string;
+}) {
+  const t = useT();
+  const needs = useNeeds("stacks.create", envId);
+  if (!needs.allowed && !needs.reason) return null;
+  const blocked = needs.allowed ? (adoptable ? undefined : reason || undefined) : needs.reason;
+  return (
+    <div className="flex flex-col gap-1 max-md:w-full md:items-end">
+      {needs.allowed && adoptable ? (
+        <Button asChild className="max-md:h-11">
+          <Link to="/env/$envId/unmanaged-stacks/$name/adopt" params={{ envId, name }}>
+            {t("stackAdopt.action.adopt")}
+          </Link>
+        </Button>
+      ) : (
+        <NeedsTooltip reason={blocked}>
+          <Button type="button" className="max-md:h-11" aria-disabled={blocked ? undefined : true}>
+            {t("stackAdopt.action.adopt")}
+          </Button>
+        </NeedsTooltip>
+      )}
+      <p className="text-xs text-muted-foreground">{t("stackAdopt.action.hint")}</p>
+    </div>
+  );
+}
+
 // FlowCaption is the caption that replaces the tabs while a deploy is being made: "Step 2 of 3:
 // Review" with the steps either side of it as plain text. The current step carries
 // aria-current="step", and the words, not the weight, say where the person is.
@@ -168,9 +235,19 @@ function FlowCaption({ step }: { step: StackFlow }) {
 }
 
 // Gone is what a stack's page becomes when the stack no longer exists. It replaces the page,
-// tabs included.
-function Gone({ envId }: { envId: string }) {
+// tabs included. An unmanaged stack's says it may be managed now and, when the server named the stack
+// that holds the name, offers it.
+function Gone({
+  envId,
+  unmanaged,
+  managedStackId,
+}: {
+  envId: string;
+  unmanaged?: boolean;
+  managedStackId?: string;
+}) {
   const t = useT();
+  const ns = unmanaged ? "stackUnmanagedPage.gone" : "stacks.detail.gone";
   return (
     <div className="flex flex-col gap-6">
       <header>
@@ -182,34 +259,35 @@ function Gone({ envId }: { envId: string }) {
             <SquareStack aria-hidden="true" />
           </EmptyMedia>
           <EmptyTitle role="heading" aria-level={2}>
-            {t("stacks.detail.gone.heading")}
+            {t(`${ns}.heading`)}
           </EmptyTitle>
-          <EmptyDescription>{t("stacks.detail.gone.body")}</EmptyDescription>
+          <EmptyDescription>{t(`${ns}.body`)}</EmptyDescription>
         </EmptyHeader>
-        <EmptyContent>
+        <EmptyContent className="flex-row flex-wrap justify-center">
           <Button asChild variant="outline" className="max-md:h-11">
             <Link to="/env/$envId/stacks" params={{ envId }}>
-              {t("stacks.detail.gone.back")}
+              {t(`${ns}.back`)}
             </Link>
           </Button>
+          {unmanaged && managedStackId ? (
+            <Button asChild variant="outline" className="max-md:h-11">
+              <Link to="/env/$envId/stacks/$stackId" params={{ envId, stackId: managedStackId }}>
+                {t("stackUnmanagedPage.gone.open")}
+              </Link>
+            </Button>
+          ) : null}
         </EmptyContent>
       </Empty>
     </div>
   );
 }
 
-// StackDetailLayout is the frame of a stack's page: the breadcrumb, the header (the name, its
+// ManagedStackDetailLayout is the frame of a stack's page: the breadcrumb, the header (the name, its
 // state, the target and source badges, and the line naming the environment and the last
 // deploy), the tab bar (Link triggers, the active tab follows the URL) and the tab under it.
 // The tabs render at once, before the stack has loaded (UI-SPEC "Loading"). A stack that is
 // gone replaces the page.
-export function StackDetailLayout({
-  envId,
-  stackId,
-  children,
-  flow,
-  editing,
-}: StackDetailLayoutProps) {
+function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: ManagedLayoutProps) {
   const t = useT();
   const envName = useEnvName(envId);
   const query = useQuery(stackQuery(envId, stackId));
@@ -340,4 +418,177 @@ export function StackDetailLayout({
       {children ?? <Outlet />}
     </div>
   );
+}
+
+// The tabs of an unmanaged stack's page: no Editor and no History, since Bayplan holds no definition of it. Each
+// is a child route of the page under unmanaged-stacks.$name.*.
+const UNMANAGED_TABS = [
+  {
+    id: "overview",
+    to: "/env/$envId/unmanaged-stacks/$name",
+    labelKey: "stacks.detail.tabs.overview",
+    exact: true,
+  },
+  {
+    id: "compose",
+    to: "/env/$envId/unmanaged-stacks/$name/compose",
+    labelKey: "stackGenerated.tab",
+    exact: false,
+  },
+  {
+    id: "resources",
+    to: "/env/$envId/unmanaged-stacks/$name/resources",
+    labelKey: "stackResources.tab",
+    exact: false,
+  },
+  {
+    id: "logs",
+    to: "/env/$envId/unmanaged-stacks/$name/logs",
+    labelKey: "stackLogs.tab",
+    exact: false,
+  },
+] as const;
+
+// UnmanagedDetailLayout is the frame of an unmanaged stack's page (UI-SPEC "Unmanaged stack page"): the
+// breadcrumb, the header (the name, its state, the target, Unmanaged, Portainer and owner badges, and the line
+// saying Bayplan does not manage it), the notes, the tab bar and the tab under it. Its one action is Adopt stack, which
+// opens the Adopt page and changes nothing by itself (D-10, D-14). A stack that is gone, or managed now, replaces the
+// page.
+function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutProps, "variant">) {
+  const t = useT();
+  const envName = useEnvName(envId);
+  const query = useQuery(unmanagedStackQuery(envId, name));
+  const { data } = query;
+  const gone = isUnmanagedGone(query.error);
+  useDocumentTitle(gone ? t("stackUnmanagedPage.gone.heading") : name);
+
+  if (gone) {
+    return <Gone envId={envId} unmanaged managedStackId={managedStackIdOf(query.error)} />;
+  }
+
+  if (query.isError && !data) {
+    return (
+      <div className="flex flex-col gap-6">
+        <header>
+          <Breadcrumb envId={envId} name={name} />
+        </header>
+        <Alert variant="destructive">
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{t("stackUnmanagedPage.error.loadFailed", { name })}</span>
+            <span>{t("stackUnmanagedPage.error.body")}</span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="max-md:h-11"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {t("stackUnmanagedPage.error.retry", { name })}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const owner = data?.owner;
+  return (
+    <div className="flex flex-col gap-6">
+      <header className="flex flex-col gap-2">
+        <Breadcrumb envId={envId} name={name} />
+        {data ? (
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <h2 className="line-clamp-2 max-w-full min-w-0 break-all text-2xl font-semibold">
+                      {name}
+                    </h2>
+                  </TooltipTrigger>
+                  <TooltipContent className="break-all">{name}</TooltipContent>
+                </Tooltip>
+                <StackStateCell
+                  state={data.state}
+                  running={data.servicesRunning}
+                  total={data.servicesTotal}
+                />
+                <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
+                <UnmanagedBadge orphan={data.orphan} />
+                {data.portainer ? (
+                  <Badge variant="outline">{t("stackUnmanaged.portainer")}</Badge>
+                ) : null}
+                {owner === "bayplan" || owner === "agent" ? (
+                  <Badge variant="outline">{t(`stackUnmanagedPage.owner.${owner}`)}</Badge>
+                ) : null}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {t("stackUnmanagedPage.meta", { env: envName })}
+              </p>
+            </div>
+            <AdoptAction
+              envId={envId}
+              name={name}
+              adoptable={data.adoptable}
+              reason={data.reason}
+            />
+          </div>
+        ) : (
+          <Skeleton className="h-8 w-64" />
+        )}
+      </header>
+      {data ? (
+        <>
+          <UnmanagedNote />
+          {!data.adoptable && data.reason ? <NotAdoptableNote reason={data.reason} /> : null}
+          {data.orphan ? <OrphanIdNote /> : null}
+          {data.portainer ? <PortainerAdvice /> : null}
+        </>
+      ) : (
+        <Skeleton className="h-16 w-full" aria-hidden="true" />
+      )}
+      <Tabs value="" className="gap-4">
+        <TabsList
+          variant="line"
+          aria-label={t("stacks.detail.tabs.label")}
+          className="h-9 max-md:h-11"
+        >
+          {UNMANAGED_TABS.map((tab) => (
+            <TabsTrigger
+              key={tab.id}
+              value={tab.id}
+              asChild
+              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
+            >
+              <Link
+                to={tab.to}
+                params={{ envId, name }}
+                activeOptions={{ exact: tab.exact }}
+                activeProps={{ "data-active": true }}
+                inactiveProps={{ "data-active": undefined }}
+              >
+                {t(tab.labelKey)}
+              </Link>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+      {children ?? <Outlet />}
+    </div>
+  );
+}
+
+// StackDetailLayout is the frame of a stack's page, for a stack Bayplan manages (the default) and for one it
+// found on the engine and does not manage (variant "unmanaged"). The two are separate components so that each
+// reads only its own stack.
+export function StackDetailLayout(props: StackDetailLayoutProps) {
+  if (props.variant === "unmanaged") {
+    return (
+      <UnmanagedDetailLayout envId={props.envId} name={props.name}>
+        {props.children}
+      </UnmanagedDetailLayout>
+    );
+  }
+  return <ManagedStackDetailLayout {...props} />;
 }

@@ -152,8 +152,70 @@ func check(ctx context.Context, in CheckInput) CheckResult {
 	// above, so what is left to deploy always names an image.
 	stripBuild(loaded.Project)
 	res.Loaded = loaded
-	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...).Sorted()
+	res.Problems = append(append(res.Problems, binds...), lintProblems(found)...)
+	if in.Target == TargetSwarm {
+		res.Problems = append(res.Problems, swarmNameProblems(loaded.Project, idx, in.Name)...)
+	}
+	res.Problems = res.Problems.Sorted()
 	return res
+}
+
+// swarmNameProblems reports each service and each network a swarm stack would create whose engine name swarm
+// refuses (swarmkit validateAnnotations: letters, digits, "-" and "_" with no dot, at most 63 bytes). Swarm names
+// a stack's services <stack>_<key>, and its networks by the name the file gives or <stack>_<key>; a deploy with
+// such a name would be refused by swarm part-way, so it stops here, before any engine call (D-48 object
+// prefixes, D-53). Every name the stack-name rule takes can hold a short service key, and a name swarm takes today
+// is never reported, so no deploy that works today is stopped. External networks are only referenced and never
+// created, so they are not checked.
+func swarmNameProblems(project *types.Project, ix *PositionIndex, stack string) Problems {
+	var out Problems
+	report := func(kind, section, key, name string, n *yaml.Node) {
+		line, col, endLine, endCol := at(n)
+		out = append(out, Problem{
+			Severity: SeverityError, Code: CodeSwarmNameInvalid, File: ComposeFile, Key: section + "." + key,
+			Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+			Message: fmt.Sprintf("Swarm can't create a %s named “%s”: swarm allows only letters, numbers, dash and underscore in service and network names, up to 63 characters.", kind, name),
+		})
+	}
+	services := make([]string, 0, len(project.Services))
+	for key := range project.Services {
+		services = append(services, key)
+	}
+	sort.Strings(services)
+	used := map[string]bool{}
+	for _, key := range services {
+		if name := stack + "_" + key; !SwarmObjectNameValid(name) {
+			report("service", "services", key, name, ix.findAny("services."+key))
+		}
+		svc := project.Services[key]
+		if len(svc.Networks) == 0 {
+			used["default"] = true
+		}
+		for nk := range svc.Networks {
+			used[nk] = true
+		}
+	}
+	networks := make([]string, 0, len(used))
+	for key := range used {
+		networks = append(networks, key)
+	}
+	sort.Strings(networks)
+	for _, key := range networks {
+		name := stack + "_" + key
+		decl, declared := project.Networks[key]
+		if declared {
+			if bool(decl.External) {
+				continue
+			}
+			if decl.Name != "" {
+				name = decl.Name
+			}
+		}
+		if !SwarmObjectNameValid(name) {
+			report("network", "networks", key, name, ix.findAny("networks."+key+".name", "networks."+key, "services"))
+		}
+	}
+	return out
 }
 
 // secretFilePaths are the paths of the files that are secret in a working copy, sorted.

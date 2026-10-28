@@ -325,6 +325,46 @@ func TestEveryPhase7ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 }
 
+// phase8DetailKeys maps every Phase 8 action to the detail keys the plans that record it must use, for the same
+// reason as phase3DetailKeys. An adoption records the stack, its target, the namespace or project it was taken from,
+// how many services it has and the number of the revision it started with (plan 08-13, STK-13).
+var phase8DetailKeys = map[string][]string{
+	audit.ActionStackAdopted: {"stack", "target", "source", "services", "revision"},
+	// Accepting what runs into the draft records the stack, the revision the draft starts from, the version of the
+	// draft it saved and how many services it was rebuilt from (plan 08-24, STK-14, D-23).
+	audit.ActionStackDriftAccepted: {"stack", "revision", "version", "services"},
+}
+
+func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase8DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase8DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"stack.adopted":        audit.ActionStackAdopted,
+		"stack.drift_accepted": audit.ActionStackDriftAccepted,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
 func TestEveryPhase5ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	f := newFixture(t)
 	for action, keys := range phase5DetailKeys {

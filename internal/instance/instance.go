@@ -39,6 +39,10 @@ const (
 	// (D-29, D-31): how long one may sit unused, and how many one person may hold.
 	SettingShellIdleMinutes = "shell_idle_minutes"
 	SettingShellMaxPerUser  = "shell_max_per_user"
+
+	// SettingStackRevisionsKept is how many revisions of each stack Bayplan keeps (D-01): the
+	// newest N, plus the deployed one and any still deploying.
+	SettingStackRevisionsKept = "stack_revisions_kept"
 )
 
 // The browser-shell limits: the defaults, and the ranges a stored or submitted value
@@ -50,6 +54,11 @@ const (
 	DefaultShellMaxPerUser  = 10
 	MinShellMaxPerUser      = 1
 	MaxShellMaxPerUser      = 50
+
+	// The stack-history retention: how many revisions of each stack are kept.
+	DefaultStackRevisionsKept = 20
+	MinStackRevisionsKept     = 5
+	MaxStackRevisionsKept     = 200
 )
 
 // ErrPublicURLLocked is returned by SetTx when BAYPLAN_PUBLIC_URL fixes the
@@ -72,6 +81,8 @@ type Instance struct {
 
 	shellIdle atomic.Int64 // minutes
 	shellCap  atomic.Int64
+
+	revisionsKept atomic.Int64
 }
 
 // Load reads the stored settings. When BAYPLAN_PUBLIC_URL is set it wins over
@@ -111,6 +122,12 @@ func Load(ctx context.Context, s *store.Store, cfg config.Config) (*Instance, er
 		return nil, err
 	}
 	i.ApplyShellLimits(idle, capN)
+
+	kept, err := readInt(ctx, s, SettingStackRevisionsKept, DefaultStackRevisionsKept, MinStackRevisionsKept, MaxStackRevisionsKept)
+	if err != nil {
+		return nil, err
+	}
+	i.ApplyStackRevisionsKept(kept)
 	return i, nil
 }
 
@@ -311,5 +328,38 @@ func (i *Instance) ApplyShellLimits(idleMinutes, maxPerUser int) {
 	}
 	if maxPerUser >= MinShellMaxPerUser && maxPerUser <= MaxShellMaxPerUser {
 		i.shellCap.Store(int64(maxPerUser))
+	}
+}
+
+// StackRevisionsKept is how many revisions of each stack are kept (D-01). It is read at every
+// prune, so a change applies to the next deploy that ends. A zero Instance reads the default.
+func (i *Instance) StackRevisionsKept() int {
+	if n := int(i.revisionsKept.Load()); n != 0 {
+		return n
+	}
+	return DefaultStackRevisionsKept
+}
+
+// SetStackRevisionsKeptTx stores how many revisions of each stack are kept inside the caller's
+// write transaction. Like SetTx it leaves the cache alone: call ApplyStackRevisionsKept after the
+// commit. A value outside its range is refused.
+func (i *Instance) SetStackRevisionsKeptTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, n int) error {
+	if n < MinStackRevisionsKept || n > MaxStackRevisionsKept {
+		return fmt.Errorf("revisions kept %d is outside %d to %d", n, MinStackRevisionsKept, MaxStackRevisionsKept)
+	}
+	err := q.WithTx(tx).UpsertSetting(ctx, sqlc.UpsertSettingParams{
+		Key: SettingStackRevisionsKept, Value: strconv.Itoa(n), UpdatedAt: time.Now().UTC().UnixNano(),
+	})
+	if err != nil {
+		return fmt.Errorf("store %s: %w", SettingStackRevisionsKept, err)
+	}
+	return nil
+}
+
+// ApplyStackRevisionsKept updates the cache after the transaction that stored the value has
+// committed. A value outside its range is ignored, so the cache never holds one.
+func (i *Instance) ApplyStackRevisionsKept(n int) {
+	if n >= MinStackRevisionsKept && n <= MaxStackRevisionsKept {
+		i.revisionsKept.Store(int64(n))
 	}
 }

@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -29,6 +31,15 @@ const (
 	OutcomePending = "pending"
 	OutcomeGood    = "good"
 	OutcomeFailed  = "failed"
+)
+
+// How a revision came to be (stack_snapshots.origin): a deploy, an Update images deploy, a roll back that
+// copied an earlier revision, or the first revision of an adopted stack. A draft reads deploy.
+const (
+	OriginDeploy   = "deploy"
+	OriginUpdate   = "update"
+	OriginRollback = "rollback"
+	OriginAdopted  = "adopted"
 )
 
 // The kinds of a stack operation and the states of its row in stack_deploys.
@@ -71,6 +82,18 @@ type Stack struct {
 	CreatedBy       string
 	CreatedAt       time.Time
 	Stopped         bool
+	// Discovered is true for a stack found on the engine by its labels that Bayplan does not hold (D-07). It
+	// is never stored: DiscoveredStack makes one, and Ownership reads it.
+	Discovered bool
+	// Adoption is what was recorded when Bayplan took the stack over, the zero value for a stack that was not
+	// adopted (Source.Kind is SourceAdopted exactly for the others).
+	Adoption stacks.Adoption
+}
+
+// DiscoveredStack is the stack of a name found on an environment's engine by its labels. It has no ID and
+// is never stored; it exists so the overview, the resources and the logs read it like any stack.
+func DiscoveredStack(envID, name string, target stacks.Target) Stack {
+	return Stack{EnvID: envID, Name: name, Target: target, Discovered: true}
 }
 
 // Snapshot is a stack's definition at a moment: the draft, or a revision a deploy took. CreatedBy
@@ -81,7 +104,14 @@ type Snapshot struct {
 	Seq, BaseSeq, Version int64
 	Outcome, CreatedBy    string
 	CreatedAt             time.Time
-	Copy                  stacks.WorkingCopy
+	// Origin is how a revision came to be (OriginDeploy and the others); RestoredFrom is the number of the
+	// revision a roll back copied, and 0 for any other.
+	Origin       string
+	RestoredFrom int64
+	// Platforms are the swarm platforms each service of a revision was deployed with, by swarm service name; a
+	// revision stored before they were recorded, a draft and a service sent none have none (G-08-4).
+	Platforms map[string][]swarm.Platform
+	Copy      stacks.WorkingCopy
 	// IsDraft is true for a draft that is stored. It is false for what Draft answers when the stack
 	// has none: the last good revision, or the starter, so the editor always has content.
 	IsDraft bool
@@ -101,15 +131,47 @@ func stackOf(row sqlc.Stack) Stack {
 		ID: row.ID, EnvID: row.EnvID, Name: row.Name, Target: stacks.Target(row.Target),
 		Source:    stacks.Source{Kind: stacks.SourceKind(row.SourceKind), Ref: row.SourceRef},
 		CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(), Stopped: row.Stopped != 0,
+		Adoption: adoptionOf(row),
 	}
+}
+
+// adoptionOf reads the adoption record of a stack row. A record that is not valid JSON reads as the zero value
+// and is logged: a stack must stay listable, and ownership then falls back to the exact bayplan.stack.id rule,
+// which is the safe side.
+func adoptionOf(row sqlc.Stack) stacks.Adoption {
+	var a stacks.Adoption
+	if row.Adoption == "" || row.Adoption == "{}" {
+		return a
+	}
+	if err := json.Unmarshal([]byte(row.Adoption), &a); err != nil {
+		slog.Default().Warn("could not read the adoption record of a stack", "stack", row.ID, "error", err)
+		return stacks.Adoption{}
+	}
+	return a
 }
 
 func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 	return Snapshot{
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
-		IsDraft: row.Kind == KindDraft,
+		Origin: row.Origin, RestoredFrom: row.RestoredFrom, IsDraft: row.Kind == KindDraft,
+		Platforms: platformsOf(row),
 	}
+}
+
+// platformsOf reads the platforms of a snapshot row. A record that is not valid JSON reads as none and is logged:
+// a revision must stay readable (History, roll back, drift), and no platforms is the same as a revision from before
+// they were recorded (T-08-109).
+func platformsOf(row sqlc.StackSnapshot) map[string][]swarm.Platform {
+	if row.Platforms == "" || row.Platforms == "{}" {
+		return nil
+	}
+	var out map[string][]swarm.Platform
+	if err := json.Unmarshal([]byte(row.Platforms), &out); err != nil {
+		slog.Default().Warn("could not read the platforms of a stack revision", "snapshot", row.ID, "error", err)
+		return nil
+	}
+	return out
 }
 
 func deployOf(row sqlc.StackDeploy) DeployRow {
@@ -163,7 +225,7 @@ func (r Repo) CreateStack(ctx context.Context, envID, name string, target stacks
 	}
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: snapID.String(), StackID: stackID.String(), Kind: KindDraft, Version: 1, Outcome: OutcomePending,
-		Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
 	}); err != nil {
 		return Stack{}, Snapshot{}, fmt.Errorf("insert draft: %w", err)
 	}
@@ -182,6 +244,161 @@ func (r Repo) CreateStack(ctx context.Context, envID, name string, target stacks
 		CreatedBy: actor, CreatedAt: now, Copy: normalise(copy), IsDraft: true,
 	}
 	return st, snap, nil
+}
+
+// AdoptRecord is a discovered stack to be stored as a managed one (plan 08-13, STK-13, D-14). Copy is the
+// definition rebuilt from what runs, Pins the images it runs by service and Rendered the masked rendering of the
+// two, which is what the first review compares a draft with.
+type AdoptRecord struct {
+	EnvID, Name string
+	Target      stacks.Target
+	// SourceRef is the swarm namespace or the Compose project the stack was found as.
+	SourceRef string
+	Actor     string
+	Copy      stacks.WorkingCopy
+	Pins      map[string]string
+	// Platforms are the platforms the swarm services run with, by service name, which revision 1 stores beside its
+	// pins (SetSnapshotPlatforms) so a roll back to it puts them back (D-14). None for a standalone stack.
+	Platforms map[string][]swarm.Platform
+	Rendered  []byte
+	Adoption  stacks.Adoption
+}
+
+// Adopt stores a discovered stack in one transaction: the stack (source kind adopted, with the adoption record),
+// its draft at version 1 based on revision 1, and revision 1 itself (origin adopted, outcome good, pinned to
+// the images that run, with its rendering), both holding the same content. The draft and the revision are
+// created at the same instant, so the draft reads as having no changes (DraftSaves). Nothing is sent to an
+// engine. A name the environment already has is ErrNameTaken and nothing is stored, which is also how the
+// second of two adoptions that race ends (UNIQUE env and name).
+func (r Repo) Adopt(ctx context.Context, rec AdoptRecord) (Stack, Snapshot, error) {
+	stackID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new stack id: %w", err)
+	}
+	draftID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	revID, err := uuid.NewV7()
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+	}
+	pins := rec.Pins
+	if pins == nil {
+		pins = map[string]string{}
+	}
+	rawPins, err := json.Marshal(pins)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode pins: %w", err)
+	}
+	platforms := rec.Platforms
+	if platforms == nil {
+		platforms = map[string][]swarm.Platform{}
+	}
+	rawPlatforms, err := json.Marshal(platforms)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode platforms: %w", err)
+	}
+	rawAdoption, err := json.Marshal(rec.Adoption)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("encode the adoption record: %w", err)
+	}
+	now := r.now()
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	err = q.InsertAdoptedStack(ctx, sqlc.InsertAdoptedStackParams{
+		ID: stackID.String(), EnvID: rec.EnvID, Name: rec.Name, Target: string(rec.Target),
+		SourceKind: string(stacks.SourceAdopted), SourceRef: rec.SourceRef, CreatedBy: rec.Actor,
+		CreatedAt: now.UnixNano(), Adoption: string(rawAdoption),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Stack{}, Snapshot{}, ErrNameTaken
+		}
+		return Stack{}, Snapshot{}, fmt.Errorf("insert stack: %w", err)
+	}
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: draftID.String(), StackID: stackID.String(), Kind: KindDraft, BaseSeq: 1, Version: 1, Outcome: OutcomePending,
+		Pins: "{}", CreatedBy: rec.Actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
+	}); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("insert draft: %w", err)
+	}
+	if err := r.writeContent(ctx, q, draftID.String(), rec.Copy); err != nil {
+		return Stack{}, Snapshot{}, err
+	}
+	seq, err := q.NextRevisionSeq(ctx, stackID.String())
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("next revision: %w", err)
+	}
+	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+		ID: revID.String(), StackID: stackID.String(), Kind: KindRevision, Seq: seq, Version: 1, Outcome: OutcomeGood,
+		Rendered: string(rec.Rendered), Pins: string(rawPins), CreatedBy: rec.Actor, CreatedAt: now.UnixNano(), Origin: OriginAdopted,
+	}); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("insert revision: %w", err)
+	}
+	n, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(rawPlatforms), ID: revID.String()})
+	if err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %w", err)
+	}
+	if n != 1 {
+		return Stack{}, Snapshot{}, fmt.Errorf("set the platforms of revision 1: %d rows changed, want 1", n)
+	}
+	if err := r.writeContent(ctx, q, revID.String(), rec.Copy); err != nil {
+		return Stack{}, Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Stack{}, Snapshot{}, fmt.Errorf("commit: %w", err)
+	}
+	st := Stack{
+		ID: stackID.String(), EnvID: rec.EnvID, Name: rec.Name, Target: rec.Target,
+		Source: stacks.Source{Kind: stacks.SourceAdopted, Ref: rec.SourceRef}, CreatedBy: rec.Actor, CreatedAt: now,
+		Adoption: rec.Adoption,
+	}
+	rev := Snapshot{
+		ID: revID.String(), StackID: st.ID, Kind: KindRevision, Seq: seq, Version: 1, Outcome: OutcomeGood,
+		CreatedBy: rec.Actor, CreatedAt: now, Origin: OriginAdopted, Copy: normalise(rec.Copy),
+	}
+	if len(rec.Platforms) > 0 {
+		rev.Platforms = rec.Platforms
+	}
+	return st, rev, nil
+}
+
+// SetAdoption replaces the adoption record of a stack: the first deploy clears Pending, and the adoption review
+// records its gaps. A stack that is gone is ErrStackNotFound.
+func (r Repo) SetAdoption(ctx context.Context, stackID string, a stacks.Adoption) error {
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return fmt.Errorf("encode the adoption record: %w", err)
+	}
+	n, err := r.Store.Q.SetStackAdoption(ctx, sqlc.SetStackAdoptionParams{Adoption: string(raw), ID: stackID})
+	if err != nil {
+		return fmt.Errorf("set the adoption record: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
+	}
+	return nil
+}
+
+// ClearAdoptionPending ends the pending window of an adopted stack: the first good deploy has put Bayplan's labels on
+// what it runs, so its workloads are owned by its ID alone from now on (D-16). The rest of the record is kept. It is
+// one statement, so a deploy that ends while the record is read elsewhere loses nothing. A stack that is gone is
+// ErrStackNotFound.
+func (r Repo) ClearAdoptionPending(ctx context.Context, stackID string) error {
+	n, err := r.Store.Q.ClearStackAdoptionPending(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("clear the pending adoption: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
+	}
+	return nil
 }
 
 // Stack reads one stack of an environment by ID. An ID of another environment is
@@ -377,7 +594,7 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 	now := r.now()
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: base.BaseSeq, Version: firstSavedVersion,
-		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
 	}); err != nil {
 		return Snapshot{}, false, fmt.Errorf("insert draft: %w", err)
 	}
@@ -395,8 +612,9 @@ func (r Repo) saveFirst(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, stackI
 
 // NewRevision copies the draft into a new revision, numbered after the stack's last one and
 // pending until its deploy ends. Each sealed value is opened and sealed again under the new
-// snapshot's ID.
-func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot, error) {
+// snapshot's ID. origin says how the revision came to be: OriginDeploy, or OriginUpdate for an
+// Update images deploy.
+func (r Repo) NewRevision(ctx context.Context, stackID, actor, origin string) (Snapshot, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
@@ -419,7 +637,7 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 	now := r.now()
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
-		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: origin,
 	}); err != nil {
 		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
@@ -431,7 +649,7 @@ func (r Repo) NewRevision(ctx context.Context, stackID, actor string) (Snapshot,
 	}
 	return Snapshot{
 		ID: id.String(), StackID: stackID, Kind: KindRevision, Seq: seq, BaseSeq: draft.BaseSeq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: draft.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, Copy: draft.Copy,
 	}, nil
 }
 
@@ -490,8 +708,9 @@ func (r Repo) rollbackRow(ctx context.Context, stackID string) (sqlc.StackSnapsh
 // CopyRevision makes a new revision, numbered after the stack's last one and pending until its
 // operation ends, from the content, pins and rendering of from: a roll back redeploys exactly what
 // from ran, and the history keeps it as a revision of its own. Each sealed value is opened with from
-// and sealed again under the new snapshot's ID. The draft is not touched.
-func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Snapshot, error) {
+// and sealed again under the new snapshot's ID. The draft is not touched. The new revision names the
+// one it copied (restored_from) and carries origin, OriginRollback for a roll back.
+func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin string) (Snapshot, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
@@ -515,18 +734,32 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor string) (Sn
 	if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
 		Outcome: OutcomePending, Rendered: ran.Rendered, Pins: ran.Pins, CreatedBy: actor, CreatedAt: now.UnixNano(),
+		Origin: origin, RestoredFrom: from.Seq,
 	}); err != nil {
 		return Snapshot{}, fmt.Errorf("insert revision: %w", err)
 	}
 	if err := r.writeContent(ctx, q, id.String(), from.Copy); err != nil {
 		return Snapshot{}, err
 	}
+	// The copy starts with the platforms of the revision it copies, as it starts with its pins (G-08-4). The record
+	// is the one the snapshot given carries, which a Repo read from the stored row (a record that did not read is none).
+	recorded := from.Platforms
+	if len(recorded) > 0 {
+		raw, err := json.Marshal(recorded)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("encode platforms: %w", err)
+		}
+		if _, err := q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: id.String()}); err != nil {
+			return Snapshot{}, fmt.Errorf("copy platforms: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
 	}
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
-		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Copy: from.Copy,
+		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Copy: from.Copy,
+		Platforms: recorded,
 	}, nil
 }
 
@@ -544,6 +777,19 @@ func (r Repo) RevisionPins(ctx context.Context, snapshotID string) (map[string]s
 		pins = map[string]string{}
 	}
 	return pins, nil
+}
+
+// RevisionRendering is the masked rendering stored with a revision, as it was stored. A revision still deploying, or
+// taken before renderings were stored, has none (nil).
+func (r Repo) RevisionRendering(ctx context.Context, snapshotID string) ([]byte, error) {
+	ran, err := r.Store.RQ.GetSnapshotPinsAndRendered(ctx, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	if ran.Rendered == "" {
+		return nil, nil
+	}
+	return []byte(ran.Rendered), nil
 }
 
 // SetOutcome marks a revision good or failed and stores what it rendered and the digests it ran
@@ -582,10 +828,30 @@ func (r Repo) SetPins(ctx context.Context, snapshotID string, pins map[string]st
 	return nil
 }
 
+// SetPlatforms stores on a revision the platforms each service of it was sent with, by swarm service name, so a
+// roll back can send them again without a registry (P7 D-14, T-07-93). A deploy stores them beside its pins.
+func (r Repo) SetPlatforms(ctx context.Context, snapshotID string, platforms map[string][]swarm.Platform) error {
+	if platforms == nil {
+		platforms = map[string][]swarm.Platform{}
+	}
+	raw, err := json.Marshal(platforms)
+	if err != nil {
+		return fmt.Errorf("encode platforms: %w", err)
+	}
+	n, err := r.Store.Q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: string(raw), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set platforms: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set platforms: no revision %s", snapshotID)
+	}
+	return nil
+}
+
 // GoodPins is what the stack's newest good revision ran, by swarm service name. AsWritten is the
 // stored reference without its digest, which is the text it was deployed from up to how
 // docker spells it; a caller compares it with the current text through sameImageText. A stack
-// with no good revision has none.
+// with no good revision has none. Platforms are the ones that revision recorded for the service (SetPlatforms).
 func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.LivePin, error) {
 	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -598,7 +864,15 @@ func (r Repo) GoodPins(ctx context.Context, stackID string) (map[string]stacks.L
 	if err := json.Unmarshal([]byte(row.Pins), &pins); err != nil {
 		return nil, fmt.Errorf("read the pins of revision %d: %w", row.Seq, err)
 	}
-	return LivePins(pins), nil
+	out := LivePins(pins)
+	// The platforms the revision recorded belong to the image it pinned; a record of a service with no pin is dropped.
+	for service, platforms := range platformsOf(row) {
+		if lp, ok := out[service]; ok && len(platforms) > 0 {
+			lp.Platforms = slices.Clone(platforms)
+			out[service] = lp
+		}
+	}
+	return out, nil
 }
 
 // LivePins reads pins by swarm service name, tag@sha256 each, as stacks.Render and the review take
@@ -868,6 +1142,12 @@ type DraftSave struct {
 // DraftSaves says, for each stack of an environment that has a draft, who saved it last and when, and
 // whether it holds changes that have not been deployed: it was saved after the stack's newest revision was
 // taken, or the stack has no revision and its draft has been saved since it was created.
+//
+// A roll back revision does not count as "the newest revision". It copies an earlier revision and deploys
+// nothing of the draft, which a roll back leaves untouched (D-03), so a draft saved before the roll back still
+// holds the changes it held (RESEARCH Pitfall 8). Counting it would make a draft read as deployed, and the list
+// would lose its Draft badge. The next deploy of that draft is told the deployed version moved by the
+// concurrent check instead, which compares revision numbers and not times.
 func (r Repo) DraftSaves(ctx context.Context, envID string) (map[string]DraftSave, error) {
 	drafts, err := r.Store.RQ.ListDraftsByEnv(ctx, envID)
 	if err != nil {

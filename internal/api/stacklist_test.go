@@ -5,12 +5,14 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +33,7 @@ type statusCountsAnswer struct {
 	Stopped      int `json:"stopped"`
 	Draft        int `json:"draft"`
 	DeployFailed int `json:"deployFailed"`
+	Drifted      int `json:"drifted"`
 }
 
 // stackListAnswer is the list of one environment's stacks.
@@ -40,6 +43,15 @@ type stackListAnswer struct {
 	UnfilteredTotal int                `json:"unfilteredTotal"`
 	Capped          bool               `json:"capped"`
 	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+	KindCounts      kindCountsAnswer   `json:"kindCounts"`
+	DiscoveryFailed bool               `json:"discoveryFailed"`
+}
+
+// kindCountsAnswer is how many stacks the Show toggle counts.
+type kindCountsAnswer struct {
+	All       int `json:"all"`
+	Managed   int `json:"managed"`
+	Unmanaged int `json:"unmanaged"`
 }
 
 type allStacksAnswer struct {
@@ -47,12 +59,15 @@ type allStacksAnswer struct {
 	UnfilteredTotal int                `json:"unfilteredTotal"`
 	Capped          bool               `json:"capped"`
 	StatusCounts    statusCountsAnswer `json:"statusCounts"`
+	KindCounts      kindCountsAnswer   `json:"kindCounts"`
 	Groups          []struct {
-		EnvID   string             `json:"envId"`
-		EnvName string             `json:"envName"`
-		Target  string             `json:"target"`
-		Stacks  []stackAnswer      `json:"stacks"`
-		Counts  statusCountsAnswer `json:"counts"`
+		EnvID           string             `json:"envId"`
+		EnvName         string             `json:"envName"`
+		Target          string             `json:"target"`
+		Stacks          []stackAnswer      `json:"stacks"`
+		Counts          statusCountsAnswer `json:"counts"`
+		KindCounts      kindCountsAnswer   `json:"kindCounts"`
+		DiscoveryFailed bool               `json:"discoveryFailed"`
 	} `json:"groups"`
 	FailedEnvironments []struct {
 		EnvID   string `json:"envId"`
@@ -481,6 +496,12 @@ func TestAllStacksCapsTheRowsAcrossEnvironmentsAndSaysHowManyThereAre(t *testing
 // The live name check of the Create stack dialog (plan 07-24, STK-01, D-12): it answers one environment's
 // verdict on a name and writes nothing.
 
+// swarmNameSentence and standaloneNameSentence are the refusals of the stack-name rule of each target (D-53).
+const (
+	swarmNameSentence      = "Use only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters."
+	standaloneNameSentence = "Use only lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters."
+)
+
 type nameCheckAnswer struct {
 	Status  string `json:"status"`
 	Message string `json:"message"`
@@ -509,10 +530,11 @@ func TestNameCheckAnswersAvailableTakenClashAndInvalid(t *testing.T) {
 		{"fresh", "available", ""},
 		{"web", "taken", "A stack named web already exists on " + e.Name + "."},
 		{"legacy", "clash", "A stack named legacy already exists on this environment, not managed by Bayplan."},
-		{"Bad Name", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{"-dash", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{strings.Repeat("a", 64), "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
-		{"", "invalid", "Use lowercase letters, numbers, dash or underscore, and start with a letter or number."},
+		{"Bad Name", "invalid", swarmNameSentence},
+		{"Shop.Front", "invalid", swarmNameSentence},
+		{"-dash", "invalid", swarmNameSentence},
+		{strings.Repeat("a", 62), "invalid", swarmNameSentence},
+		{"", "invalid", swarmNameSentence},
 	} {
 		code, got, rec := nameCheck(t, admin, c.name)
 		if code != http.StatusOK || got.Status != c.status || got.Message != c.message {
@@ -565,5 +587,437 @@ func TestNameCheckNeedsTheRightToCreateStacksOnThatEnvironment(t *testing.T) {
 	probe := &roleCaller{f: f, t: t, e: b, cookie: admin.cookie, csrf: admin.csrf}
 	if code, got, rec := nameCheck(t, probe, "edge-proxy"); code != http.StatusNotFound {
 		t.Errorf("name-check on an environment the caller has no grant on: %d %s %+v, want 404", code, rec.Body, got)
+	}
+}
+
+// foreignSwarmService is a service of a namespace no stack of Bayplan's has, as `docker stack deploy` leaves it.
+func foreignSwarmService(namespace, short string, running, desired uint64, labels map[string]string) dockertest.FakeService {
+	l := map[string]string{"com.docker.stack.namespace": namespace}
+	for k, v := range labels {
+		l[k] = v
+	}
+	return dockertest.FakeService{
+		ID: "svc-" + namespace + "-" + short, Name: namespace + "_" + short, Mode: "replicated", Running: running, Desired: desired,
+		Image: "nginx:1.27", Labels: l,
+	}
+}
+
+func TestStackListIncludesUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	web := newStack(t, admin, "web")
+	reconfigureSwarm(t, f, e,
+		foreignSwarmService("legacy", "app", 2, 2, nil),
+		foreignSwarmService("legacy", "db", 0, 1, nil),
+		foreignSwarmService("lost", "app", 1, 1, map[string]string{"bayplan.stack.id": "stack-old", "io.portainer.accesscontrol.teams": "x"}),
+		foreignSwarmService("web", "app", 0, 1, nil), // the name of a managed stack: that stack's, not a second one
+	)
+	writesBefore := len(f.fake.Writes())
+
+	got := listWith(t, admin, "")
+
+	byName := map[string]stackAnswer{}
+	for _, it := range got.Items {
+		byName[it.Name] = it
+	}
+	if len(got.Items) != 3 || got.KindCounts != (kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}) || got.DiscoveryFailed {
+		t.Fatalf("list = %+v, want web plus legacy and lost, two unmanaged, discovery fine", got)
+	}
+	if m := byName["web"]; !m.Managed || m.ID != web.ID || m.Unmanaged != nil {
+		t.Errorf("web = %+v, want the managed stack with no unmanaged body", m)
+	}
+	legacy := byName["legacy"]
+	if legacy.Managed || legacy.ID != "" || legacy.Target != "swarm" || legacy.State != "degraded" || legacy.Source != "unmanaged" {
+		t.Errorf("legacy = %+v, want an unmanaged swarm stack with no ID, degraded", legacy)
+	}
+	if legacy.ServicesRunning == nil || *legacy.ServicesRunning != 1 || legacy.ServicesTotal == nil || *legacy.ServicesTotal != 2 {
+		t.Errorf("legacy services = %v of %v, want 1 of 2", legacy.ServicesRunning, legacy.ServicesTotal)
+	}
+	if u := legacy.Unmanaged; u == nil || u.Orphan || u.Portainer || u.Owner != "" || !u.Adoptable || u.Reason != "" {
+		t.Errorf("legacy unmanaged = %+v, want a plain adoptable stack", u)
+	}
+	lost := byName["lost"]
+	if u := lost.Unmanaged; u == nil || !u.Orphan || !u.Portainer || !u.Adoptable {
+		t.Errorf("lost unmanaged = %+v, want orphan and Portainer flags", u)
+	}
+	if strings.Contains(stackListText(t, admin), "stack-old") {
+		t.Error("the list carries the label ID of an orphan: it is a flag, never sent")
+	}
+	if after := len(f.fake.Writes()); after != writesBefore {
+		t.Errorf("the engine received %d writes while discovering, want none", after-writesBefore)
+	}
+}
+
+func stackListText(t *testing.T, c *roleCaller) string {
+	t.Helper()
+	rec := c.do(http.MethodGet, "stacks", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list stacks: %d %s", rec.Code, rec.Body)
+	}
+	return rec.Body.String()
+}
+
+func TestStackListSearchFindsAnUnmanagedStackByItsServiceName(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	reconfigureSwarm(t, f, e, foreignSwarmService("legacy", "cache", 1, 1, nil), foreignSwarmService("other", "app", 1, 1, nil))
+
+	got := listWith(t, admin, "?q=cache")
+
+	if names := stackNames(got.Items); !slices.Equal(names, []string{"legacy"}) {
+		t.Errorf("q=cache listed %v, want legacy", names)
+	}
+}
+
+// unmanagedMix makes a managed stack, web, and two stacks of the swarm that Bayplan did not make, and returns
+// the env Admin.
+func unmanagedMix(t *testing.T, f *envFix, e envBody) *roleCaller {
+	t.Helper()
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	newStack(t, admin, "web")
+	reconfigureSwarm(t, f, e,
+		foreignSwarmService("legacy", "app", 1, 1, nil),
+		foreignSwarmService("portainer-blog", "app", 0, 1, nil),
+	)
+	return admin
+}
+
+func TestStackListKindFiltersManagedAndUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := unmanagedMix(t, f, e)
+
+	for query, want := range map[string][]string{
+		"":                {"legacy", "portainer-blog", "web"},
+		"?kind=managed":   {"web"},
+		"?kind=unmanaged": {"legacy", "portainer-blog"},
+	} {
+		got := listWith(t, admin, query)
+		if names := stackNames(got.Items); !slices.Equal(names, want) {
+			t.Errorf("%q listed %v, want %v", query, names, want)
+		}
+		if got.Total != len(want) {
+			t.Errorf("%q total = %d, want %d", query, got.Total, len(want))
+		}
+	}
+}
+
+func TestStackListKindCountsComeFromTheUnfilteredSet(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := unmanagedMix(t, f, e)
+
+	want := kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}
+	for _, query := range []string{"", "?kind=managed", "?kind=unmanaged", "?q=nomatch", "?status=degraded", "?kind=unmanaged&q=legacy"} {
+		if got := listWith(t, admin, query); got.KindCounts != want {
+			t.Errorf("%q kindCounts = %+v, want %+v whatever was typed", query, got.KindCounts, want)
+		}
+	}
+}
+
+func TestStackListStatusChipsFilterManagedStacksOnly(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha := newStack(t, admin, "alpha")
+	if job := f.deployAndWait(t, operator, alpha.ID, `{"draftVersion":1}`); job.State != "done" {
+		t.Fatalf("deploy alpha: %+v", job)
+	}
+	// alpha is degraded (one of two services runs); legacy is degraded too, and unmanaged.
+	reconfigureSwarm(t, f, e,
+		ownedService(alpha, "worker", 1, 3),
+		foreignSwarmService("legacy", "app", 1, 2, nil),
+	)
+
+	degraded := listWith(t, admin, "?status=degraded")
+	if names := stackNames(degraded.Items); !slices.Equal(names, []string{"alpha"}) {
+		t.Errorf("status=degraded listed %v, want the managed alpha only", names)
+	}
+	if degraded.StatusCounts.Degraded != 1 {
+		t.Errorf("degraded count = %d, want 1: an unmanaged stack is in no chip", degraded.StatusCounts.Degraded)
+	}
+	if none := listWith(t, admin, "?status=degraded&kind=unmanaged"); len(none.Items) != 0 || none.Total != 0 {
+		t.Errorf("status=degraded&kind=unmanaged listed %v, want nothing", stackNames(none.Items))
+	}
+}
+
+func TestStackListRefusesAKindThatIsNeitherManagedNorUnmanaged(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+
+	rec := admin.do(http.MethodGet, "stacks?kind=other", "")
+
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "kind_invalid") {
+		t.Errorf("kind=other: %d %s, want 422 kind_invalid", rec.Code, rec.Body)
+	}
+}
+
+func TestAllStacksCountsUnmanagedPerEnvironmentAndTakesTheKindFilter(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	admin := unmanagedMix(t, f, a)
+	f.seedStack(t, b.ID, "edge-proxy", stacks.TargetSwarm)
+
+	all := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, ""))
+	if all.KindCounts != (kindCountsAnswer{All: 4, Managed: 2, Unmanaged: 2}) {
+		t.Errorf("kindCounts = %+v, want 2 managed and 2 unmanaged over both environments", all.KindCounts)
+	}
+	perEnv := map[string]kindCountsAnswer{}
+	for _, g := range all.Groups {
+		perEnv[g.EnvID] = g.KindCounts
+	}
+	if perEnv[a.ID] != (kindCountsAnswer{All: 3, Managed: 1, Unmanaged: 2}) || perEnv[b.ID] != (kindCountsAnswer{All: 1, Managed: 1}) {
+		t.Errorf("per-environment kindCounts = %+v", perEnv)
+	}
+
+	only := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?kind=unmanaged"))
+	if only.Total != 2 || len(only.Groups) != 1 || only.Groups[0].EnvID != a.ID || only.KindCounts.All != 4 {
+		t.Errorf("kind=unmanaged answered %+v, want A's two unmanaged stacks with the counts unchanged", only)
+	}
+	if rec := f.allStacks(t, f.cookie, "?kind=other"); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("kind=other: %d, want 422", rec.Code)
+	}
+	_ = admin
+}
+
+func TestStackListSaysWhenTheLookForUnmanagedStacksFailedAndStillListsTheManagedOnes(t *testing.T) {
+	t.Parallel()
+	f, a, b := twoStackEnvironments(t, nil)
+	f.seedStack(t, b.ID, "edge-proxy", stacks.TargetSwarm)
+
+	// B's agent is not connected: what it runs cannot be read, so nothing can be discovered there.
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+b.ID))
+	if len(got.Groups) != 1 || !got.Groups[0].DiscoveryFailed || len(got.Groups[0].Stacks) != 1 || got.Groups[0].Stacks[0].Name != "edge-proxy" {
+		t.Errorf("B = %+v, want edge-proxy listed and discoveryFailed", got.Groups)
+	}
+
+	// A has no stacks and discovery works: no group, no failure.
+	ok := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+a.ID))
+	if len(ok.Groups) != 0 {
+		t.Errorf("A = %+v, want no group: it has no stacks of any kind", ok.Groups)
+	}
+}
+
+func TestAllStacksKeepsAGroupForAnEnvironmentWithNoStacksWhoseLookFailed(t *testing.T) {
+	t.Parallel()
+	f, _, b := twoStackEnvironments(t, nil)
+
+	got := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?env="+b.ID))
+
+	if len(got.Groups) != 1 || got.Groups[0].EnvID != b.ID || len(got.Groups[0].Stacks) != 0 || !got.Groups[0].DiscoveryFailed {
+		t.Errorf("groups = %+v, want B's group with no stacks and discoveryFailed, so the page can say so", got.Groups)
+	}
+}
+
+func TestStackNameCheckFollowsTheTarget(t *testing.T) {
+	t.Parallel()
+	t.Run("a swarm takes MyApp", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		code, got, rec := nameCheck(t, admin, "MyApp")
+		if code != http.StatusOK || got.Status != "available" {
+			t.Errorf("name-check MyApp on a swarm = %d %s, want available", code, rec.Body)
+		}
+		// The name travels percent-encoded in the query and is read back whole.
+		code, got, rec = nameCheck(t, admin, "My App&x=1")
+		if code != http.StatusOK || got.Status != "invalid" || got.Message != swarmNameSentence {
+			t.Errorf("name-check with a space and an ampersand = %d %s, want invalid with the swarm sentence", code, rec.Body)
+		}
+	})
+	t.Run("a standalone host refuses it", func(t *testing.T) {
+		t.Parallel()
+		f, e, _ := standaloneEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		code, got, rec := nameCheck(t, admin, "MyApp")
+		if code != http.StatusOK || got.Status != "invalid" || got.Message != standaloneNameSentence {
+			t.Errorf("name-check MyApp on a standalone host = %d %s, want invalid with the standalone sentence", code, rec.Body)
+		}
+		code, got, rec = nameCheck(t, admin, "shop-front")
+		if code != http.StatusOK || got.Status != "available" {
+			t.Errorf("name-check shop-front = %d %s, want available", code, rec.Body)
+		}
+	})
+}
+
+func TestNameRuleIsTheSameForCreateAndAdopt(t *testing.T) {
+	t.Parallel()
+	long61, long62 := strings.Repeat("a", 61), strings.Repeat("a", 62)
+	names := []string{"web", "MyApp", "myapp", "my_app-2", "Shop.Front", "shop.front", "my stack", "a/b", "-web", long61, long62}
+	for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+		t.Run(string(target), func(t *testing.T) {
+			t.Parallel()
+			var f *envFix
+			var e envBody
+			if target == stacks.TargetSwarm {
+				f, e = stackEnv(t, nil)
+			} else {
+				f, e, _ = standaloneEnv(t, nil)
+			}
+			admin := f.caller(t, e, "envadmin-1", "admin")
+			// A managed stack, so that "taken" has something to be taken by: on a swarm MyApp is the same name
+			// as it (case), and so is the 61-byte one.
+			for _, name := range []string{"myapp", long61} {
+				if stacks.NameValid(target, name) {
+					newStack(t, admin, name)
+				}
+			}
+
+			for _, name := range names {
+				valid := stacks.NameValid(target, name)
+				taken := valid && target == stacks.TargetSwarm && (strings.EqualFold(name, "myapp") || name == long61)
+				takenStandalone := valid && target == stacks.TargetStandalone && (name == "myapp" || name == long61)
+				code, got, rec := nameCheck(t, admin, name)
+				switch {
+				case code != http.StatusOK:
+					t.Errorf("name-check %q: %d %s", name, code, rec.Body)
+				case !valid:
+					if got.Status != "invalid" || got.Message != "Use only "+stacks.NameRuleText(target)+"." {
+						t.Errorf("name-check %q = %+v, want invalid with the rule's sentence", name, got)
+					}
+				case taken || takenStandalone:
+					if got.Status != "taken" {
+						t.Errorf("name-check %q = %+v, want taken", name, got)
+					}
+				case got.Status != "available":
+					t.Errorf("name-check %q = %+v, want available", name, got)
+				}
+				// Create and the name check agree on what the rule refuses.
+				if !valid {
+					body, _ := json.Marshal(map[string]string{"name": name})
+					if rec := admin.createStack(string(body)); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" {
+						t.Errorf("create %q: %d %s, want 422 stack_name_invalid", name, rec.Code, rec.Body)
+					}
+				}
+			}
+
+			// Adopting: objects labelled with each name are listed, adoptable exactly when the same rule takes the
+			// name, and the reason is worded from the same rule text as the create refusal. A fresh environment
+			// is read, so that no earlier read of the host is served from the short-lived cache.
+			if target == stacks.TargetSwarm {
+				f, e = stackEnv(t, nil)
+			} else {
+				f, e, _ = standaloneEnv(t, nil)
+			}
+			admin = f.caller(t, e, "envadmin-1", "admin")
+			if target == stacks.TargetSwarm {
+				var svcs []dockertest.FakeService
+				for _, name := range names {
+					svcs = append(svcs, foreignSwarmService(name, "app", 1, 1, nil))
+				}
+				reconfigureSwarm(t, f, e, svcs...)
+			} else {
+				cfg := swarmManagerEngine()
+				cfg.SwarmState, cfg.SwarmControl, cfg.NodeRows = "", false, nil
+				for i, name := range names {
+					cfg.Containers = append(cfg.Containers, dockertest.FakeContainer{
+						ID: "c" + strconv.Itoa(i), Names: []string{"/p" + strconv.Itoa(i) + "-web-1"}, Image: "nginx:1.27", State: "running",
+						Labels: map[string]string{"com.docker.compose.project": name, "com.docker.compose.service": "web"},
+					})
+				}
+				f.fake.Reconfigure(cfg)
+			}
+			listed := map[string]stackAnswer{}
+			for _, it := range listWith(t, admin, "").Items {
+				listed[it.Name] = it
+			}
+			for _, name := range names {
+				it, ok := listed[name]
+				if !ok || it.Unmanaged == nil {
+					t.Errorf("%q is not listed as unmanaged: %+v", name, it)
+					continue
+				}
+				valid := stacks.NameValid(target, name)
+				want := ""
+				if !valid {
+					where := "a swarm"
+					if target == stacks.TargetStandalone {
+						where = "a standalone host"
+					}
+					want = "Bayplan can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
+				}
+				if it.Unmanaged.Adoptable != valid || it.Unmanaged.Reason != want {
+					t.Errorf("%q: adoptable %v reason %q, want adoptable %v reason %q", name, it.Unmanaged.Adoptable, it.Unmanaged.Reason, valid, want)
+				}
+			}
+		})
+	}
+}
+
+// The drift status of the lists (plan 08-21, STK-14, D-22): the newest check of a stack, as the background worker or a
+// person opening its drift page stored it, shows on the list and is a status the list filters and counts by.
+func TestStackListDriftStatusAndCounts(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	calm := newStack(t, admin, "calm")
+	f.deployGood(t, operator, calm.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	moved := newStack(t, admin, "moved")
+	f.deployGood(t, operator, moved.ID, liveValuesCompose("nginx:1.27-alpine", "one"))
+	newStack(t, admin, "idle")
+	f.editLiveService(t, e, "moved", "web", scaleTo(3))
+
+	driftOf := func(got stackListAnswer, name string) *driftSummaryAnswer {
+		for _, it := range got.Items {
+			if it.Name == name {
+				return it.Drift
+			}
+		}
+		t.Fatalf("the list has no stack %s: %v", name, stackNames(got.Items))
+		return nil
+	}
+
+	// Nothing has been checked: no stack shows drift, and the chip counts none.
+	got := listWith(t, operator, "")
+	for _, name := range []string{"calm", "moved", "idle"} {
+		if d := driftOf(got, name); d != nil {
+			t.Errorf("%s shows drift %+v before any check", name, d)
+		}
+	}
+	if got.StatusCounts.Drifted != 0 || len(listWith(t, operator, "?status=drifted").Items) != 0 {
+		t.Fatalf("before any check: counts %+v, want no drifted stack", got.StatusCounts)
+	}
+
+	// The checks are stored, whoever made them.
+	for _, id := range []string{calm.ID, moved.ID} {
+		if rec := operator.do(http.MethodGet, driftPath(id, true), ""); rec.Code != http.StatusOK {
+			t.Fatalf("check %s: %d %s", id, rec.Code, rec.Body)
+		}
+	}
+	got = listWith(t, operator, "")
+	if d := driftOf(got, "moved"); d == nil || d.State != "drifted" || d.Revision != 1 || d.Count == 0 {
+		t.Errorf("moved drift = %+v, want drifted at revision 1 with a count", d)
+	}
+	if d := driftOf(got, "calm"); d == nil || d.State != "none" {
+		t.Errorf("calm drift = %+v, want the check that found none", d)
+	}
+	if d := driftOf(got, "idle"); d != nil {
+		t.Errorf("idle shows drift %+v, it was never deployed", d)
+	}
+	if got.StatusCounts.Drifted != 1 || got.UnfilteredTotal != 3 {
+		t.Errorf("counts = %+v, unfiltered %d, want one drifted of three", got.StatusCounts, got.UnfilteredTotal)
+	}
+	only := listWith(t, operator, "?status=drifted")
+	if names := stackNames(only.Items); !slices.Equal(names, []string{"moved"}) || only.StatusCounts.Drifted != 1 || only.Total != 1 {
+		t.Errorf("status=drifted = %v, total %d, counts %+v, want moved alone with the unfiltered count", names, only.Total, only.StatusCounts)
+	}
+	if got := listWith(t, operator, "?status=drifted&q=calm"); len(got.Items) != 0 || got.StatusCounts.Drifted != 1 {
+		t.Errorf("status=drifted&q=calm = %v with counts %+v, want none listed and the count unchanged", stackNames(got.Items), got.StatusCounts)
+	}
+	all := answerOf[allStacksAnswer](t, f.allStacks(t, f.cookie, "?status=drifted"))
+	if all.StatusCounts.Drifted != 1 || all.Total != 1 {
+		t.Errorf("all stacks status=drifted: total %d, counts %+v, want the one drifted stack", all.Total, all.StatusCounts)
+	}
+
+	// A new deploy makes the old check stale: the badge goes until the next check.
+	f.deployGood(t, operator, moved.ID, liveValuesCompose("nginx:1.28-alpine", "one"))
+	got = listWith(t, operator, "")
+	if d := driftOf(got, "moved"); d != nil || got.StatusCounts.Drifted != 0 {
+		t.Errorf("after a new deploy moved shows drift %+v, counts %+v, want none until it is checked again", d, got.StatusCounts)
 	}
 }

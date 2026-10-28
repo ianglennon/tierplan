@@ -11,6 +11,7 @@ const row = (name: string, state: StackRow["state"], over: Partial<StackRow> = {
   name,
   target: "swarm",
   source: "inline",
+  managed: true,
   state,
   lastDeployedAt: "",
   lastDeployedBy: "",

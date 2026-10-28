@@ -17,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/auth"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/vault"
 )
 
@@ -148,6 +149,131 @@ func TestVersion14DatabaseUpgradesToHeadWithRestartLoopDefaults(t *testing.T) {
 	}
 	assertRestartLoopChecks(t, s)
 	assertRestartLoopMutesTableWorks(t, s)
+}
+
+// TestVersion16DatabaseUpgradesToHeadWithStackHistoryBackfill stages a database as the release before stack
+// history leaves it (schema version 16) with a stack holding a deploy revision and a roll back revision, upgrades
+// it, and checks that the roll back reads origin rollback with the revision it copied, the deploy reads origin
+// deploy, and the stack's adoption record is empty (plan 08-01, D-04).
+func TestVersion16DatabaseUpgradesToHeadWithStackHistoryBackfill(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v16-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 16),
+	})
+	if err != nil || res.To != 16 {
+		t.Fatalf("migrate to version 16: %v (at %d)", err, res.To)
+	}
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('stack_snapshots') WHERE name IN ('origin', 'restored_from')`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("stack_snapshots has the history columns at version 16 (%d, %v)", n, err)
+	}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := s.Write.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'prod', '', 1, 30, 30)`)
+	exec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('st-1', 'env-1', 'web', 'swarm', 'ada', 40)`)
+	// Revision 1 was a deploy; revision 2 a roll back of it (Phase 7 stored the restored seq in base_seq and
+	// recorded a stack_deploys row of kind rollback); revision 3 an update; the draft started from revision 2.
+	const snap = `INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, created_by, created_at) VALUES (?, 'st-1', ?, ?, ?, 1, 'good', 'ada', 50)`
+	exec(snap, "snap-draft", "draft", 0, 2)
+	exec(snap, "snap-1", "revision", 1, 0)
+	exec(snap, "snap-2", "revision", 2, 1)
+	exec(snap, "snap-3", "revision", 3, 2)
+	const dep = `INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, started_by, started_at) VALUES (?, 'st-1', 'env-1', ?, 'done', ?, 'ada', 60)`
+	exec(dep, "dep-1", "deploy", 1)
+	exec(dep, "dep-2", "rollback", 2)
+	exec(dep, "dep-3", "update", 3)
+
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v16-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 16 || up.To < 17 {
+		t.Fatalf("upgrade went %d -> %d, want from 16 to at least 17", up.From, up.To)
+	}
+	for _, c := range []struct {
+		id, origin string
+		restored   int64
+	}{
+		{"snap-draft", "deploy", 0}, {"snap-1", "deploy", 0}, {"snap-2", "rollback", 1}, {"snap-3", "deploy", 0},
+	} {
+		var origin string
+		var restored int64
+		if err := s.Read.QueryRowContext(ctx, `SELECT origin, restored_from FROM stack_snapshots WHERE id = ?`, c.id).Scan(&origin, &restored); err != nil {
+			t.Fatalf("read %s: %v", c.id, err)
+		}
+		if origin != c.origin || restored != c.restored {
+			t.Errorf("%s reads origin %q restored from %d, want %q %d", c.id, origin, restored, c.origin, c.restored)
+		}
+	}
+	var adoption string
+	if err := s.Read.QueryRowContext(ctx, `SELECT adoption FROM stacks WHERE id = 'st-1'`).Scan(&adoption); err != nil || adoption != "{}" {
+		t.Errorf("adoption = %q (%v), want {}", adoption, err)
+	}
+	if _, err := s.Write.ExecContext(ctx, `UPDATE stack_snapshots SET origin = 'copied' WHERE id = 'snap-1'`); err == nil {
+		t.Errorf("an origin outside deploy, update, rollback and adopted was accepted")
+	}
+	if _, err := s.Write.ExecContext(ctx, `UPDATE stack_snapshots SET origin = 'adopted' WHERE id = 'snap-1'`); err != nil {
+		t.Errorf("origin adopted refused: %v", err)
+	}
+}
+
+// TestVersion17DatabaseUpgradesToHeadWithRevisionPlatforms stages a database as the release before the revision
+// platforms leave it (schema version 17) with a stack holding a revision and a draft, upgrades it, and checks that
+// both read no platforms and that platforms can be stored on a revision afterwards (plan 08-33, G-08-4).
+func TestVersion17DatabaseUpgradesToHeadWithRevisionPlatforms(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v17-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 17),
+	})
+	if err != nil || res.To != 17 {
+		t.Fatalf("migrate to version 17: %v (at %d)", err, res.To)
+	}
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('stack_snapshots') WHERE name = 'platforms'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("stack_snapshots has the platforms column at version 17 (%d, %v)", n, err)
+	}
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := s.Write.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	exec(`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'prod', '', 1, 30, 30)`)
+	exec(`INSERT INTO stacks (id, env_id, name, target, created_by, created_at) VALUES ('st-1', 'env-1', 'web', 'swarm', 'ada', 40)`)
+	const snap = `INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, pins, created_by, created_at) VALUES (?, 'st-1', ?, ?, ?, 1, 'good', ?, 'ada', 50)`
+	exec(snap, "snap-draft", "draft", 0, 1, "{}")
+	exec(snap, "snap-1", "revision", 1, 0, `{"web_app":"nginx:1.27@sha256:aaa"}`)
+
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v17-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 17 || up.To < 18 {
+		t.Fatalf("upgrade went %d -> %d, want from 17 to at least 18", up.From, up.To)
+	}
+	for _, id := range []string{"snap-draft", "snap-1"} {
+		var platforms, pins string
+		if err := s.Read.QueryRowContext(ctx, `SELECT platforms, pins FROM stack_snapshots WHERE id = ?`, id).Scan(&platforms, &pins); err != nil {
+			t.Fatalf("read %s: %v", id, err)
+		}
+		if platforms != "{}" {
+			t.Errorf("%s reads platforms %q, want {}", id, platforms)
+		}
+		if id == "snap-1" && pins != `{"web_app":"nginx:1.27@sha256:aaa"}` {
+			t.Errorf("%s pins changed to %q by the upgrade", id, pins)
+		}
+	}
+	if _, err := s.Q.SetSnapshotPlatforms(ctx, sqlc.SetSnapshotPlatformsParams{Platforms: `{"web_app":[{"Architecture":"amd64","OS":"linux"}]}`, ID: "snap-1"}); err != nil {
+		t.Errorf("platforms could not be stored on the upgraded revision: %v", err)
+	}
 }
 
 // assertRestartLoopChecks checks that the two thresholds refuse values outside 2 to 50

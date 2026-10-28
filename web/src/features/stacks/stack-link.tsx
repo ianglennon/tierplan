@@ -4,6 +4,8 @@
 import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -21,19 +23,39 @@ const linkClass =
   "rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
 
 // StackLink draws a stack's name on a page that is not the stack's own (UI-SPEC "Links on other
-// pages"): a link to the stack when the server says Bayplan manages it, plain text when it does not.
-// A stack that docker stack deploy made stays text until adoption exists (Phase 8). The address is
-// built by the router from the confirmed ID, never from the label text.
+// pages"): a link to the stack when the server says Bayplan manages it. For a stack it does not manage (a
+// swarm namespace or Compose project that docker stack deploy, docker compose or Portainer made) it is a link to
+// the stack's read-only page, with the Tooltip "Not managed by Bayplan.", and plain text only for a user who cannot
+// read stacks on the environment. The address is built by the router from the confirmed ID, or from the name for
+// a stack that has none, never from the label's text joined into a path.
 export function StackLink({ envId, name, bayplanStackId, className }: StackLinkProps) {
-  if (!bayplanStackId) return <>{name}</>;
+  const t = useT();
+  const canRead = usePermission("stacks.read", envId);
+  if (bayplanStackId) {
+    return (
+      <Link
+        to="/env/$envId/stacks/$stackId"
+        params={{ envId, stackId: bayplanStackId }}
+        className={cn(linkClass, className)}
+      >
+        {name}
+      </Link>
+    );
+  }
+  if (!canRead) return <>{name}</>;
   return (
-    <Link
-      to="/env/$envId/stacks/$stackId"
-      params={{ envId, stackId: bayplanStackId }}
-      className={cn(linkClass, className)}
-    >
-      {name}
-    </Link>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to="/env/$envId/unmanaged-stacks/$name"
+          params={{ envId, name }}
+          className={cn(linkClass, className)}
+        >
+          {name}
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent>{t("stackUnmanagedPage.link.tooltip")}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -58,9 +80,9 @@ interface StackSentenceProps extends Omit<StackLinkProps, "name" | "className"> 
 }
 
 // StackSentence is a translated sentence that names a stack, with the name a StackLink: the words stay
-// exactly as they were, and only the name becomes a link when Bayplan manages the stack (UI-SPEC "Links
-// on other pages": "Unchanged text; the stack name inside them is a link"). For any other stack it is the
-// plain sentence.
+// exactly as they were, and only the name becomes a link (UI-SPEC "Links on other pages": "Unchanged text; the
+// stack name inside them is a link"), to the stack when Bayplan manages it and to its read-only page when it
+// does not. For a user who cannot read stacks it is the plain sentence.
 export function StackSentence({
   i18nKey,
   values = {},
@@ -70,7 +92,6 @@ export function StackSentence({
   bayplanStackId,
 }: StackSentenceProps) {
   const t = useT();
-  if (!bayplanStackId) return <>{t(i18nKey, { ...values, [variable]: stack })}</>;
   const parts = t(i18nKey, { ...values, [variable]: MARK }).split(MARK);
   // The text before the first name, then each name with the text after it.
   let n = 0;

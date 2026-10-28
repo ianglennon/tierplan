@@ -242,6 +242,19 @@ func isDigits(s string) bool {
 	return s != ""
 }
 
+// keepVolumes is the answer the Compose SDK gets to every question it asks during an up: no (D-46). The only
+// question an up reaches is the one the reconciler asks when a named volume exists but its driver, options or
+// labels differ from the compose file: "Recreate (data will be lost)?". The SDK's always-yes prompt answered
+// it by removing the volume and creating it again, which deleted the data of a stack because someone edited a
+// label. Answering no is what a person does at the CLI to keep the data: the volume stays as it is, the
+// deploy goes on, and the containers mount the existing volume. The question is logged at Info through the
+// SDK's logging, which InitCompose sends to slog, so the operator can see which volume was left alone.
+// Changing a volume's settings needs the volume removed by hand and the stack deployed again.
+func keepVolumes(message string, _ bool) (bool, error) {
+	logrus.Info(message + " Bayplan answers no and keeps the volume as it is.")
+	return false, nil
+}
+
 // composeService builds the SDK for one deploy over this client, wrapped in the guard. Each deploy gets an
 // instance of its own, so the events of one reach only its callback.
 func (c *Client) composeService(p *types.Project, on func(ComposeEvent)) (api.Compose, error) {
@@ -268,7 +281,7 @@ func (c *Client) composeService(p *types.Project, on func(ComposeEvent)) (api.Co
 	}
 	svc, err := compose.NewComposeService(cli,
 		compose.WithMaxConcurrency(composeMaxConcurrency),
-		compose.WithPrompt(compose.AlwaysOkPrompt()),
+		compose.WithPrompt(keepVolumes),
 		compose.WithStreams(io.Discard, io.Discard, strings.NewReader("")),
 		compose.WithEventProcessor(&eventBridge{project: p, on: on}),
 	)
@@ -405,6 +418,8 @@ type ComposeContainer struct {
 	// Image is the image the container was created from, as the engine lists it: the reference it was
 	// created with (repo:tag@sha256:...), or the image ID once the reference has moved.
 	Image string
+	// ImageID is the ID of the image the container was created from, which a moved tag does not change.
+	ImageID string
 	// State is the engine's state word (running, exited, created ...), Health none, starting, healthy
 	// or unhealthy.
 	State, Health string
@@ -427,7 +442,7 @@ func (c *Client) ComposeContainers(ctx context.Context, project string) ([]Compo
 		}
 		out = append(out, ComposeContainer{
 			ID: r.ID, Name: r.Name, Service: r.Labels[api.ServiceLabel], ConfigHash: r.Labels[api.ConfigHashLabel],
-			Image: r.Image, State: r.State, Health: r.Health, Labels: r.Labels,
+			Image: r.Image, ImageID: r.ImageID, State: r.State, Health: r.Health, Labels: r.Labels,
 		})
 	}
 	return out, nil
@@ -438,3 +453,14 @@ func (c *Client) ComposeContainers(ctx context.Context, project string) ([]Compo
 // of the service as it is now is recreated by the next Up. It leaves out what the SDK leaves out (build,
 // pull policy, scale, replicas, depends_on, profiles), and custom labels are not in it.
 func ServiceHash(svc types.ServiceConfig) (string, error) { return compose.ServiceHash(svc) }
+
+// ComposeNetworkHash is the configuration hash the Compose SDK stamps on a network it creates
+// (com.docker.compose.config-hash), computed the same way: the next Up recreates a network whose label
+// differs from the hash of the network as the project declares it now. cfg is the network as a deploy loads
+// and prepares it, so its name is the engine's. Bayplan's own labels (CustomLabels) are not in it.
+func ComposeNetworkHash(cfg *types.NetworkConfig) (string, error) { return compose.NetworkHash(cfg) }
+
+// ComposeVolumeHash is ComposeNetworkHash for a volume. A volume whose label differs from the hash of the
+// volume as the project declares it now is the one the SDK would ask to recreate (and lose the data of), so
+// an adopted stack declares only the form whose hash is the label (D-46).
+func ComposeVolumeHash(cfg types.VolumeConfig) (string, error) { return compose.VolumeHash(cfg) }

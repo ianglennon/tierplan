@@ -7,9 +7,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/moby/moby/api/types/swarm"
+	"modernc.org/sqlite"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
@@ -219,11 +224,11 @@ func TestNewRevisionCopiesTheDraftAndSealsSecretsUnderTheNewSnapshot(t *testing.
 	ctx := context.Background()
 	wc := stacks.WorkingCopy{Files: []stacks.File{compose("a")}, Vars: []stacks.Var{{Name: "K", Value: "secret", Secret: true}}}
 	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", wc)
-	rev1, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev1, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatalf("NewRevision: %v", err)
 	}
-	rev2, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev2, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatalf("NewRevision: %v", err)
 	}
@@ -296,7 +301,7 @@ func TestDraftStatesSeeASaveAfterTheLastDeploy(t *testing.T) {
 	if !states() {
 		t.Error("a saved, undeployed draft does not read as a draft")
 	}
-	if _, err := f.repo.NewRevision(ctx, st.ID, "ada"); err != nil {
+	if _, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy); err != nil {
 		t.Fatal(err)
 	}
 	if states() {
@@ -388,7 +393,7 @@ func TestDraftOfAStackWithNoneFallsBackToTheLastGoodRevision(t *testing.T) {
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{
 		Files: []stacks.File{compose("deployed")}, Vars: []stacks.Var{{Name: "PORT", Value: "80"}},
 	})
-	rev, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	rev, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +401,7 @@ func TestDraftOfAStackWithNoneFallsBackToTheLastGoodRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later revision that failed is not what is deployed.
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "bob")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +450,7 @@ func TestSavingAfterADiscardStartsAFreshDraft(t *testing.T) {
 	f := newRepo(t)
 	ctx := context.Background()
 	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
-	rev, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	rev, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +534,7 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		t.Fatalf("GoodPins of a stack with no good revision = %v, %v; want none", got, err)
 	}
 
-	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa", "web_db": "registry.example:5000/db:2@sha256:bbb"}); err != nil {
 		t.Fatalf("SetPins: %v", err)
 	}
@@ -538,7 +543,7 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A later revision that failed, with its own pins, is not what runs.
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetPins(ctx, failed.ID, map[string]string{"web_app": "nginx:1.28@sha256:ccc"}); err != nil {
 		t.Fatal(err)
 	}
@@ -554,8 +559,162 @@ func TestPinsAreStoredOnARevisionAndTheLastGoodOnesReadBack(t *testing.T) {
 		"web_app": {AsWritten: "nginx:1.27", Image: "nginx:1.27@sha256:aaa"},
 		"web_db":  {AsWritten: "registry.example:5000/db:2", Image: "registry.example:5000/db:2@sha256:bbb"},
 	}
-	if len(got) != len(want) || got["web_app"] != want["web_app"] || got["web_db"] != want["web_db"] {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("GoodPins = %+v, want %+v", got, want)
+	}
+}
+
+// GoodPins answers each pin with the platforms the newest good revision recorded for that service: a service without a
+// record has none, a record of a service that has no pin is dropped, and a revision that ended failed never counts
+// (G-08-4, P7 D-18).
+func TestGoodPinsCarryThePlatformsTheLastGoodRevisionRecorded(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err := f.repo.SetPins(ctx, good.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa", "web_db": "db:2@sha256:bbb"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetPlatforms(ctx, good.ID, map[string][]swarm.Platform{"web_app": {amd, arm}, "web_gone": {amd}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err := f.repo.SetPins(ctx, failed.ID, map[string]string{"web_app": "nginx:1.28@sha256:ccc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetPlatforms(ctx, failed.ID, map[string][]swarm.Platform{"web_app": {amd}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.repo.GoodPins(ctx, st.ID)
+	if err != nil {
+		t.Fatalf("GoodPins: %v", err)
+	}
+	want := map[string]stacks.LivePin{
+		"web_app": {AsWritten: "nginx:1.27", Image: "nginx:1.27@sha256:aaa", Platforms: []swarm.Platform{amd, arm}},
+		"web_db":  {AsWritten: "db:2", Image: "db:2@sha256:bbb"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("GoodPins = %+v, want %+v", got, want)
+	}
+}
+
+func TestPlatformsAreStoredOnARevisionAndReadBackByService(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A revision nobody stored platforms on reads none.
+	if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 {
+		t.Fatalf("Revision before SetPlatforms = %v, %v; want no platforms", got.Platforms, err)
+	}
+
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	want := map[string][]swarm.Platform{"web_app": {amd, arm}, "web_db": {amd}}
+	if err := f.repo.SetPlatforms(ctx, rev.ID, want); err != nil {
+		t.Fatalf("SetPlatforms: %v", err)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, rev.Seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Platforms, want) {
+		t.Errorf("Revision platforms = %v, want %v", got.Platforms, want)
+	}
+	// The pins of the revision are not touched by storing its platforms, nor its platforms by its pins.
+	if err := f.repo.SetPins(ctx, rev.ID, map[string]string{"web_app": "nginx:1.27@sha256:aaa"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok, err := f.repo.LatestGoodRevision(ctx, st.ID)
+	if err != nil || !ok || !reflect.DeepEqual(latest.Platforms, want) {
+		t.Errorf("LatestGoodRevision platforms = %v (found %v, %v), want %v", latest.Platforms, ok, err, want)
+	}
+
+	// nil stores the empty record, which reads none.
+	if err := f.repo.SetPlatforms(ctx, rev.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 {
+		t.Errorf("Revision after SetPlatforms(nil) = %v, %v; want no platforms", got.Platforms, err)
+	}
+}
+
+// A revision whose stored platforms cannot be read still opens everywhere a revision is read, with no platforms, and the
+// problem is logged (T-08-109). The test sets the default logger, so it does not run in parallel with the rest.
+func TestARevisionWithUnreadablePlatformsStillOpensWithNone(t *testing.T) {
+	f := newRepo(t)
+	ctx := context.Background()
+	st, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"not json", `{"web_app": "linux/amd64"}`, `[1, 2]`} {
+		for _, id := range []string{rev.ID, draft.ID} {
+			if _, err := f.repo.Store.Write.ExecContext(ctx, `UPDATE stack_snapshots SET platforms = ? WHERE id = ?`, bad, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var logs bytes.Buffer
+		old := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+
+		if got, err := f.repo.Revision(ctx, st.ID, rev.Seq); err != nil || len(got.Platforms) != 0 || len(got.Copy.Files) == 0 {
+			t.Errorf("platforms %q: Revision = %v, %v; want it read, with no platforms", bad, got.Platforms, err)
+		}
+		if got, ok, err := f.repo.LatestGoodRevision(ctx, st.ID); err != nil || !ok || len(got.Platforms) != 0 {
+			t.Errorf("platforms %q: LatestGoodRevision = %v, %v, %v; want it read, with no platforms", bad, got.Platforms, ok, err)
+		}
+		if got, err := f.repo.Draft(ctx, st.ID); err != nil || len(got.Platforms) != 0 || !got.IsDraft {
+			t.Errorf("platforms %q: Draft = %v, %v; want it read, with no platforms", bad, got.Platforms, err)
+		}
+		slog.SetDefault(old)
+		if !strings.Contains(logs.String(), "could not read the platforms of a stack revision") {
+			t.Errorf("platforms %q: the problem was not logged: %q", bad, logs.String())
+		}
+	}
+
+	// The stack with no draft starts from its last good revision: that path reads it too.
+	if _, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.repo.Draft(ctx, st.ID); err != nil || got.IsDraft || len(got.Platforms) != 0 || got.BaseSeq != rev.Seq {
+		t.Errorf("Draft of a stack with no draft = base %d, platforms %v, %v; want the last good revision's content with no platforms", got.BaseSeq, got.Platforms, err)
+	}
+}
+
+func TestSetPlatformsRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	_, draft, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("x")}})
+	plat := map[string][]swarm.Platform{"web_app": {{OS: "linux", Architecture: "amd64"}}}
+	if err := f.repo.SetPlatforms(ctx, "nope", plat); err == nil {
+		t.Error("SetPlatforms of an unknown snapshot succeeded")
+	}
+	if err := f.repo.SetPlatforms(ctx, draft.ID, plat); err == nil {
+		t.Error("SetPlatforms of a draft succeeded: only a revision has platforms")
 	}
 }
 
@@ -690,7 +849,7 @@ func TestARevisionKeepsASecretFileSealedUnderItsOwnRow(t *testing.T) {
 	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", filesOf(composeWithTokFile, stacks.File{Path: "tok.txt", Content: []byte("TOP-SECRET-TOKEN")})); err != nil {
 		t.Fatal(err)
 	}
-	rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +882,7 @@ func TestARevisionKeepsItsRenderingThroughItsOutcomeAndOnlyAGoodOneIsTheBase(t *
 		t.Fatalf("GoodRendering of a stack with no good revision = %q, %v; want none", got, err)
 	}
 
-	good, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	good, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetRendered(ctx, good.ID, []byte("services:\n  web: {}\n")); err != nil {
 		t.Fatalf("SetRendered: %v", err)
 	}
@@ -731,7 +890,7 @@ func TestARevisionKeepsItsRenderingThroughItsOutcomeAndOnlyAGoodOneIsTheBase(t *
 	if err := f.repo.SetOutcome(ctx, good.ID, stackops.OutcomeGood, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 	if err := f.repo.SetRendered(ctx, failed.ID, []byte("services:\n  other: {}\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -764,7 +923,7 @@ func TestSetRenderedRefusesARevisionThatDoesNotExistAndADraft(t *testing.T) {
 func goodRevision(t *testing.T, f repoFixture, stackID, actor string) stackops.Snapshot {
 	t.Helper()
 	ctx := context.Background()
-	rev, err := f.repo.NewRevision(ctx, stackID, actor)
+	rev, err := f.repo.NewRevision(ctx, stackID, actor, stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +1022,7 @@ func TestGoodRevisionInfoNamesWhoDeployedTheNewestGoodRevision(t *testing.T) {
 	}
 	goodRevision(t, f, st.ID, "ada")
 	second := goodRevision(t, f, st.ID, "bob")
-	failed, _ := f.repo.NewRevision(ctx, st.ID, "cy")
+	failed, _ := f.repo.NewRevision(ctx, st.ID, "cy", stackops.OriginDeploy)
 	if err := f.repo.SetOutcome(ctx, failed.ID, stackops.OutcomeFailed, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -890,14 +1049,14 @@ func TestMarkInterruptedEndsRunningDeploysAndFailsTheirPendingRevisions(t *testi
 	}
 	// run: a deploy that was running with its revision pending. finished: one that ended good.
 	run, finished := mk("run"), mk("finished")
-	revRun, err := f.repo.NewRevision(ctx, run.ID, "ada")
+	revRun, err := f.repo.NewRevision(ctx, run.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.repo.StartDeploy(ctx, run.ID, f.envID, stackops.DeployKindDeploy, revRun.Seq, "job-1", "ada"); err != nil {
 		t.Fatal(err)
 	}
-	revDone, err := f.repo.NewRevision(ctx, finished.ID, "ada")
+	revDone, err := f.repo.NewRevision(ctx, finished.ID, "ada", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -961,7 +1120,7 @@ func TestRollbackTargetIsTheLastRevisionThatRanWell(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, outcome := range tc.outcomes {
-				rev, err := f.repo.NewRevision(ctx, st.ID, "ada")
+				rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1007,7 +1166,7 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	if err := f.repo.SetRendered(ctx, good.ID, []byte("rendered: yes\n")); err != nil {
 		t.Fatal(err)
 	}
-	bad, err := f.repo.NewRevision(ctx, st.ID, "bob")
+	bad, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginDeploy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1178,7 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	if err != nil || !ok || target.ID != good.ID {
 		t.Fatalf("target = %+v, %v, %v", target, ok, err)
 	}
-	cp, err := f.repo.CopyRevision(ctx, target, "cyd")
+	cp, err := f.repo.CopyRevision(ctx, target, "cyd", stackops.OriginRollback)
 	if err != nil {
 		t.Fatalf("CopyRevision: %v", err)
 	}
@@ -1061,6 +1220,51 @@ func TestCopyRevisionTakesTheContentPinsAndRenderingAsANewRevision(t *testing.T)
 	}
 }
 
+// A roll back revision starts with the platforms of the revision it restores, as it starts with its pins, so a roll back
+// that stops before its lookup step still holds a record of what it was about to send (G-08-4, 08-33 note).
+func TestCopyRevisionTakesThePlatformsOfTheRevisionItCopies(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {a: {image: x}}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := goodRevision(t, f, st.ID, "ada")
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	want := map[string][]swarm.Platform{"web_a": {amd}}
+	if err := f.repo.SetPlatforms(ctx, good.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	target, err := f.repo.Revision(ctx, st.ID, good.Seq)
+	if err != nil || !reflect.DeepEqual(target.Platforms, want) {
+		t.Fatalf("target = %+v, %v, want platforms %v", target, err, want)
+	}
+	cp, err := f.repo.CopyRevision(ctx, target, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatalf("CopyRevision: %v", err)
+	}
+	if !reflect.DeepEqual(cp.Platforms, want) {
+		t.Errorf("copy answers platforms %v, want %v", cp.Platforms, want)
+	}
+	read, err := f.repo.Revision(ctx, st.ID, cp.Seq)
+	if err != nil || !reflect.DeepEqual(read.Platforms, want) {
+		t.Errorf("stored copy platforms = %v, %v, want %v", read.Platforms, err, want)
+	}
+	// A revision with no record copies to none.
+	plain, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp2, err := f.repo.CopyRevision(ctx, plain, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read2, err := f.repo.Revision(ctx, st.ID, cp2.Seq); err != nil || len(read2.Platforms) != 0 {
+		t.Errorf("copy of an unrecorded revision has platforms %v, %v, want none", read2.Platforms, err)
+	}
+}
+
 func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 	t.Parallel()
 	f := newRepo(t)
@@ -1070,7 +1274,7 @@ func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 		t.Fatal(err)
 	}
 	good := goodRevision(t, f, st.ID, "ada")
-	cp, err := f.repo.CopyRevision(ctx, good, "ada")
+	cp, err := f.repo.CopyRevision(ctx, good, "ada", stackops.OriginRollback)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1085,5 +1289,295 @@ func TestMarkInterruptedFailsTheRevisionOfARollBackToo(t *testing.T) {
 	}
 	if rev, _ := f.repo.Revision(ctx, st.ID, good.Seq); rev.Outcome != stackops.OutcomeGood {
 		t.Errorf("the restored revision = %+v, must stay good", rev)
+	}
+}
+
+func TestRevisionsRecordTheirOrigin(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deploy := goodRevision(t, f, st.ID, "ada")
+	update, err := f.repo.NewRevision(ctx, st.ID, "bob", stackops.OriginUpdate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, update.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	rollback, err := f.repo.CopyRevision(ctx, deploy, "cyd", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name         string
+		got          stackops.Snapshot
+		seq          int64
+		origin       string
+		restoredFrom int64
+	}{
+		{"deploy", deploy, 1, stackops.OriginDeploy, 0},
+		{"update", update, 2, stackops.OriginUpdate, 0},
+		{"rollback", rollback, 3, stackops.OriginRollback, deploy.Seq},
+	} {
+		if c.got.Seq != c.seq || c.got.Origin != c.origin || c.got.RestoredFrom != c.restoredFrom {
+			t.Errorf("%s returned seq %d origin %q restored from %d, want %d %q %d", c.name, c.got.Seq, c.got.Origin, c.got.RestoredFrom, c.seq, c.origin, c.restoredFrom)
+		}
+		read, err := f.repo.Revision(ctx, st.ID, c.seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read.Origin != c.origin || read.RestoredFrom != c.restoredFrom {
+			t.Errorf("%s reads back origin %q restored from %d, want %q %d", c.name, read.Origin, read.RestoredFrom, c.origin, c.restoredFrom)
+		}
+	}
+	// A roll back adds a revision; the one it copied is not rewritten.
+	if orig, err := f.repo.Revision(ctx, st.ID, deploy.Seq); err != nil || orig.Origin != stackops.OriginDeploy || orig.RestoredFrom != 0 || orig.Outcome != stackops.OutcomeGood {
+		t.Errorf("the revision a roll back copied = %+v, %v, want it unchanged", orig, err)
+	}
+}
+
+// A roll back leaves the draft as it is (plan 08-03, D-03, RESEARCH Pitfall 8): the draft still reads as holding
+// changes that were not deployed when it did before, and as clean when it was.
+
+// rolledBackTo copies revision seq of the stack into a new revision of origin rollback, as a roll back does, and
+// marks it good.
+func rolledBackTo(t *testing.T, f repoFixture, stackID string, seq int64) stackops.Snapshot {
+	t.Helper()
+	ctx := context.Background()
+	from, err := f.repo.Revision(ctx, stackID, seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.CopyRevision(ctx, from, "ada", stackops.OriginRollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	return rev
+}
+
+func TestRollbackKeepsTheDraftPending(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
+	goodRevision(t, f, st.ID, "ada")
+	goodRevision(t, f, st.ID, "ada")
+	goodRevision(t, f, st.ID, "ada")
+	// An edit saved after revision 3 and before the roll back to revision 1.
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("edited")}}); err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		saves, err := f.repo.DraftSaves(ctx, f.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saves[st.ID].Pending
+	}
+	if !pending() {
+		t.Fatal("the saved draft does not read as holding changes before the roll back")
+	}
+
+	rev := rolledBackTo(t, f, st.ID, 1)
+	if rev.Seq != 4 {
+		t.Fatalf("roll back revision = %d, want 4", rev.Seq)
+	}
+	if !pending() {
+		t.Error("a roll back hid the Draft badge: the draft still holds changes that were not deployed")
+	}
+	draft, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || !draft.IsDraft || draft.Version != 2 || string(draft.Copy.Compose()) != "edited" {
+		t.Errorf("draft after the roll back = %+v, %v, want version 2 with the edit untouched", draft, err)
+	}
+}
+
+func TestRollbackKeepsAnUnchangedDraftClean(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("a")}})
+	goodRevision(t, f, st.ID, "ada")
+	// The edit was saved and then deployed: nothing is pending.
+	if _, _, err := f.repo.SaveDraft(ctx, st.ID, 1, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("b")}}); err != nil {
+		t.Fatal(err)
+	}
+	goodRevision(t, f, st.ID, "ada")
+	pending := func() bool {
+		saves, err := f.repo.DraftSaves(ctx, f.envID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saves[st.ID].Pending
+	}
+	if pending() {
+		t.Fatal("a deployed draft reads as holding changes before the roll back")
+	}
+
+	rolledBackTo(t, f, st.ID, 1)
+	if pending() {
+		t.Error("a roll back made a draft with no changes read as holding some")
+	}
+}
+
+// TestAdoptWritesOneTransaction: the adopted stack, its draft at version 1 and revision 1 are stored together, with
+// the same content, the revision good and pinned and carrying its rendering, and the draft reading as having no
+// changes. A second adoption of the name stores nothing.
+func TestAdoptWritesOneTransaction(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	copy := stacks.WorkingCopy{Files: []stacks.File{compose("services:\n  web:\n    image: nginx:1.27\n")}}
+	rec := stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada", Copy: copy,
+		Pins:     map[string]string{"legacy_web": "nginx:1.27@sha256:" + strings.Repeat("a", 64)},
+		Rendered: []byte("rendered: yes\n"),
+		Adoption: stacks.Adoption{PriorID: "old", Networks: []string{"legacy_back"}, Secrets: []string{"legacy_pw"}, Pending: true},
+	}
+
+	st, rev, err := f.repo.Adopt(ctx, rec)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+
+	if st.Source.Kind != stacks.SourceAdopted || st.Source.Ref != "legacy" || st.CreatedBy != "ada" || st.Target != stacks.TargetSwarm {
+		t.Errorf("stack = %+v, want an adopted swarm stack made by ada, sourced from legacy", st)
+	}
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Source.Kind != stacks.SourceAdopted || !read.Adoption.Pending || read.Adoption.PriorID != "old" ||
+		len(read.Adoption.Networks) != 1 || read.Adoption.Networks[0] != "legacy_back" || read.Adoption.Secrets[0] != "legacy_pw" {
+		t.Errorf("stored adoption = %+v, want the record back", read.Adoption)
+	}
+	if rev.Kind != stackops.KindRevision || rev.Seq != 1 || rev.Origin != stackops.OriginAdopted || rev.Outcome != stackops.OutcomeGood {
+		t.Errorf("revision = %+v, want revision 1 of origin adopted, good", rev)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, 1)
+	if err != nil || string(got.Copy.Compose()) != string(copy.Compose()) {
+		t.Fatalf("Revision 1 = %+v, %v", got, err)
+	}
+	pins, err := f.repo.RevisionPins(ctx, got.ID)
+	if err != nil || pins["legacy_web"] == "" {
+		t.Errorf("pins = %v, %v, want the running digest", pins, err)
+	}
+	if r, err := f.repo.RevisionRendering(ctx, got.ID); err != nil || string(r) != "rendered: yes\n" {
+		t.Errorf("rendering = %q, %v", r, err)
+	}
+	draft, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || !draft.IsDraft || draft.Version != 1 || draft.BaseSeq != 1 || string(draft.Copy.Compose()) != string(copy.Compose()) {
+		t.Errorf("draft = %+v, %v, want version 1 based on revision 1 with the same content", draft, err)
+	}
+	// The draft and the revision are made at one instant, so the draft shows no changes.
+	saves, err := f.repo.DraftSaves(ctx, f.envID)
+	if err != nil || saves[st.ID].Pending {
+		t.Errorf("DraftSaves = %+v, %v, want an adopted draft with no changes", saves[st.ID], err)
+	}
+	if good, ok, err := f.repo.GoodRevisionInfo(ctx, st.ID); err != nil || !ok || good.Seq != 1 {
+		t.Errorf("GoodRevisionInfo = %+v, %v, %v, want revision 1", good, ok, err)
+	}
+
+	if _, _, err := f.repo.Adopt(ctx, rec); !errors.Is(err, stackops.ErrNameTaken) {
+		t.Errorf("a second Adopt = %v, want ErrNameTaken", err)
+	}
+	list, err := f.repo.Stacks(ctx, f.envID)
+	if err != nil || len(list) != 1 {
+		t.Errorf("Stacks = %+v, %v, want the one adopted stack", list, err)
+	}
+}
+
+// TestAdoptKeepsTheCauseWhenStoringThePlatformsFails (IN-04): the error of a refused platforms write keeps its chain, so a
+// caller can still tell what the database said (a cancelled context, a busy database) and nothing is stored.
+func TestAdoptKeepsTheCauseWhenStoringThePlatformsFails(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	if _, err := f.repo.Store.Write.ExecContext(ctx, `CREATE TRIGGER refuse_platforms BEFORE UPDATE OF platforms ON stack_snapshots
+		BEGIN SELECT RAISE(ABORT, 'platforms refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}},
+	})
+	if err == nil {
+		t.Fatal("Adopt = nil, want the refused platforms write")
+	}
+	var sqlErr *sqlite.Error
+	if !errors.As(err, &sqlErr) {
+		t.Errorf("Adopt error %q does not wrap the database error, want it wrapped with %%w", err)
+	}
+	var n int
+	if err := f.repo.Store.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM stacks WHERE name = 'legacy'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("stacks named legacy = %d, %v, want none stored after the failure", n, err)
+	}
+}
+
+// TestSetAdoptionReplacesTheRecord: the first deploy clears Pending through it, and a stack that is gone is refused.
+func TestSetAdoptionReplacesTheRecord(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}}, Adoption: stacks.Adoption{Pending: true, Volumes: []string{"legacy_data"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetAdoption(ctx, st.ID, stacks.Adoption{Volumes: []string{"legacy_data"}}); err != nil {
+		t.Fatalf("SetAdoption: %v", err)
+	}
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil || read.Adoption.Pending || len(read.Adoption.Volumes) != 1 {
+		t.Errorf("stored adoption = %+v, %v, want Pending cleared and the volume kept", read.Adoption, err)
+	}
+	if err := f.repo.SetAdoption(ctx, "no-such-stack", stacks.Adoption{}); !errors.Is(err, stackops.ErrStackNotFound) {
+		t.Errorf("SetAdoption of a missing stack = %v, want ErrStackNotFound", err)
+	}
+}
+
+// TestClearAdoptionPending: the first good deploy ends the pending window and keeps the rest of the record, a stack
+// that was not adopted is left as it is, and a stack that is gone is refused (D-16).
+func TestClearAdoptionPending(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, err := f.repo.Adopt(ctx, stackops.AdoptRecord{
+		EnvID: f.envID, Name: "legacy", Target: stacks.TargetSwarm, SourceRef: "legacy", Actor: "ada",
+		Copy: stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}},
+		Adoption: stacks.Adoption{
+			Pending: true, PriorID: "stk-old", Networks: []string{"legacy_back"}, Volumes: []string{"legacy_data"},
+			Secrets: []string{"legacy_pw"}, Gaps: map[string][]string{"legacy_web": {"Env"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.repo.ClearAdoptionPending(ctx, st.ID); err != nil {
+		t.Fatalf("ClearAdoptionPending: %v", err)
+	}
+
+	read, err := f.repo.Stack(ctx, f.envID, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := read.Adoption
+	if a.Pending || a.PriorID != "stk-old" || len(a.Networks) != 1 || len(a.Volumes) != 1 || len(a.Secrets) != 1 || len(a.Gaps["legacy_web"]) != 1 {
+		t.Errorf("stored adoption = %+v, want Pending cleared and every other field kept", a)
+	}
+	if err := f.repo.ClearAdoptionPending(ctx, st.ID); err != nil {
+		t.Errorf("ClearAdoptionPending again = %v, want it to be harmless", err)
+	}
+	if err := f.repo.ClearAdoptionPending(ctx, "no-such-stack"); !errors.Is(err, stackops.ErrStackNotFound) {
+		t.Errorf("ClearAdoptionPending of a missing stack = %v, want ErrStackNotFound", err)
 	}
 }

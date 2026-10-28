@@ -1,0 +1,56 @@
+{
+  "stackUnmanagedPage": {
+    "meta": "{{env}} · Not managed by Bayplan",
+    "note": {
+      "title": "Bayplan doesn't manage this stack",
+      "body": "You can look at it here. Adopt it to deploy, update and roll it back with Bayplan. Adopting changes nothing until you deploy."
+    },
+    "orphan": {
+      "title": "Created by Bayplan (another instance or a lost record)",
+      "body": "This stack carries a Bayplan ID that this instance doesn't know. Adopting it works like any other stack, and the first deploy replaces the old ID labels."
+    },
+    "portainer": {
+      "title": "This stack looks like it was created by Portainer",
+      "body": "Remove it from Portainer without deleting it, or the two tools will fight over it. Bayplan doesn't contact Portainer."
+    },
+    "owner": {
+      "bayplan": "Bayplan",
+      "agent": "Bayplan agent"
+    },
+    "details": {
+      "title": "Details",
+      "environment": "Environment",
+      "target": "Target",
+      "source": "Source",
+      "sourceValue": "Unmanaged",
+      "foundBy": "Found by",
+      "foundByValue": "Label {{label}} = {{value}}",
+      "services": "Services",
+      "servicesValue_one": "{{count, number}} service",
+      "servicesValue_other": "{{count, number}} services"
+    },
+    "services": {
+      "empty": "No service of this stack is running."
+    },
+    "resources": {
+      "caption": "Labelled objects would be owned by the stack after adopting. The others stay external."
+    },
+    "gone": {
+      "heading": "This stack is gone",
+      "body": "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",
+      "back": "Back to stacks",
+      "open": "Open stack"
+    },
+    "error": {
+      "loadFailed": "Couldn't load {{name}}.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading {{name}}"
+    },
+    "actions": {
+      "open": "Open stack"
+    },
+    "link": {
+      "tooltip": "Not managed by Bayplan."
+    }
+  }
+}

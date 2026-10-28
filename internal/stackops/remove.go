@@ -102,6 +102,7 @@ type ownedStack struct {
 // the volumes of every node, fresh, and counts the containers outside the stack that mount each.
 func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes bool) (ownedStack, error) {
 	var out ownedStack
+	own := OwnershipOf(st)
 	if st.Target == stacks.TargetStandalone {
 		node, err := d.StandaloneNode(ctx, envID)
 		if err != nil {
@@ -112,17 +113,17 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 			if e != nil {
 				return e
 			}
-			for _, row := range cs {
-				if ownsLabels(st, row.Labels) {
-					out.containers = append(out.containers, row)
-				}
-			}
-			nets, e := c.NetworksWithLabel(ctx, stacks.LabelComposeProject, st.Name)
+			// The stack's own containers and the ones someone added to its project from the host CLI (docker compose up
+			// --scale, no bayplan.stack.id) are what a removal takes; another stack's and a project the stack owns none
+			// of are not (SplitProject, G-08-6).
+			mine, added, _ := SplitProject(own, cs, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
+			out.containers = append(mine, added...)
+			nets, e := c.NetworksWithLabel(ctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
 			for _, n := range nets {
-				if ownsLabels(st, n.Labels) {
+				if own.OwnsNetwork(n.Name, n.Labels) {
 					out.networks = append(out.networks, n)
 				}
 			}
@@ -142,16 +143,16 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, s := range svcs {
-				if ownsLabels(st, s.Labels) {
+				if own.OwnsWorkload(s.Labels) {
 					out.services = append(out.services, s)
 				}
 			}
-			nets, e := c.NetworksWithLabel(ctx, stacks.LabelSwarmNamespace, st.Name)
+			nets, e := c.NetworksWithLabel(ctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
 			for _, n := range nets {
-				if ownsLabels(st, n.Labels) {
+				if own.OwnsNetwork(n.Name, n.Labels) {
 					out.networks = append(out.networks, n)
 				}
 			}
@@ -160,7 +161,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, o := range secretRows(secrets) {
-				if ownsLabels(st, o.Labels) {
+				if own.OwnsObject(o.Labels) {
 					out.secrets = append(out.secrets, o)
 				}
 			}
@@ -169,7 +170,7 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 				return e
 			}
 			for _, o := range configRows(configs) {
-				if ownsLabels(st, o.Labels) {
+				if own.OwnsObject(o.Labels) {
 					out.configs = append(out.configs, o)
 				}
 			}
@@ -188,14 +189,25 @@ func (d Deps) readOwned(ctx context.Context, envID string, st Stack, volumes boo
 	}
 	out.notReporting = append([]string{}, agg.NotReporting...)
 	out.anyVolume = map[string]bool{}
+	// A container outside the stack is one that is not of the stack: on a host that leaves out the containers the host
+	// CLI added to the stack's project, which a removal takes with it.
+	inStack := func(c envs.ContainerRow) bool { return own.OwnsWorkload(c.Labels) }
+	if st.Target == stacks.TargetStandalone {
+		mine, added, _ := SplitProject(own, agg.Containers, func(c envs.ContainerRow) map[string]string { return c.Labels })
+		ids := make(map[string]bool, len(mine)+len(added))
+		for _, c := range append(mine, added...) {
+			ids[c.ID] = true
+		}
+		inStack = func(c envs.ContainerRow) bool { return ids[c.ID] }
+	}
 	for _, v := range agg.Volumes {
 		out.anyVolume[v.NodeID+"/"+v.Name] = true
-		if !ownsLabels(st, v.Labels) {
+		if !own.OwnsVolume(v.Name, v.Labels) {
 			continue
 		}
 		choice := VolumeChoice{Name: v.Name, NodeID: v.NodeID, NodeName: v.Node}
 		for _, c := range agg.Containers {
-			if c.NodeID != v.NodeID || ownsLabels(st, c.Labels) {
+			if c.NodeID != v.NodeID || inStack(c) {
 				continue
 			}
 			if slices.ContainsFunc(c.Mounts, func(m dockerx.MountRow) bool { return m.Type == "volume" && m.Name == v.Name }) {
@@ -351,6 +363,12 @@ type removal struct {
 	res    RemoveResult
 	// ownedVolumes is how many volumes the stack has on its nodes, read by the check.
 	ownedVolumes int
+	// serviceIDs are the IDs of the swarm services the check found the stack owns: the tasks that outlive a removed
+	// service are the stack's by them.
+	serviceIDs map[string]bool
+	// containerIDs are the IDs of the containers the check found a standalone removal takes, the stack's own and the
+	// ones the host CLI added: the wait keeps counting them by ID after the stack's own are gone.
+	containerIDs map[string]bool
 	// failures are the first object of each step that stayed, until the step ends.
 	failures map[string]failure
 }
@@ -496,7 +514,7 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 			return ownedStack{}, false
 		}
 		live, err := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
-		if err == nil && foreignLive(live, in.Stack.ID) {
+		if err == nil && foreignLive(live, OwnershipOf(in.Stack)) {
 			x.fail(ItemCheck, CodeNameClash, "", nil, nil)
 			x.skipRest()
 			return ownedStack{}, false
@@ -528,6 +546,14 @@ func (x *removal) check(ctx context.Context) (ownedStack, bool) {
 		}
 	}
 	x.ownedVolumes = len(owned.volumes)
+	x.containerIDs = make(map[string]bool, len(owned.containers))
+	for _, c := range owned.containers {
+		x.containerIDs[c.ID] = true
+	}
+	x.serviceIDs = make(map[string]bool, len(owned.services))
+	for _, s := range owned.services {
+		x.serviceIDs[s.ID] = true
+	}
 	x.line(fmt.Sprintf("Found %d services or containers, %d networks, %d secrets and %d configs", len(owned.services)+len(owned.containers), len(owned.networks), len(owned.secrets), len(owned.configs)))
 	x.done(ItemCheck, nil)
 	return owned, true
@@ -602,19 +628,28 @@ func terminalTask(state string) bool {
 // containers of the Compose project.
 func (x *removal) remaining(ctx context.Context) (int, error) {
 	d, in := x.d, x.in
+	own := OwnershipOf(in.Stack)
 	rctx, cancel := context.WithTimeout(ctx, pollReadTimeout)
 	defer cancel()
 	if in.Stack.Target == stacks.TargetStandalone {
 		var n int
 		err := d.Aggregator.OnNode(rctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
 			// The project's containers, as the SDK counts them: a one-off container (compose run) is not one of its services.
+			// The stack's own and the ones added from the host CLI are waited for; another stack's are not. Once the
+			// stack's own are gone a container the host CLI added no longer has one beside it to be told apart by, so
+			// the containers the check found stay counted by their ID.
 			cs, e := c.ComposeContainers(rctx, in.Stack.Name)
 			if e != nil {
 				return e
 			}
-			n = 0
+			mine, added, _ := SplitProject(own, cs, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
+			counted := make(map[string]bool, len(mine)+len(added))
+			for _, row := range slices.Concat(mine, added) {
+				counted[row.ID] = true
+			}
+			n = len(counted)
 			for _, row := range cs {
-				if ownsLabels(in.Stack, row.Labels) {
+				if x.containerIDs[row.ID] && !counted[row.ID] {
 					n++
 				}
 			}
@@ -624,13 +659,15 @@ func (x *removal) remaining(ctx context.Context) (int, error) {
 	}
 	var tasks int
 	err := d.Clusters.ClusterRead(rctx, in.EnvID, func(c *dockerx.Client) error {
-		rows, e := c.Tasks(rctx, dockerx.TaskFilter{Labels: []string{stacks.LabelStackID + "=" + in.Stack.ID}})
+		// A task keeps the labels its service had, so the namespace finds the tasks of a service that is gone; a task is
+		// the stack's when its service was one the check found the stack owns, since a task row names no owner.
+		rows, e := c.Tasks(rctx, dockerx.TaskFilter{Labels: []string{own.labelKey() + "=" + own.Name}})
 		if e != nil {
 			return e
 		}
 		tasks = 0
 		for _, t := range rows {
-			if !terminalTask(t.State) {
+			if x.serviceIDs[t.ServiceID] && !terminalTask(t.State) {
 				tasks++
 			}
 		}
@@ -665,8 +702,9 @@ func (x *removal) containersOn(ctx context.Context, nodeID string) (int, error) 
 			return e
 		}
 		n = 0
+		own := OwnershipOf(x.in.Stack)
 		for _, row := range rows {
-			if ownsLabels(x.in.Stack, row.Labels) {
+			if own.OwnsWorkload(row.Labels) {
 				n++
 			}
 		}
@@ -856,6 +894,7 @@ func (e *volumeBusyError) Error() string {
 // service, mounts it; a volume used outside the stack is left, named, and the others are still removed.
 func (x *removal) removeVolumes(ctx context.Context) {
 	d, in := x.d, x.in
+	own := OwnershipOf(in.Stack)
 	for _, v := range in.Volumes {
 		id := idRemoveVolume + v.key()
 		if ctx.Err() != nil {
@@ -875,11 +914,11 @@ func (x *removal) removeVolumes(ctx context.Context) {
 		removed := false
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 		err := d.Aggregator.WriteOnNode(wctx, in.EnvID, v.NodeID, func(c *dockerx.Client) error {
-			mine, e := c.VolumesWithLabel(wctx, stacks.LabelStackID, in.Stack.ID)
+			mine, e := c.VolumesWithLabel(wctx, own.labelKey(), own.Name)
 			if e != nil {
 				return e
 			}
-			if !slices.ContainsFunc(mine, func(row dockerx.VolumeRow) bool { return row.Name == v.Name && ownsLabels(in.Stack, row.Labels) }) {
+			if !slices.ContainsFunc(mine, func(row dockerx.VolumeRow) bool { return row.Name == v.Name && own.OwnsVolume(row.Name, row.Labels) }) {
 				_, exists, e := c.VolumeDriver(wctx, v.Name)
 				if e != nil {
 					return e

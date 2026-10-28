@@ -1,0 +1,23 @@
+{
+  "stackChanges": {
+    "loading": "Loading the changes of revision #{{seq}}…",
+    "caption": "What rolling back to #{{seq}} would change, compared with the deployed revision #{{deployed}}.",
+    "same": {
+      "title": "No changes",
+      "body": "Revision #{{seq}} has the same content as the deployed revision."
+    },
+    "deployed": {
+      "title": "No changes",
+      "body": "This is the deployed revision."
+    },
+    "failed": "Revision #{{seq}} failed, so there is nothing to roll back to.",
+    "pending": "Revision #{{seq}} is still deploying. Its changes show once it has finished.",
+    "notDeployable": "Revision #{{seq}} can't be redeployed as it stands, so there is nothing to compare.",
+    "busy": "Too many comparisons are running. Try again in a moment.",
+    "error": {
+      "title": "Couldn't load this revision's changes.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry"
+    }
+  }
+}

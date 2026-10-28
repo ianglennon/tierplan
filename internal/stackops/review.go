@@ -21,9 +21,13 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/bayplan/internal/store"
 )
 
-// The modes of a review: a deploy of the draft, or an update of the images of some services (D-16).
+// The modes of a review: a deploy of the draft, an update of the images of some services (D-16), a roll back to a
+// revision (ReviewModeRollback, review_rollback.go), or the check before a stack is adopted (ReviewModeAdopt,
+// review_adopt.go).
 const (
 	ReviewModeDeploy = "deploy"
 	ReviewModeUpdate = "update"
@@ -134,10 +138,24 @@ type ReviewInput struct {
 	Base     *stacks.WorkingCopy
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
 	Pins PinStore
+	// Target is the revision a roll back restores, with its files and variables opened, and TargetPins the images it
+	// ran (by swarm service name) and TargetRendering the masked rendering it stored, which may be empty. They are read
+	// only for ReviewModeRollback and ReviewModeRestore, which review Target against what is running instead of the draft.
+	Target          *Snapshot
+	TargetPins      map[string]string
+	TargetRendering []byte
 	// Revisions is where a standalone review reads the stored revisions from, to find what the engine does
 	// not record about a running container. Nil means none.
 	Revisions RevisionStore
 	Caller    Caller
+	// Audit is the store whose audit log names the causes of the drift a deploy reverts (D-24). Nil leaves them out.
+	Audit *store.Store
+	// SkipReverts leaves the Reverts drift part out and its extra read of the engine: the History tab asks for the
+	// changes of a revision as a roll back review lists them and has no use for the rest.
+	SkipReverts bool
+	// Rebuilt is the definition rebuilt from what runs, which ReviewModeAdopt reviews against what runs. Copy holds
+	// the compose file made from it and Stack the stack as it will be adopted. Nil for any other mode.
+	Rebuilt *rebuild.Result
 }
 
 // DeployedRevision is the stack's last good revision: its number, who started its deploy and
@@ -189,6 +207,11 @@ type Summary struct {
 	// ImagesPinned counts the services that keep or carry a digest, ImagesNew the ones whose
 	// digest was just looked up.
 	ImagesPinned, ImagesNew int
+	// OwnershipOnly counts the services of an adopt check that differ from what runs in nothing but Bayplan's
+	// ownership labels (D-16). They are not in Services.Changed.
+	OwnershipOnly int
+	// RevertsDrift counts the outside changes a deploy, an update or a roll back puts back (D-25).
+	RevertsDrift int
 }
 
 // ImageRow is one service's image: the reference as written, the digest it will run with and the
@@ -224,6 +247,22 @@ type Review struct {
 	YAML TextDiff
 	// Concurrent is set when the last good revision is newer than the one the draft started from.
 	Concurrent *Concurrent
+	// Adoption is set while the stack is adopted and has not been deployed yet: the first deploy takes ownership by
+	// adding Bayplan's labels to every service (D-16).
+	Adoption *AdoptionReview
+	// RevertsDrift are the changes made outside the stack that this deploy would put back, apart from the draft's own
+	// changes (D-25). It is empty for a restore, which is the drift itself, and when nothing would be reverted.
+	RevertsDrift []DriftRevert
+	// RevertsDriftUnavailable says the drift could not be computed, so RevertsDrift is empty for want of knowing and
+	// not because nothing would be reverted.
+	RevertsDriftUnavailable bool
+}
+
+// AdoptionReview is what the first deploy of an adopted stack does that is not in the file: Pending says it is that
+// deploy, and OwnershipOnly counts the services it recreates for the ownership labels alone (they restart briefly).
+type AdoptionReview struct {
+	Pending       bool
+	OwnershipOnly int
 }
 
 // Review reads what a deploy of the saved draft would do. A stack of a standalone host is reviewed by
@@ -238,10 +277,19 @@ type Review struct {
 func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error) {
 	rv = Review{DraftVersion: in.DraftVersion, Pins: map[string]string{}, NeedsAdmin: []string{}}
 	// A review judges what the caller may deploy, so it cannot be made without a way to judge it.
+	if in.Mode == ReviewModeAdopt {
+		// The adopt check judges no policy (D-17): it lists what the first deploy would change and nothing else.
+		err = d.reviewAdopt(ctx, in, &rv)
+		return rv, err
+	}
 	if d.Checker == nil || in.Caller.Principal == nil {
 		return rv, ErrNoPolicy
 	}
 	if err = d.CheckTarget(ctx, in.EnvID, in.Stack); err != nil {
+		return rv, err
+	}
+	if in.Mode == ReviewModeRollback || in.Mode == ReviewModeRestore {
+		err = d.reviewRollback(ctx, in, &rv)
 		return rv, err
 	}
 	res := stacks.Check(ctx, stacks.CheckInput{Name: in.Stack.Name, Target: in.Stack.Target, Copy: in.Copy})
@@ -291,7 +339,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	if err != nil {
 		return rv, err
 	}
-	if clash(in.Stack.ID, in.Stack.Name, live.Networks, live.Services, live.Objects) {
+	if own := OwnershipOf(in.Stack); clash(own, live.Networks, live.Services, live.Objects) {
 		rv.Problems = append(rv.Problems, stacks.Problem{
 			Severity: stacks.SeverityError, Code: CodeNameClash, Message: NameClashMessage(in.Stack.Name), File: stacks.ComposeFile,
 			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
@@ -330,6 +378,9 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		}
 	}
 	pinned := d.ResolvePins(ctx, in.EnvID, plan.Services, byName, stored, update)
+	// A service is sent the platforms the last good revision recorded for its digest, else the ones of the image it runs,
+	// in the order a deploy applies them, so the review shows what the deploy sends (G-08-4, WR-02).
+	pinPlatforms(pinned.Pins, stored, byName)
 	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (no manager is connected, the agent refused).
@@ -355,10 +406,8 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	desired := make(map[string]swarm.ServiceSpec, len(plan.Services))
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		if p, ok := pinned.Pins[sp.Name]; ok && spec.TaskTemplate.ContainerSpec != nil {
-			cs := *spec.TaskTemplate.ContainerSpec
-			cs.Image = p.Ref
-			spec.TaskTemplate.ContainerSpec = &cs
+		if p, ok := pinned.Pins[sp.Name]; ok {
+			spec = withPin(spec, p)
 		}
 		if existing, ok := byName[sp.Name]; ok {
 			// The counter that makes the swarm replace tasks is carried over, as a deploy does.
@@ -371,8 +420,15 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		return rv, err
 	}
 	rv.Services = stacks.DiffServices(desired, running, masker)
-	for _, c := range rv.Services {
-		bump(&rv.Summary.Services, c.Change)
+	if own := OwnershipOf(in.Stack); own.Adopted && own.Pending {
+		// The first deploy of an adopted stack puts Bayplan's labels on every service, which recreates it: a service
+		// that differs in nothing else is told apart from a real change (D-16).
+		stacks.MarkOwnershipOnly(rv.Services, desired, running)
+		rv.Adoption = &AdoptionReview{Pending: true}
+	}
+	countServices(&rv)
+	if rv.Adoption != nil {
+		rv.Adoption.OwnershipOnly = rv.Summary.OwnershipOnly
 	}
 
 	var problems stacks.Problems
@@ -389,6 +445,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		}
 	}
 	rv.Problems = rv.Problems.Sorted()
+	d.addRevertsDrift(ctx, in, &rv, rawSwarmRows(desired, running), masker)
 	return rv, nil
 }
 
@@ -482,6 +539,7 @@ func (d Deps) readLive(ctx context.Context, envID, stackName string, want liveWa
 // that name, so a service that is unchanged converts to the spec the swarm holds.
 func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) objectRefs {
 	refs := newObjectRefs()
+	own := OwnershipOf(stack)
 	for _, o := range objs {
 		if o.External {
 			ref := objectRef{Name: o.ExternalName}
@@ -493,7 +551,7 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 		}
 		full, _ := stacks.ObjectName(stack.Name, o.Name, o.Content)
 		ref := objectRef{Name: full}
-		if row, ok := findObject(live, o.Kind, full); ok && row.Labels[stacks.LabelStackID] == stack.ID {
+		if row, ok := findObject(live, o.Kind, full); ok && own.OwnsObject(row.Labels) {
 			ref.ID = row.ID
 		}
 		refs.set(o.Kind, o.Name, ref)
@@ -506,13 +564,20 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 // service of the namespace that Bayplan does not own is left out; the name-clash check refuses
 // the stack for it.
 func liveSpecs(live liveStack, stack Stack) (map[string]swarm.ServiceSpec, error) {
+	own := OwnershipOf(stack)
+	return liveSpecsOwned(live, func(s dockerx.ServiceDetail) bool { return own.OwnsWorkload(s.Labels) })
+}
+
+// liveSpecsOwned is liveSpecs for the services owns says are the stack's: an adopted stack that has not been
+// deployed yet owns services that carry no ID of its own (OwnershipOf).
+func liveSpecsOwned(live liveStack, owns func(dockerx.ServiceDetail) bool) (map[string]swarm.ServiceSpec, error) {
 	idName := make(map[string]string, len(live.AllNetworks))
 	for _, n := range live.AllNetworks {
 		idName[n.ID] = n.Name
 	}
 	out := make(map[string]swarm.ServiceSpec, len(live.Services))
 	for _, s := range live.Services {
-		if s.Labels[stacks.LabelStackID] != stack.ID {
+		if !owns(s) {
 			continue
 		}
 		var spec swarm.ServiceSpec
@@ -595,6 +660,7 @@ func imageRows(items []pinItem, pinned PinOutcome, current map[string]string, up
 // resourceChanges lists the networks, secrets and configs a deploy would add, change or remove,
 // and the problems that stop a deploy for them: an external object that does not exist.
 func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent, live liveStack) ([]ObjectChange, stacks.Problems) {
+	own := OwnershipOf(stack)
 	var out []ObjectChange
 	var problems stacks.Problems
 
@@ -611,7 +677,7 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 		switch {
 		case !ok:
 			out = append(out, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: n.Name})
-		case row.Labels[stacks.LabelStackID] == stack.ID && networkDiffers(n, row):
+		case own.OwnsNetwork(row.Name, row.Labels) && networkDiffers(n, row):
 			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: "network", Name: n.Name, Detail: detailNetwork})
 		}
 	}
@@ -628,10 +694,10 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 			continue
 		}
 		full, _ := stacks.ObjectName(stack.Name, o.Name, o.Content)
-		if row, ok := findObject(live.Objects, o.Kind, full); ok && row.Labels[stacks.LabelStackID] == stack.ID {
+		if row, ok := findObject(live.Objects, o.Kind, full); ok && own.OwnsObject(row.Labels) {
 			continue // the same content: the object is reused
 		}
-		if ownedVersion(live.Objects, o.Kind, stack.ID, o.Name) {
+		if ownedVersion(live.Objects, o.Kind, own, o.Name) {
 			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: kind, Name: o.Name, Detail: detailNewVersion})
 			continue
 		}
@@ -641,7 +707,7 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 	for _, r := range live.Objects {
 		name := r.Labels[stacks.LabelObject]
 		key := string(r.Kind) + "/" + name
-		if r.Labels[stacks.LabelStackID] != stack.ID || name == "" || used[key] || removed[key] {
+		if !own.OwnsObject(r.Labels) || name == "" || used[key] || removed[key] {
 			continue
 		}
 		removed[key] = true
@@ -664,9 +730,9 @@ func section(k stacks.ObjectKind) string {
 
 // ownedVersion reports whether the stack owns a secret or config of this kind made for the
 // compose name, under whatever hash.
-func ownedVersion(live []objectRow, kind stacks.ObjectKind, stackID, name string) bool {
+func ownedVersion(live []objectRow, kind stacks.ObjectKind, own Ownership, name string) bool {
 	for _, r := range live {
-		if r.Kind == kind && r.Labels[stacks.LabelStackID] == stackID && r.Labels[stacks.LabelObject] == name {
+		if r.Kind == kind && own.OwnsObject(r.Labels) && r.Labels[stacks.LabelObject] == name {
 			return true
 		}
 	}
@@ -789,6 +855,14 @@ func textDiffOf(old, next string) TextDiff {
 		return TextDiff{}
 	}
 	return TextDiff{Hunks: hunks, ChangedLines: stacks.ChangedLines(hunks), Lines: stacks.SplitLines(next)}
+}
+
+// RevisionYAMLDiff compares the stored rendering of a revision (next) with another rendering (old), line by
+// line. It is textDiffOf with the same bounds (stacks.LineDiff): there is nothing to show when they are the
+// same. Both texts are the masked renderings that were stored with their revisions, so no secret is in
+// either.
+func RevisionYAMLDiff(old, next []byte) TextDiff {
+	return textDiffOf(string(old), string(next))
 }
 
 // renderedChange is the rendered stack of the draft, with the images the review chose, against the

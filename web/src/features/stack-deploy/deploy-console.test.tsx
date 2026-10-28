@@ -70,6 +70,9 @@ let rollbackAnswer: { status: number; type?: string };
 let rollbacks: Request[];
 // The mode and state of the job j2 a roll back starts.
 let rollbackJob: { state: string; items: Item[] };
+// For a roll back to a chosen revision, the revision it restores and the one it was recorded as (0 is none).
+let jobRevision: number;
+let jobRecorded: number;
 
 const item = (over: Item): Record<string, unknown> => ({
   code: "",
@@ -91,6 +94,8 @@ function jobBody(over: Partial<{ state: string; items: Item[]; id: string; mode:
     stackId: STACK,
     mode: over.mode ?? jobMode,
     startedBy: "ada",
+    ...(jobRevision > 0 ? { revision: jobRevision } : {}),
+    ...(jobRecorded > 0 ? { recordedRevision: jobRecorded } : {}),
     state: j.state,
     createdAt: "2026-10-19T12:00:00Z",
     finishedAt: j.state === "running" ? "" : "2026-10-19T12:00:09Z",
@@ -124,6 +129,8 @@ beforeEach(() => {
   rollbackAnswer = { status: 202 };
   rollbacks = [];
   rollbackJob = { state: "running", items: [check, services] };
+  jobRevision = 0;
+  jobRecorded = 0;
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   // The job query keeps its own retry rule; a zero delay makes its three tries instant.
@@ -923,6 +930,77 @@ describe("a standalone deploy (plan 07-20, D-13)", () => {
     for (const markup of ["<b>c</b>", "<i>bad</i>"]) {
       expect(screen.getByText(markup).children).toHaveLength(0);
     }
+  });
+
+  describe("rolled back to a chosen revision (plan 08-05)", () => {
+    // The steps of a standalone roll back are those of a standalone deploy, finished.
+    const finished = (over: Partial<Record<string, Partial<Item>>> = {}): Item[] =>
+      standalone({
+        volumes: { state: "done" },
+        services: { state: "done" },
+        cleanup: { state: "done" },
+        "volume:demo_data": { state: "done" },
+        "service:web": { state: "done", current: 2, result: { phase: "healthy" } },
+        "container:demo-web-1": { state: "done" },
+        "container:demo-web-2": { state: "done" },
+        "remove-container:demo-old-1": { state: "done" },
+        ...over,
+      });
+
+    it("is titled with the revision, lists the standalone steps in their words and says Roll back complete", async () => {
+      jobMode = "rollback";
+      jobRevision = 5;
+      jobRecorded = 9;
+      job = { state: "done", items: finished() };
+      mount();
+      expect(await screen.findByRole("heading", { name: "Rolling back web to #5" })).toBeTruthy();
+      expect(stepLines()).toEqual([
+        "Check the stackDone",
+        "Look up imagesDone",
+        "Create network demo_defaultDone",
+        "Create volume demo_dataDone",
+        "Deploy servicesDone",
+        "Remove containers no longer in the stackDone",
+        "Remove container demo-old-1Done",
+      ]);
+      expect(await screen.findByRole("heading", { name: "Roll back complete" })).toBeTruthy();
+      expect(
+        screen.getByText(
+          "web is running the content of revision #5. Bayplan recorded it as revision #9.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Open history" }).getAttribute("href")).toBe(
+        "/env/e1/stacks/s1/history?rev=9",
+      );
+    });
+
+    it("says Roll back failed when a container does not come up, and retries the same revision", async () => {
+      role = "operator";
+      jobMode = "rollback";
+      jobRevision = 5;
+      jobRecorded = 9;
+      job = {
+        state: "failed",
+        items: finished({
+          services: { state: "failed", code: "engine_error" },
+          "service:web": { state: "failed", code: "engine_error" },
+          "container:demo-web-2": {
+            state: "failed",
+            detail: "port is already allocated",
+            result: { state: "failed" },
+          },
+        }),
+      };
+      mount();
+      const alert = await screen.findByRole("alert");
+      expect(within(alert).getByText("Roll back failed")).toBeTruthy();
+      expect(
+        within(alert).getByText("Bayplan recorded the failed attempt as revision #9."),
+      ).toBeTruthy();
+      fireEvent.click(within(alert).getByRole("button", { name: "Retry roll back" }));
+      await waitFor(() => expect(rollbacks).toHaveLength(1));
+      expect(JSON.parse((await rollbacks[0]?.text()) ?? "")).toEqual({ revision: 5 });
+    });
   });
 
   it("leaves a swarm job alone: its steps keep the server's words", async () => {
@@ -2285,4 +2363,117 @@ describe("rolling back", () => {
       );
     },
   );
+});
+
+// A roll back to a chosen revision (plan 08-03, STK-08, D-02, D-04): the console names the revision it restores and
+// the one it recorded.
+describe("a roll back to a chosen revision", () => {
+  const stoppedAtWeb = [check, { ...services, state: "failed" as const }, row("web", "failed")];
+
+  it("is titled with the revision it restores", async () => {
+    jobMode = "rollback";
+    jobRevision = 5;
+    jobRecorded = 9;
+    mount();
+    expect(await screen.findByRole("heading", { name: "Rolling back web to #5" })).toBeTruthy();
+  });
+
+  it("says Roll back complete, which revision is running and which one Bayplan recorded", async () => {
+    jobMode = "rollback";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
+    mount();
+    expect(await screen.findByRole("heading", { name: "Roll back complete" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "web is running the content of revision #5. Bayplan recorded it as revision #9.",
+      ),
+    ).toBeTruthy();
+    const stack = screen.getByRole("link", { name: "Open stack" });
+    expect(stack.getAttribute("data-variant")).toBe("default");
+    const history = screen.getByRole("link", { name: "Open history" });
+    expect(history.getAttribute("href")).toBe("/env/e1/stacks/s1/history?rev=9");
+    expect(history.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Deploy complete")).toBeNull();
+  });
+
+  it("says Roll back failed, that the failed attempt was recorded, and retries the same revision", async () => {
+    role = "operator";
+    jobMode = "rollback";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "failed", items: stoppedAtWeb };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Roll back failed")).toBeTruthy();
+    expect(
+      within(alert).getByText("Bayplan recorded the failed attempt as revision #9."),
+    ).toBeTruthy();
+    const retry = within(alert).getByRole("button", { name: "Retry roll back" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(rollbacks).toHaveLength(1));
+    expect(JSON.parse((await rollbacks[0]?.text()) ?? "")).toEqual({ revision: 5 });
+  });
+
+  it("does not claim a recorded revision for a deploy", async () => {
+    jobRecorded = 9;
+    job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
+    mount();
+    expect(await screen.findByText("Deploy complete")).toBeTruthy();
+    expect(screen.queryByText(/Bayplan recorded it as revision/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open history" })).toBeNull();
+  });
+});
+
+// A restore of the deployed revision (plan 08-23, STK-14, D-23): the console words it as a restore.
+describe("a restore of the deployed revision", () => {
+  const stoppedAtWeb = [check, { ...services, state: "failed" as const }, row("web", "failed")];
+
+  it("is titled Restoring and not Rolling back", async () => {
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    mount();
+    expect(await screen.findByRole("heading", { name: "Restoring web" })).toBeTruthy();
+    expect(screen.queryByText(/Rolling back/)).toBeNull();
+  });
+
+  it("says Restore complete, that web matches the revision again, and offers the stack and the history", async () => {
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
+    mount();
+    expect(await screen.findByRole("heading", { name: "Restore complete" })).toBeTruthy();
+    expect(screen.getByText("web matches revision #5 again.")).toBeTruthy();
+    const stack = screen.getByRole("link", { name: "Open stack" });
+    expect(stack.getAttribute("data-variant")).toBe("default");
+    const history = screen.getByRole("link", { name: "Open history" });
+    expect(history.getAttribute("href")).toBe("/env/e1/stacks/s1/history?rev=9");
+    expect(history.getAttribute("data-variant")).toBe("outline");
+    expect(screen.queryByText("Roll back complete")).toBeNull();
+    expect(screen.queryByText(/Bayplan recorded it as revision/)).toBeNull();
+  });
+
+  it("says Restore failed, that the attempt was recorded, and retries the restore", async () => {
+    role = "operator";
+    jobMode = "restore";
+    jobRevision = 5;
+    jobRecorded = 9;
+    job = { state: "failed", items: stoppedAtWeb };
+    mount();
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByText("Restore failed")).toBeTruthy();
+    expect(
+      within(alert).getByText("Bayplan recorded the failed attempt as revision #9."),
+    ).toBeTruthy();
+    expect(within(alert).queryByRole("button", { name: "Retry roll back" })).toBeNull();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry restore" }));
+    await waitFor(() => expect(rollbacks).toHaveLength(1));
+    expect(JSON.parse((await rollbacks[0]?.text()) ?? "")).toEqual({
+      mode: "restore",
+      revision: 5,
+    });
+  });
 });

@@ -4,7 +4,9 @@
 package stacks_test
 
 import (
+	"math/rand/v2"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -83,5 +85,131 @@ func TestObjectHashSeparatesNameFromContentWithANUL(t *testing.T) {
 	t.Parallel()
 	if stacks.ObjectHash("ab", []byte("c")) == stacks.ObjectHash("a", []byte("bc")) {
 		t.Error(`("ab", "c") and ("a", "bc") hash alike: the name and the content are not kept apart`)
+	}
+}
+
+func TestNameValidAcceptsWhatDockerNames(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"MyApp", "web", "my_app-2", "0abc", "A", strings.Repeat("a", 61), strings.Repeat("Z", 61)} {
+		if !stacks.NameValid(stacks.TargetSwarm, name) {
+			t.Errorf("NameValid(swarm, %q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"web_1", "my-stack", "a", "0abc", strings.Repeat("a", 255)} {
+		if !stacks.NameValid(stacks.TargetStandalone, name) {
+			t.Errorf("NameValid(standalone, %q) = false, want true", name)
+		}
+	}
+}
+
+func TestNameValidRefuses(t *testing.T) {
+	t.Parallel()
+	both := []string{
+		"", "my stack", `my"stack`, "my'stack", "a/b", `a\b`, "a\x00b", "a\nb", "a\xffb", "ünï",
+		"Shop.Front", "shop.front", "a.b", ".web", "-web", "_web",
+	}
+	for _, target := range []stacks.Target{stacks.TargetSwarm, stacks.TargetStandalone} {
+		for _, name := range both {
+			if stacks.NameValid(target, name) {
+				t.Errorf("NameValid(%s, %q) = true, want false", target, name)
+			}
+		}
+	}
+	for _, name := range []string{strings.Repeat("a", 62), strings.Repeat("a", 64)} {
+		if stacks.NameValid(stacks.TargetSwarm, name) {
+			t.Errorf("NameValid(swarm, %d bytes) = true, want false", len(name))
+		}
+	}
+	for _, name := range []string{"Web", "MyApp", "-web", strings.Repeat("a", 256)} {
+		if stacks.NameValid(stacks.TargetStandalone, name) {
+			t.Errorf("NameValid(standalone, %q) = true, want false", name)
+		}
+	}
+}
+
+func TestSwarmObjectNameValid(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"MyApp_web", "app-_web", "a", strings.Repeat("a", 63)} {
+		if !stacks.SwarmObjectNameValid(name) {
+			t.Errorf("SwarmObjectNameValid(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"Shop.Front_web", "app_web.v2", "web-", "a_.b", "", "_web", strings.Repeat("a", 64)} {
+		if stacks.SwarmObjectNameValid(name) {
+			t.Errorf("SwarmObjectNameValid(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestNameRuleTextMatchesTheRule(t *testing.T) {
+	t.Parallel()
+	for target, cap := range map[stacks.Target]int{stacks.TargetSwarm: 61, stacks.TargetStandalone: 255} {
+		text := stacks.NameRuleText(target)
+		if want := "up to " + strconv.Itoa(cap) + " characters"; !strings.Contains(text, want) {
+			t.Errorf("NameRuleText(%s) = %q, want it to say %q", target, text, want)
+		}
+		if !stacks.NameValid(target, strings.Repeat("a", cap)) || stacks.NameValid(target, strings.Repeat("a", cap+1)) {
+			t.Errorf("NameValid(%s) does not stop at the %d characters the text names", target, cap)
+		}
+	}
+	if strings.Contains(stacks.NameRuleText(stacks.TargetSwarm), "lowercase") {
+		t.Errorf("the swarm text says lowercase, but the swarm takes both cases")
+	}
+	if !strings.Contains(stacks.NameRuleText(stacks.TargetStandalone), "lowercase") {
+		t.Errorf("the standalone text does not say lowercase")
+	}
+}
+
+func TestObjectNameStaysInsideTheAgentRule(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ stack, name string }{
+		{"MyApp", "tok"}, {"web", "db_password"}, {"a", "b"}, {"A-_b", "n.ame"},
+		{strings.Repeat("A", 61), strings.Repeat("n", 60)}, {strings.Repeat("a", 255), "x"},
+		{strings.Repeat("a", 20) + "-", strings.Repeat("-", 50) + "z"}, {"my stack", "tok"}, {"a/b", "c-d"},
+		{"-lead", "tok"}, {"_lead", "tok"}, {"", "tok"}, {"ünï", "tok"},
+	} {
+		full, hash := stacks.ObjectName(tc.stack, tc.name, []byte("x"))
+		if !agentObjectName.MatchString(full) || !strings.HasSuffix(full, "_"+hash) || !hex8.MatchString(hash) {
+			t.Errorf("ObjectName(%q, %q) = %q (hash %q), want a name inside the agent's rule that ends _<hash>", tc.stack, tc.name, full, hash)
+		}
+	}
+	// Every name either target takes, with generated secret names: a quick loop in place of a property library.
+	const stackChars = "abcxyzABCXYZ0189_-"
+	const nameChars = "abcxyz0189_.-"
+	rng := rand.New(rand.NewPCG(1, 2)) //nolint:gosec // a seeded generator keeps the test deterministic; nothing here is secret
+	pick := func(chars string, n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = chars[rng.IntN(len(chars))]
+		}
+		return string(b)
+	}
+	for i := 0; i < 2000; i++ {
+		stack := string("aZ09"[rng.IntN(4)]) + pick(stackChars, rng.IntN(60))
+		name := pick(nameChars, 1+rng.IntN(70))
+		if !stacks.NameValid(stacks.TargetSwarm, stack) {
+			t.Fatalf("generator made %q, which the swarm rule refuses", stack)
+		}
+		full, _ := stacks.ObjectName(stack, name, []byte("c"))
+		if !agentObjectName.MatchString(full) {
+			t.Fatalf("ObjectName(%q, %q) = %q, outside the agent's rule", stack, name, full)
+		}
+	}
+}
+
+func TestObjectNameUnchangedForPhase7Names(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ stack, name string }{
+		{"web", "tok"}, {"my-stack_2", "db_password"}, {"s", "a.b"}, {strings.Repeat("s", 63), strings.Repeat("n", 60)},
+	} {
+		hash := stacks.ObjectHash(tc.name, []byte("x"))
+		prefix := tc.stack + "_" + tc.name
+		if room := 64 - len("_"+hash); len(prefix) > room {
+			prefix = strings.TrimRight(prefix[:room], "_.-")
+		}
+		want := prefix + "_" + hash
+		if got, _ := stacks.ObjectName(tc.stack, tc.name, []byte("x")); got != want {
+			t.Errorf("ObjectName(%q, %q) = %q, want the Phase 7 name %q", tc.stack, tc.name, got, want)
+		}
 	}
 }

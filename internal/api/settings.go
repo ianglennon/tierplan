@@ -21,6 +21,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/tunnel"
 )
@@ -116,6 +117,7 @@ func RegisterSettings(r *httpx.Router, d SettingsDeps) {
 		d.Log = slog.Default()
 	}
 	RegisterShellSettings(r, d)
+	RegisterStackHistorySettings(r, d)
 	internal := func(what string, err error) error {
 		d.Log.Error("settings request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -427,5 +429,148 @@ func RegisterShellSettings(r *httpx.Router, d SettingsDeps) {
 		}
 		d.Instance.ApplyShellLimits(idle, maxN)
 		return &ShellSettingsOutput{CacheControl: "no-store", Body: current()}, nil
+	})
+}
+
+// StackHistorySettingsBody is the instance's stack-history retention (D-01).
+type StackHistorySettingsBody struct {
+	Kept   int `json:"kept" minimum:"5" maximum:"200" doc:"How many revisions of each stack Bayplan keeps. The deployed revision and any revision still deploying are kept besides"`
+	Min    int `json:"min" doc:"The lowest value Kept may have"`
+	Max    int `json:"max" doc:"The highest value Kept may have"`
+	Pruned int `json:"pruned" doc:"How many revisions this request deleted: those beyond a lowered limit, and 0 for a read or a limit that was not lowered"`
+}
+
+// StackHistorySettingsOutput wraps StackHistorySettingsBody for huma.
+type StackHistorySettingsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackHistorySettingsBody
+}
+
+// UpdateStackHistorySettingsInput sets how many revisions are kept.
+type UpdateStackHistorySettingsInput struct {
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		Kept int `json:"kept" minimum:"5" maximum:"200" doc:"The new number of revisions kept per stack, 5 to 200"`
+	}
+}
+
+// StackHistoryPreviewInput is the limit a preview counts for.
+type StackHistoryPreviewInput struct {
+	Keep int `query:"keep" required:"true" minimum:"5" maximum:"200" doc:"The limit to count for, 5 to 200"`
+}
+
+// StackHistoryPreviewBody is what a lower limit would delete.
+type StackHistoryPreviewBody struct {
+	Revisions int `json:"revisions" doc:"How many revisions the limit would delete now, across all stacks"`
+	Stacks    int `json:"stacks" doc:"How many stacks those revisions belong to"`
+}
+
+// StackHistoryPreviewOutput wraps StackHistoryPreviewBody for huma.
+type StackHistoryPreviewOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackHistoryPreviewBody
+}
+
+// RegisterStackHistorySettings registers GET and PATCH /api/settings/stack-history and the prune preview: how
+// many revisions of each stack Bayplan keeps (D-01). The limit is read at the end of every deploy and at startup,
+// so a change reaches the next deploy that ends; lowering it also prunes at once.
+func RegisterStackHistorySettings(r *httpx.Router, d SettingsDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	current := func() StackHistorySettingsBody {
+		return StackHistorySettingsBody{Kept: d.Instance.StackRevisionsKept(), Min: instance.MinStackRevisionsKept, Max: instance.MaxStackRevisionsKept}
+	}
+	var mu sync.Mutex
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "getStackHistorySettings",
+		Method:      http.MethodGet,
+		Path:        "/api/settings/stack-history",
+		Summary:     "Get how many revisions of each stack are kept",
+		Description: "kept is how many revisions of each stack Bayplan keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.",
+		Tags:        []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(_ context.Context, _ *struct{}) (*StackHistorySettingsOutput, error) {
+		return &StackHistorySettingsOutput{CacheControl: "no-store", Body: current()}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateStackHistorySettings",
+		Method:      http.MethodPatch,
+		Path:        "/api/settings/stack-history",
+		Summary:     "Change how many revisions of each stack are kept",
+		Description: "A value outside 5 to 200 answers 422. Lowering the limit deletes the older revisions of every stack at once, in the same transaction as the new value, and the answer's pruned says how many; " +
+			"the deployed revision and any revision still deploying are never deleted. Deleted revisions cannot be recovered. A request that changes nothing answers 200 and is not audited. " +
+			"Each change is audited as settings.updated with the old and new limit and the number of revisions deleted.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *UpdateStackHistorySettingsInput) (*StackHistorySettingsOutput, error) {
+		p := httpx.PrincipalFrom(ctx)
+		if p == nil {
+			return nil, httpx.Problem(http.StatusUnauthorized, "", "Sign in to continue.")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+
+		before := current()
+		if in.Body.Kept == before.Kept {
+			return &StackHistorySettingsOutput{CacheControl: "no-store", Body: before}, nil
+		}
+		fail := func(what string, err error) error {
+			d.Log.Error("stack history settings request failed", "step", what, "error", err)
+			return huma.Error500InternalServerError("internal error")
+		}
+		tx, err := d.Store.Write.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fail("begin", err)
+		}
+		defer func() { _ = tx.Rollback() }() // a no-op once committed
+		if err := d.Instance.SetStackRevisionsKeptTx(ctx, tx, d.Store.Q, in.Body.Kept); err != nil {
+			return nil, fail("store the limit", err)
+		}
+		// Only a lowered limit deletes: raising it never reaches for revisions it was not asked about. The
+		// revisions go in the same transaction, so the limit and what it deleted stand or fall together.
+		pruned := 0
+		if in.Body.Kept < before.Kept {
+			if pruned, err = (stackops.Repo{Store: d.Store}).EnforceKeepTx(ctx, tx, in.Body.Kept); err != nil {
+				return nil, fail("prune the revisions", err)
+			}
+		}
+		if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+			Actor: p.AuditActor(), Action: audit.ActionSettingsUpdated, TargetType: targetSettings, TargetID: targetSettings,
+			Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+			Details: map[string]string{
+				"stack_revisions_kept_from": strconv.Itoa(before.Kept),
+				"stack_revisions_kept_to":   strconv.Itoa(in.Body.Kept),
+				"pruned":                    strconv.Itoa(pruned),
+			},
+		}); err != nil {
+			return nil, fail("audit the stack history settings change", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fail("commit", err)
+		}
+		// Only after the commit, so a rollback leaves the cache and the database in step.
+		d.Instance.ApplyStackRevisionsKept(in.Body.Kept)
+		out := current()
+		out.Pruned = pruned
+		return &StackHistorySettingsOutput{CacheControl: "no-store", Body: out}, nil
+	})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "previewStackHistoryPrune",
+		Method:      http.MethodGet,
+		Path:        "/api/settings/stack-history/preview",
+		Summary:     "Count the revisions a lower limit would delete",
+		Description: "Answers how many revisions across how many stacks a limit of keep (5 to 200) would delete now, by the rule pruning applies: the newest keep of each stack, the deployed revision and any revision still deploying stay. " +
+			"It only reads. Needs settings.write, as the change it previews does.",
+		Tags: []string{"settings"},
+	}, rbac.Requirement{Perm: rbac.PermSettingsWrite, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *StackHistoryPreviewInput) (*StackHistoryPreviewOutput, error) {
+		revisions, stacks, err := (stackops.Repo{Store: d.Store}).PrunePreview(ctx, in.Keep)
+		if err != nil {
+			d.Log.Error("stack history preview failed", "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		}
+		return &StackHistoryPreviewOutput{CacheControl: "no-store", Body: StackHistoryPreviewBody{Revisions: revisions, Stacks: stacks}}, nil
 	})
 }

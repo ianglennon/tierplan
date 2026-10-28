@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/distribution/reference"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/registry"
@@ -28,11 +30,13 @@ const (
 )
 
 // Pin is how one service's image is pinned: the reference as written, the reference to send and
-// what decided it. Note is the sentence for a warning (a local image), empty otherwise.
+// what decided it. Note is the sentence for a warning (a local image), empty otherwise. Platforms are the image's
+// platforms, the way a swarm schedules by them (TaskTemplate.Placement.Platforms), empty when they are not known.
 type Pin struct {
 	Service, AsWritten, Ref string
 	Action                  stacks.PinAction
 	Note                    string
+	Platforms               []swarm.Platform
 }
 
 // PinOutcome is the answer of ResolvePins. Pins is by swarm service name. Problems holds a
@@ -60,6 +64,18 @@ func (o PinOutcome) Refs() map[string]string {
 	out := make(map[string]string, len(o.Pins))
 	for name, p := range o.Pins {
 		out[name] = p.Ref
+	}
+	return out
+}
+
+// Platforms are the platforms each service is sent with, by swarm service name, the form a revision stores beside its
+// pins. A service sent none is left out.
+func (o PinOutcome) Platforms() map[string][]swarm.Platform {
+	out := make(map[string][]swarm.Platform, len(o.Pins))
+	for name, p := range o.Pins {
+		if len(p.Platforms) > 0 {
+			out[name] = slices.Clone(p.Platforms)
+		}
 	}
 	return out
 }
@@ -148,7 +164,7 @@ func (d Deps) resolvePins(ctx context.Context, envID string, items []pinItem, li
 					File: stacks.ComposeFile, Key: "services." + it.Short + ".image",
 				})
 			default:
-				pin.Ref = res.ref
+				pin.Ref, pin.Platforms = res.ref, slices.Clone(res.platforms)
 			}
 		}
 		out.Pins[it.Name] = pin
@@ -176,7 +192,9 @@ func pinInputFor(it pinItem, live, stored map[string]stacks.LivePin, update map[
 // need it (CodeRegistryUnreachable or CodeImageUnresolved), infra a deploy code for one that
 // blocks the deploy.
 type lookupResult struct {
-	ref            string
+	ref string
+	// platforms are those of the image the lookup pinned, empty for a local image (it has no registry to say them).
+	platforms      []swarm.Platform
 	local          bool
 	failure, infra string
 	host           string
@@ -215,23 +233,30 @@ func (d Deps) lookupImage(ctx context.Context, envID, text string, read reader) 
 	})
 	switch {
 	case err == nil:
-		res.ref = resolved.Ref
+		res.ref, res.platforms = resolved.Ref, dockerx.SwarmPlatforms(resolved.Platforms)
+		// What this lookup learned about the digest in this repository and environment holds for the deploy that follows a review.
+		d.Platforms.remember(envID, text, resolved.Digest, res.platforms)
 	case local != nil:
 		res.ref, res.local = local.ID, true
 	default:
-		if code := codeOf(ctx, err); code != CodeEngineError {
-			// The agent refused, no manager is connected or the deploy was cancelled: not a
-			// fact about this image.
-			res.infra = code
-			return res
-		}
-		res.failure = CodeImageUnresolved
-		if unreachable(err) {
-			res.failure = CodeRegistryUnreachable
-		}
-		d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "failure", res.failure, "reason", dockerx.PullFailure(err))
+		d.classifyLookup(ctx, envID, text, err, &res)
 	}
 	return res
+}
+
+// classifyLookup sets on res what a failed lookup of text says: infra when the failure is not about this image (the agent
+// refused, no manager is connected, the deploy was cancelled), otherwise the lookup failure that blocks the services
+// that need it.
+func (d Deps) classifyLookup(ctx context.Context, envID, text string, err error, res *lookupResult) {
+	if code := codeOf(ctx, err); code != CodeEngineError {
+		res.infra = code
+		return
+	}
+	res.failure = CodeImageUnresolved
+	if unreachable(err) {
+		res.failure = CodeRegistryUnreachable
+	}
+	d.log().Warn("could not look up a stack image", "environment", envID, "image", text, "failure", res.failure, "reason", dockerx.PullFailure(err))
 }
 
 // unreachable reports whether a lookup failed because the registry could not be reached: a

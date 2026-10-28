@@ -1,0 +1,52 @@
+{
+  "stackRestore": {
+    "action": "Redeploy to restore",
+    "actionAlert": "Redeploy to restore…",
+    "revision": "Revision #{{seq}}",
+    "noDrift": "No drift to restore.",
+    "review": {
+      "title": "Restore {{name}}",
+      "body": "This deploys revision #{{seq}} again, with its pinned images, to put back what was changed outside the stack.",
+      "bodyPending": "This deploys the deployed revision again, with its pinned images, to put back what was changed outside the stack.",
+      "yamlCaption": "Rendered YAML of revision #{{seq}}, as deployed",
+      "noChanges": {
+        "body": "Running already matches revision #{{seq}}. There's nothing to restore."
+      },
+      "reasons": {
+        "nothing": "No drift to restore."
+      },
+      "footer": {
+        "back": "Back to drift",
+        "restore": "Restore stack",
+        "starting": "Starting…"
+      },
+      "error": {
+        "none": "This stack has not been deployed yet, so there's nothing to restore."
+      },
+      "errors": {
+        "deployedChanged": "The stack was deployed again since you opened this review. Review it again.",
+        "reviewAgain": "Review again",
+        "none": "This stack has not been deployed yet, so there's nothing to restore.",
+        "needsAdmin": "The deployed revision uses host access, which needs Admin. Ask an administrator to restore it.",
+        "invalid": "The deployed revision can't be deployed again as it is.",
+        "lost": "The server didn't answer. The restore may have started: check the stack before you try again.",
+        "generic": "Couldn't start the restore. Check the connection and try again."
+      }
+    },
+    "console": {
+      "title": "Restoring {{name}}",
+      "retry": "Retry restore",
+      "announce": "Restore complete",
+      "complete": {
+        "title": "Restore complete",
+        "body": "{{name}} matches revision #{{revision}} again."
+      },
+      "failed": {
+        "title": "Restore failed"
+      },
+      "cancelled": {
+        "title": "Restore cancelled"
+      }
+    }
+  }
+}

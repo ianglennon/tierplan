@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
 )
 
 // stepError is a failure of one step of a swarm deploy: the deploy code to end the item with, the
@@ -49,6 +50,7 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 // options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
 // the call with a *stepError; the networks created before it stay in created.
 func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress) (created []string, err error) {
+	own := OwnershipOf(stack)
 	for _, n := range plans {
 		if n.External {
 			found, swarmScope := externalNetwork(live, n.Name)
@@ -61,7 +63,7 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 			continue
 		}
 		if row, ok := findNetwork(live, n.Name); ok {
-			if row.Labels[stacks.LabelStackID] != stack.ID {
+			if !own.OwnsNetwork(row.Name, row.Labels) && !own.Knows(rebuild.KindNetwork, row.Name) {
 				return created, &stepError{code: CodeNetworkConflict, name: n.Name, err: errors.New("the network belongs to another owner")}
 			}
 			continue
@@ -135,8 +137,9 @@ func networkSpec(n convert.NetworkPlan) dockerx.NetworkCreateSpec {
 // never touched. The caller runs it only after every declared service was created or updated. The
 // first failure ends the call with a *stepError; removed names the services removed before it.
 func (d Deps) pruneServices(ctx context.Context, envID string, stack Stack, declared map[string]bool, live []dockerx.ServiceDetail, prog *progress) (removed []string, err error) {
+	own := OwnershipOf(stack)
 	for _, s := range live {
-		if declared[s.Name] || s.Labels[stacks.LabelSwarmNamespace] != stack.Name || s.Labels[stacks.LabelStackID] != stack.ID {
+		if declared[s.Name] || !own.OwnsWorkload(s.Labels) {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -289,6 +292,7 @@ func hasExternalObject(objs []stacks.ObjectContent, kind stacks.ObjectKind) bool
 // create (T-07-33).
 func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs []stacks.ObjectContent, live []objectRow, prog *progress) (refs objectRefs, created []string, err error) {
 	refs = newObjectRefs()
+	own := OwnershipOf(stack)
 	for _, o := range objs {
 		if o.External {
 			row, ok := findObject(live, o.Kind, o.ExternalName)
@@ -300,7 +304,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 		}
 		full, hash := stacks.ObjectName(stack.Name, o.Name, o.Content)
 		if row, ok := findObject(live, o.Kind, full); ok {
-			if row.Labels[stacks.LabelStackID] != stack.ID {
+			if !own.OwnsObject(row.Labels) {
 				return refs, created, &stepError{code: CodeObjectNameTaken, name: full, err: dockerx.ErrNameTaken}
 			}
 			refs.set(o.Kind, o.Name, objectRef{ID: row.ID, Name: full})
@@ -362,22 +366,33 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 // next deploy finds the same objects by their labels; err is only a read that failed, when
 // nothing could be judged.
 func (d Deps) removeReplacedObjects(ctx context.Context, envID string, stack Stack, keep objectRefs, prog *progress) (removed, leftInPlace []string, err error) {
+	own := OwnershipOf(stack)
 	var svcs []dockerx.ServiceDetail
 	var secrets, configs []objectRow
 	err = d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
 		var e error
+		secrets, configs = nil, nil // a read that is tried on another manager starts again
 		if svcs, e = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, stack.Name); e != nil {
 			return e
 		}
-		srows, e := c.SecretsWithLabel(ctx, stacks.LabelStackID, stack.ID)
+		srows, e := c.SecretsWithLabel(ctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		crows, e := c.ConfigsWithLabel(ctx, stacks.LabelStackID, stack.ID)
+		crows, e := c.ConfigsWithLabel(ctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		secrets, configs = secretRows(srows), configRows(crows)
+		for _, r := range secretRows(srows) {
+			if own.OwnsObject(r.Labels) {
+				secrets = append(secrets, r)
+			}
+		}
+		for _, r := range configRows(crows) {
+			if own.OwnsObject(r.Labels) {
+				configs = append(configs, r)
+			}
+		}
 		return nil
 	})
 	if err != nil {

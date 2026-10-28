@@ -32,10 +32,32 @@ const stack = (over: Record<string, unknown> = {}) => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "not_deployed",
   lastDeployedAt: "",
   lastDeployedBy: "",
   hasDraft: false,
+  ...over,
+});
+
+// A stack found on the engine that Bayplan did not make: no ID, a state and the service counts, and the flags.
+const unmanaged = (
+  name: string,
+  over: Record<string, unknown> = {},
+  flags: Record<string, unknown> = {},
+) => ({
+  id: "",
+  name,
+  target: "swarm",
+  source: "unmanaged",
+  managed: false,
+  state: "running",
+  lastDeployedAt: "",
+  lastDeployedBy: "",
+  hasDraft: false,
+  servicesRunning: 2,
+  servicesTotal: 2,
+  unmanaged: { orphan: false, portainer: false, owner: "", adoptable: true, reason: "", ...flags },
   ...over,
 });
 
@@ -65,7 +87,7 @@ beforeEach(() => {
           total: items.length,
           unfilteredTotal: items.length,
           capped: false,
-          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0, drifted: 0 },
           ...(stacks as object),
           ...listExtra,
         });
@@ -163,7 +185,7 @@ describe("StackList", () => {
     expect(await screen.findByRole("heading", { name: "Stacks", level: 1 })).toBeTruthy();
     const link = await screen.findByRole("link", { name: "web" });
     expect(link.getAttribute("href")).toBe("/env/e1/stacks/s1");
-    expect(screen.getByText(/Stacks Bayplan manages on Prod\./)).toBeTruthy();
+    expect(screen.getByText(/Stacks on Prod\./)).toBeTruthy();
     expect(screen.getByText(/1 stack$/)).toBeTruthy();
   });
 
@@ -209,6 +231,63 @@ describe("StackList", () => {
     const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
     expect(within(row("drafty")).getByText("Draft")).toBeTruthy();
     expect(within(row("plain")).queryByText("Draft")).toBeNull();
+  });
+
+  it("badges a stack that drifted after its name, after Draft when it has both, with the revision in its tooltip text", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a",
+          name: "both",
+          hasDraft: true,
+          drift: { state: "drifted", revision: 3, count: 2 },
+        }),
+        stack({ id: "b", name: "alone", drift: { state: "drifted", revision: 1, count: 1 } }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "both" });
+    const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+    const badges = (n: string) =>
+      within(row(n))
+        .getAllByText(/^(Draft|Drifted)$/)
+        .map((b) => b.textContent);
+    expect(badges("both")).toEqual(["Draft", "Drifted"]);
+    expect(badges("alone")).toEqual(["Drifted"]);
+    // The words of the Tooltip are also the badge's description, for a reader who never opens it.
+    const badge = within(row("both")).getByText("Drifted");
+    const description = document.getElementById(badge.getAttribute("aria-describedby") ?? "");
+    expect(description?.textContent).toBe("Running state no longer matches revision #3.");
+  });
+
+  it("shows no Drifted badge for a stack that was not found drifted, stopped, not deployed or not checked", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a",
+          name: "fine",
+          state: "running",
+          drift: { state: "none", revision: 1, count: 0 },
+        }),
+        stack({
+          id: "b",
+          name: "halted",
+          state: "stopped",
+          drift: { state: "stopped", revision: 1, count: 0 },
+        }),
+        stack({ id: "c", name: "fresh", drift: { state: "not_deployed", revision: 0, count: 0 } }),
+        stack({
+          id: "d",
+          name: "opaque",
+          state: "running",
+          drift: { state: "unknown", revision: 2, count: 0 },
+        }),
+        stack({ id: "e", name: "unchecked", state: "running" }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "fine" });
+    expect(screen.queryByText("Drifted")).toBeNull();
   });
 
   it("renders a name with markup in it as text", async () => {
@@ -476,18 +555,44 @@ describe("StackList: search and status chips", () => {
     expect(last.searchParams.get("dir")).toBe("desc");
   });
 
-  it("shows the four status chips with the counts the server gave, in a labelled group that wraps", async () => {
+  it("shows the five status chips with the counts the server gave, in a labelled group that wraps, Drifted after the others", async () => {
     listExtra = {
-      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0 },
+      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0, drifted: 4 },
       unfilteredTotal: 9,
     };
     mount({ search: { q: "zzz" } });
     await screen.findByRole("link", { name: "web" });
     const group = screen.getByRole("group", { name: "Filter by status" });
     expect(group.className).toContain("flex-wrap");
-    for (const label of ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0"]) {
+    const labels = ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0", "Drifted 4"];
+    for (const label of labels) {
       expect(within(group).getByRole("button", { name: label })).toBeTruthy();
     }
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(labels);
+  });
+
+  it("puts the Drifted chip in the URL after the other chips, and takes it out again", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: /^Drifted/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "drifted" });
+    fireEvent.click(screen.getByRole("button", { name: /^Draft/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "draft,drifted" });
+    fireEvent.click(screen.getByRole("button", { name: /^Drifted/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "draft" });
+  });
+
+  it("restores the Drifted chip from the URL and sends status=drifted to the server", async () => {
+    mount({ search: { status: "drifted" } });
+    await screen.findByRole("link", { name: "web" });
+    const chip = screen.getByRole("button", { name: /^Drifted/ });
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    const last = requests.at(-1) as URL;
+    expect(last.searchParams.get("status")).toBe("drifted");
   });
 
   it("puts a chosen chip in the URL and takes it out again", async () => {
@@ -640,5 +745,344 @@ describe("StackList: columns and pending rows", () => {
     const idle = within(row("e-stack")).getByRole("button", { name: "Actions for e-stack" });
     expect((idle as HTMLButtonElement).disabled).toBe(false);
     expect(within(row("e-stack")).getByText("Running")).toBeTruthy();
+  });
+});
+
+describe("StackList unmanaged stacks", () => {
+  const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, a link to its page and Open stack and Adopt stack… only", async () => {
+    stacks = {
+      items: [
+        stack(),
+        unmanaged("legacy", { state: "degraded", servicesRunning: 1, servicesTotal: 3 }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+
+    const row = rowOfName("legacy");
+    expect(within(row).getByText("Unmanaged")).toBeTruthy();
+    expect(within(row).getByText("Degraded")).toBeTruthy();
+    expect(within(row).getByText("1/3")).toBeTruthy();
+    // Source is a dash without a Portainer marker and Last deployed is a dash: two cells say so.
+    expect(within(row).getAllByText("\u2014")).toHaveLength(2);
+    // The name links to the stack's read-only page, built from the name.
+    expect(within(row).getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy",
+    );
+    // A managed row beside it keeps its link and menu.
+    expect(within(rowOfName("web")).getByRole("button", { name: /web/ })).toBeTruthy();
+    // The row's menu offers Open stack and Adopt stack… (to an Env Admin) and nothing that changes the stack: Deploy,
+    // Update images, Stop, Start and Remove are not offered.
+    fireEvent.pointerDown(within(row).getByRole("button", { name: "Actions for legacy" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    const items = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
+    expect(items).toEqual(["Open stack", "Adopt stack…"]);
+    expect(screen.getByRole("menuitem", { name: "Adopt stack…" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/legacy/adopt",
+    );
+  });
+
+  it("shows an Operator Adopt stack… off with Needs Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    stacks = { items: [unmanaged("legacy")] };
+    mount();
+    await screen.findByText("legacy");
+    fireEvent.pointerDown(
+      within(rowOfName("legacy")).getByRole("button", { name: "Actions for legacy" }),
+      { button: 0, ctrlKey: false },
+    );
+
+    const adopt = await screen.findByRole("menuitem", { name: "Adopt stack…" });
+    await waitFor(() => expect(adopt.getAttribute("aria-disabled")).toBe("true"));
+    expect(adopt.getAttribute("href")).toBeNull();
+  });
+
+  it("shows Adopt stack… off, with the reason, for a stack that cannot be adopted", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "selfstack",
+          {},
+          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+        ),
+      ],
+    };
+    mount();
+    await screen.findByText("selfstack");
+    fireEvent.pointerDown(
+      within(rowOfName("selfstack")).getByRole("button", { name: "Actions for selfstack" }),
+      { button: 0, ctrlKey: false },
+    );
+
+    const adopt = await screen.findByRole("menuitem", { name: "Adopt stack…" });
+    expect(adopt.getAttribute("aria-disabled")).toBe("true");
+    expect(adopt.getAttribute("href")).toBeNull();
+  });
+
+  it("reads a source this build has no word for as a dash, never as a raw key", async () => {
+    stacks = { items: [stack({ id: "z1", name: "odd", source: "svn" })] };
+    mount();
+    await screen.findByRole("link", { name: "odd" });
+
+    const row = rowOfName("odd");
+    expect(within(row).queryByText(/stacks\.source/)).toBeNull();
+    expect(within(row).getAllByText("\u2014")).not.toHaveLength(0);
+  });
+
+  it("shows a stack that was adopted with the outline Source badge Adopted", async () => {
+    stacks = {
+      items: [
+        stack({
+          id: "a1",
+          name: "legacy",
+          source: "adopted",
+          state: "running",
+          servicesRunning: 2,
+          servicesTotal: 2,
+        }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "legacy" });
+
+    const row = rowOfName("legacy");
+    expect(within(row).getByText("Adopted")).toBeTruthy();
+    expect(within(row).queryByText("Unmanaged")).toBeNull();
+    expect(within(row).getByText("Running")).toBeTruthy();
+    expect(within(row).queryByText("Draft")).toBeNull();
+  });
+
+  it("renders the name of an unmanaged stack with markup in it as text", async () => {
+    stacks = { items: [unmanaged("<img src=x onerror=alert(1)>")] };
+    mount();
+    const name = await screen.findByText("<img src=x onerror=alert(1)>");
+    expect(name.querySelector("img")).toBeNull();
+  });
+
+  it("explains in a Tooltip that Bayplan did not create the stack", async () => {
+    stacks = { items: [unmanaged("legacy")] };
+    mount();
+    await screen.findByText("legacy");
+    fireEvent.focus(within(rowOfName("legacy")).getByText("Unmanaged"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
+    );
+  });
+});
+
+describe("StackList: the Show group, captions and discovery", () => {
+  const counts = (all: number, managed: number, unmanagedCount: number) => ({
+    all,
+    managed,
+    unmanaged: unmanagedCount,
+  });
+
+  it("shows a group named Show beside the search with All, Managed and Unmanaged and their counts", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    const show = screen.getByRole("group", { name: "Show" });
+    expect(within(show).getByRole("radio", { name: "All, 3" })).toBeTruthy();
+    expect(within(show).getByRole("radio", { name: "Managed, 1" })).toBeTruthy();
+    expect(within(show).getByRole("radio", { name: "Unmanaged, 2" })).toBeTruthy();
+    // It sits in toolbar row 1, with the search.
+    expect(show.parentElement?.contains(screen.getByRole("searchbox"))).toBe(true);
+  });
+
+  it("puts the kind in the URL, and takes it out when the chosen one is pressed again", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("radio", { name: "Unmanaged, 2" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "unmanaged" });
+    fireEvent.click(screen.getByRole("radio", { name: "Managed, 1" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "managed" });
+    fireEvent.click(screen.getByRole("radio", { name: "Managed, 1" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: undefined });
+  });
+
+  it("restores the kind from the URL and sends it to the server", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount({ search: { kind: "unmanaged" } });
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByRole("radio", { name: "Unmanaged, 2" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    await waitFor(() => expect(requests.at(-1)?.searchParams.get("kind")).toBe("unmanaged"));
+  });
+
+  it("offers Clear filters while a kind is on, and clears it", async () => {
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    const { onChange } = mount({ search: { kind: "managed" } });
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, kind: undefined });
+  });
+
+  it("captions the stacks and the unmanaged ones among them, plural-aware", async () => {
+    stacks = { items: [stack(), unmanaged("legacy"), unmanaged("blog")] };
+    listExtra = { kindCounts: counts(3, 1, 2) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText(/Stacks on Prod\./)).toBeTruthy();
+    expect(screen.getByText(/3 stacks, 2 unmanaged$/)).toBeTruthy();
+    cleanup();
+    client.clear();
+
+    stacks = { items: [unmanaged("legacy")] };
+    listExtra = { kindCounts: counts(1, 0, 1) };
+    mount();
+    await screen.findByText("legacy");
+    expect(screen.getByText(/1 stack, 1 unmanaged$/)).toBeTruthy();
+  });
+
+  it("leaves the unmanaged part out of the caption when there are none", async () => {
+    listExtra = { kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText(/1 stack$/)).toBeTruthy();
+    expect(screen.queryByText(/unmanaged$/)).toBeNull();
+  });
+
+  it("lists an environment that has only unmanaged stacks and does not say there are no stacks", async () => {
+    stacks = { items: [unmanaged("legacy")] };
+    listExtra = { kindCounts: counts(1, 0, 1) };
+    mount();
+    expect(await screen.findByText("legacy")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "No stacks", level: 2 })).toBeNull();
+  });
+
+  it("says there are no unmanaged stacks, and clears the filter", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 1, kindCounts: counts(1, 1, 0) };
+    const { onChange } = mount({ search: { kind: "unmanaged" } });
+    expect(
+      await screen.findByRole("heading", { name: "No unmanaged stacks", level: 2 }),
+    ).toBeTruthy();
+    expect(screen.getByText("Every stack on Prod is managed by Bayplan.")).toBeTruthy();
+    const buttons = screen.getAllByRole("button", { name: "Clear filters" });
+    fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
+    expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, kind: undefined });
+  });
+
+  it("says there are no managed stacks when every stack was created elsewhere", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 2, kindCounts: counts(2, 0, 2) };
+    mount({ search: { kind: "managed" } });
+    expect(
+      await screen.findByRole("heading", { name: "No managed stacks", level: 2 }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The stacks on Prod were all created elsewhere. Adopt one to manage it here.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Clear filters" }).length).toBeGreaterThan(0);
+  });
+
+  it("says no stack matches the filters for a status chip with the Unmanaged kind", async () => {
+    stacks = { items: [] };
+    listExtra = { unfilteredTotal: 3, kindCounts: counts(3, 1, 2) };
+    mount({ search: { kind: "unmanaged", status: "degraded" } });
+    expect(
+      await screen.findByRole("heading", { name: "No stacks match these filters.", level: 2 }),
+    ).toBeTruthy();
+  });
+
+  it("shows a retry row when the look for unmanaged stacks failed, with the managed stacks still listed", async () => {
+    listExtra = { discoveryFailed: true, kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.getByText("Couldn't look for unmanaged stacks on Prod.")).toBeTruthy();
+    const before = requests.length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requests.length).toBeGreaterThan(before));
+  });
+
+  it("shows no retry row when the look worked", async () => {
+    listExtra = { discoveryFailed: false, kindCounts: counts(1, 1, 0) };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(screen.queryByText(/Couldn't look for unmanaged stacks/)).toBeNull();
+  });
+});
+
+describe("StackList: flags on unmanaged stacks", () => {
+  const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
+
+  it("adds the lost-record sentence to the Tooltip of an orphan row's Unmanaged badge", async () => {
+    stacks = { items: [unmanaged("orphan", {}, { orphan: true })] };
+    mount();
+    await screen.findByText("orphan");
+    fireEvent.focus(within(rowOfName("orphan")).getByText("Unmanaged"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toBe(
+      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here. Created by Bayplan (another instance or a lost record).",
+    );
+  });
+
+  it("shows the Portainer badge in Source for a Portainer stack and a dash for any other", async () => {
+    stacks = {
+      items: [unmanaged("viaportainer", {}, { portainer: true }), unmanaged("plain")],
+    };
+    mount();
+    await screen.findByText("viaportainer");
+    const source = (name: string) => within(rowOfName(name)).getAllByRole("cell")[3] as HTMLElement;
+    expect(within(source("viaportainer")).getByText("Portainer")).toBeTruthy();
+    expect(within(source("plain")).queryByText("Portainer")).toBeNull();
+    expect(source("plain").textContent).toBe("—");
+  });
+
+  it("badges Bayplan's own stack and the agent's stack beside Unmanaged, with the reason in a Tooltip", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "self",
+          {},
+          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+        ),
+        unmanaged(
+          "agents",
+          {},
+          { owner: "agent", adoptable: false, reason: "This stack runs Bayplan's agent." },
+        ),
+        unmanaged("blog"),
+      ],
+    };
+    mount();
+    await screen.findByText("self");
+    const own = rowOfName("self");
+    expect(within(own).getByText("Unmanaged")).toBeTruthy();
+    expect(within(own).getByText("Bayplan")).toBeTruthy();
+    expect(within(rowOfName("agents")).getByText("Bayplan agent")).toBeTruthy();
+    expect(within(rowOfName("blog")).queryByText(/^Bayplan/)).toBeNull();
+
+    fireEvent.focus(within(own).getByText("Bayplan"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe("This is Bayplan's own stack.");
+  });
+
+  it("draws every flag as a neutral outline badge, never a status fill, and keeps names as text", async () => {
+    stacks = {
+      items: [
+        unmanaged(
+          "<b>flagged</b>",
+          { state: "degraded", servicesRunning: 1, servicesTotal: 2 },
+          { orphan: true, portainer: true, owner: "agent", adoptable: false, reason: "r" },
+        ),
+      ],
+    };
+    mount();
+    const name = await screen.findByText("<b>flagged</b>");
+    expect(name.querySelector("b")).toBeNull();
+    const row = name.closest("tr") as HTMLElement;
+    for (const word of ["Unmanaged", "Bayplan agent", "Portainer"]) {
+      const badge = within(row).getByText(word);
+      expect(badge.getAttribute("data-variant")).toBe("outline");
+    }
   });
 });

@@ -116,11 +116,12 @@ describe("the Overview cards", () => {
     expect(link.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/stacks/stk-1`);
   });
 
-  it("leaves the Stack row as text for a stack Bayplan does not manage", async () => {
+  it("links the Stack row to the read-only page of a stack Bayplan does not manage", async () => {
     await overview(serviceDetail({ stack: "legacy" }));
     const c = within(card("Service"));
-    expect(c.getByText("legacy")).toBeTruthy();
-    expect(c.queryByRole("link", { name: "legacy" })).toBeNull();
+    expect(c.getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(
+      `/env/${SERVICE_ENV}/unmanaged-stacks/legacy`,
+    );
   });
 
   it("says whether the restart-loop alerts are on or muted", async () => {

@@ -56,6 +56,13 @@ func stackEnvTuned(t *testing.T, tune func(*envFix)) (*envFix, envBody) {
 	return f, e
 }
 
+// driftSummaryAnswer is the drift a list or a stack's page says without the services.
+type driftSummaryAnswer struct {
+	State    string `json:"state"`
+	Revision int64  `json:"revision"`
+	Count    int    `json:"count"`
+}
+
 type stackAnswer struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -72,6 +79,17 @@ type stackAnswer struct {
 	Stopped         bool   `json:"stopped"`
 	DraftSavedAt    string `json:"draftSavedAt"`
 	DraftSavedBy    string `json:"draftSavedBy"`
+	// Drift is the newest drift check, absent until the stack has one.
+	Drift *driftSummaryAnswer `json:"drift"`
+	// Managed is false for a stack found on the engine that Bayplan did not make, which carries Unmanaged.
+	Managed   bool `json:"managed"`
+	Unmanaged *struct {
+		Orphan    bool   `json:"orphan"`
+		Portainer bool   `json:"portainer"`
+		Owner     string `json:"owner"`
+		Adoptable bool   `json:"adoptable"`
+		Reason    string `json:"reason"`
+	} `json:"unmanaged"`
 }
 
 type draftAnswer struct {
@@ -378,7 +396,7 @@ func TestStackRefusals(t *testing.T) {
 		t.Errorf("a viewer listing: %d %s, want 200", rec.Code, rec.Body)
 	}
 
-	for _, name := range []string{"Web", "-web", "my stack", "", strings.Repeat("a", 64), "a.b"} {
+	for _, name := range []string{"-web", "my stack", "", strings.Repeat("a", 62), strings.Repeat("a", 64), "a/b", ".web", "a.b"} {
 		body, _ := json.Marshal(map[string]string{"name": name})
 		rec := admin.createStack(string(body))
 		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" {
@@ -603,6 +621,20 @@ type standaloneUp struct {
 	calls   int
 }
 
+// failWith makes the next runs of the Compose stand-in end with err; nil makes them succeed again.
+func (u *standaloneUp) failWith(err error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.err = err
+}
+
+// lastProject is the project the stand-in was last given and how many times it has been run.
+func (u *standaloneUp) lastProject() (*types.Project, int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.project, u.calls
+}
+
 func (u *standaloneUp) run(_ context.Context, _ *dockerx.Client, p *types.Project, _ dockerx.ComposeUpOptions, on func(dockerx.ComposeEvent)) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -679,18 +711,18 @@ func TestAFailedStandaloneDeployIsRecordedAsFailed(t *testing.T) {
 	}
 }
 
-func TestARollBackOfAStandaloneStackIsRefusedUntilItsEngineExists(t *testing.T) {
+func TestARollBackOfAStandaloneStackThatNeverRanWellHasNothingToRestore(t *testing.T) {
 	t.Parallel()
-	f, e, _ := standaloneEnv(t, nil)
+	f, e, up := standaloneEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	operator := f.caller(t, e, "operator-1", "operator")
 	st := newStack(t, admin, "solo")
 	rec := operator.do(http.MethodPost, "stacks/"+st.ID+"/rollback", "")
-	if rec.Code != http.StatusConflict || problemType(t, rec) != "target_engine_missing" {
-		t.Errorf("rollback: %d %s, want 409 target_engine_missing", rec.Code, rec.Body)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "no_previous_version" {
+		t.Errorf("rollback: %d %s, want 409 no_previous_version", rec.Code, rec.Body)
 	}
-	if w := f.fake.Writes(); len(w) != 0 {
-		t.Errorf("writes = %v", w)
+	if w := f.fake.Writes(); len(w) != 0 || up.calls != 0 {
+		t.Errorf("writes = %v, compose runs = %d, want none", w, up.calls)
 	}
 }
 
@@ -1099,4 +1131,46 @@ func TestCreateStackFromAnEmptyUploadMakesAnEmptyComposeFile(t *testing.T) {
 	if got := composeOf(t, admin, answerOf[stackAnswer](t, rec).ID); got != "" {
 		t.Errorf("compose.yaml = %q, want the empty file that was uploaded, not the starter", got)
 	}
+}
+
+// One stack-name rule for create and adopt (plan 08-10, D-48, D-53): the rule is the target's, and the create
+// route, the name check and discovery all apply it.
+
+func TestCreateTakesTheRelaxedName(t *testing.T) {
+	t.Parallel()
+	t.Run("a swarm takes both cases and refuses a dot", func(t *testing.T) {
+		t.Parallel()
+		f, e := stackEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		got := newStack(t, admin, "MyApp")
+		if got.Name != "MyApp" || got.Target != "swarm" {
+			t.Fatalf("created = %+v, want MyApp on a swarm", got)
+		}
+		if names := stackNames(listWith(t, admin, "").Items); !slices.Equal(names, []string{"MyApp"}) {
+			t.Errorf("listed %v, want MyApp", names)
+		}
+		// Swarm looks object names up regardless of case, so a case variant is the same name.
+		rec := admin.createStack(`{"name":"myapp"}`)
+		if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_taken" {
+			t.Errorf("myapp next to MyApp: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
+		}
+		rec = admin.createStack(`{"name":"Shop.Front"}`)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" || !strings.Contains(rec.Body.String(), swarmNameSentence) {
+			t.Errorf("Shop.Front: %d %s, want 422 stack_name_invalid with the swarm sentence", rec.Code, rec.Body)
+		}
+	})
+	t.Run("a standalone host takes compose-go's project name", func(t *testing.T) {
+		t.Parallel()
+		f, e, _ := standaloneEnv(t, nil)
+		admin := f.caller(t, e, "envadmin-1", "admin")
+		for _, name := range []string{"MyApp", "Shop.Front", "shop.front"} {
+			rec := admin.createStack(`{"name":"` + name + `"}`)
+			if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "stack_name_invalid" || !strings.Contains(rec.Body.String(), standaloneNameSentence) {
+				t.Errorf("%s: %d %s, want 422 stack_name_invalid with the standalone sentence", name, rec.Code, rec.Body)
+			}
+		}
+		if got := newStack(t, admin, "shop-front"); got.Target != "standalone" {
+			t.Errorf("created = %+v, want shop-front on a standalone host", got)
+		}
+	})
 }

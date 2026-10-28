@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { ArrowRight, ChevronRight, RotateCcw, RotateCw } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import type { StackReviewService } from "@/api/stacks";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/table";
 import { imageOf } from "@/features/service-editor/spec-paths";
 import { diffSpecs } from "@/features/spec-editor/diff";
-import { SpecDiff } from "@/features/spec-editor/spec-diff";
+import { DriftedMarker, SpecDiff } from "@/features/spec-editor/spec-diff";
+import { OwnershipOnlyGroup } from "@/features/stack-review/ownership-only-group";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,18 @@ const OPEN_BY_DEFAULT = 3;
 
 interface ServiceDiffListProps {
   services: StackReviewService[];
+  // The headings of the value columns of an expanded row, and its caption as a function of the service's name, when
+  // they are not the review's own (the Adopt page's are "Running now" and "After the first deploy").
+  headings?: { current?: string; next?: string };
+  caption?: (name: string) => string;
+  // A number that goes up when every row that can open should open ("Show differences" on the Adopt page). 0 or absent
+  // leaves each row as it is.
+  openAll?: number;
+  // "standalone" words the Ownership labels only group for containers and not for services.
+  context?: "standalone";
+  // The paths of the settings that differ because of drift, by service name (History's Changes tab): each is marked
+  // Drifted. Absent for the review, which has no use for it.
+  driftedPaths?: Record<string, string[] | null> | null;
 }
 
 // The glyph beside a change's word. The word carries the meaning; the glyph is for scanning.
@@ -64,7 +77,15 @@ function ImageText({ text }: { text: string }) {
 // HiddenChanges lists the settings whose value changed to or from one that is hidden: the path
 // alone, as "Changed (hidden)". The server decided that they changed before it hid them and never
 // sent the values, so there is nothing else to show (STK-06, T-07-69).
-function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
+export function HiddenChanges({
+  name,
+  paths,
+  drifted,
+}: {
+  name: string;
+  paths: string[];
+  drifted?: readonly string[];
+}) {
   const t = useT();
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">
@@ -91,6 +112,12 @@ function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
               </TableCell>
               <TableCell className="align-top font-mono text-xs break-all whitespace-normal">
                 {path}
+                {drifted?.includes(path) ? (
+                  <>
+                    {" "}
+                    <DriftedMarker />
+                  </>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
@@ -100,9 +127,10 @@ function HiddenChanges({ name, paths }: { name: string; paths: string[] }) {
   );
 }
 
-interface RowProps {
+interface RowProps extends Pick<ServiceDiffListProps, "headings" | "caption" | "openAll"> {
   service: StackReviewService;
   defaultOpen: boolean;
+  drifted?: readonly string[];
 }
 
 // A change the file did not make: a standalone deploy recreates this service because the one it
@@ -144,10 +172,13 @@ function CarriedRow({ service }: { service: StackReviewService }) {
 // ServiceRow is one service: the change in words with its glyph, the name in mono, how many
 // settings changed and the image change. A changed or added service expands to the field-level
 // difference; a removed one is its summary row and nothing more.
-function ServiceRow({ service, defaultOpen }: RowProps) {
+function ServiceRow({ service, defaultOpen, headings, caption, openAll, drifted }: RowProps) {
   const t = useT();
   const change = service.change as keyof typeof GLYPH;
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (openAll) setOpen(true);
+  }, [openAll]);
   const removed = service.change === "removed";
   const hidden = service.hiddenChanges ?? [];
   const rows = useMemo(
@@ -213,9 +244,14 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
               current={service.current}
               next={service.next}
               create={service.change === "added"}
+              headings={headings}
+              caption={caption?.(service.short)}
+              drifted={drifted}
             />
           ) : null}
-          {hidden.length > 0 ? <HiddenChanges name={service.short} paths={hidden} /> : null}
+          {hidden.length > 0 ? (
+            <HiddenChanges name={service.short} paths={hidden} drifted={drifted} />
+          ) : null}
         </CollapsibleContent>
       </Collapsible>
     </li>
@@ -227,30 +263,56 @@ function ServiceRow({ service, defaultOpen }: RowProps) {
 // services a standalone deploy recreates or restarts because another is recreated. A first deploy lists
 // every service as Added. Masked values never appear on either side: the server sends them
 // hidden, and a change to a hidden one is only a path.
-export function ServiceDiffList({ services }: ServiceDiffListProps) {
+export function ServiceDiffList({
+  services,
+  headings,
+  caption,
+  openAll,
+  context,
+  driftedPaths,
+}: ServiceDiffListProps) {
+  // The services that differ in nothing but Bayplan's ownership labels are their own group above the list
+  // (UI-SPEC "Review additions"); a service with a real change as well stays in the list.
+  const labelsOnly = useMemo(() => services.filter((s) => s.ownershipOnly), [services]);
   // The server lists added and changed services by name, then the ones a recreate carries, then
   // the removed ones; the order is kept here too, so a list that came in another order still ends
   // with what goes away.
-  const ordered = useMemo(
-    () => [
-      ...services.filter((s) => s.change !== "removed" && !isCarried(s)),
-      ...services.filter(isCarried),
-      ...services.filter((s) => s.change === "removed"),
-    ],
-    [services],
-  );
-  if (ordered.length === 0) return null;
+  const ordered = useMemo(() => {
+    const rest = services.filter((s) => !s.ownershipOnly);
+    return [
+      ...rest.filter((s) => s.change !== "removed" && !isCarried(s)),
+      ...rest.filter(isCarried),
+      ...rest.filter((s) => s.change === "removed"),
+    ];
+  }, [services]);
+  if (ordered.length === 0 && labelsOnly.length === 0) return null;
   // Only a row that can open counts for whether they open: a carried one has nothing to show.
   const open = ordered.filter((s) => s.change === "added" || s.change === "changed").length;
+  const list =
+    ordered.length === 0 ? null : (
+      <ul className="flex flex-col gap-2">
+        {ordered.map((s) =>
+          isCarried(s) ? (
+            <CarriedRow key={s.name} service={s} />
+          ) : (
+            <ServiceRow
+              key={s.name}
+              service={s}
+              defaultOpen={open <= OPEN_BY_DEFAULT}
+              headings={headings}
+              caption={caption}
+              openAll={openAll}
+              drifted={driftedPaths?.[s.name] ?? undefined}
+            />
+          ),
+        )}
+      </ul>
+    );
+  if (labelsOnly.length === 0) return list;
   return (
-    <ul className="flex flex-col gap-2">
-      {ordered.map((s) =>
-        isCarried(s) ? (
-          <CarriedRow key={s.name} service={s} />
-        ) : (
-          <ServiceRow key={s.name} service={s} defaultOpen={open <= OPEN_BY_DEFAULT} />
-        ),
-      )}
-    </ul>
+    <div className="flex flex-col gap-4">
+      <OwnershipOnlyGroup services={labelsOnly} context={context} />
+      {list}
+    </div>
   );
 }

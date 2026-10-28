@@ -40,8 +40,8 @@ var (
 	// *DraftConflictError.
 	ErrDraftConflict = errors.New("stackops: the draft was saved by someone else")
 	// ErrTargetEngineMissing means the stack's target has no engine for the operation asked for in this
-	// version: a standalone stack deploys with the Compose SDK, but rolling one back, and the other
-	// operations of the later plans, wait for their plans.
+	// version. Deploying to and rolling back a standalone stack both have one now, so no operation answers
+	// it at present; the sentinel and its 409 stay for an operation a later plan adds that a target lacks.
 	ErrTargetEngineMissing = errors.New("stackops: this version cannot deploy to that kind of environment yet")
 	// ErrTargetChanged means the environment is no longer the kind of target the stack was created
 	// for: the stack deploys to a swarm and the environment is a standalone host, or the reverse.
@@ -98,6 +98,11 @@ type Deps struct {
 	// (WriteOnNode refuses a read-only host before it takes a client); a test sets it to play a host that
 	// answers otherwise, which the aggregator proves for itself.
 	Writable func(ctx context.Context, envID, nodeID string) error
+	// Platforms remembers the platforms of every image a lookup found, by digest, so a deploy that follows a review sends
+	// the platforms the review showed without asking the registry again. Nil is no memo: a reviewed deploy then asks the
+	// registry, once for each looked-up digest, for that digest's platforms. One memo is shared by every stack route of a
+	// server.
+	Platforms *PlatformMemo
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

@@ -23,8 +23,11 @@ interface ImagePinTableProps {
   // One row for each service with an image; absent while the review is on its way, when the rows
   // are skeletons and the card says the digests are being looked up.
   images?: StackReviewImage[];
-  // In update mode a row whose digest moved shows the old chip, an arrow and the new chip.
+  // In update mode a row whose digest moved shows the old chip, an arrow and the new chip. In rollback and restore mode
+  // every row is the revision's own digest.
   mode?: ReviewMode;
+  // The revision a roll back restores.
+  revision?: number;
 }
 
 // Missing values read as a dash, never blank.
@@ -33,7 +36,15 @@ const DASH = "—";
 // DigestCell is the Digest column of one row: the chip with the word that says what the digest is
 // (Pinned (running), New, or the note of a state that has no chip). Words are visible text, never
 // an icon alone (UI-SPEC "Digest chips and pins").
-function DigestCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) {
+function DigestCell({
+  row,
+  mode,
+  revision,
+}: {
+  row: StackReviewImage;
+  mode: ReviewMode;
+  revision?: number;
+}) {
   const t = useT();
   switch (row.state) {
     case "unreachable":
@@ -47,7 +58,11 @@ function DigestCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) 
       return (
         <span className="flex flex-wrap items-center gap-2">
           <DigestChip digest={row.digest || row.current} />
-          <span className="text-xs text-muted-foreground">{t("stackReview.images.pinned")}</span>
+          <span className="text-xs text-muted-foreground">
+            {(mode === "rollback" || mode === "restore") && revision !== undefined
+              ? t("stackRollback.images.pinned", { seq: revision })
+              : t("stackReview.images.pinned")}
+          </span>
         </span>
       );
     default: {
@@ -86,7 +101,7 @@ function DigestCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) 
 // note for the others ("No tag, so it can move.", "Already up to date"). A registry that cannot be
 // reached or asked blocks the deploy, so its note is in offline text, with the word and not the
 // colour carrying it.
-function NoteCell({ row }: { row: StackReviewImage }) {
+function NoteCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) {
   const t = useT();
   switch (row.state) {
     case "unreachable":
@@ -100,7 +115,8 @@ function NoteCell({ row }: { row: StackReviewImage }) {
     case "local":
       return <span className="text-muted-foreground">{t("stackReview.images.local")}</span>;
     default:
-      return row.note ? (
+      // The note of a roll back's row only says the digest is the revision's, which the Digest column says.
+      return row.note && mode !== "rollback" && mode !== "restore" ? (
         <span className="text-muted-foreground">{row.note}</span>
       ) : (
         <span aria-hidden="true" className="text-muted-foreground">
@@ -113,7 +129,7 @@ function NoteCell({ row }: { row: StackReviewImage }) {
 // ImagePinTable is the Images card of the review (D-15, D-18): every service has a row with the
 // image as written, the digest it will run with and a note. Image references and notes are
 // Docker's and the registry's text, drawn as text, and long references wrap.
-export function ImagePinTable({ images, mode = "deploy" }: ImagePinTableProps) {
+export function ImagePinTable({ images, mode = "deploy", revision }: ImagePinTableProps) {
   const t = useT();
   return (
     <SettingsCard title={t("stackReview.images.title")}>
@@ -137,10 +153,10 @@ export function ImagePinTable({ images, mode = "deploy" }: ImagePinTableProps) {
                   {row.image}
                 </TableCell>
                 <TableCell className="align-top whitespace-normal">
-                  <DigestCell row={row} mode={mode} />
+                  <DigestCell row={row} mode={mode} revision={revision} />
                 </TableCell>
                 <TableCell className="align-top text-xs whitespace-normal">
-                  <NoteCell row={row} />
+                  <NoteCell row={row} mode={mode} />
                 </TableCell>
               </TableRow>
             ))}

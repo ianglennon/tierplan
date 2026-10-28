@@ -78,6 +78,11 @@ type StandaloneDeployInput struct {
 	// Update, when not nil, is an update of the images (D-16): the services in it are looked up again
 	// even though their text did not change.
 	Update map[string]bool
+	// Rollback says the deploy restores a revision that ran: Reviewed are that revision's own pins, by service
+	// name in the compose file, and are used as they are (RestoredStandalonePins). They are not compared with
+	// what the host runs now, which a reviewed deploy does and which would refuse an older digest (the point is
+	// to move the host back), and no registry is asked for anything (STK-08, T-08-18).
+	Rollback bool
 	// Pins is where the pins of the stack's last good revision are read from and where this deploy's are
 	// stored, on the revision RevisionID. Nil means neither.
 	Pins       PinStore
@@ -229,7 +234,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		d.log().Warn("could not read a standalone host before a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		return failErr(ItemCheck, codeOf(ctx, err), "", err)
 	}
-	if foreignLive(live, in.Stack.ID) {
+	if foreignLive(live, OwnershipOf(in.Stack)) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
@@ -247,7 +252,14 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	}
 	read := d.nodeReader(in.EnvID, in.NodeID)
 	var pinned PinOutcome
-	if in.Reviewed != nil {
+	if in.Rollback {
+		pins, err := RestoredStandalonePins(project, in.Reviewed)
+		var invalid *PinsInvalidError
+		if errors.As(err, &invalid) {
+			return fail(ItemLookup, CodePinsInvalid, invalid.Service)
+		}
+		pinned = PinOutcome{Pins: pins}
+	} else if in.Reviewed != nil {
 		pins, err := d.reviewedPins(ctx, in.EnvID, items, standaloneLivePins(live.Containers), stored, in.Update, in.Reviewed, read)
 		var invalid *PinsInvalidError
 		switch {
@@ -443,21 +455,24 @@ func standaloneAction(diff standaloneDiff, name string) string {
 }
 
 // foreignLive reports whether the host holds a container, network or volume under the stack's Compose
-// project that does not carry the stack's ID: a Compose project of that name that Bayplan does not manage
-// (D-12).
-func foreignLive(live standaloneLive, stackID string) bool {
-	for _, c := range live.Containers {
-		if c.Labels[stacks.LabelStackID] != stackID {
-			return true
-		}
+// project that the stack does not own: a Compose project of that name that Bayplan does not manage (D-12). A
+// container is the stack's own, one the host CLI added to its project, or foreign (SplitProject): the CLI's has no
+// bayplan.stack.id and counts only beside a container the stack owns of the same service, so a stack scaled with
+// `docker compose up --scale` is no name clash, while another stack's container, a same-named project the stack holds
+// nothing of, or a service the stack runs nothing of, still is (G-08-6, WR-03, P7 D-12). An adopted stack owns the containers of its project that carry no ID of its own until
+// its first deploy, and the networks and volumes recorded when it was adopted for good (D-11, D-18), so a project it
+// took over is no clash.
+func foreignLive(live standaloneLive, own Ownership) bool {
+	if _, _, foreign := SplitProject(own, live.Containers, func(c dockerx.ComposeContainer) map[string]string { return c.Labels }); len(foreign) > 0 {
+		return true
 	}
 	for _, n := range live.Networks {
-		if n.Labels[stacks.LabelStackID] != stackID {
+		if own.foreignNetwork(n.Name, n.Labels) {
 			return true
 		}
 	}
 	for _, v := range live.Volumes {
-		if v.Labels[stacks.LabelStackID] != stackID {
+		if own.foreignVolume(v.Name, v.Labels) {
 			return true
 		}
 	}
@@ -699,6 +714,16 @@ func (e *composeEvents) finishService(name, action string, final []dockerx.Compo
 		e.prog.r.Finish(idContainer+n, jobs.ItemDone, "", "", map[string]string{"state": row[n]})
 		e.prog.setEnded(idContainer+n, jobs.ItemDone)
 	}
+	// A container the SDK removed on the way (the surplus one of a scale-down) was given its row by its first
+	// event, so the row is ended like the others, reading the word the SDK last gave it. Left running it would
+	// be reported as interrupted when the job ends, and a deploy that worked would read partial.
+	for n, word := range row {
+		id := idContainer + n
+		if stage(word) == 0 && e.prog.has(id) {
+			e.prog.r.Finish(id, jobs.ItemDone, "", "", map[string]string{"state": word})
+			e.prog.setEnded(id, jobs.ItemDone)
+		}
+	}
 	phase, running, total := e.summary(name)
 	e.prog.serviceDone(name, action, phase, running, total)
 }
@@ -740,13 +765,20 @@ func (p *progress) addContainer(id, name, service string) {
 	if p == nil {
 		return
 	}
-	p.mu.Lock()
-	known := slices.ContainsFunc(p.added, func(a addedItem) bool { return a.id == id })
-	p.mu.Unlock()
-	if known {
+	if p.has(id) {
 		return
 	}
 	p.add(jobs.ItemSpec{ID: id, Label: name, Parent: idService + service, Kind: KindContainer}, name, "container")
+}
+
+// has says whether the job has a row with this ID.
+func (p *progress) has(id string) bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.ContainsFunc(p.added, func(a addedItem) bool { return a.id == id })
 }
 
 // serviceDone ends the row of a service that the SDK brought up: done, with what was done to it, the phase

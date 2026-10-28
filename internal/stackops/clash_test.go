@@ -21,8 +21,8 @@ var (
 	swarmNS    = map[string]string{"com.docker.stack.namespace": "web"}
 	swarmOwned = map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
 	swarmOther = map[string]string{"com.docker.stack.namespace": "blog", "bayplan.stack.id": "stack-blog"}
-	projNS     = map[string]string{"com.docker.compose.project": "web"}
-	projOwned  = map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-web"}
+	projNS     = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app"}
+	projOwned  = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "bayplan.stack.id": "stack-web"}
 	projOther  = map[string]string{"com.docker.compose.project": "blog"}
 )
 
@@ -101,6 +101,80 @@ func TestForeignStackOnAStandaloneHostFindsAComposeProjectOfTheNameWithoutThisSt
 		got, err := rig.deps.ForeignStack(testsupport.Context(t), rig.envID, stacks.TargetStandalone, "web", "stack-web")
 		if err != nil || got != tc.want {
 			t.Errorf("%s: ForeignStack = %v, %v, want %v", name, got, err, tc.want)
+		}
+	}
+}
+
+// TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded: a container the host CLI adds to a managed standalone
+// stack's Compose project (docker compose up --scale) carries the project and no bayplan.stack.id. Beside a container
+// that carries the stack's ID and runs the same service it is no name clash; another stack's ID, a project the stack holds
+// no container of, or a service no container of the stack runs, still is (G-08-6, WR-03, user decisions 2026-10-27;
+// P7 D-12, T-08-47, T-08-107, T-08-113).
+func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
+	t.Parallel()
+	c := func(id string, labels map[string]string) dockertest.FakeContainer {
+		return dockertest.FakeContainer{ID: id, Names: []string{"/web-app-" + id}, Image: "x", State: "running", Labels: labels}
+	}
+	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "com.docker.compose.oneoff": "True"}
+	anotherStack := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-other"}
+	otherService := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "postgres"}
+	for name, tc := range map[string]struct {
+		containers []dockertest.FakeContainer
+		want       bool
+	}{
+		"the stack's own container and a CLI one":       {[]dockertest.FakeContainer{c("1", projOwned), c("2", projNS)}, false},
+		"the stack's own container and a compose run":   {[]dockertest.FakeContainer{c("1", projOwned), c("2", oneOff)}, false},
+		"the stack's own container and another stack's": {[]dockertest.FakeContainer{c("1", projOwned), c("2", anotherStack)}, true},
+		"the stack's own container and another service": {[]dockertest.FakeContainer{c("1", projOwned), c("2", otherService)}, true},
+		"a CLI container beside another stack's alone":  {[]dockertest.FakeContainer{c("1", anotherStack), c("2", projNS)}, true},
+		"CLI containers and none of the stack's own":    {[]dockertest.FakeContainer{c("1", projNS), c("2", projNS)}, true},
+	} {
+		rig := newSwarmRig(t, func(cfg *dockertest.FakeConfig) {
+			standalone(cfg)
+			cfg.Containers = tc.containers
+		})
+		st := stackops.Stack{ID: "stack-web", Name: "web", Target: stacks.TargetStandalone}
+		got, err := rig.deps.ForeignStackOf(testsupport.Context(t), rig.envID, st)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: ForeignStackOf = %v, %v, want %v", name, got, err, tc.want)
+		}
+		// The create path asks for a stack that has no container yet, so it stays strict whatever sits in the project.
+		if got, err := rig.deps.ForeignStack(testsupport.Context(t), rig.envID, stacks.TargetStandalone, "web", ""); err != nil || !got {
+			t.Errorf("%s: ForeignStack of a stack being created = %v, %v, want a name clash", name, got, err)
+		}
+	}
+}
+
+// TestCreateClashStaysStrict: the create path's check asks the ownership of a stack that is not adopted, so an object
+// that an adopted stack would own (no ID, or an ID it recorded, a network it recorded) is still foreign to a stack
+// being created, and a stored stack that is not adopted still owns only what carries its own ID (plan 08-18).
+func TestCreateClashStaysStrict(t *testing.T) {
+	t.Parallel()
+	stale := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stale-id"}
+	staleProj := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stale-id"}
+	ctx := testsupport.Context(t)
+
+	for name, labels := range map[string]map[string]string{"no ID": swarmNS, "a stale ID": stale} {
+		rig := newSwarmRig(t, nil, dockertest.FakeService{ID: "s1", Name: "web_app", Mode: "replicated", Image: "x", Labels: labels})
+		for who, stackID := range map[string]string{"a stack being created": "", "a stack with an ID": "stack-web"} {
+			if got, err := rig.deps.ForeignStack(ctx, rig.envID, stacks.TargetSwarm, "web", stackID); err != nil || !got {
+				t.Errorf("%s, %s: ForeignStack = %v, %v, want the service to be foreign", name, who, got, err)
+			}
+		}
+		managed := stackops.Stack{ID: "stack-web", Name: "web", Target: stacks.TargetSwarm}
+		if got, err := rig.deps.ForeignStackOf(ctx, rig.envID, managed); err != nil || !got {
+			t.Errorf("%s: ForeignStackOf(managed) = %v, %v, want the service to be foreign to a stack that was not adopted", name, got, err)
+		}
+	}
+	for name, labels := range map[string]map[string]string{"no ID": projNS, "a stale ID": staleProj} {
+		rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+			standalone(c)
+			c.Containers = []dockertest.FakeContainer{{ID: "c1", Names: []string{"/web-app-1"}, Image: "x", State: "running", Labels: labels}}
+		})
+		for who, stackID := range map[string]string{"a stack being created": "", "a stack with an ID": "stack-web"} {
+			if got, err := rig.deps.ForeignStack(ctx, rig.envID, stacks.TargetStandalone, "web", stackID); err != nil || !got {
+				t.Errorf("%s, %s: ForeignStack = %v, %v, want the container to be foreign", name, who, got, err)
+			}
 		}
 	}
 }

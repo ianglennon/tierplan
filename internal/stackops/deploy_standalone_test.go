@@ -6,6 +6,7 @@ package stackops_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
@@ -249,6 +251,29 @@ func TestStandaloneDeployShowsTheRemovalOfAContainerTheFileNoLongerDeclares(t *t
 	}
 }
 
+// A scale-down removes a container of a service the file still declares (a person ran `docker compose up
+// --scale web=2` and a restore puts the stack back). The SDK stops and removes it; its row is not left
+// running to be reported as interrupted when the job ends (found on a real host by plan 08-28).
+func TestStandaloneDeployEndsTheRowOfASurplusContainerTheSDKRemoved(t *testing.T) {
+	t.Parallel()
+	pin := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": pin})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", pin))
+	rig.deps.Up = newScriptedUp(nil, []dockerx.ComposeEvent{
+		container("demo-web-2", "web", "Stopping", false), container("demo-web-2", "web", "Stopped", true),
+		container("demo-web-2", "web", "Removing", false), container("demo-web-2", "web", "Removed", true),
+	}).up
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result %+v, job %s %v, want a deploy that worked and ended done", res, job.State, itemStates(job))
+	}
+	if row := itemByID(t, job, "container:demo-web-2"); row.State != jobs.ItemDone || row.Result["state"] != "removed" {
+		t.Errorf("surplus container row = %+v, want done and removed", row)
+	}
+}
+
 func TestStandaloneDeployDecidesFromTheSDKsAnswerAndNotFromItsWords(t *testing.T) {
 	t.Parallel()
 	t.Run("an error event with a clean return is a deploy that worked", func(t *testing.T) {
@@ -341,5 +366,195 @@ func TestStandaloneDeployOnAReadOnlyHostFailsTheCheckStepAndRunsNothing(t *testi
 	}
 	if stand.calls != 0 || len(rig.fake.Writes()) != 0 || len(rig.fake.DistributionRefs()) != 0 {
 		t.Errorf("SDK calls %d, writes %v, lookups %v, want nothing asked of the host", stand.calls, rig.fake.Writes(), rig.fake.DistributionRefs())
+	}
+}
+
+// A standalone roll back sends the images the revision stored (plan 08-05, STK-08, D-06, T-08-18).
+func TestStandaloneRollbackSendsTheStoredDigest(t *testing.T) {
+	t.Parallel()
+	older := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	newer := "nginx:1.27-alpine@sha256:" + strings.Repeat("b", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": newer})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", newer))
+	// The tag has moved again on the registry: a roll back must not follow it.
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27-alpine", "sha256:"+strings.Repeat("c", 64))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	pins := &memPins{}
+	in := standaloneInput("demo", webStandalone)
+	in.Pins, in.RevisionID, in.Reviewed, in.Rollback = pins, "rev-3", map[string]string{"web": older}, true
+
+	res, job := rig.deployStandalone(t, in)
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("result %+v, job %s %v", res, job.State, itemStates(job))
+	}
+	if stand.project == nil || stand.project.Services["web"].Image != older {
+		t.Fatalf("the SDK was given %+v, want web at exactly the stored reference %q", stand.project, older)
+	}
+	if got := pins.pinsOf("rev-3"); got["web"] != older {
+		t.Errorf("stored pins = %v, want the roll back's revision to hold the stored reference", got)
+	}
+	if refs := rig.fake.DistributionRefs(); len(refs) != 0 {
+		t.Errorf("distribution checks = %v, a roll back asks no registry", refs)
+	}
+	if res.Updated != 1 {
+		t.Errorf("result = %+v, want the web container recreated from the older image", res)
+	}
+}
+
+func TestAReviewedStandaloneDeployRefusesAnOlderDigestButARollbackSendsIt(t *testing.T) {
+	t.Parallel()
+	older := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	newer := "nginx:1.27-alpine@sha256:" + strings.Repeat("b", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": newer})["web"]
+	rig := newStandaloneRig(t, deployedContainer("demo", "web", hash, "nginx:1.27-alpine", newer))
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	in := standaloneInput("demo", webStandalone)
+	in.Reviewed = map[string]string{"web": older}
+
+	res, _ := rig.deployStandalone(t, in)
+
+	if res.OK() || res.Code != stackops.CodePinsInvalid || stand.calls != 0 {
+		t.Fatalf("result %+v after %d runs, want a reviewed deploy of an older digest refused (pins_invalid) before anything runs", res, stand.calls)
+	}
+	in.Rollback = true
+	if res, _ = rig.deployStandalone(t, in); !res.OK() || stand.calls != 1 {
+		t.Errorf("result %+v after %d runs, want the same pins accepted as a roll back", res, stand.calls)
+	}
+}
+
+func TestAStandaloneRollbackWithoutAStoredImageFailsTheLookupStepAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	stand := &upStandIn{}
+	rig.deps.Up = stand.up
+	in := standaloneInput("demo", webStandalone)
+	in.Reviewed, in.Rollback = map[string]string{}, true
+
+	res, job := rig.deployStandalone(t, in)
+
+	if res.OK() || res.Code != stackops.CodePinsInvalid || res.FailedService != "web" || stand.calls != 0 {
+		t.Fatalf("result %+v after %d runs, want pins_invalid at web and nothing run", res, stand.calls)
+	}
+	if states := itemStates(job); states["lookup"] != "failed:pins_invalid" {
+		t.Errorf("items = %v, want the lookup step failed", states)
+	}
+}
+
+// standaloneDeployInput is the input of the adopted project's first deploy, with the images its review chose.
+func (a *adopted) standaloneDeployInput(t *testing.T, rv stackops.Review) stackops.StandaloneDeployInput {
+	t.Helper()
+	st, err := a.repo.Stack(testsupport.Context(t), a.rig.envID, a.stack.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stackops.StandaloneDeployInput{Stack: st, Copy: a.draft.Copy, Reviewed: rv.Pins, Pins: a.repo}
+}
+
+// TestFirstDeployOfAnAdoptedStandaloneStack: the first deploy of an adopted docker compose project is not refused as
+// a foreign project, and hands the SDK the project's network and volume under the names recorded at adoption with the
+// config hashes the host's labels hold, so the SDK recreates the containers for their labels and keeps the network
+// and the volume. Bayplan itself creates, removes and writes nothing but what the SDK does (D-16, D-18, T-08-65).
+func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
+	t.Parallel()
+	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
+	a := adoptRigOn(t, hostRig(t, h), stacks.TargetStandalone)
+	rv := a.review(t)
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want the first review of an adopted project to refuse nothing", rv.Problems)
+	}
+	stand := &upStandIn{}
+	a.rig.deps.Up = stand.up
+	before := len(a.rig.fake.Writes())
+
+	res, job := a.rig.deployStandalone(t, a.standaloneDeployInput(t, rv))
+
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	if res.Networks != 0 || len(res.CreatedNetworks) != 0 || res.Services != 0 || len(res.RemovedServices) != 0 {
+		t.Errorf("deploy created networks %v and services %d and removed %v, want only the recreate for the labels", res.CreatedNetworks, res.Services, res.RemovedServices)
+	}
+	if res.Updated != 2 {
+		t.Errorf("updated = %d, want both services recreated for the ownership labels", res.Updated)
+	}
+	if got := a.rig.fake.Writes()[before:]; len(got) != 0 {
+		t.Errorf("Bayplan wrote %v, want everything left to the SDK", got)
+	}
+	p := stand.project
+	if p == nil || stand.calls != 1 {
+		t.Fatalf("the SDK stand-in was called %d times", stand.calls)
+	}
+	if len(stand.opts.ForceRecreate) != 0 {
+		t.Errorf("force recreate = %v, want none: the hashes already differ", stand.opts.ForceRecreate)
+	}
+	net, vol := p.Networks["back"], p.Volumes["data"]
+	if net.Name != "shop_back" || vol.Name != "shop_data" || bool(net.External) || bool(vol.External) {
+		t.Fatalf("network %+v volume %+v, want shop_back and shop_data declared as the project's own", net, vol)
+	}
+	netHash, err := dockerx.ComposeNetworkHash(&net)
+	if err != nil {
+		t.Fatal(err)
+	}
+	volHash, err := dockerx.ComposeVolumeHash(vol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := h.Networks[0].Labels[stacks.LabelComposeConfigHash]; netHash != want {
+		t.Errorf("network hash = %s, want the host's %s: the SDK would recreate the network", netHash, want)
+	}
+	if want := h.Volumes[0].Labels[stacks.LabelComposeConfigHash]; volHash != want {
+		t.Errorf("volume hash = %s, want the host's %s: the SDK would ask to recreate the volume", volHash, want)
+	}
+	for name, svc := range p.Services {
+		if svc.CustomLabels[stacks.LabelStackID] != a.stack.ID {
+			t.Errorf("service %s is sent without Bayplan's ID: %v", name, svc.CustomLabels)
+		}
+	}
+}
+
+// cliShaped is the container docker compose up --scale adds to a deployed container's project from the host: the
+// same project and service, the next number, and none of Bayplan's labels (G-08-6).
+func cliShaped(from dockertest.FakeContainer, n int) dockertest.FakeContainer {
+	c := from
+	c.ID = fmt.Sprintf("%s-%d", from.ID, n)
+	c.Names = []string{fmt.Sprintf("/%s-%d", strings.TrimSuffix(strings.TrimPrefix(from.Names[0], "/"), "-1"), n)}
+	c.Labels = maps.Clone(from.Labels)
+	for key := range c.Labels {
+		if strings.HasPrefix(key, "bayplan.") {
+			delete(c.Labels, key)
+		}
+	}
+	c.Labels[stacks.LabelComposeConfigHash] = "cli-hash"
+	return c
+}
+
+// TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded: the deploy that puts the revision back (the D-25
+// revert, a roll back deploy) is not refused as a name clash by web-2, which docker compose up --scale added without
+// Bayplan's labels; a container with another stack's ID still refuses it (G-08-6, user decision 2026-10-27).
+func TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	pin := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)
+	hash := preparedHash(t, "demo", webStandalone, map[string]string{"web": pin})["web"]
+	own := deployedContainer("demo", "web", hash, "nginx:1.27-alpine", pin)
+	run := func(added dockertest.FakeContainer) (stackops.DeployResult, *upStandIn) {
+		rig := newStandaloneRig(t, own, added)
+		stand := &upStandIn{}
+		rig.deps.Up = stand.up
+		in := standaloneInput("demo", webStandalone)
+		in.Pins, in.RevisionID, in.Reviewed, in.Rollback = &memPins{}, "rev-1", map[string]string{"web": pin}, true
+		res, _ := rig.deployStandalone(t, in)
+		return res, stand
+	}
+
+	if res, stand := run(cliShaped(own, 2)); !res.OK() || stand.calls != 1 {
+		t.Errorf("result %+v after %d runs, want the restore to run beside the container the host CLI added", res, stand.calls)
+	}
+	stranger := cliShaped(own, 2)
+	stranger.Labels[stacks.LabelStackID] = "stack-other"
+	if res, stand := run(stranger); res.OK() || res.Code != stackops.CodeNameClash || stand.calls != 0 {
+		t.Errorf("result %+v after %d runs, want stack_name_clash for a container with another stack's ID", res, stand.calls)
 	}
 }

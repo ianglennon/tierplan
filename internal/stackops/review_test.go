@@ -4,6 +4,7 @@
 package stackops_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -279,6 +281,9 @@ func TestReviewInUpdateModeShowsOnlyTheChosenServicesMoving(t *testing.T) {
 func TestADeployWithReviewedPinsMakesNoRegistryLookupAndRefusesOnesItWouldNotChoose(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)
+	// The server shares one memo of the review's answers with the deploy, so the deploy needs no lookup for the platforms
+	// of the digests it was given (G-08-4; without a memo it asks once for each, see TestAReviewedDeploySendsThePlatformsItsReviewFound).
+	rig.deps.Platforms = stackops.NewPlatformMemo()
 	rv := rig.review(t, "tracer", stacks.StarterCompose, nil)
 	lookups := len(rig.fake.DistributionRefs())
 
@@ -910,5 +915,189 @@ func TestReviewInUpdateModeMarksOnlyTheRowWhoseRegistryIsDownAndBlocksOnlyForIt(
 		if strings.Contains(ref, "redis") {
 			t.Errorf("the review asked the registry about %s, which was not chosen", ref)
 		}
+	}
+}
+
+// TestReviewAdoptedSwarmStackShowsOwnershipOnly: the first review of an adopted stack that docker stack deploy made
+// is not refused as a name clash, shows every service as differing only in Bayplan's labels, counts them apart from
+// the changed ones and leaves the stack's networks and secrets alone (D-16, D-20, ROADMAP SC3).
+func TestReviewAdoptedSwarmStackShowsOwnershipOnly(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+
+	rv := a.review(t)
+
+	if len(rv.Problems) != 0 {
+		t.Fatalf("problems = %+v, want an adopted stack not refused as a name clash", rv.Problems)
+	}
+	var names []string
+	for _, c := range rv.Services {
+		if !c.OwnershipOnly {
+			t.Errorf("service %s is %s with its own change, want ownership labels only", c.Short, c.Change)
+		}
+		names = append(names, c.Short)
+	}
+	if want := []string{"api", "bare", "legacy"}; !slices.Equal(names, want) {
+		t.Errorf("services = %v, want %v", names, want)
+	}
+	if rv.Summary.OwnershipOnly != 3 || rv.Summary.Services != (stackops.Counts{}) {
+		t.Errorf("summary = %+v, want 3 ownership-only and none changed", rv.Summary)
+	}
+	if rv.Adoption == nil || !rv.Adoption.Pending || rv.Adoption.OwnershipOnly != 3 {
+		t.Errorf("adoption = %+v, want pending with 3 services", rv.Adoption)
+	}
+	for _, o := range rv.Objects {
+		if o.Change != stackops.ChangeExternal {
+			t.Errorf("object %s %s %s: want the existing networks and secrets neither added nor changed", o.Change, o.Kind, o.Name)
+		}
+	}
+	for _, name := range []string{"db_password.h1", "tls_key.h1"} {
+		if !slices.Contains(objectsOf(rv), "external secret "+name) {
+			t.Errorf("objects = %v, want %s listed as external", objectsOf(rv), name)
+		}
+	}
+	if w := a.rig.fake.Writes(); len(w) != 0 {
+		t.Errorf("a review wrote %v", w)
+	}
+}
+
+// TestReviewOfAnAdoptedStackKeepsARealChangeInTheList: a service with a real change as well as the labels is a
+// normal changed row, counted as changed, and the others stay ownership-only.
+func TestReviewOfAnAdoptedStackKeepsARealChangeInTheList(t *testing.T) {
+	t.Parallel()
+	a := adoptCorpus(t, nil)
+	compose := strings.Replace(string(a.draft.Copy.Compose()), "replicas: 4", "replicas: 5", 1)
+	if compose == string(a.draft.Copy.Compose()) {
+		t.Fatal("the rebuilt file has no replicas: 4 to change")
+	}
+	a.draft.Copy = stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}, Vars: a.draft.Copy.Vars}
+
+	rv := a.review(t)
+
+	if rv.Summary.Services.Changed != 1 || rv.Summary.OwnershipOnly != 2 {
+		t.Errorf("summary = %+v, want one changed service and two ownership-only", rv.Summary)
+	}
+}
+
+// TestReviewShowsThePlatformsARedeployPutsBack (G-08-4, P7 D-11, P7 D-18): a service that keeps its digest is sent the
+// platforms the stack's last good revision recorded for that digest, and the review lists that change before the deploy,
+// as the deploy then makes it. A record for another digest is not shown, and a stack whose services run the recorded
+// platforms lists no change.
+func TestReviewShowsThePlatformsARedeployPutsBack(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
+	kept := "nginx:1.27@" + digestOf("a")
+	const withPlatforms = `"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]`
+	reviewWith := func(t *testing.T, rig *swarmRig, good map[string]stacks.LivePin) stackops.Review {
+		t.Helper()
+		in := rig.reviewInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins = &memPins{good: good}
+		rv, err := rig.deps.Review(testsupport.Context(t), in)
+		if err != nil {
+			t.Fatalf("review: %v", err)
+		}
+		return rv
+	}
+	siteChange := func(t *testing.T, rv stackops.Review) stacks.ServiceChange {
+		t.Helper()
+		for _, c := range rv.Services {
+			if c.Name == "site_web" {
+				return c
+			}
+		}
+		t.Fatalf("review lists %+v, want a change for site_web", rv.Services)
+		return stacks.ServiceChange{}
+	}
+
+	t.Run("the recorded platforms are listed as added", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{amd, arm}}})
+		c := siteChange(t, rv)
+		if c.Change != "changed" || !strings.Contains(string(c.Next), withPlatforms) || strings.Contains(string(c.Current), `"Platforms":[{`) {
+			t.Errorf("site_web = %s, current %s, next %s; want a change that adds the recorded platforms", c.Change, c.Current, c.Next)
+		}
+		if n := len(rig.fake.DistributionRefs()); n != 0 {
+			t.Errorf("distribution lookups = %d, want none for a kept digest", n)
+		}
+	})
+
+	t.Run("a record for another digest is not shown", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil, siteWeb(kept))
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: "nginx:1.27@" + digestOf("b"), Platforms: []swarm.Platform{amd, arm}}})
+		if c := siteChange(t, rv); strings.Contains(string(c.Next), `"Platforms":[{`) {
+			t.Errorf("next = %s, want no platforms from a record of another digest (T-08-111)", c.Next)
+		}
+	})
+
+	t.Run("services that run the recorded platforms list no change", func(t *testing.T) {
+		t.Parallel()
+		rig := newSwarmRig(t, nil)
+		rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+		_, in := stackInput(t, "site", pinCompose("nginx:1.27"), nil)
+		in.Pins, in.RevisionID = &memPins{}, "rev-1"
+		if res, job := rig.deploy(t, in); !res.OK() || job.State != jobs.JobDone {
+			t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+		}
+		rv := reviewWith(t, rig, map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.27", Image: kept, Platforms: []swarm.Platform{amd, arm}}})
+		if len(rv.Services) != 0 {
+			t.Errorf("review = %+v, want no change: the service runs the recorded platforms", rv.Services)
+		}
+	})
+}
+
+// TestAReviewedDeploySendsThePlacementTheReviewShowed (WR-02): the review and the deploy that follows it apply the
+// platform sources in one order, so the platforms the review lists for a service are the platforms the deploy sends. A
+// stack whose last good revision recorded fewer platforms than the registry names for the same digest is sent the
+// record by both.
+func TestAReviewedDeploySendsThePlacementTheReviewShowed(t *testing.T) {
+	t.Parallel()
+	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
+	pinned := "nginx:1.27@" + digestOf("a")
+	compose := pinCompose("nginx:1.27")
+	rig := newSwarmRig(t, nil)
+	rig.deps.Platforms = stackops.NewPlatformMemo()
+	rig.fake.SetDistributionDigest("docker.io/library/nginx:1.27", digestOf("a"))
+	// The record was made for the text nginx:1.26, so the review looks nginx:1.27 up; the registry names the same digest.
+	good := map[string]stacks.LivePin{"site_web": {AsWritten: "nginx:1.26", Image: pinned, Platforms: []swarm.Platform{amd}}}
+
+	in := rig.reviewInput(t, "site", compose, nil)
+	in.Pins = &memPins{good: good}
+	rv, err := rig.deps.Review(testsupport.Context(t), in)
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	var shown []swarm.Platform
+	for _, c := range rv.Services {
+		if c.Name != "site_web" {
+			continue
+		}
+		var spec swarm.ServiceSpec
+		if err := json.Unmarshal(c.Next, &spec); err != nil {
+			t.Fatalf("review's next spec: %v", err)
+		}
+		if spec.TaskTemplate.Placement != nil {
+			shown = spec.TaskTemplate.Placement.Platforms
+		}
+	}
+
+	deploy := reviewedDeploy(t, rig, "site", compose, rv)
+	deploy.Pins = &memPins{good: good}
+	res, job := rig.deploy(t, deploy)
+	if !res.OK() || job.State != jobs.JobDone {
+		t.Fatalf("deploy = %+v job %s %v", res, job.State, itemStates(job))
+	}
+	creates := rig.fake.ServiceCreates()
+	if len(creates) != 1 || creates[0].Spec.TaskTemplate.Placement == nil {
+		t.Fatalf("service creates = %+v, want one with a placement", creates)
+	}
+	sent := creates[0].Spec.TaskTemplate.Placement.Platforms
+	if !slices.Equal(shown, sent) {
+		t.Errorf("the review showed platforms %v, the deploy sent %v, want the same", shown, sent)
+	}
+	if !slices.Equal(sent, []swarm.Platform{amd}) {
+		t.Errorf("the deploy sent %v, want the platforms the last good revision recorded %v", sent, []swarm.Platform{amd})
 	}
 }

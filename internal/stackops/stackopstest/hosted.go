@@ -6,11 +6,14 @@
 package stackopstest
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -103,16 +106,31 @@ func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, 
 	}
 	nets, vols := map[string]string{}, map[string]string{}
 	owner := map[string]string{stacks.LabelComposeProject: project.Name, stacks.LabelStackID: stackID}
+	// The SDK stamps the hash of the config it created a network or a volume from, and a later up compares it
+	// (plan 08-17): the objects of a deployed stack carry it too.
+	owned := func(hash string) map[string]string {
+		out := maps.Clone(owner)
+		out[stacks.LabelComposeConfigHash] = hash
+		return out
+	}
 	for key, n := range project.Networks {
 		nets[key] = n.Name
 		if !bool(n.External) {
-			h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "net-" + n.Name, Name: n.Name, Driver: "bridge", Scope: "local", Labels: owner})
+			hash, err := dockerx.ComposeNetworkHash(&n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "net-" + n.Name, Name: n.Name, Driver: "bridge", Scope: "local", Labels: owned(hash)})
 		}
 	}
 	for key, v := range project.Volumes {
 		vols[key] = v.Name
 		if !bool(v.External) {
-			h.Volumes = append(h.Volumes, dockertest.FakeVolume{Name: v.Name, Driver: "local", Labels: owner})
+			hash, err := dockerx.ComposeVolumeHash(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.Volumes = append(h.Volumes, dockertest.FakeVolume{Name: v.Name, Driver: "local", Labels: owned(hash)})
 		}
 	}
 	ids := map[string][]string{}
@@ -138,7 +156,7 @@ func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, 
 			Project: project.Name, ID: h.IDs[n], ConfigHash: hash, Networks: nets, Volumes: vols, Image: img,
 		})
 		h.Containers = append(h.Containers, dockertest.FakeContainer{
-			ID: h.IDs[n], Names: []string{"/" + project.Name + "-" + n + "-1"}, Image: h.Pins[n], State: "running",
+			ID: h.IDs[n], Names: []string{"/" + project.Name + "-" + n + "-1"}, Image: h.Pins[n], ImageID: img.ID, State: "running",
 			Labels: doc.Config.Labels, Inspect: dockertest.FakeInspect{Document: &doc, ImageID: img.ID},
 		})
 		h.Docs[n] = &doc
@@ -153,4 +171,119 @@ func HostPinned(t testing.TB, name, stackID, compose string, vars []stacks.Var, 
 // Apply puts the stack's containers, images, networks and volumes into an engine's configuration.
 func (h *Hosted) Apply(c *dockertest.FakeConfig) {
 	c.Containers, c.Images, c.Networks, c.Volumes = h.Containers, h.Images, h.Networks, h.Volumes
+}
+
+// Foreign stands a project that someone ran with the docker compose command on a fake standalone host, the
+// way the CLI leaves it (plan 08-12): no label of Bayplan's on a container, a network or a volume, the image
+// of each service as the file wrote it, the config hash of each service computed on the file as loaded, and
+// on each network and volume the com.docker.compose.config-hash label of its config, computed with the SDK's
+// own functions on the config as loaded. A service with a scale has that many containers, a depends_on
+// leaves its label, and the engine reports the objects the file declares (the default network too, when a
+// service uses it). A test changes the document of a container through Docs, or an image or an object in
+// the lists, before it stands the host up with Apply.
+func Foreign(t testing.TB, name, compose string) *Hosted {
+	t.Helper()
+	copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose)}}}
+	checked := stacks.Check(context.Background(), stacks.CheckInput{Name: name, Target: stacks.TargetStandalone, Copy: copy})
+	if checked.Loaded == nil {
+		t.Fatalf("check: %v", checked.Problems)
+	}
+	project := checked.Loaded.Project
+	h := &Hosted{Name: name, Project: project, Hash: map[string]string{}, IDs: map[string]string{}, Pins: map[string]string{}}
+	owner := func(extra map[string]string, labels map[string]string) map[string]string {
+		out := map[string]string{"com.docker.compose.project": project.Name, "com.docker.compose.version": "5.6.0"}
+		maps.Copy(out, labels)
+		maps.Copy(out, extra)
+		return out
+	}
+
+	nets, vols := map[string]string{}, map[string]string{}
+	for _, key := range slices.Sorted(maps.Keys(project.Networks)) {
+		n := project.Networks[key]
+		nets[key] = n.Name
+		if bool(n.External) {
+			h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "net-" + n.Name, Name: n.Name, Driver: "bridge", Scope: "local"})
+			continue
+		}
+		hash, err := dockerx.ComposeNetworkHash(&n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fake := dockertest.FakeNetwork{
+			ID: "net-" + n.Name, Name: n.Name, Driver: cmp.Or(n.Driver, "bridge"), Scope: "local",
+			Labels:   owner(map[string]string{"com.docker.compose.network": key, "com.docker.compose.config-hash": hash}, n.Labels),
+			Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6 != nil && *n.EnableIPv6, Options: maps.Clone(n.DriverOpts),
+		}
+		for _, pool := range n.Ipam.Config {
+			if pool.Subnet != "" {
+				fake.Subnets = append(fake.Subnets, pool.Subnet)
+				fake.Gateways = append(fake.Gateways, pool.Gateway)
+			}
+		}
+		h.Networks = append(h.Networks, fake)
+	}
+	for _, key := range slices.Sorted(maps.Keys(project.Volumes)) {
+		v := project.Volumes[key]
+		vols[key] = v.Name
+		if bool(v.External) {
+			h.Volumes = append(h.Volumes, dockertest.FakeVolume{Name: v.Name, Driver: "local"})
+			continue
+		}
+		hash, err := dockerx.ComposeVolumeHash(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Volumes = append(h.Volumes, dockertest.FakeVolume{
+			Name: v.Name, Driver: cmp.Or(v.Driver, "local"), Options: maps.Clone(v.DriverOpts),
+			Labels: owner(map[string]string{"com.docker.compose.volume": key, "com.docker.compose.config-hash": hash}, v.Labels),
+		})
+	}
+
+	names := slices.Sorted(maps.Keys(project.Services))
+	images := map[string]dockertest.FakeImage{}
+	ids := map[string][]string{}
+	for _, n := range names {
+		svc := project.Services[n]
+		if svc.Image != "" {
+			images[svc.Image] = ImageFor(svc.Image)
+			h.Pins[n] = svc.Image
+		}
+		for number := 1; number <= svc.GetScale(); number++ {
+			ids[n] = append(ids[n], hexOf("container:"+n+"-"+strconv.Itoa(number)))
+		}
+		h.IDs[n] = ids[n][0]
+	}
+	h.Docs = map[string]*container.InspectResponse{}
+	for _, n := range names {
+		resolved := stacks.ResolveServiceRefs(project.Services[n], ids)
+		hash, err := dockerx.ServiceHash(resolved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.Hash[n] = hash
+		var deps []string
+		for _, dep := range slices.Sorted(maps.Keys(resolved.DependsOn)) {
+			d := resolved.DependsOn[dep]
+			deps = append(deps, dep+":"+d.Condition+":"+strconv.FormatBool(d.Restart))
+		}
+		img := images[resolved.Image]
+		for i, id := range ids[n] {
+			doc := dockertest.ComposeInspect(resolved, dockertest.ComposeOptions{
+				Project: project.Name, Number: i + 1, ID: id, ConfigHash: hash, Networks: nets, Volumes: vols, Image: img,
+			})
+			doc.Config.Labels["com.docker.compose.depends_on"] = strings.Join(deps, ",")
+			h.Containers = append(h.Containers, dockertest.FakeContainer{
+				ID: id, Names: []string{doc.Name}, Image: resolved.Image, ImageID: img.ID, State: "running",
+				Labels: doc.Config.Labels, Inspect: dockertest.FakeInspect{Document: &doc, ImageID: img.ID},
+			})
+			if i == 0 {
+				h.Docs[n] = &doc
+			}
+		}
+	}
+	for _, img := range images {
+		h.Images = append(h.Images, img)
+	}
+	slices.SortFunc(h.Images, func(a, b dockertest.FakeImage) int { return strings.Compare(a.ID, b.ID) })
+	return h
 }

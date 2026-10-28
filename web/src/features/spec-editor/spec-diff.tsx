@@ -3,6 +3,7 @@
 
 import { useMemo } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -91,7 +92,7 @@ function humanize(name: string): string {
 
 // settingLabel is the human name of a setting: a known setting's own label, a list entry as
 // "Port 80/tcp" followed by what about it changed, or the last part of an unknown path in words.
-function settingLabel(t: Translate, path: string): string {
+export function settingLabel(t: Translate, path: string): string {
   const tokens = tokensOf(path);
   const shape = tokens.map((tk) => tk.name).join("/");
   const known = `specEditor.labels.${shape}`;
@@ -163,9 +164,15 @@ interface SpecDiffProps {
   next: unknown;
   // The headings of the two value columns; Current and New when left out.
   headings?: { current?: string; next?: string };
+  // The table's caption, when it is not "Changes to {name}" (the Adopt page's is "Differences in {name}").
+  caption?: string;
   // The spec is of a service that does not exist yet: every setting is new, so the table has the
   // columns Setting and Value and no Change or Current.
   create?: boolean;
+  // The paths of the settings that differ because somebody changed them outside the stack (the drift check found
+  // them): each gets the outline Drifted marker beside its label, so it reads as changed outside the stack and not as
+  // part of the revision (UI-SPEC History tab, D-05).
+  drifted?: readonly string[];
 }
 
 // SpecDiff is the field-level difference of two service specs: a native table that lists each
@@ -173,7 +180,15 @@ interface SpecDiffProps {
 // text, long values wrap, and a value the server withheld is shown as bullets on both sides
 // and never as the value (D-39). The review step, the rollback dialog and the rotate flow draw
 // it.
-export function SpecDiff({ name, current, next, headings, create = false }: SpecDiffProps) {
+export function SpecDiff({
+  name,
+  current,
+  next,
+  headings,
+  caption,
+  create = false,
+  drifted,
+}: SpecDiffProps) {
   const t = useT();
   const rows = useMemo(() => diffSpecs(current, next), [current, next]);
   if (rows.length === 0) {
@@ -191,7 +206,7 @@ export function SpecDiff({ name, current, next, headings, create = false }: Spec
   return (
     <div className="rounded-lg ring-1 ring-foreground/10">
       <Table>
-        <caption className="sr-only">{t("specEditor.diff.caption", { name })}</caption>
+        <caption className="sr-only">{caption ?? t("specEditor.diff.caption", { name })}</caption>
         <TableHeader>
           <TableRow>
             {create ? null : (
@@ -213,7 +228,14 @@ export function SpecDiff({ name, current, next, headings, create = false }: Spec
           </TableRow>
         </TableHeader>
         {sections.map((s) => (
-          <GroupRows key={s.group} group={s.group} rows={s.rows} t={t} create={create} />
+          <GroupRows
+            key={s.group}
+            group={s.group}
+            rows={s.rows}
+            t={t}
+            create={create}
+            drifted={drifted}
+          />
         ))}
       </Table>
     </div>
@@ -225,11 +247,22 @@ interface GroupRowsProps {
   rows: DiffRow[];
   t: Translate;
   create: boolean;
+  drifted?: readonly string[];
+}
+
+// DriftedMarker is the outline badge that says a setting differs because it was changed outside the stack.
+export function DriftedMarker() {
+  const t = useT();
+  return (
+    <Badge variant="outline" data-slot="drifted-marker">
+      {t("stackRevertsDrift.drifted")}
+    </Badge>
+  );
 }
 
 // GroupRows is one group's heading row and the rows under it, in a body of their own so the
 // heading names the rows below it.
-function GroupRows({ group, rows, t, create }: GroupRowsProps) {
+function GroupRows({ group, rows, t, create, drifted }: GroupRowsProps) {
   return (
     <TableBody>
       <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -252,7 +285,10 @@ function GroupRows({ group, rows, t, create }: GroupRowsProps) {
             </TableCell>
           )}
           <TableCell className="align-top whitespace-normal">
-            <div>{settingLabel(t, row.path)}</div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>{settingLabel(t, row.path)}</span>
+              {drifted?.includes(row.path) ? <DriftedMarker /> : null}
+            </div>
             <div className="font-mono text-xs break-all text-muted-foreground">{row.path}</div>
           </TableCell>
           {create ? null : <ValueCell text={valueText(t, row, "current")} t={t} />}

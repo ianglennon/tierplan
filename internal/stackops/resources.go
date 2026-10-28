@@ -227,6 +227,7 @@ func (r Repo) Declared(ctx context.Context, stack Stack) (Declared, error) {
 // by the name it gives. A volume is the stack's only by its labels. The nodes that did not answer are named, so
 // the page can say their volumes are left out.
 func VolumesFrom(stack Stack, decl Declared, agg envs.Aggregate) ([]VolumeResource, []string) {
+	own := OwnershipOf(stack)
 	external := map[string]bool{}
 	for _, v := range decl.Volumes {
 		if v.External {
@@ -237,7 +238,7 @@ func VolumesFrom(stack Stack, decl Declared, agg envs.Aggregate) ([]VolumeResour
 	for _, v := range agg.Volumes {
 		owner := ""
 		switch {
-		case ownsLabels(stack, v.Labels):
+		case own.OwnsVolume(v.Name, v.Labels):
 			owner = OwnerStack
 		case external[v.Name]:
 			owner = OwnerExternal
@@ -277,23 +278,20 @@ func cardOf[T any](d Deps, envID string, stack Stack, card string, items []T, er
 	return ResourceCard[T]{Items: items}
 }
 
-// ownsLabels reports whether an object's labels are the stack's own: its swarm namespace or Compose
-// project and the ID of its Bayplan record. A name alone is never ownership: another stack, or a person,
-// can make an object under the same namespace.
-func ownsLabels(stack Stack, labels map[string]string) bool {
-	if labels[stacks.LabelStackID] != stack.ID {
-		return false
-	}
-	if stack.Target == stacks.TargetSwarm {
-		return labels[stacks.LabelSwarmNamespace] == stack.Name
-	}
-	return labels[stacks.LabelComposeProject] == stack.Name
-}
-
 // Resources reads the cards of a stack's Resources tab now. Each card keeps its own error, so a secrets list the
 // engine refuses leaves the tasks and the networks in place. decl is what the deployed revision refers to
 // (Repo.Declared); the zero value is a stack with none. It is a read.
 func (d Deps) Resources(ctx context.Context, envID string, stack Stack, decl Declared) Resources {
+	if stack.Discovered {
+		// No file declares what a stack found by its labels uses, so what its services use stands in for it:
+		// the networks, volumes, secrets and configs they refer to that its labels do not claim read External.
+		used, err := d.usedDeclared(ctx, envID, stack)
+		if err != nil {
+			d.log().Warn("could not read what the services of an unmanaged stack use", "environment", envID, "stack", stack.Name, "error", err)
+		} else {
+			decl = used
+		}
+	}
 	var out Resources
 	vols, notReporting, verr := d.volumesOf(ctx, envID, stack, decl)
 	out.Volumes = cardOf(d, envID, stack, "volumes", vols, verr)
@@ -530,12 +528,15 @@ func usersOf(o objectInfo, uses []serviceUse, refs func(dockerx.ServiceRef) []do
 
 // swarmObjects lists the secrets or configs of a swarm stack: those that carry the stack's own labels, by the name the
 // compose file uses and the content hash Bayplan put in the object's name, and those the compose file declares external,
-// found by the name it gives. An object is the stack's only by its labels; an external one never reads Stack.
+// found by the name it gives. An object is the stack's only by its labels; an external one never reads Stack. A
+// stack found by its labels owns none (D-13): every secret and config its services reference is External, whatever
+// labels it carries, because adopting never takes one over.
 func swarmObjects(stack Stack, declared []DeclaredObject, uses []serviceUse, all []objectInfo, refs func(dockerx.ServiceRef) []dockerx.ServiceObjectRef) []ObjectResource {
 	out := []ObjectResource{}
 	owned := map[string]bool{}
+	own := OwnershipOf(stack)
 	for _, o := range all {
-		if !ownsLabels(stack, o.Labels) {
+		if stack.Discovered || !own.OwnsObject(o.Labels) {
 			continue
 		}
 		owned[o.ID] = true
@@ -584,6 +585,7 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl De
 		read = func(fn func(*dockerx.Client) error) error { return d.Aggregator.OnNode(ctx, envID, node, fn) }
 	}
 	var out []NetworkResource
+	own := OwnershipOf(stack)
 	err := read(func(c *dockerx.Client) error {
 		rows, e := c.NetworksWithLabel(ctx, key, stack.Name)
 		if e != nil {
@@ -591,7 +593,7 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl De
 		}
 		out = []NetworkResource{}
 		for _, r := range rows {
-			if !ownsLabels(stack, r.Labels) {
+			if !own.OwnsNetwork(r.Name, r.Labels) {
 				continue
 			}
 			out = append(out, NetworkResource{ID: r.ID, Name: r.Name, Driver: r.Driver, Scope: r.Scope, Ownership: OwnerStack})
@@ -629,7 +631,9 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl De
 }
 
 // standaloneContainers lists the containers of the stack's Compose project, stopped ones too, one-off
-// containers (`compose run`) left out.
+// containers (`compose run`) left out. They are the stack's own and the ones the host CLI added to its project
+// without Bayplan's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6);
+// another stack's container and a project the stack owns none of stay out.
 func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stack) ([]ContainerResource, error) {
 	node, err := d.StandaloneNode(ctx, envID)
 	if err != nil {
@@ -643,9 +647,10 @@ func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stac
 	}); err != nil {
 		return nil, err
 	}
-	out := make([]ContainerResource, 0, len(rows))
-	for _, r := range rows {
-		if !ownsLabels(stack, r.Labels) || strings.EqualFold(r.Labels[stacks.LabelComposeOneoff], "true") {
+	mine, unlabelled, _ := SplitProject(OwnershipOf(stack), rows, func(r dockerx.ContainerRow) map[string]string { return r.Labels })
+	out := make([]ContainerResource, 0, len(mine)+len(unlabelled))
+	for _, r := range append(mine, unlabelled...) {
+		if strings.EqualFold(r.Labels[stacks.LabelComposeOneoff], "true") {
 			continue
 		}
 		seen := map[string]bool{}
@@ -664,4 +669,120 @@ func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stac
 	}
 	slices.SortFunc(out, func(a, b ContainerResource) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.ID, b.ID)) })
 	return out, nil
+}
+
+// builtinNetworks are the networks every engine makes, which no stack owns and a service uses without asking.
+var builtinNetworks = map[string]bool{"bridge": true, "host": true, "none": true, "ingress": true, "docker_gwbridge": true}
+
+// usedFor collects what a stack's services refer to, by key, with the services that refer to it.
+type usedFor struct{ nets, vols, secrets, configs map[string][]string }
+
+func newUsedFor() usedFor {
+	return usedFor{nets: map[string][]string{}, vols: map[string][]string{}, secrets: map[string][]string{}, configs: map[string][]string{}}
+}
+
+// net records a network a service is attached to: the engine's own networks are left out.
+func (u usedFor) net(name, service string) {
+	if !builtinNetworks[name] {
+		addUser(u.nets, name, service)
+	}
+}
+
+// vol records a volume a service mounts by name: an anonymous volume is the container's own and is left out.
+func (u usedFor) vol(name, service string) {
+	if name != "" && !dockerx.IsAnonymousVolume(name, nil) {
+		addUser(u.vols, name, service)
+	}
+}
+
+// declared turns what was collected into Declared, every object external: nothing declares it, and the labels
+// decide which of them the stack owns.
+func (u usedFor) declared() Declared {
+	all := func(key string) (bool, string) { return true, key }
+	return Declared{
+		Known:    true,
+		Networks: declaredObjects(u.nets, all), Volumes: declaredObjects(u.vols, all),
+		Secrets: declaredObjects(u.secrets, all), Configs: declaredObjects(u.configs, all),
+	}
+}
+
+// usedDeclared reads what the services of a discovered stack use, live: the networks they are attached to, the
+// volumes they mount by name, and the secrets and configs they reference. A swarm is read from the service specs on
+// one manager, a standalone host from the containers of the project.
+func (d Deps) usedDeclared(ctx context.Context, envID string, stack Stack) (Declared, error) {
+	u := newUsedFor()
+	if stack.Target == stacks.TargetSwarm {
+		if d.Clusters == nil {
+			return Declared{}, errors.New("stackops: no cluster reader to read the swarm with")
+		}
+		err := d.Clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+			read, e := c.Cluster(ctx)
+			if e != nil {
+				return e
+			}
+			nets, e := c.Networks(ctx)
+			if e != nil {
+				return e
+			}
+			// A spec names a network by ID or by name; the page names it as the engine does.
+			nameOf := func(ref string) string {
+				if i := slices.IndexFunc(nets, func(n dockerx.NetworkRow) bool { return n.ID == ref }); i >= 0 {
+					return nets[i].Name
+				}
+				if i := slices.IndexFunc(nets, func(n dockerx.NetworkRow) bool { return n.Name == ref }); i >= 0 {
+					return nets[i].Name
+				}
+				return ""
+			}
+			for _, use := range objectUsers(SwarmRows(stack, read.Services), read.ServiceRefs) {
+				for _, ref := range use.ref.Networks {
+					if name := nameOf(ref); name != "" {
+						u.net(name, use.svc.Short)
+					}
+				}
+				for _, v := range use.ref.Volumes {
+					u.vol(v, use.svc.Short)
+				}
+				for _, o := range use.ref.Secrets {
+					addUser(u.secrets, o.Name, use.svc.Short)
+				}
+				for _, o := range use.ref.Configs {
+					addUser(u.configs, o.Name, use.svc.Short)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return Declared{}, err
+		}
+		return u.declared(), nil
+	}
+	node, err := d.StandaloneNode(ctx, envID)
+	if err != nil {
+		return Declared{}, err
+	}
+	var rows []dockerx.ContainerRow
+	if err := d.Aggregator.OnNode(ctx, envID, node, func(c *dockerx.Client) error {
+		var e error
+		rows, e = c.ContainersWithLabel(ctx, stacks.LabelComposeProject, stack.Name)
+		return e
+	}); err != nil {
+		return Declared{}, err
+	}
+	own := OwnershipOf(stack)
+	for _, r := range rows {
+		service := r.Labels[stacks.LabelComposeService]
+		if !own.OwnsWorkload(r.Labels) || strings.EqualFold(r.Labels[stacks.LabelComposeOneoff], "true") || service == "" {
+			continue
+		}
+		for _, n := range r.Networks {
+			u.net(n.Name, service)
+		}
+		for _, m := range r.Mounts {
+			if m.Type == "volume" {
+				u.vol(m.Name, service)
+			}
+		}
+	}
+	return u.declared(), nil
 }

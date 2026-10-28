@@ -33,19 +33,36 @@ func (d Deps) ForeignStack(ctx context.Context, envID string, target stacks.Targ
 	if stackID == "" {
 		stackID = noStack
 	}
-	if target == stacks.TargetStandalone {
-		return d.foreignProject(ctx, envID, name, stackID)
+	// Not an adopted stack: only an object that carries this ID is the stack's, so the create path stays strict.
+	return d.foreignUnder(ctx, envID, OwnershipOf(Stack{ID: stackID, Name: name, Target: target}))
+}
+
+// ForeignStackOf is ForeignStack for a stack Bayplan holds, judged by the stack's own ownership rule (D-16): an
+// adopted stack that has not been deployed yet owns the workloads that carry no ID of its own, and the networks,
+// secrets and configs it recorded when it was adopted, so its first deploy is no name clash. On a standalone host it
+// owns the containers of its Compose project with no ID of its own and the networks and volumes recorded then. Once
+// deployed, a container with no ID in its project (what `docker compose up --scale` adds from the host) is no clash
+// beside a container the stack owns; another stack's ID, or a project it owns no container of, still is (G-08-6).
+func (d Deps) ForeignStackOf(ctx context.Context, envID string, st Stack) (bool, error) {
+	return d.foreignUnder(ctx, envID, OwnershipOf(st))
+}
+
+// foreignUnder reads the environment for objects of the stack's name that own does not own.
+func (d Deps) foreignUnder(ctx context.Context, envID string, own Ownership) (bool, error) {
+	if own.Target == stacks.TargetStandalone {
+		return d.foreignProject(ctx, envID, own)
 	}
-	live, err := d.readLive(ctx, envID, name, liveWant{})
+	live, err := d.readLive(ctx, envID, own.Name, liveWant{})
 	if err != nil {
 		return false, err
 	}
-	return clash(stackID, name, live.Networks, live.Services, live.Objects), nil
+	own.Target = stacks.TargetSwarm
+	return clash(own, live.Networks, live.Services, live.Objects), nil
 }
 
 // foreignProject reads the one engine of a standalone environment for a Compose project of this
 // name.
-func (d Deps) foreignProject(ctx context.Context, envID, name, stackID string) (bool, error) {
+func (d Deps) foreignProject(ctx context.Context, envID string, own Ownership) (bool, error) {
 	if d.Aggregator == nil {
 		return false, errors.New("stackops: no aggregator to read the host with")
 	}
@@ -58,26 +75,26 @@ func (d Deps) foreignProject(ctx context.Context, envID, name, stackID string) (
 	}
 	foreign := false
 	err = d.Aggregator.OnNode(ctx, envID, agg.Nodes[0].ID, func(c *dockerx.Client) error {
-		containers, e := c.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
+		containers, e := c.ContainersWithLabel(ctx, stacks.LabelComposeProject, own.Name)
 		if e != nil {
 			return e
 		}
-		networks, e := c.NetworksWithLabel(ctx, stacks.LabelComposeProject, name)
+		networks, e := c.NetworksWithLabel(ctx, stacks.LabelComposeProject, own.Name)
 		if e != nil {
 			return e
 		}
-		volumes, e := c.VolumesWithLabel(ctx, stacks.LabelComposeProject, name)
+		volumes, e := c.VolumesWithLabel(ctx, stacks.LabelComposeProject, own.Name)
 		if e != nil {
 			return e
 		}
-		for _, r := range containers {
-			foreign = foreign || r.Labels[stacks.LabelStackID] != stackID
-		}
+		// The stack's own containers and the ones the host CLI added to its project are no clash (SplitProject).
+		_, _, others := SplitProject(own, containers, func(r dockerx.ContainerRow) map[string]string { return r.Labels })
+		foreign = len(others) > 0
 		for _, r := range networks {
-			foreign = foreign || r.Labels[stacks.LabelStackID] != stackID
+			foreign = foreign || own.foreignNetwork(r.Name, r.Labels)
 		}
 		for _, r := range volumes {
-			foreign = foreign || r.Labels[stacks.LabelStackID] != stackID
+			foreign = foreign || own.foreignVolume(r.Name, r.Labels)
 		}
 		return nil
 	})

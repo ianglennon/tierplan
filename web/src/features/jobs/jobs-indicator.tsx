@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Download, Rocket } from "lucide-react";
+import { Download, ListRestart, Rocket, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
@@ -378,7 +378,13 @@ function StackJobRow({
   const live = job.state === "running";
   return (
     <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
-      <Rocket aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      {job.kind === "restore" ? (
+        <ListRestart aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      ) : job.kind === "rollback" ? (
+        <Undo2 aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      ) : (
+        <Rocket aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      )}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-1.5">
         <Tooltip>
           <TooltipTrigger asChild>

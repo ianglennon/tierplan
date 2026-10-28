@@ -1143,3 +1143,52 @@ func TestAGuardedConverterRefusalHoldsNoRunOfItsSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertUnusualStackName(t *testing.T) {
+	t.Parallel()
+	const compose = `services:
+  web:
+    image: nginx:1.27-alpine
+    volumes:
+      - data:/data
+  api:
+    image: nginx:1.27-alpine
+    networks:
+      - back
+networks:
+  back: {}
+volumes:
+  data: {}
+`
+	p, err := plan(t, "MyApp", compose)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	var services, networks []string
+	for _, s := range p.Services {
+		services = append(services, s.Name)
+	}
+	for _, n := range p.Networks {
+		networks = append(networks, n.Name)
+	}
+	slices.Sort(services)
+	slices.Sort(networks)
+	if want := []string{"MyApp_api", "MyApp_web"}; !slices.Equal(services, want) {
+		t.Errorf("services = %v, want %v", services, want)
+	}
+	if want := []string{"MyApp_back", "MyApp_default"}; !slices.Equal(networks, want) {
+		t.Errorf("networks = %v, want %v", networks, want)
+	}
+	for _, s := range p.Services {
+		if s.Short != "web" {
+			continue
+		}
+		m := s.Spec.TaskTemplate.ContainerSpec.Mounts
+		if len(m) != 1 || m[0].Source != "MyApp_data" {
+			t.Errorf("web mounts = %+v, want the volume MyApp_data", m)
+		}
+		if s.Spec.Labels["com.docker.stack.namespace"] != "MyApp" {
+			t.Errorf("web labels = %v, want the namespace MyApp", s.Spec.Labels)
+		}
+	}
+}

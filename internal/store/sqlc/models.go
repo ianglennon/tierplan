@@ -219,6 +219,7 @@ type Stack struct {
 	CreatedBy  string
 	CreatedAt  int64
 	Stopped    int64
+	Adoption   string
 }
 
 type StackDeploy struct {
@@ -237,17 +238,20 @@ type StackDeploy struct {
 }
 
 type StackSnapshot struct {
-	ID        string
-	StackID   string
-	Kind      string
-	Seq       int64
-	BaseSeq   int64
-	Version   int64
-	Outcome   string
-	Rendered  string
-	Pins      string
-	CreatedBy string
-	CreatedAt int64
+	ID           string
+	StackID      string
+	Kind         string
+	Seq          int64
+	BaseSeq      int64
+	Version      int64
+	Outcome      string
+	Rendered     string
+	Pins         string
+	CreatedBy    string
+	CreatedAt    int64
+	Origin       string
+	RestoredFrom int64
+	Platforms    string
 }
 
 type StackSnapshotFile struct {

@@ -74,6 +74,19 @@ type paritySource struct {
 // the compose file and the files beside it are written to a directory of the node, and nothing is
 // asked of any registry (--resolve-image=never), so the images stay as the file wrote them.
 func deployWithCLI(ctx context.Context, node *dockertest.Node, name string, src paritySource) error {
+	return deployWithCLIResolve(ctx, node, name, src, "never")
+}
+
+// deployWithCLIResolving deploys the stack the way deployWithCLI does, with the CLI's own default,
+// --resolve-image=always: the CLI asks the registry for each image, rewrites it to image@digest and writes the
+// platforms the image runs on into the service's placement. This is the stack the UAT adopted (G-08-4).
+func deployWithCLIResolving(ctx context.Context, node *dockertest.Node, name string, src paritySource) error {
+	return deployWithCLIResolve(ctx, node, name, src, "always")
+}
+
+// deployWithCLIResolve is the one body of deployWithCLI and deployWithCLIResolving, so the two cannot drift apart:
+// resolve is the value of --resolve-image.
+func deployWithCLIResolve(ctx context.Context, node *dockertest.Node, name string, src paritySource, resolve string) error {
 	dir := "/tmp/" + name
 	if out, err := node.Exec(ctx, "mkdir", "-p", dir); err != nil {
 		return fmt.Errorf("make %s: %w\n%s", dir, err, out)
@@ -87,7 +100,7 @@ func deployWithCLI(ctx context.Context, node *dockertest.Node, name string, src 
 		return err
 	}
 	// --detach arrived after Engine 24, whose stack deploy never waits anyway.
-	out, err := node.Sh(ctx, "cd "+dir+" && detach=; docker stack deploy --help | grep -q -e --detach && detach=--detach=true; docker stack deploy -c compose.yaml --resolve-image=never $detach "+name+" 2>&1")
+	out, err := node.Sh(ctx, "cd "+dir+" && detach=; docker stack deploy --help | grep -q -e --detach && detach=--detach=true; docker stack deploy -c compose.yaml --resolve-image="+resolve+" $detach "+name+" 2>&1")
 	if err != nil {
 		return fmt.Errorf("docker stack deploy %s: %w\n%s", name, err, out)
 	}

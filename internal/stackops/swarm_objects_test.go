@@ -300,3 +300,37 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// TestEnsureNetworksOwnsARecordedNetwork: a network an adopted stack recorded when it was adopted is the stack's
+// whatever bayplan.stack.id it carries, so the deploy neither creates it nor answers network_conflict; a network of
+// the same name that a stack Bayplan holds does not own is a conflict (D-18, T-08-61).
+func TestEnsureNetworksOwnsARecordedNetwork(t *testing.T) {
+	t.Parallel()
+	held := func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{
+			ID: "net-1", Name: "tracer_default", Driver: "overlay", Scope: "swarm",
+			Labels: map[string]string{stacks.LabelSwarmNamespace: "tracer", stacks.LabelStackID: "someone-else"},
+		}}
+	}
+
+	// Recorded at adoption: the deploy uses the network as it is.
+	rig := newSwarmRig(t, held)
+	st, in := starterPlan(t, "tracer")
+	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "tracer"}
+	st.Adoption = stacks.Adoption{Networks: []string{"tracer_default"}, Pending: true}
+	in.Stack = st
+	res, _ := rig.deploy(t, in)
+	if !res.OK() || res.Networks != 0 {
+		t.Fatalf("deploy = %+v, want it to use the recorded network as it is", res)
+	}
+	if got := writesNamed(rig.fake, "/networks"); len(got) != 0 {
+		t.Errorf("the deploy wrote to networks: %v", got)
+	}
+
+	// Not recorded: a network of another owner under the stack's namespace is a clash.
+	other := newSwarmRig(t, held)
+	_, plain := starterPlan(t, "tracer")
+	if res, _ := other.deploy(t, plain); res.Code != stackops.CodeNameClash {
+		t.Fatalf("deploy = %+v, want name_clash for a network of another owner", res)
+	}
+}

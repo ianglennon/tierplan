@@ -19,7 +19,7 @@ import { TestRouter } from "@/test-router";
 const ENV = "e1";
 
 let role: "viewer" | "operator";
-let rollbackInfo: { available: boolean; deployedAt: string; deployedBy: string };
+let rollbackInfo: { available: boolean; deployedAt: string; deployedBy: string; revision?: number };
 let rollbacks: number;
 let client: QueryClient;
 
@@ -28,6 +28,7 @@ const stackOf = (over: Partial<StackDetail> = {}): StackDetail => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "deploy_failed",
   lastDeployedAt: "2026-10-19T11:00:00Z",
   lastDeployedBy: "bob",
@@ -102,6 +103,19 @@ function mount(stack: StackDetail) {
 }
 
 describe("DeployFailedAlert", () => {
+  it("names the revision the one-click roll back restores, when it was deployed and by whom", async () => {
+    rollbackInfo = {
+      available: true,
+      deployedAt: "2026-01-02T10:00:00Z",
+      deployedBy: "bob",
+      revision: 4,
+    };
+    mount(stackOf({ rollback: rollbackInfo }));
+    const alert = await screen.findByRole("alert");
+    expect(await within(alert).findByText(/^Revision #4, deployed .+ by bob$/)).toBeTruthy();
+    expect(within(alert).queryByText(/^Last deployed/)).toBeNull();
+  });
+
   it("says The last deploy failed and where Bayplan stopped and why", async () => {
     mount(stackOf());
     const alert = await screen.findByRole("alert");

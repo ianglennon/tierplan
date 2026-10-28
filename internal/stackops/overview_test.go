@@ -169,7 +169,9 @@ func TestOverviewOfAStandaloneStackLeavesOutAnotherProjectsContainers(t *testing
 		Labels: map[string]string{stacks.LabelComposeProject: "other", stacks.LabelComposeService: "web"},
 	}, dockertest.FakeContainer{
 		ID: "foreign-1", Names: []string{"/demo-foreign-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{stacks.LabelComposeProject: "demo", stacks.LabelComposeService: "foreign"},
+		// Another stack's container in the project. A container with no ID beside the stack's own is the host CLI's
+		// addition and is listed since G-08-6 (TestStandaloneRowsCountAContainerTheHostCLIAdded); this one is not.
+		Labels: map[string]string{stacks.LabelComposeProject: "demo", stacks.LabelComposeService: "foreign", stacks.LabelStackID: "stack-other"},
 	})
 	rig := hostRig(t, h)
 
@@ -251,5 +253,60 @@ func TestStandaloneRowsShowPublishedPortsOnceWithoutTheHostAddress(t *testing.T)
 
 	if len(rows) != 1 || !slices.Equal(rows[0].Ports, []string{"8080->80/tcp", "9000->9000/udp"}) {
 		t.Errorf("ports = %+v", rows)
+	}
+}
+
+// TestStandaloneRowsCountAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the project with none of
+// Bayplan's labels. Beside web-1, which carries the stack's ID, it is a container of the service on the stack's page and
+// in the lists' counts. Another stack's container, a project the stack owns no container of, and a one-off stay out
+// (G-08-6, user decision 2026-10-27, D-09).
+func TestStandaloneRowsCountAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	row := func(name, service string, extra map[string]string) dockerx.ContainerRow {
+		l := map[string]string{stacks.LabelComposeProject: "demo", stacks.LabelComposeService: service}
+		for k, v := range extra {
+			l[k] = v
+		}
+		return dockerx.ContainerRow{ID: name, Name: "/" + name, State: "running", Image: "nginx:1", Labels: l}
+	}
+	own := map[string]string{stacks.LabelStackID: "stack-demo"}
+	other := map[string]string{stacks.LabelStackID: "stack-other"}
+	names := func(rows []stackops.ServiceRow) []string {
+		var out []string
+		for _, r := range rows {
+			for _, c := range r.Containers {
+				out = append(out, r.Short+":"+c.Name)
+			}
+		}
+		return out
+	}
+	for name, tc := range map[string]struct {
+		in   []dockerx.ContainerRow
+		want []string
+	}{
+		"added from the host CLI":          {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-2", "web", nil)}, []string{"web:demo-web-1", "web:demo-web-2"}},
+		"a service only the CLI added":     {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-ghost-1", "ghost", nil)}, []string{"web:demo-web-1"}},
+		"another stack's container":        {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-2", "web", other)}, []string{"web:demo-web-1"}},
+		"a project the stack owns none of": {[]dockerx.ContainerRow{row("demo-web-1", "web", nil), row("demo-web-2", "web", nil)}, nil},
+		"a one-off beside the stack's own": {[]dockerx.ContainerRow{row("demo-web-1", "web", own), row("demo-web-run-1", "web", map[string]string{"com.docker.compose.oneoff": "True"})}, []string{"web:demo-web-1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rows := stackops.StandaloneRows(standaloneStack("demo"), tc.in)
+			if got := names(rows); !slices.Equal(got, tc.want) {
+				t.Errorf("containers = %v, want %v", got, tc.want)
+			}
+			for _, r := range rows {
+				n := 0
+				for _, w := range tc.want {
+					if strings.HasPrefix(w, r.Short+":") {
+						n++
+					}
+				}
+				if r.Desired != n || r.Running != n {
+					t.Errorf("%s = %+v, want %d containers counted", r.Short, r, n)
+				}
+			}
+		})
 	}
 }

@@ -323,6 +323,19 @@ func swarmPlatforms(platforms []string) []string {
 	return out
 }
 
+// SwarmPlatforms turns the os/arch[/variant] platforms of an image (ResolvedImage.Platforms, or the answer of a
+// distribution lookup) into the platforms a swarm schedules a service by (TaskTemplate.Placement.Platforms), by the rules
+// of swarmPlatforms: the architecture of arm is blanked, the variant dropped and a platform comes once, in the order of
+// its first appearance.
+func SwarmPlatforms(platforms []string) []swarm.Platform {
+	var out []swarm.Platform
+	for _, p := range swarmPlatforms(platforms) {
+		osName, arch, _ := strings.Cut(p, "/")
+		out = append(out, swarm.Platform{OS: osName, Architecture: arch})
+	}
+	return out
+}
+
 // ForceUpdateOptions are the choices of ServiceForceUpdate.
 type ForceUpdateOptions struct {
 	// Version is the service version the caller read; a different current one is

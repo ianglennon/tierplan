@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -29,13 +30,25 @@ const (
 	stackStatusStopped      = "stopped"
 	stackStatusDraft        = "draft"
 	stackStatusDeployFailed = "deploy_failed"
+	stackStatusDrifted      = "drifted"
+
+	stackKindManaged   = "managed"
+	stackKindUnmanaged = "unmanaged"
 
 	stackSortName         = "name"
 	stackSortState        = "state"
 	stackSortLastDeployed = "lastDeployed"
 )
 
-var stackStatuses = []string{stackStatusDegraded, stackStatusStopped, stackStatusDraft, stackStatusDeployFailed}
+// problemKindInvalid is the problem type of a kind filter that is neither managed nor unmanaged.
+const problemKindInvalid = "kind_invalid"
+
+const (
+	reasonOwnStack   = "This is Bayplan's own stack."
+	reasonAgentStack = "This stack runs Bayplan's agent."
+)
+
+var stackStatuses = []string{stackStatusDegraded, stackStatusStopped, stackStatusDraft, stackStatusDeployFailed, stackStatusDrifted}
 
 // stateRank is the order the State column sorts in, the priority of UI-SPEC "Color": an operation under
 // way, then stopped, deploy failed, not running, degraded, running, and a stack never deployed last.
@@ -62,12 +75,14 @@ type StackStatusCountsBody struct {
 	Stopped      int `json:"stopped" doc:"Stacks a person stopped"`
 	Draft        int `json:"draft" doc:"Stacks whose draft holds changes that have not been deployed"`
 	DeployFailed int `json:"deployFailed" doc:"Stacks whose newest deploy, update or roll back failed, was cancelled or was interrupted"`
+	Drifted      int `json:"drifted" doc:"Stacks whose newest drift check found that what runs differs from the deployed revision"`
 }
 
 // StackQueryInput is the search, status filter and sort both stack lists take.
 type StackQueryInput struct {
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
-	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
+	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
 	Sort   string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
 	Dir    string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
 }
@@ -88,6 +103,7 @@ type stackRow struct {
 type stackQuery struct {
 	q        string
 	statuses []string
+	kind     string
 	sort     string
 	desc     bool
 }
@@ -99,6 +115,13 @@ func newStackQuery(in StackQueryInput) (stackQuery, error) {
 			"The search can be at most "+strconv.Itoa(maxStackQuery)+" characters.")
 	}
 	q := stackQuery{q: strings.ToLower(strings.TrimSpace(in.Q)), sort: in.Sort, desc: in.Dir == "desc"}
+	switch in.Kind {
+	case "", stackKindManaged, stackKindUnmanaged:
+		q.kind = in.Kind
+	default:
+		return stackQuery{}, httpx.Problem(http.StatusUnprocessableEntity, problemKindInvalid,
+			"kind "+strconv.Quote(in.Kind)+" is not one of "+stackKindManaged+" or "+stackKindUnmanaged+".")
+	}
 	if q.sort == "" {
 		q.sort = stackSortName
 	}
@@ -118,8 +141,12 @@ func newStackQuery(in StackQueryInput) (stackQuery, error) {
 	return q, nil
 }
 
-// hasStackStatus says whether a row counts under one status value.
+// hasStackStatus says whether a row counts under one status value. The chips are for stacks Bayplan
+// manages: an unmanaged stack has no draft, no deploys and no stop of Bayplan's, and is in none of them.
 func hasStackStatus(it StackItem, status string) bool {
+	if !it.Managed {
+		return false
+	}
 	switch status {
 	case stackStatusDegraded:
 		return it.State == string(stackops.StateDegraded)
@@ -129,6 +156,8 @@ func hasStackStatus(it StackItem, status string) bool {
 		return it.HasDraft
 	case stackStatusDeployFailed:
 		return it.State == string(stackops.StateDeployFailed)
+	case stackStatusDrifted:
+		return it.Drift != nil && it.Drift.State == stackops.DriftDrifted
 	}
 	return false
 }
@@ -150,12 +179,31 @@ func stackStatusCounts(rows []stackRow) StackStatusCountsBody {
 		if hasStackStatus(r.item, stackStatusDeployFailed) {
 			c.DeployFailed++
 		}
+		if hasStackStatus(r.item, stackStatusDrifted) {
+			c.Drifted++
+		}
 	}
 	return c
 }
 
-// matches says whether a row passes the search and the status filter.
+// stackKindCounts counts the rows by kind, before the search, the status filter and the kind itself.
+func stackKindCounts(rows []stackRow) StackKindCountsBody {
+	c := StackKindCountsBody{All: len(rows)}
+	for _, r := range rows {
+		if r.item.Managed {
+			c.Managed++
+		} else {
+			c.Unmanaged++
+		}
+	}
+	return c
+}
+
+// matches says whether a row passes the search, the kind and the status filter.
 func (q stackQuery) matches(r stackRow) bool {
+	if q.kind == stackKindManaged && !r.item.Managed || q.kind == stackKindUnmanaged && r.item.Managed {
+		return false
+	}
 	if q.q != "" && !strings.Contains(strings.ToLower(r.item.Name), q.q) &&
 		!slices.ContainsFunc(r.services, func(s string) bool { return strings.Contains(s, q.q) }) {
 		return false
@@ -219,6 +267,9 @@ type AllStacksGroup struct {
 	Target  string                `json:"target" enum:"swarm,standalone" doc:"Where the environment's stacks deploy: swarm or standalone"`
 	Stacks  []StackItem           `json:"stacks" doc:"The environment's stacks among the rows returned, in the order asked for"`
 	Counts  StackStatusCountsBody `json:"counts" doc:"How many of the environment's stacks each status chip counts, before the search and the status filter"`
+	// KindCounts and DiscoveryFailed are the environment's own.
+	KindCounts      StackKindCountsBody `json:"kindCounts" doc:"How many of the environment's stacks are managed and unmanaged, before the search, the status filter and the kind"`
+	DiscoveryFailed bool                `json:"discoveryFailed" doc:"True when the look for unmanaged stacks on this environment failed just now: its managed stacks are listed all the same"`
 }
 
 // FailedEnvironmentBody names an environment whose stacks could not be read, so the list can say so
@@ -236,6 +287,7 @@ type AllStacksBody struct {
 	UnfilteredTotal    int                     `json:"unfilteredTotal" doc:"How many stacks the environments read have before the search and the status filter"`
 	Capped             bool                    `json:"capped" doc:"True when total is more than the rows returned, counted over every group together"`
 	StatusCounts       StackStatusCountsBody   `json:"statusCounts" doc:"How many stacks each status chip counts, over the environments read and before the search and the status filter"`
+	KindCounts         StackKindCountsBody     `json:"kindCounts" doc:"How many stacks the Show toggle counts (all, managed, unmanaged), over the environments read and before the search, the status filter and the kind"`
 }
 
 // AllStacksInput is the query of GET /api/stacks.
@@ -271,12 +323,13 @@ func splitIDs(raw string) []string {
 func registerAllStacks(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listAllStacks", Method: http.MethodGet, Path: "/api/stacks",
-		Summary: "The stacks Bayplan manages on every environment the caller may read them on",
+		Summary: "The stacks of every environment the caller may read them on, managed or found",
 		Description: "One group for each environment that has stacks, by environment name, each with its stacks, " +
 			"their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, " +
 			"and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read " +
 			"is named in failedEnvironments while the others are answered. env chooses environments by ID. " +
-			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort " +
+			"Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. " +
+			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort " +
 			"run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, " +
 			"with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.",
 		Tags: []string{"stacks"},
@@ -308,10 +361,15 @@ func listAllStacks(ctx context.Context, d StacksDeps, in *AllStacksInput) (*AllS
 	// Every row of every environment read, with each environment's own counts.
 	var rows []stackRow
 	type read struct {
-		name, target string
-		counts       StackStatusCountsBody
+		name, target    string
+		counts          StackStatusCountsBody
+		kinds           StackKindCountsBody
+		discoveryFailed bool
 	}
-	envs := map[string]read{}
+	readEnvs := map[string]read{}
+	// bare are the environments with no stacks at all whose look for unmanaged ones failed: their group holds
+	// the retry row alone.
+	var bare []string
 	for _, e := range all {
 		if e.Enabled == 0 || !canIn(perEnv, e.ID, rbac.PermStacksRead) {
 			continue
@@ -319,75 +377,106 @@ func listAllStacks(ctx context.Context, d StacksDeps, in *AllStacksInput) (*AllS
 		if len(chosen) > 0 && !slices.Contains(chosen, e.ID) {
 			continue
 		}
-		envRows, err := d.stackRowsOf(ctx, e.ID, e.Name)
+		got, err := d.stackRowsOf(ctx, e.ID, e.Name, e.Kind == envs.KindLocal)
+		envRows := got.rows
 		if err != nil {
 			d.Log.Error("the stacks of an environment could not be read for the all-stacks list", "environment", e.ID, "error", err)
 			body.FailedEnvironments = append(body.FailedEnvironments, FailedEnvironmentBody{EnvID: e.ID, EnvName: e.Name})
 			continue
 		}
-		if len(envRows) == 0 {
+		if len(envRows) == 0 && !got.discoveryFailed {
 			continue
 		}
-		envs[e.ID] = read{name: e.Name, target: envRows[0].item.Target, counts: stackStatusCounts(envRows)}
+		target := got.target
+		if len(envRows) > 0 {
+			target = envRows[0].item.Target
+		}
+		readEnvs[e.ID] = read{name: e.Name, target: target, counts: stackStatusCounts(envRows), kinds: stackKindCounts(envRows), discoveryFailed: got.discoveryFailed}
 		rows = append(rows, envRows...)
+		if len(envRows) == 0 {
+			bare = append(bare, e.ID)
+		}
 	}
 
 	shown, total := q.apply(rows)
 	body.Total, body.UnfilteredTotal, body.Capped, body.StatusCounts = total, len(rows), total > len(shown), stackStatusCounts(rows)
+	body.KindCounts = stackKindCounts(rows)
 	index := map[string]int{}
-	for _, r := range shown {
-		envID := r.envID
+	group := func(envID string) int {
 		g, ok := index[envID]
 		if !ok {
-			e := envs[envID]
-			body.Groups = append(body.Groups, AllStacksGroup{EnvID: envID, EnvName: e.name, Target: e.target, Stacks: []StackItem{}, Counts: e.counts})
+			e := readEnvs[envID]
+			body.Groups = append(body.Groups, AllStacksGroup{
+				EnvID: envID, EnvName: e.name, Target: e.target, Stacks: []StackItem{}, Counts: e.counts,
+				KindCounts: e.kinds, DiscoveryFailed: e.discoveryFailed,
+			})
 			g = len(body.Groups) - 1
 			index[envID] = g
 		}
+		return g
+	}
+	for _, r := range shown {
+		g := group(r.envID)
 		body.Groups[g].Stacks = append(body.Groups[g].Stacks, r.item)
+	}
+	for _, envID := range bare {
+		group(envID)
 	}
 	slices.SortStableFunc(body.Groups, func(a, b AllStacksGroup) int { return compareText(a.EnvName, b.EnvName) })
 	slices.SortStableFunc(body.FailedEnvironments, func(a, b FailedEnvironmentBody) int { return compareText(a.EnvName, b.EnvName) })
 	return &AllStacksOutput{CacheControl: "no-store", Body: body}, nil
 }
 
+// envStackRows is the list rows of one environment.
+type envStackRows struct {
+	rows []stackRow
+	// target is where the environment's stacks deploy, known when the look for unmanaged stacks found out.
+	target string
+	// discoveryFailed is true when what the environment runs could not be read for the look for unmanaged
+	// stacks: the managed rows are all there, the unmanaged ones are missing.
+	discoveryFailed bool
+}
+
 // stackRowsOf builds the list rows of one environment's stacks, by name: the rows Bayplan stores for
 // them and, for a stack that has had an operation, what the engine runs, from the caches the lists
-// use. envName is kept on each row to break a tie between environments.
-func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string) ([]stackRow, error) {
+// use, then the stacks found on the engine that Bayplan did not make (stackops.Discover) from the same
+// caches. envName is kept on each row to break a tie between environments. selfHost is true for the
+// Docker host Bayplan itself runs on, the only one whose swarm namespace can be Bayplan's own.
+func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, selfHost bool) (envStackRows, error) {
 	if d.ReadEnv != nil {
 		if err := d.ReadEnv(ctx, envID); err != nil {
-			return nil, err
+			return envStackRows{}, err
 		}
 	}
 	repo := d.repo()
 	list, err := repo.Stacks(ctx, envID)
 	if err != nil {
-		return nil, err
+		return envStackRows{}, err
 	}
 	latest, err := repo.LatestDeploys(ctx, envID)
 	if err != nil {
-		return nil, err
+		return envStackRows{}, err
 	}
 	likes, err := repo.LatestDeployLikes(ctx, envID)
 	if err != nil {
-		return nil, err
+		return envStackRows{}, err
 	}
 	done, err := repo.LastDeployed(ctx, envID)
 	if err != nil {
-		return nil, err
+		return envStackRows{}, err
 	}
 	drafts, err := repo.DraftSaves(ctx, envID)
 	if err != nil {
-		return nil, err
+		return envStackRows{}, err
 	}
 	reads := newStackReads(ctx, d, envID)
-	rows := make([]stackRow, 0, len(list))
+	out := envStackRows{rows: make([]stackRow, 0, len(list))}
 	for _, st := range list {
 		l, hasL := latest[st.ID]
 		k, hasK := likes[st.ID]
 		g, hasG := done[st.ID]
 		item, services := stackItemWithServices(reads, st, l, hasL, k, hasK, g, hasG, drafts[st.ID].Pending)
+		item.Drift = d.driftOf(ctx, repo, st)
 		r := stackRow{item: item, envID: envID, envName: envName}
 		if hasG {
 			r.deployedAt = g.EndedAt
@@ -395,9 +484,97 @@ func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string) ([]s
 		for _, s := range services {
 			r.services = append(r.services, strings.ToLower(s.Name), strings.ToLower(s.Short))
 		}
-		rows = append(rows, r)
+		out.rows = append(out.rows, r)
 	}
-	return rows, nil
+	found, target, ok := d.discover(ctx, reads, list, selfHost)
+	out.target, out.discoveryFailed = string(target), !ok
+	for _, u := range found {
+		out.rows = append(out.rows, unmanagedRow(u, envID, envName))
+	}
+	return out, nil
+}
+
+// driftOf is the newest drift check of a stack as the lists show it: the one in the store that is still about the
+// revision deployed now, nil for none. The revision is read only for a stack that has a check.
+func (d StacksDeps) driftOf(ctx context.Context, repo stackops.Repo, st stackops.Stack) *StackDriftSummaryBody {
+	if d.Drift == nil {
+		return nil
+	}
+	if _, ok := d.Drift.Get(st.ID); !ok {
+		return nil
+	}
+	seq := int64(0)
+	info, has, err := repo.GoodRevisionInfo(ctx, st.ID)
+	if err != nil {
+		return nil
+	}
+	if has {
+		seq = info.Seq
+	}
+	return driftSummaryOf(d, st, seq)
+}
+
+// discover finds the stacks of an environment that Bayplan did not make, in the caches the lists use. The
+// bool is false when they could not be read: the caller lists the managed stacks without them.
+func (d StacksDeps) discover(ctx context.Context, reads *stackReads, managed []stackops.Stack, selfHost bool) ([]stackops.Discovered, stacks.Target, bool) {
+	envID := reads.envID
+	var target stacks.Target
+	switch {
+	case len(managed) > 0:
+		target = managed[0].Target
+	case d.Clusters == nil:
+		return nil, "", false
+	default:
+		swarm, err := d.Clusters.IsSwarm(ctx, envID)
+		if err != nil {
+			d.Log.Debug("could not tell what kind of environment this is for its unmanaged stacks", "environment", envID, "error", err)
+			return nil, "", false
+		}
+		target = stacks.TargetStandalone
+		if swarm {
+			target = stacks.TargetSwarm
+		}
+	}
+	h := reads.heldOf(target == stacks.TargetSwarm)
+	if h.err != nil {
+		return nil, target, false
+	}
+	held := h.held
+	self := stackops.SelfMarks{ContainerID: d.SelfContainerID}
+	if selfHost {
+		self.Namespace = d.SelfNamespace
+	}
+	return stackops.Discover(held, managed, target, self), target, true
+}
+
+// notAdoptableReason is why a discovered stack cannot be adopted, empty when it can: the owner reasons
+// first (D-49), then the name rule of its target (D-53).
+func notAdoptableReason(u stackops.Discovered) string {
+	switch u.Owner {
+	case stackops.OwnerBayplan:
+		return reasonOwnStack
+	case stackops.OwnerAgent:
+		return reasonAgentStack
+	}
+	return u.NameReason
+}
+
+// unmanagedRow is the list row of a stack found on the engine. It has no ID: it is known by its name on its
+// environment, and no label value is ever used as an ID.
+func unmanagedRow(u stackops.Discovered, envID, envName string) stackRow {
+	running, total := u.Running, u.Total
+	body := &StackUnmanagedBody{Orphan: u.OrphanID != "", Portainer: u.Portainer, Owner: u.Owner, Adoptable: u.Adoptable(), Reason: notAdoptableReason(u)}
+	r := stackRow{
+		item: StackItem{
+			Name: u.Name, Target: string(u.Target), Source: "unmanaged", Managed: false, State: string(u.State),
+			ServicesRunning: &running, ServicesTotal: &total, Unmanaged: body,
+		},
+		envID: envID, envName: envName,
+	}
+	for _, s := range u.Rows {
+		r.services = append(r.services, strings.ToLower(s.Name), strings.ToLower(s.Short))
+	}
+	return r
 }
 
 // compareText orders two names case-insensitively, then exactly, so the order never depends on how
@@ -418,7 +595,7 @@ type StackNameCheckBody struct {
 // StackNameCheckInput is the path and query of the name check.
 type StackNameCheckInput struct {
 	EnvironmentPathInput
-	Name string `query:"name" maxLength:"200" doc:"The name to check"`
+	Name string `query:"name" maxLength:"255" doc:"The name to check"`
 }
 
 // StackNameCheckOutput wraps StackNameCheckBody for huma.
@@ -454,27 +631,21 @@ func checkStackName(ctx context.Context, d StacksDeps, in *StackNameCheckInput) 
 		return &StackNameCheckOutput{CacheControl: "no-store", Body: StackNameCheckBody{Status: status, Message: message}}, nil
 	}
 	name := in.Name
-	if !stacks.NameValid(name) {
-		return answer("invalid", stackNameInvalidMessage)
+	// The target comes from the stored facts of the environment (no engine call); the name is held to its
+	// rule first (D-53, T-08-37).
+	target, err := d.stackTargetOf(ctx, env.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !stacks.NameValid(target, name) {
+		return answer("invalid", stackNameInvalidMessage(target))
 	}
 	own, err := d.repo().Stacks(ctx, env.ID)
 	if err != nil {
 		return nil, stackInternal(d, "name check", env.ID, err)
 	}
-	if slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+	if stackNameTaken(own, target, name) {
 		return answer("taken", stackNameTakenMessage(name, env.Name))
-	}
-	if d.Clusters == nil {
-		d.Log.Error("the stack routes have no cluster reader")
-		return nil, huma.Error500InternalServerError("internal error")
-	}
-	swarm, err := d.Clusters.IsSwarm(ctx, env.ID)
-	if err != nil {
-		return nil, snapshotProblem(d.Log, env.ID, err)
-	}
-	target := stacks.TargetStandalone
-	if swarm {
-		target = stacks.TargetSwarm
 	}
 	foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
 	if err != nil {

@@ -17,6 +17,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
 )
 
@@ -262,8 +264,9 @@ func TestCancelDuringTheWaitEndsTheServicesAsCreatedAndRemovesNothingInUse(t *te
 	rig.fake.SetTaskState("t_api", "preparing", "")
 	_, in := stackInput(t, "t", cancelCompose, tokFile("s3cret"))
 	d := rig.startDeploy(t, in)
-	d.until(t, "the stuck row to count its tasks", func(items map[string]jobs.Item) bool {
-		return items["service:t_api"].Unit == "tasks"
+	// The cancel must come after web has settled, or a loaded host can still have web waiting.
+	d.until(t, "the stuck row to count its tasks and web to settle", func(items map[string]jobs.Item) bool {
+		return items["service:t_api"].Unit == "tasks" && items["service:t_web"].Result["settled"] == "true"
 	})
 	if err := rig.hub.Cancel(d.job.ID); err != nil {
 		t.Fatal(err)
@@ -497,5 +500,76 @@ func TestAStandaloneDeployThatNeverReachedTheSDKRemovesNothing(t *testing.T) {
 	}
 	if got := deletes(rig); len(got) != 0 {
 		t.Errorf("removals = %v, want none: nothing was created", got)
+	}
+}
+
+// TestStandaloneCleanupUsesOwnership: a first deploy of an adopted project that fails removes the containers it
+// created that the stack owns, and never one that existed at adoption (even one the engine now reports as created) or
+// one that carries another stack's ID (T-08-66).
+func TestStandaloneCleanupUsesOwnership(t *testing.T) {
+	t.Parallel()
+	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
+	var base dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		standalone(c)
+		c.TasksFollowWrites = false
+		h.Apply(c)
+		base = *c
+	})
+	a := adoptRigOn(t, rig, stacks.TargetStandalone)
+	rv := a.review(t)
+	owned := func(id, service string) map[string]string {
+		return map[string]string{"com.docker.compose.project": "shop", "com.docker.compose.service": service, "com.docker.compose.oneoff": "False", stacksStackID: id}
+	}
+	rig.deps.Up = failingUp(rig, base, func(c *dockertest.FakeConfig) {
+		// A container that existed at adoption and now reads as created is not this deploy's to remove.
+		c.Containers[0].State = "created"
+		c.Containers = append(c.Containers,
+			dockertest.FakeContainer{ID: "c-web-new", Names: []string{"/shop-web-2"}, Image: "nginx:1.27", State: "created", Labels: owned(a.stack.ID, "web")},
+			dockertest.FakeContainer{ID: "c-stranger", Names: []string{"/shop-job-1"}, Image: "nginx:1.27", State: "created", Labels: owned("stk-someone-else", "job")},
+		)
+	}, errors.New("Error response from daemon: driver failed programming external connectivity"))
+	existing := base.Containers[0].ID
+
+	res, _ := rig.deployStandalone(t, a.standaloneDeployInput(t, rv))
+
+	if res.OK() || res.Code != stackops.CodeEngineError {
+		t.Fatalf("result = %+v, want engine_error", res)
+	}
+	got := deletes(rig)
+	if want := []string{"DELETE /containers/c-web-new"}; !slices.Equal(got, want) {
+		t.Errorf("removals = %v, want only the container this deploy created for the stack (not %s from adoption, not another stack's)", got, existing)
+	}
+}
+
+// TestFailedDeployOfAnAdoptedStackCleansUpByOwnership: the clean-up of a deploy that stopped finds what the stack owns
+// by its namespace and asks the stack's ownership (plan 08-18). The network and the secret this deploy created carry
+// the stack's ID and go; a network the stack recorded when it was adopted, which carries the namespace alone and which
+// a service uses, stays; a secret of the namespace that the stack only references stays too.
+func TestFailedDeployOfAnAdoptedStackCleansUpByOwnership(t *testing.T) {
+	t.Parallel()
+	ns := map[string]string{"com.docker.stack.namespace": "t"}
+	rig := failRig(t, func(c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{{ID: "n-legacy", Name: "t_legacy", Driver: "overlay", Scope: "swarm", Labels: ns}}
+		c.Secrets = []dockertest.FakeSecret{{ID: "sec-ref", Name: "t_ref", Labels: ns}}
+	})
+	st, in := stackInput(t, "t", failCompose, tokFile("s3cret"))
+	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "t"}
+	st.Adoption = stacks.Adoption{Networks: []string{"t_legacy"}, Secrets: []string{"t_ref"}}
+	in.Stack = st
+	secret := hashedName("t", "tok", "s3cret")
+
+	res, _ := rig.deploy(t, in)
+
+	if res.Code != stackops.CodeServiceRejected {
+		t.Fatalf("result = %+v, want the swarm's rejection of t_mid", res)
+	}
+	if !slices.Equal(res.CleanedUp, []string{"t_fresh", secret}) {
+		t.Errorf("CleanedUp = %v, want the network and the secret this deploy created", res.CleanedUp)
+	}
+	for _, w := range rig.fake.Writes() {
+		if strings.Contains(w, "n-legacy") || strings.Contains(w, "sec-ref") {
+			t.Errorf("write %q touched an object the deploy did not create", w)
+		}
 	}
 }

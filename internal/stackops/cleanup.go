@@ -68,23 +68,40 @@ func (d Deps) cleanupCreated(ctx context.Context, envID string, stack Stack, res
 		secrets  []objectRow
 		configs  []objectRow
 	)
+	own := OwnershipOf(stack)
 	readErr := d.Clusters.ClusterRead(cctx, envID, func(c *dockerx.Client) error {
 		var e error
+		networks, secrets, configs = nil, nil, nil // a read that is tried on another manager starts again
 		if svcs, e = c.ServicesWithLabel(cctx, stacks.LabelSwarmNamespace, stack.Name); e != nil {
 			return e
 		}
-		if networks, e = c.NetworksWithLabel(cctx, stacks.LabelStackID, stack.ID); e != nil {
-			return e
-		}
-		srows, e := c.SecretsWithLabel(cctx, stacks.LabelStackID, stack.ID)
+		nets, e := c.NetworksWithLabel(cctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		crows, e := c.ConfigsWithLabel(cctx, stacks.LabelStackID, stack.ID)
+		for _, n := range nets {
+			if own.OwnsNetwork(n.Name, n.Labels) {
+				networks = append(networks, n)
+			}
+		}
+		srows, e := c.SecretsWithLabel(cctx, own.labelKey(), own.Name)
 		if e != nil {
 			return e
 		}
-		secrets, configs = secretRows(srows), configRows(crows)
+		crows, e := c.ConfigsWithLabel(cctx, own.labelKey(), own.Name)
+		if e != nil {
+			return e
+		}
+		for _, r := range secretRows(srows) {
+			if own.OwnsObject(r.Labels) {
+				secrets = append(secrets, r)
+			}
+		}
+		for _, r := range configRows(crows) {
+			if own.OwnsObject(r.Labels) {
+				configs = append(configs, r)
+			}
+		}
 		return nil
 	})
 	if readErr != nil {
@@ -282,9 +299,12 @@ func (d Deps) cleanupStandalone(ctx context.Context, envID, nodeID string, stack
 	for _, c := range before {
 		had[c.ID] = true
 	}
+	own := OwnershipOf(stack)
 	var stray []dockerx.ComposeContainer
 	for _, c := range after.Containers {
-		if !had[c.ID] && c.State == "created" && c.Labels[stacks.LabelStackID] == stack.ID {
+		// Only a container this deploy created (its ID was not on the host before) and that the stack owns: one that
+		// existed at adoption, or that belongs to nobody the stack knows, is never removed (T-08-66).
+		if !had[c.ID] && c.State == "created" && own.OwnsWorkload(c.Labels) {
 			stray = append(stray, c)
 		}
 	}
@@ -307,7 +327,7 @@ func (d Deps) cleanupStandalone(ctx context.Context, envID, nodeID string, stack
 	sort.Strings(names)
 	for _, name := range names {
 		row, ok := findNetwork(after.Networks, name)
-		if !ok || row.Labels[stacks.LabelStackID] != stack.ID {
+		if !ok || !own.OwnsNetwork(row.Name, row.Labels) {
 			continue // the up never got as far as this network, or it is not the stack's
 		}
 		item := prog.addCleanup("network", name)

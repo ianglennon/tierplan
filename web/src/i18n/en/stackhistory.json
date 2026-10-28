@@ -1,0 +1,76 @@
+{
+  "stackHistory": {
+    "tab": "History",
+    "caption": "Every deploy of {{name}}, newest first. Select a revision to see it in detail.",
+    "count_one": "{{count, number}} revision",
+    "count_other": "{{count, number}} revisions",
+    "capped": "Only the newest {{count, number}} revisions are listed.",
+    "missing": "—",
+    "table": {
+      "caption": "Revisions of {{name}}",
+      "columns": {
+        "revision": "Revision",
+        "kind": "Kind",
+        "result": "Result",
+        "who": "Who",
+        "when": "When",
+        "images": "Images",
+        "actions": "Actions"
+      },
+      "deployed": "Deployed",
+      "open": "Open revision #{{seq}}",
+      "rowMenu": "Actions for revision #{{seq}}"
+    },
+    "kind": {
+      "deploy": "Deploy",
+      "update": "Update images",
+      "rollback": "Roll back",
+      "adopted": "Adopted",
+      "from": "from {{name}}",
+      "ofPrefix": "of"
+    },
+    "result": {
+      "good": "Good",
+      "failed": "Failed",
+      "pending": "In progress",
+      "unfinished": "The deploy didn't finish.",
+      "interrupted": "The server restarted while it ran."
+    },
+    "images": {
+      "changed_one": "{{count, number}} image changed",
+      "changed_other": "{{count, number}} images changed",
+      "none": "No image changes",
+      "pinned_one": "{{count, number}} image pinned",
+      "pinned_other": "{{count, number}} images pinned",
+      "unresolved": "—",
+      "change": "{{service}}: {{from}} → {{to}}",
+      "added": "{{service}}: new, {{to}}"
+    },
+    "detail": {
+      "heading": "Revision",
+      "rollbackOf": "Roll back of",
+      "deployed": "This is the deployed revision.",
+      "failed": {
+        "title": "Revision #{{seq}} failed",
+        "body": "{{service}}: {{reason}}",
+        "bodyNoService": "{{reason}}",
+        "keep": "It stays in the list for the record. It can't be rolled back to."
+      },
+      "pending": {
+        "title": "Revision #{{seq}} is still deploying",
+        "console": "Open console"
+      },
+      "by": "by {{user}},"
+    },
+    "empty": {
+      "title": "No revisions yet",
+      "body": "Every deploy of {{name}} is listed here, so you can compare it with what's running and roll back to it.",
+      "action": "Review and deploy"
+    },
+    "error": {
+      "title": "Couldn't load the history.",
+      "body": "Check the connection and try again.",
+      "retry": "Retry loading history"
+    }
+  }
+}

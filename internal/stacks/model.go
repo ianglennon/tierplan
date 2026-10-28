@@ -15,6 +15,8 @@ package stacks
 
 import (
 	"regexp"
+
+	"github.com/compose-spec/compose-go/v2/loader"
 )
 
 // Target is where a stack deploys: a swarm (Bayplan's own stack deploy) or a standalone host (the
@@ -42,6 +44,30 @@ const (
 type Source struct {
 	Kind SourceKind
 	Ref  string
+}
+
+// Adoption is what Bayplan recorded when it took over a stack that was made elsewhere (D-14, D-18). It is
+// stored with the stack and read by the ownership rule: until the stack's first deploy it says which
+// objects of the engine are the stack's (Pending), and for as long as the stack lives it names the networks
+// and volumes the stack owns, so a later removal cleans up the right ones. The zero value is a stack that was
+// not adopted.
+type Adoption struct {
+	// PriorID is the bayplan.stack.id the stack's objects carried when it was adopted (Bayplan made it once,
+	// for a record this instance does not hold, D-11), empty for none. It widens ownership of the workloads of
+	// this namespace or project while Pending, and is never the stack's own ID.
+	PriorID string `json:"priorId,omitempty"`
+	// Networks and Volumes are the engine names of the networks and volumes the stack owns.
+	Networks []string `json:"networks,omitempty"`
+	Volumes  []string `json:"volumes,omitempty"`
+	// Secrets and Configs are the names of the existing secrets and configs the stack references as external.
+	Secrets []string `json:"secrets,omitempty"`
+	Configs []string `json:"configs,omitempty"`
+	// Pending is true from the adoption until the first deploy of the stack has put Bayplan's labels on what
+	// it runs.
+	Pending bool `json:"pending,omitempty"`
+	// Gaps are the places the rebuilt definition differs from what runs, by kind, found when the stack was
+	// adopted (D-55). The adoption review fills them in.
+	Gaps map[string][]string `json:"gaps,omitempty"`
 }
 
 // ComposeFile is the path of the compose file in a stack's working copy.
@@ -87,12 +113,58 @@ func (w WorkingCopy) Compose() []byte {
 	return []byte{}
 }
 
-var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+// maxSwarmName is the longest stack name on a swarm. Swarm names a stack's services and networks
+// {stack}_{key} and refuses a service or network name over maxSwarmObjectName bytes, so 61 is the
+// longest stack name that can still hold a one-character service key.
+const maxSwarmName = 61
 
-// NameValid reports whether name can be a stack name: lowercase letters, digits, dash and
-// underscore, starting with a letter or digit, at most 63 characters. The same rule keeps the
-// name safe as a docker label value, a swarm namespace and a compose project name.
-func NameValid(name string) bool { return nameRe.MatchString(name) }
+// maxStandaloneName is the longest stack name on a standalone host.
+const maxStandaloneName = 255
+
+// maxSwarmObjectName is the longest service or network name swarm takes (swarmkit
+// validateAnnotations).
+const maxSwarmObjectName = 63
+
+var (
+	swarmNameRe       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,60}$`)
+	swarmObjectNameRe = regexp.MustCompile(`^[a-zA-Z0-9](?:[-_]*[A-Za-z0-9]+)*$`)
+)
+
+// NameValid reports whether name can be the name of a stack on target. It is the one rule that
+// decides both creating a stack in Bayplan and adopting one made elsewhere (D-48, D-53): there is no
+// second, create-only rule.
+//
+// On a swarm the name is letters in either case, digits, "_" and "-", starting with a letter or a
+// digit, 1 to 61 bytes. It has no ".", because swarm refuses a dot in a service or network name and
+// those are named {stack}_{key}. The cap is 61 because swarm refuses a service or network name over
+// 63 bytes: 61 is the longest stack name that can hold a one-character service, so a longer name,
+// which Phase 7 accepted, could never deploy a service.
+//
+// On a standalone host the name is compose-go's own project-name rule (lowercase letters, digits,
+// "_" and "-", starting with a letter or digit; a dot is refused there too), at most 255 bytes.
+func NameValid(target Target, name string) bool {
+	if target == TargetSwarm {
+		return len(name) <= maxSwarmName && swarmNameRe.MatchString(name)
+	}
+	return name != "" && len(name) <= maxStandaloneName && loader.NormalizeProjectName(name) == name
+}
+
+// NameRuleText describes the rule NameValid applies to target, as a phrase that completes "Use only
+// ..." and "a stack name on a swarm takes only ...". Every sentence about the rule is built from it,
+// so create and adopt cannot word it differently (D-53).
+func NameRuleText(target Target) string {
+	if target == TargetSwarm {
+		return "letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters"
+	}
+	return "lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters"
+}
+
+// SwarmObjectNameValid reports whether swarm takes name as the name of a service or a network: letters,
+// digits, "-" and "_" (no "." and no run of the two at either end), at most 63 bytes (swarmkit
+// validateAnnotations).
+func SwarmObjectNameValid(name string) bool {
+	return len(name) <= maxSwarmObjectName && swarmObjectNameRe.MatchString(name)
+}
 
 // StarterCompose is the compose file a new stack starts from when the user chooses the starter
 // example. It loads clean for both targets.

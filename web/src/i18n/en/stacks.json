@@ -12,7 +12,6 @@
     "draft": "Draft",
     "list": {
       "title": "Stacks",
-      "caption": "Stacks Bayplan manages on {{name}}.",
       "count_one": "{{count, number}} stack",
       "count_other": "{{count, number}} stacks",
       "empty": "No stacks",
@@ -35,7 +34,9 @@
       "target": "On {{name}} ({{target}})",
       "name": {
         "label": "Name",
-        "helper": "Lowercase letters, numbers, dash or underscore. It can't change later."
+        "helper": "Letters, numbers, dash or underscore. It can't change later.",
+        "helperSwarm": "Letters, numbers, dash or underscore, up to 61 characters. It can't change later.",
+        "helperStandalone": "Lowercase letters, numbers, dash or underscore, up to 255 characters. It can't change later."
       },
       "start": {
         "label": "Start from",
@@ -48,7 +49,9 @@
       "success": "Created stack {{name}}. Nothing is deployed yet.",
       "errors": {
         "nameRequired": "Enter a name for the stack.",
-        "nameInvalid": "Use lowercase letters, numbers, dash or underscore, and start with a letter or number.",
+        "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number.",
+        "nameInvalidSwarm": "Use only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters.",
+        "nameInvalidStandalone": "Use only lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters.",
         "nameTaken": "A stack named {{name}} already exists on {{env}}.",
         "permission": "You can't create stacks on this environment.",
         "generic": "Couldn't create the stack. Check the connection and try again.",

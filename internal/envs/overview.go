@@ -73,7 +73,9 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 		}
 		if c := in.Cluster; c != nil {
 			// The nodes and failing services of a local swarm manager are the cluster's.
-			if c.Known && o.EnvType == envTypeSwarm {
+			// A worker, or a socket that is not answering, cannot say: the cached read
+			// was made while a manager was up and is not shown as current.
+			if c.Known && o.EnvType == envTypeSwarm && st.Probe.Type == dockerx.TypeSwarmManager && st.State == StateOnline {
 				o.Nodes = &NodeCounts{Ready: c.NodesReady, Total: c.NodesTotal}
 			}
 			o.Failing = c.Failing
@@ -121,8 +123,11 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 	}
 	if c := in.Cluster; c != nil {
 		// What a manager said about the cluster is better than what the agents
-		// imply: it counts nodes that never enrolled and leaves out drained ones.
-		if c.Known && in.EnvType == envTypeSwarm {
+		// imply: it counts nodes that never enrolled and leaves out drained ones. It is
+		// only current while a manager is connected to answer; with none, the read was
+		// made while one was up and the agents' own count stands (the summary route
+		// says "unknown" for the same case).
+		if c.Known && in.EnvType == envTypeSwarm && managerConnected(active) {
 			o.Nodes = &NodeCounts{Ready: c.NodesReady, Total: c.NodesTotal}
 			o.Agents = &AgentCounts{Connected: connected, Expected: max(c.ExpectedAgents, connected)}
 		}
@@ -147,6 +152,17 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 		}
 	}
 	return o
+}
+
+// managerConnected is whether any of the agents is a connected manager, the only
+// kind that can answer a cluster question.
+func managerConnected(agents []AgentView) bool {
+	for _, a := range agents {
+		if a.Connected && a.Role == roleManager {
+			return true
+		}
+	}
+	return false
 }
 
 func lessVersion(a, b [3]int) bool {

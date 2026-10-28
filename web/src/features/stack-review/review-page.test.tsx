@@ -31,6 +31,11 @@ let sent: Sent[];
 let me: ReturnType<typeof makeMe>;
 let review: () => Response | Promise<Response>;
 let deploy: () => Response | Promise<Response>;
+let rollback: () => Response | Promise<Response>;
+// Whether the stack holds a saved draft with changes that were not deployed.
+let draftSaved: boolean;
+// The kind of host the stack deploys to.
+let target: "swarm" | "standalone";
 let client: QueryClient;
 // The operation lock the stack's page reports, when one is held.
 let lock: Record<string, string> | undefined;
@@ -87,6 +92,9 @@ beforeEach(() => {
   me = makeMe({ envs: { [ENV]: "operator" } });
   review = () => Response.json(reviewBody());
   deploy = () => Response.json({ jobId: "j1", revision: 3 }, { status: 202 });
+  rollback = () => Response.json({ jobId: "j9", revision: 4 }, { status: 202 });
+  draftSaved = false;
+  target = "swarm";
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -106,13 +114,13 @@ beforeEach(() => {
       });
       if (path === "/api/me") return Response.json(me);
       if (path === "/api/environments") {
-        return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+        return Response.json({ items: [{ id: ENV, name: "Prod", envType: target }] });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}`) {
         return Response.json({
           id: STACK,
           name: "web",
-          target: "swarm",
+          target,
           source: "inline",
           state: "running",
           lastDeployedAt: "2026-10-19T11:00:00Z",
@@ -123,11 +131,13 @@ beforeEach(() => {
           createdBy: "ada",
           createdAt: "2026-10-19T10:00:00Z",
           stopped: false,
+          ...(draftSaved ? { draftSavedAt: "2026-10-19T12:00:00Z", draftSavedBy: "ada" } : {}),
           ...(lock ? { lock } : {}),
         });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/review`) return review();
       if (path === `/api/env/${ENV}/stacks/${STACK}/deploys`) return deploy();
+      if (path === `/api/env/${ENV}/stacks/${STACK}/rollback`) return rollback();
       return Response.json({}, { status: 404 });
     }),
   );
@@ -1047,5 +1057,607 @@ describe("the operation lock", () => {
         "Another stack operation started on Prod just now. Try again when it finishes.",
       ),
     ).toBeTruthy();
+  });
+});
+
+// A roll back to a chosen revision (plan 08-03, STK-08, D-02): the revision's own stack with its stored
+// digests against what runs, and the roll back of exactly that.
+describe("in roll back mode", () => {
+  const rollbackReview = (over: Record<string, unknown> = {}) =>
+    reviewBody({
+      revision: 1,
+      deployedSeq: 3,
+      images: [
+        {
+          service: "web",
+          image: "nginx:1.27",
+          digest: D2,
+          current: D1,
+          state: "pinned",
+          note: "revision",
+        },
+      ],
+      pins: { s1_web: `nginx:1.27@${D2}` },
+      ...over,
+    });
+  const rollbackButton = () =>
+    screen.getByRole("button", { name: /^(Roll back stack|Starting…)$/ });
+
+  beforeEach(() => {
+    review = () => Response.json(rollbackReview());
+  });
+
+  it("is titled for the revision, says what it restores and asks for that revision's review", async () => {
+    mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByRole("heading", { name: "Roll back web to revision #1" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This restores revision #1 exactly: its compose file, files, variables and pinned images. Nothing is looked up in a registry.",
+      ),
+    ).toBeTruthy();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/review")).toHaveLength(1);
+    expect(posts("/review")[0]?.body).toEqual({ mode: "rollback", revision: 1 });
+  });
+
+  it("has Back to history, which returns to the revision, and Roll back stack in place of Deploy stack", async () => {
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    const back = screen.getByRole("link", { name: "Back to history" });
+    expect(back.getAttribute("href")).toBe(`/env/${ENV}/stacks/${STACK}/history?rev=1`);
+    expect(rollbackButton().getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deploy stack" })).toBeNull();
+  });
+
+  it("tells a person with a saved draft that the draft stays as it is, and no one else", async () => {
+    draftSaved = true;
+    const { unmount } = mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByText(
+        "Your saved draft stays as it is. After the roll back it shows a notice that the deployed version changed.",
+      ),
+    ).toBeTruthy();
+    unmount();
+    cleanup();
+    client.clear();
+    draftSaved = false;
+    mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByText(/Your saved draft stays as it is/)).toBeNull();
+  });
+
+  it("rolls back with the revision and the deployed revision it reviewed, once, and opens the job", async () => {
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    fireEvent.click(rollbackButton());
+    expect(posts("/rollback")).toHaveLength(1);
+    expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
+    rollback = () => problem(409, "deployed_changed");
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(rollbackButton());
+    expect(
+      await screen.findByText(
+        "The stack was deployed again since you opened this review. Review it again.",
+      ),
+    ).toBeTruthy();
+    expect(onDeployed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(posts("/review")).toHaveLength(2));
+    expect(screen.queryByRole("button", { name: "Review again" })).toBeNull();
+  });
+
+  it("reviews a roll back of a standalone stack the same way: the host's network and volume are created, and it rolls back with the same request", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        rollbackReview({
+          pins: { web: `nginx:1.27@${D2}` },
+          services: [changedWeb({ name: "web" })],
+          objects: [
+            { change: "added", kind: "network", name: "web_front", detail: "" },
+            { change: "added", kind: "volume", name: "web_data", detail: "" },
+          ],
+          summary: { ...reviewBody().summary, networks: counts(1), volumes: counts(1) },
+        }),
+      );
+    const { onDeployed } = mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByRole("heading", { name: "Roll back web to revision #1" }),
+    ).toBeTruthy();
+    const summary = within(await screen.findByRole("table", { name: "Summary of changes" }));
+    expect(
+      within(summary.getByRole("row", { name: /^Volumes/ }))
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["1", "0", "0"]);
+    const others = within(screen.getByRole("table", { name: "Other resources" }));
+    expect(others.getByText("web_front")).toBeTruthy();
+    expect(others.getByText("web_data")).toBeTruthy();
+    expect(screen.queryByText(/target_engine_missing|can't be deployed to/)).toBeNull();
+    fireEvent.click(rollbackButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    expect(posts("/rollback")[0]?.body).toEqual({ revision: 1, expectedDeployed: 3 });
+  });
+
+  it("says there is nothing to roll back when running already matches the revision", async () => {
+    review = () => Response.json(rollbackReview({ services: [], summary: reviewBody().summary }));
+    mount({ mode: "rollback", revision: 1 });
+    expect(
+      await screen.findByText("Running already matches revision #1. There's nothing to roll back."),
+    ).toBeTruthy();
+    expect(rollbackButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("reads Pinned (revision #n) for every service, with no New row and no raw note", async () => {
+    review = () =>
+      Response.json(
+        rollbackReview({
+          images: [
+            {
+              service: "web",
+              image: "nginx:1.27",
+              digest: D2,
+              current: D1,
+              state: "pinned",
+              note: "revision",
+            },
+            {
+              service: "db",
+              image: "postgres:16",
+              digest: D1,
+              current: D1,
+              state: "pinned",
+              note: "revision",
+            },
+          ],
+        }),
+      );
+    mount({ mode: "rollback", revision: 1 });
+    expect(await screen.findAllByText("Pinned (revision #1)")).toHaveLength(2);
+    // The YAML diff has a New column; the Images card has no New badge.
+    expect(
+      screen.queryAllByText("New").filter((el) => el.getAttribute("data-slot") === "badge"),
+    ).toHaveLength(0);
+    expect(screen.queryByText("revision")).toBeNull();
+    expect(screen.queryByText("Pinned (running)")).toBeNull();
+  });
+});
+
+// A restore of the deployed revision (plan 08-23, STK-14, D-23): the deployed revision with its stored digests against
+// what runs, so that the changes are the drift.
+describe("in restore mode", () => {
+  const restoreReview = (over: Record<string, unknown> = {}) =>
+    reviewBody({
+      revision: 3,
+      deployedSeq: 3,
+      images: [
+        {
+          service: "web",
+          image: "nginx:1.27",
+          digest: D2,
+          current: D2,
+          state: "pinned",
+          note: "revision",
+        },
+      ],
+      pins: { s1_web: `nginx:1.27@${D2}` },
+      ...over,
+    });
+  const restoreButton = () => screen.getByRole("button", { name: /^(Restore stack|Starting…)$/ });
+
+  beforeEach(() => {
+    review = () => Response.json(restoreReview());
+  });
+
+  it("is titled Restore, says which revision it deploys again and asks the server for the deployed one", async () => {
+    mount({ mode: "restore" });
+    expect(await screen.findByRole("heading", { name: "Restore web" })).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "This deploys revision #3 again, with its pinned images, to put back what was changed outside the stack.",
+      ),
+    ).toBeTruthy();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/review")).toHaveLength(1);
+    expect(posts("/review")[0]?.body).toEqual({ mode: "restore" });
+  });
+
+  it("has Back to drift, which returns to the drift page, and Restore stack in place of Deploy stack", async () => {
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    const back = screen.getByRole("link", { name: "Back to drift" });
+    expect(back.getAttribute("href")).toBe(`/env/${ENV}/stacks/${STACK}/drift`);
+    expect(restoreButton().getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deploy stack" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Roll back stack" })).toBeNull();
+  });
+
+  it("reads Pinned (revision #n) for the images and leaves out the draft notice and the Reverts drift section", async () => {
+    draftSaved = true;
+    mount({ mode: "restore" });
+    expect(await screen.findByText("Pinned (revision #3)")).toBeTruthy();
+    expect(screen.queryByText(/Your saved draft stays as it is/)).toBeNull();
+    expect(screen.queryByText(/reverts/i)).toBeNull();
+  });
+
+  it("restores the deployed revision it reviewed, once, and opens the job", async () => {
+    const { onDeployed } = mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    await waitFor(() => expect(onDeployed).toHaveBeenCalledWith("j9"));
+    fireEvent.click(restoreButton());
+    expect(posts("/rollback")).toHaveLength(1);
+    expect(posts("/rollback")[0]?.body).toEqual({ mode: "restore", revision: 3 });
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("restores nothing until the person presses Restore stack", async () => {
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(posts("/rollback")).toHaveLength(0);
+    expect(posts("/deploys")).toHaveLength(0);
+  });
+
+  it("says the stack was deployed again, stores nothing, and reviews again on request", async () => {
+    rollback = () => problem(409, "deployed_changed");
+    const { onDeployed } = mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "The stack was deployed again since you opened this review. Review it again.",
+      ),
+    ).toBeTruthy();
+    expect(onDeployed).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Review again" }));
+    await waitFor(() => expect(posts("/review")).toHaveLength(2));
+  });
+
+  it("says the deployed revision needs Admin when the server refuses its host access", async () => {
+    rollback = () => problem(403, "privileged_compose");
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "The deployed revision uses host access, which needs Admin. Ask an administrator to restore it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says another operation is running when the server refuses it for the lock", async () => {
+    rollback = () => problem(409, "operation_locked");
+    mount({ mode: "restore" });
+    await screen.findByRole("table", { name: "Summary of changes" });
+    fireEvent.click(restoreButton());
+    expect(
+      await screen.findByText(
+        "Another stack operation started on Prod just now. Try again when it finishes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says there is no drift to restore when running already matches, and holds Restore stack back", async () => {
+    review = () => Response.json(restoreReview({ services: [], summary: reviewBody().summary }));
+    mount({ mode: "restore" });
+    expect(
+      await screen.findByText("Running already matches revision #3. There's nothing to restore."),
+    ).toBeTruthy();
+    expect(restoreButton().getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getAllByText("No drift to restore.").length).toBeGreaterThan(0);
+  });
+
+  it("says a stack with nothing deployed has nothing to restore", async () => {
+    review = () => problem(409, "no_deployed_revision");
+    mount({ mode: "restore" });
+    expect(
+      await screen.findByText(
+        "This stack has not been deployed yet, so there's nothing to restore.",
+      ),
+    ).toBeTruthy();
+  });
+});
+
+// The first review of an adopted stack (plan 08-16, D-16): the services that differ in nothing but Bayplan's
+// ownership labels are told apart from real changes, and the restart is announced before the summary.
+
+const STACK_ID = "stk-1";
+
+// A service as the review states it: with the label the first deploy adds (next) or without (current).
+const labelled = (
+  short: string,
+  replicas: number,
+  withId: boolean,
+  extra: Record<string, unknown> = {},
+) => ({
+  Name: `s1_${short}`,
+  Labels: withId ? { "bayplan.stack.id": STACK_ID } : {},
+  Mode: { Replicated: { Replicas: replicas } },
+  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", ...extra } },
+});
+
+const labelsOnly = (short: string, replicas = 2) => ({
+  name: `s1_${short}`,
+  short,
+  change: "changed",
+  current: labelled(short, replicas, false),
+  next: labelled(short, replicas, true),
+  hiddenChanges: [],
+  settings: 1,
+  ownershipOnly: true,
+});
+
+// composeOnly is a container's service of an adopted Compose project that differs in nothing but the configuration
+// hash Bayplan's labels change: the two sides are the same, and no setting differs.
+const composeOnly = (short: string) => {
+  const service = { image: "nginx:1.27", environment: { MODE: "prod" } };
+  return {
+    name: short,
+    short,
+    change: "changed",
+    current: service,
+    next: service,
+    hiddenChanges: [],
+    settings: 0,
+    ownershipOnly: true,
+  };
+};
+
+// adoptedBody is the review of an adopted stack whose first deploy is still to come.
+function adoptedBody(services: Record<string, unknown>[], over: Record<string, unknown> = {}) {
+  const only = services.filter((s) => s.ownershipOnly).length;
+  const changed = services.length - only;
+  return reviewBody({
+    services,
+    summary: {
+      services: counts(0, changed, 0),
+      networks: counts(),
+      volumes: counts(),
+      secrets: counts(),
+      configs: counts(),
+      imagesNew: 0,
+      imagesPinned: 1,
+      ownershipOnly: only,
+    },
+    adoption: { pending: true, ownershipOnly: only },
+    ...over,
+  });
+}
+
+describe("an adopted stack's first review", () => {
+  it("announces the restart after the warnings and before the Summary, plural-aware", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const title = await screen.findByText("Taking ownership restarts 2 services");
+    const alert = title.closest('[role="status"]') as HTMLElement;
+    expect(alert).toBeTruthy();
+    expect(
+      within(alert).getByText(
+        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
+      ),
+    ).toBeTruthy();
+    const summary = screen.getByRole("table", { name: "Summary of changes" });
+    expect(alert.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("says Taking ownership restarts 1 service for one", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    expect(await screen.findByText("Taking ownership restarts 1 service")).toBeTruthy();
+  });
+
+  it("adds Ownership labels only to the Summary and keeps those services out of Changed", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const table = await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.getByText("Ownership labels only: 2")).toBeTruthy();
+    const row = within(table).getByRole("row", { name: /^Services/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((c) => c.textContent),
+    ).toEqual(["0", "0", "0"]);
+  });
+
+  it("lists the services in a closed Ownership labels only group with their task counts", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    const toggle = within(group).getByRole("button", { name: "Ownership labels only" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(group).getByText(
+        "2 services will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const items = within(group).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("api");
+    expect(items[0]?.textContent).toContain("labels");
+    expect(items[0]?.textContent).toContain("2 tasks");
+    expect(items[1]?.textContent).toContain("3 tasks");
+  });
+
+  it("opens a service to the label rows alone, captioned Labels on {service}", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    fireEvent.click(within(group).getByRole("button", { name: /api/ }));
+    const table = await within(group).findByRole("table", { name: "Labels on api" });
+    const rows = within(table).getAllByRole("row");
+    // The header, the group heading and the one label row.
+    expect(rows).toHaveLength(3);
+    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain(STACK_ID);
+    expect(table.querySelector(".break-all")).toBeTruthy();
+  });
+
+  it("keeps a service with a real change as well in the normal list, its labels one row among the others", async () => {
+    const both = {
+      ...labelsOnly("web"),
+      ownershipOnly: false,
+      current: labelled("web", 2, false),
+      next: labelled("web", 4, true),
+      settings: 2,
+    };
+    review = () => Response.json(adoptedBody([both, labelsOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    expect(within(group).queryByText("web")).toBeNull();
+    expect(within(group).getAllByRole("button", { name: /api/ })).toHaveLength(1);
+    const list = screen.getByText("web", { selector: '[data-slot="service-name"]' });
+    expect(group.contains(list)).toBe(false);
+    // Changed counts the one real change; the label-only service is counted apart.
+    expect(screen.getByText("Taking ownership restarts 1 service")).toBeTruthy();
+    expect(screen.getByText("Ownership labels only: 1")).toBeTruthy();
+    // Its rows hold the replicas and the label.
+    const table = await screen.findByRole("table", { name: "Changes to web" });
+    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain("Replicas");
+  });
+
+  it("cuts a long service name and wraps nothing else out of its row", async () => {
+    const long = "a".repeat(80);
+    review = () => Response.json(adoptedBody([labelsOnly(long)]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    const name = within(group).getByText(long);
+    expect(name.className).toContain("truncate");
+    expect(name.className).toContain("font-mono");
+  });
+
+  it("words the group and the warning for containers on a standalone host", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([labelsOnly("api"), labelsOnly("worker", 3)]));
+    mount();
+    expect(await screen.findByText("Taking ownership restarts 2 containers")).toBeTruthy();
+    const group = screen.getByRole("region", { name: "Ownership labels only" });
+    expect(
+      within(group).getByText(
+        "2 containers will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("words the whole warning for containers on a standalone host", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([composeOnly("api"), composeOnly("worker")]));
+    mount();
+    const title = await screen.findByText("Taking ownership restarts 2 containers");
+    const alert = title.closest('[role="status"]') as HTMLElement;
+    expect(
+      within(alert).getByText(
+        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Ownership labels only: 2")).toBeTruthy();
+  });
+
+  it("says what a standalone row changes instead of a diff with nothing in it, and counts no tasks", async () => {
+    target = "standalone";
+    review = () => Response.json(adoptedBody([composeOnly("api")]));
+    mount();
+    const group = await screen.findByRole("region", { name: "Ownership labels only" });
+    fireEvent.click(within(group).getByRole("button", { name: "Ownership labels only" }));
+    const item = within(group).getByRole("listitem");
+    expect(item.textContent).toContain("api");
+    expect(item.textContent).not.toContain("task");
+    fireEvent.click(within(item).getByRole("button"));
+    expect(
+      within(item).getByText(
+        "Compose recreates the container because Bayplan's labels change its configuration hash. No setting you wrote changes.",
+      ),
+    ).toBeTruthy();
+    expect(within(item).queryByText("No changes")).toBeNull();
+  });
+
+  it("lists the network a standalone deploy recreates and the volume it keeps in Other resources, counted as Changed", async () => {
+    target = "standalone";
+    review = () =>
+      Response.json(
+        adoptedBody([changedWeb()], {
+          objects: [
+            {
+              change: "changed",
+              kind: "network",
+              name: "shop_back",
+              detail:
+                "Its settings differ from the compose file. The deploy recreates it, which restarts the containers attached to it.",
+            },
+            {
+              change: "changed",
+              kind: "volume",
+              name: "shop_data",
+              detail: "Its settings differ from the compose file. Bayplan keeps it as it is.",
+            },
+          ],
+          summary: {
+            services: counts(0, 1, 0),
+            networks: counts(0, 1, 0),
+            volumes: counts(0, 1, 0),
+            secrets: counts(),
+            configs: counts(),
+            imagesNew: 0,
+            imagesPinned: 1,
+            ownershipOnly: 0,
+          },
+        }),
+      );
+    mount();
+    const other = await screen.findByRole("table", { name: "Other resources" });
+    const net = within(other).getByText("shop_back").closest("tr") as HTMLElement;
+    expect(within(net).getByText("Changed")).toBeTruthy();
+    expect(
+      within(net).getByText(/The deploy recreates it, which restarts the containers/),
+    ).toBeTruthy();
+    const vol = within(other).getByText("shop_data").closest("tr") as HTMLElement;
+    expect(within(vol).getByText("Volume")).toBeTruthy();
+    expect(within(vol).getByText(/Bayplan keeps it as it is\./)).toBeTruthy();
+    const summary = screen.getByRole("table", { name: "Summary of changes" });
+    for (const row of ["Networks", "Volumes"]) {
+      const cells = within(within(summary).getByRole("row", { name: new RegExp(`^${row}`) }))
+        .getAllByRole("cell")
+        .map((c) => c.textContent);
+      expect(cells).toEqual(["0", "1", "0"]);
+    }
+  });
+
+  it("omits the group, the warning and the Summary line when no service is ownership-only", async () => {
+    review = () => Response.json(adoptedBody([changedWeb()]));
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByRole("region", { name: "Ownership labels only" })).toBeNull();
+    expect(screen.queryByText(/Taking ownership restarts/)).toBeNull();
+    expect(screen.queryByText(/Ownership labels only:/)).toBeNull();
+  });
+
+  it("shows neither while the review loads, and no spinner of its own", async () => {
+    review = () => new Promise<Response>(() => {});
+    mount();
+    expect(await screen.findByText("Checking the stack…")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Ownership labels only" })).toBeNull();
+    expect(screen.queryByText(/Taking ownership restarts/)).toBeNull();
+    expect(screen.getByTestId("summary-skeleton")).toBeTruthy();
+  });
+
+  it("lets the deploy go ahead: taking ownership is a change to make", async () => {
+    review = () => Response.json(adoptedBody([labelsOnly("api")]));
+    mount();
+    await screen.findByText("Taking ownership restarts 1 service");
+    await waitFor(() => expect(deployButton().getAttribute("aria-disabled")).toBeNull());
   });
 });

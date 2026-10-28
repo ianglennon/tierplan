@@ -110,6 +110,43 @@ describe("actionLabel", () => {
     expect(actionLabel("something.new", echo)).toBe("something.new");
   });
 
+  it("labels a roll back of a stack with the revision it restored, and any other deploy as a deploy", () => {
+    const rollback = { mode: "rollback", stack: "web", restoredFrom: "4" };
+    expect(actionLabel("stack.deployed", echo, rollback)).toBe(
+      "t:audit.actions.stack.deployed_rollback",
+    );
+    expect(actionLabel("stack.deployed", echo, { mode: "deploy", stack: "web" })).toBe(
+      "t:audit.actions.stack.deployed",
+    );
+    expect(actionLabel("stack.deployed", echo)).toBe("t:audit.actions.stack.deployed");
+    // The mode of another action says nothing.
+    expect(actionLabel("stack.stopped", echo, rollback)).toBe("t:audit.actions.stack.stopped");
+    expect(audit.audit.actions.stack.deployed_rollback).toBe(
+      "Rolled back stack {{name}} to revision #{{revision}}",
+    );
+  });
+
+  it("labels a restore of a stack from drift, and nothing else that has a mode", () => {
+    const restore = { mode: "restore", stack: "web", restoredFrom: "4" };
+    expect(actionLabel("stack.deployed", echo, restore)).toBe(
+      "t:audit.actions.stack.deployed_restore",
+    );
+    expect(actionLabel("stack.stopped", echo, restore)).toBe("t:audit.actions.stack.stopped");
+    expect(audit.audit.actions.stack.deployed_restore).toBe("Restored stack {{name}} from drift");
+  });
+
+  it("labels accepting live state into the draft with the stack's name when the entry has it", () => {
+    expect(actionLabel("stack.drift_accepted", echo, { stack: "web", revision: "4" })).toBe(
+      "t:audit.actions.stack.drift_accepted_named",
+    );
+    expect(actionLabel("stack.drift_accepted", echo)).toBe("t:audit.actions.stack.drift_accepted");
+    expect(KNOWN_ACTIONS).toContain("stack.drift_accepted");
+    expect(audit.audit.actions.stack.drift_accepted_named).toBe(
+      "Accepted live state into the draft of {{name}}",
+    );
+    expect(audit.audit.actions.stack.drift_accepted).toBe("Accepted live state into the draft");
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];
@@ -351,6 +388,15 @@ describe("the secret.rotated and config.rotated actions (06-28)", () => {
     const labels = audit.audit.actions as Record<string, Record<string, string>>;
     expect(labels.secret?.rotated).toBe("Secret rotated");
     expect(labels.config?.rotated).toBe("Config rotated");
+  });
+});
+
+describe("the stack.adopted action (08-13)", () => {
+  it("is in the Action filter, scoped to an environment, with its label", () => {
+    expect(KNOWN_ACTIONS).toContain("stack.adopted");
+    expect(ENV_SCOPED_ACTIONS).toContain("stack.adopted");
+    const labels = audit.audit.actions as Record<string, Record<string, string>>;
+    expect(labels.stack?.adopted).toBe("Stack adopted");
   });
 });
 

@@ -9,7 +9,14 @@ export type StackTarget = "swarm" | "standalone";
 export type LogSource =
   | { kind: "container"; id: string; nodeId?: string }
   | { kind: "service"; id: string }
-  | { kind: "stack"; id: string; target: StackTarget };
+  | { kind: "stack"; id: string; target: StackTarget; unmanaged?: true };
+
+// The path segment a source's routes are under: a stack Bayplan did not make is read under its name and has its own
+// routes (plan 08-09), but is the same merged log.
+export function logRoute(src: LogSource): string {
+  if (src.kind === "stack") return src.unmanaged ? "unmanaged-stacks" : "stacks";
+  return src.kind === "service" ? "services" : "containers";
+}
 
 export const containerSource = (id: string, nodeId?: string): LogSource => ({
   kind: "container",
@@ -23,6 +30,17 @@ export const stackSource = (id: string, target: StackTarget): LogSource => ({
   kind: "stack",
   id,
   target,
+});
+
+// unmanagedStackSource is the log of a stack Bayplan did not make, which is its name and not an ID.
+export const unmanagedStackSource = (
+  name: string,
+  target: StackTarget,
+): Extract<LogSource, { kind: "stack" }> => ({
+  kind: "stack",
+  id: name,
+  target,
+  unmanaged: true,
 });
 
 // How a service's log is narrowed on the server: to these tasks (an ID, or the start of

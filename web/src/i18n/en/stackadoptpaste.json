@@ -1,0 +1,60 @@
+{
+  "stackAdoptPaste": {
+    "source": {
+      "title": "Start from",
+      "rebuild": {
+        "label": "Rebuild from the running services",
+        "help": "Bayplan builds the compose file from what's running."
+      },
+      "paste": {
+        "label": "I have the original compose file",
+        "help": "Paste it and Bayplan checks it against what's running."
+      }
+    },
+    "file": {
+      "label": "Original compose file",
+      "placeholder": "Paste compose.yaml here",
+      "help": "Used as you wrote it if it matches. If it doesn't, you'll see the differences first.",
+      "choose": "Choose file",
+      "input": "Choose a compose file",
+      "remove": "Remove pasted file",
+      "tooLarge": "That file is over 1 MiB. Rebuild from the running services instead.",
+      "readFailed": "Couldn't read that file."
+    },
+    "result": {
+      "matches": "Matches what's running.",
+      "differs_one": "Differs from what's running in {{count}} setting.",
+      "differs_other": "Differs from what's running in {{count}} settings.",
+      "show": "Show differences",
+      "useRebuild": "Use the rebuild instead"
+    },
+    "problems": {
+      "title": "Fix these in your file:",
+      "line": "Line {{line}}: {{message}}"
+    },
+    "variables": {
+      "title": "Variables in your file",
+      "help": "Used to check your file against what's running. They are saved with the stack.",
+      "value": "Value of {{name}}",
+      "secret": "Secret: {{name}}",
+      "secretShort": "Secret",
+      "required": "Required",
+      "missing": "{{name}} has no value. Fill it in to check your file."
+    },
+    "card": {
+      "idle": "Paste your file to see what will change.",
+      "blocked": "Fix your file to see what will change."
+    },
+    "off": {
+      "empty": "Paste a compose file first, or rebuild from the running services.",
+      "errors": "Fix the errors in the pasted file first, or rebuild from the running services.",
+      "fill_one": "Fill in {{count}} variable first.",
+      "fill_other": "Fill in {{count}} variables first."
+    },
+    "error": {
+      "needsReveal": "Checking your own file compares it with the values that run, which needs the reveal secrets permission. Rebuild from the running services instead.",
+      "invalid": "The pasted file doesn't pass the check: {{reason}}",
+      "secretShort": "A secret value is at least 4 characters. Use a longer value, or turn Secret off."
+    }
+  }
+}

@@ -275,6 +275,55 @@ func TestBuildMarksStackDeploysThatWereRunningAsInterrupted(t *testing.T) {
 	}
 }
 
+// Revisions beyond the retention limit are pruned once at startup (plan 08-06, D-01): the newest 20, the
+// deployed revision and a pending one stay, and the rest go with their variables.
+func TestBuildPrunesStackRevisionsBeyondTheLimit(t *testing.T) {
+	dir := t.TempDir() + "/data"
+	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	var logs bytes.Buffer
+	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at) VALUES ('env-1', 'agent', 'e', '', 1, 1, 1)`,
+		`INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at) VALUES ('s1', 'env-1', 'web', 'swarm', 'inline', '', 'ada', 1)`,
+		// #1 is good and deployed-by-age, #2 to #25 failed, so the window is #6 to #25 and #1 stays as the deployed one.
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 25)
+		 INSERT INTO stack_snapshots (id, stack_id, kind, seq, outcome, created_by, created_at)
+		 SELECT 'r' || i, 's1', 'revision', i, CASE WHEN i = 1 THEN 'good' ELSE 'failed' END, 'ada', i FROM n`,
+		`INSERT INTO stack_snapshot_vars (snapshot_id, name, value, value_sealed, secret) SELECT id, 'K', '', 'sealed', 1 FROM stack_snapshots`,
+	} {
+		if _, err := first.Store().Write.ExecContext(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Build(ctx, cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = second.Close() })
+	var revisions, vars, lowest, firstKept int
+	row := second.Store().Read.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MIN(CASE WHEN seq > 1 THEN seq END), 0), (SELECT COUNT(*) FROM stack_snapshots WHERE seq = 1) FROM stack_snapshots WHERE kind = 'revision'`)
+	if err := row.Scan(&revisions, &lowest, &firstKept); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Store().Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM stack_snapshot_vars`).Scan(&vars); err != nil {
+		t.Fatal(err)
+	}
+	if revisions != 21 || lowest != 6 || firstKept != 1 || vars != 21 {
+		t.Errorf("revisions %d (lowest above #1: %d, #1 kept: %d), variables %d, want 21 (#1 and #6 to #25) with 21 variables", revisions, lowest, firstKept, vars)
+	}
+	if !strings.Contains(logs.String(), "pruned stack revisions") {
+		t.Errorf("no line about the pruned revisions: %s", logs.String())
+	}
+}
+
 func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 	dir := t.TempDir() + "/data"
 	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})

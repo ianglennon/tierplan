@@ -5,17 +5,31 @@
 INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);
 
+-- name: InsertAdoptedStack :exec
+-- InsertStack with the adoption record (D-14): the stack of a discovered stack Bayplan took over.
+INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?);
+
+-- name: SetStackAdoption :execrows
+-- Replaces the adoption record of a stack. The caller read the stack by environment and ID first.
+UPDATE stacks SET adoption = ? WHERE id = ?;
+
+-- name: ClearStackAdoptionPending :execrows
+-- Ends the pending window of an adopted stack (the first good deploy, D-16) and keeps the rest of the record. The
+-- flag is omitted from the record when false, so removing it is clearing it.
+UPDATE stacks SET adoption = json_remove(adoption, '$.pending') WHERE id = ?;
+
 -- name: GetStack :one
 -- A stack is always looked up by its environment and ID, so an ID of another environment is not found.
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND id = ?;
 
 -- name: ListStacksByEnv :many
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? ORDER BY name;
 
 -- name: GetStackByName :one
-SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped
+SELECT id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption
 FROM stacks WHERE env_id = ? AND name = ?;
 
 -- name: SetStackStopped :execrows
@@ -44,11 +58,11 @@ WHERE d.env_id = ? AND d.kind IN ('deploy', 'update', 'rollback')
               ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
 
 -- name: InsertSnapshot :exec
-INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -87,7 +101,7 @@ SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) + 1 AS seq FROM stack_snapshots
 WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -100,7 +114,7 @@ WHERE stack_id = ? AND kind = 'revision';
 -- name: GoodRevisionBefore :one
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -121,7 +135,7 @@ WHERE id = sqlc.arg(id) AND kind = 'revision';
 UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -130,6 +144,10 @@ UPDATE stack_snapshots SET base_seq = ? WHERE stack_id = ? AND kind = 'draft';
 
 -- name: SetSnapshotPins :execrows
 UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotPlatforms :execrows
+-- The platforms each service of a revision was sent with, JSON by swarm service name.
+UPDATE stack_snapshots SET platforms = ? WHERE id = ? AND kind = 'revision';
 
 -- name: InsertStackDeploy :exec
 INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at)
@@ -180,8 +198,50 @@ JOIN stacks s ON s.id = dr.stack_id
 WHERE s.env_id = ? AND dr.kind = 'draft';
 
 -- name: ListLatestRevisionTimesByEnv :many
--- When the newest revision of each stack of an environment was taken.
+-- When the newest revision of each stack of an environment was taken, not counting a roll back: it copies an earlier
+-- revision and does not deploy the draft, so it must not make a draft saved before it read as deployed (D-03).
 SELECT r.stack_id, CAST(MAX(r.created_at) AS INTEGER) AS taken_at FROM stack_snapshots r
 JOIN stacks s ON s.id = r.stack_id
-WHERE s.env_id = ? AND r.kind = 'revision'
+WHERE s.env_id = ? AND r.kind = 'revision' AND r.origin <> 'rollback'
 GROUP BY r.stack_id;
+
+-- name: ListRevisions :many
+-- The revisions of one stack, newest first, with the failure each one's deploy ended in. Two operations can name one
+-- seq (a retry of the same revision), so the newest deploy row is the one read.
+SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
+FROM stack_snapshots r
+LEFT JOIN stack_deploys d ON d.id = (
+    SELECT d2.id FROM stack_deploys d2
+    WHERE d2.stack_id = r.stack_id AND d2.revision_seq = r.seq AND d2.kind IN ('deploy', 'update', 'rollback')
+    ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1)
+WHERE r.stack_id = ? AND r.kind = 'revision'
+ORDER BY r.seq DESC
+LIMIT ?;
+
+-- name: PruneRevisions :execrows
+-- Retention (D-01): a stack keeps its newest keep revisions by seq, its newest good revision (the deployed
+-- one) however old, and any revision still pending. The rest are deleted; the foreign keys cascade to their
+-- files and variables, so a sealed value goes with its revision. A draft is never touched.
+DELETE FROM stack_snapshots
+WHERE stack_snapshots.stack_id = sqlc.arg(stack_id) AND stack_snapshots.kind = 'revision' AND stack_snapshots.outcome <> 'pending'
+  AND stack_snapshots.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                  WHERE k.stack_id = stack_snapshots.stack_id AND k.kind = 'revision'
+                  ORDER BY k.seq DESC LIMIT sqlc.arg(keep))
+  AND stack_snapshots.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+              WHERE g.stack_id = stack_snapshots.stack_id AND g.kind = 'revision' AND g.outcome = 'good');
+
+-- name: CountPrunableRevisions :one
+-- How many revisions across how many stacks PruneRevisions would delete for keep, over every stack: the
+-- same predicate, read only.
+SELECT CAST(COUNT(*) AS INTEGER) AS revisions, CAST(COUNT(DISTINCT s.stack_id) AS INTEGER) AS stacks
+FROM stack_snapshots s
+WHERE s.kind = 'revision' AND s.outcome <> 'pending'
+  AND s.seq NOT IN (SELECT k.seq FROM stack_snapshots k
+                    WHERE k.stack_id = s.stack_id AND k.kind = 'revision'
+                    ORDER BY k.seq DESC LIMIT sqlc.arg(keep))
+  AND s.seq <> (SELECT CAST(COALESCE(MAX(g.seq), 0) AS INTEGER) FROM stack_snapshots g
+                WHERE g.stack_id = s.stack_id AND g.kind = 'revision' AND g.outcome = 'good');
+
+-- name: ListStackIDs :many
+SELECT id FROM stacks ORDER BY id;

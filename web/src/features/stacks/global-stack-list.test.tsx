@@ -28,6 +28,7 @@ const stack = (over: Record<string, unknown> = {}) => ({
   name: "web",
   target: "swarm",
   source: "inline",
+  managed: true,
   state: "not_deployed",
   lastDeployedAt: "",
   lastDeployedBy: "",
@@ -35,11 +36,35 @@ const stack = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-const group = (envId: string, envName: string, target: string, stacks: unknown[]) => ({
+const group = (
+  envId: string,
+  envName: string,
+  target: string,
+  stacks: unknown[],
+  over: Record<string, unknown> = {},
+) => ({
   envId,
   envName,
   target,
   stacks,
+  ...over,
+});
+
+// A stack found on the engine that Bayplan did not make.
+const unmanaged = (name: string, over: Record<string, unknown> = {}) => ({
+  id: "",
+  name,
+  target: "swarm",
+  source: "unmanaged",
+  managed: false,
+  state: "running",
+  lastDeployedAt: "",
+  lastDeployedBy: "",
+  hasDraft: false,
+  servicesRunning: 2,
+  servicesTotal: 2,
+  unmanaged: { orphan: false, portainer: false, owner: "", adoptable: true, reason: "" },
+  ...over,
 });
 
 const ENVIRONMENTS = [
@@ -82,7 +107,7 @@ beforeEach(() => {
           total: rows,
           unfilteredTotal: rows,
           capped: false,
-          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0 },
+          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0, drifted: 0 },
           ...(answer as object),
           ...extra,
         });
@@ -153,7 +178,7 @@ describe("GlobalStackList", () => {
     mount();
     expect(await screen.findByRole("heading", { name: "Stacks", level: 1 })).toBeTruthy();
     await screen.findByRole("link", { name: "alpha" });
-    expect(screen.getByText(/Stacks Bayplan manages across your environments\./)).toBeTruthy();
+    expect(screen.getByText(/Stacks across your environments\./)).toBeTruthy();
     expect(screen.getByText(/3 stacks in 2 environments$/)).toBeTruthy();
     const bands = document.querySelectorAll('[data-slot="group-header-row"]');
     expect(bands).toHaveLength(2);
@@ -381,12 +406,12 @@ describe("GlobalStackList: search, status chips, sort and the cap", () => {
   });
 
   it("shows the status chips with the counts of the whole set, and puts a chosen one in the URL", async () => {
-    extra = { statusCounts: { degraded: 4, stopped: 0, draft: 1, deployFailed: 2 } };
+    extra = { statusCounts: { degraded: 4, stopped: 0, draft: 1, deployFailed: 2, drifted: 3 } };
     const { onChange } = mount({ q: "zzz" });
     await screen.findByRole("link", { name: "alpha" });
     const group = screen.getByRole("group", { name: "Filter by status" });
     expect(group.className).toContain("flex-wrap");
-    for (const label of ["Degraded 4", "Stopped 0", "Draft 1", "Deploy failed 2"]) {
+    for (const label of ["Degraded 4", "Stopped 0", "Draft 1", "Deploy failed 2", "Drifted 3"]) {
       expect(within(group).getByRole("button", { name: label })).toBeTruthy();
     }
     fireEvent.click(within(group).getByRole("button", { name: "Deploy failed 2" }));
@@ -557,5 +582,108 @@ describe("GlobalStackList: Create stack", () => {
     mount({}, true);
     const dialog = await screen.findByRole("dialog", { name: "Create a stack" });
     expect(await within(dialog).findByRole("combobox", { name: "Environment" })).toBeTruthy();
+  });
+});
+
+describe("GlobalStackList: Managed and Unmanaged", () => {
+  const withUnmanaged = () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [stack({ id: "a", name: "alpha" }), unmanaged("legacy")], {
+          kindCounts: { all: 2, managed: 1, unmanaged: 1 },
+        }),
+        group("e2", "Staging", "standalone", [stack({ id: "c", name: "gamma" })], {
+          kindCounts: { all: 1, managed: 1, unmanaged: 0 },
+        }),
+      ],
+      failedEnvironments: [],
+    };
+    extra = { kindCounts: { all: 3, managed: 2, unmanaged: 1 } };
+  };
+
+  it("lists unmanaged stacks with the badge beside the managed ones, and counts them in the caption", async () => {
+    withUnmanaged();
+    mount();
+    const row = (await screen.findByText("legacy")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Unmanaged")).toBeTruthy();
+    expect(screen.getByText(/Stacks across your environments\./)).toBeTruthy();
+    expect(screen.getByText(/3 stacks in 2 environments, 1 unmanaged$/)).toBeTruthy();
+  });
+
+  it("shows the Show group with the counts of the whole set and puts the kind in the URL", async () => {
+    withUnmanaged();
+    const { onChange } = mount();
+    await screen.findByText("legacy");
+    const show = screen.getByRole("group", { name: "Show" });
+    expect(within(show).getByRole("radio", { name: "All, 3" })).toBeTruthy();
+    expect(within(show).getByRole("radio", { name: "Managed, 2" })).toBeTruthy();
+    fireEvent.click(within(show).getByRole("radio", { name: "Unmanaged, 1" }));
+    expect(onChange).toHaveBeenLastCalledWith({ kind: "unmanaged" });
+  });
+
+  it("restores the kind from the URL, sends it, and clears it with the other filters", async () => {
+    withUnmanaged();
+    const { onChange } = mount({ kind: "unmanaged" });
+    await screen.findByText("legacy");
+    await waitFor(() => expect(requests.at(-1)).toContain("kind=unmanaged"));
+    expect(screen.getByRole("radio", { name: "Unmanaged, 1" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(onChange).toHaveBeenCalledWith({
+      q: undefined,
+      status: undefined,
+      env: undefined,
+      kind: undefined,
+    });
+  });
+
+  it("shows the retry row inside the group of the environment whose discovery failed", async () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [stack({ id: "a", name: "alpha" })], {
+          discoveryFailed: true,
+          kindCounts: { all: 1, managed: 1, unmanaged: 0 },
+        }),
+      ],
+      failedEnvironments: [],
+    };
+    mount();
+    await screen.findByRole("link", { name: "alpha" });
+    expect(screen.getByText("Couldn't look for unmanaged stacks on Prod.")).toBeTruthy();
+    const before = requests.length;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requests.length).toBeGreaterThan(before));
+  });
+
+  it("shows the retry row for an environment with no stacks whose discovery failed", async () => {
+    answer = {
+      groups: [
+        group("e1", "Prod", "swarm", [], {
+          discoveryFailed: true,
+          kindCounts: { all: 0, managed: 0, unmanaged: 0 },
+        }),
+      ],
+      failedEnvironments: [],
+    };
+    mount();
+    expect(await screen.findByText("Couldn't look for unmanaged stacks on Prod.")).toBeTruthy();
+  });
+
+  it("says there are no unmanaged stacks, and no managed ones, with a way to clear the filter", async () => {
+    answer = { groups: [], failedEnvironments: [] };
+    extra = { unfilteredTotal: 2, kindCounts: { all: 2, managed: 2, unmanaged: 0 } };
+    mount({ kind: "unmanaged" });
+    expect(
+      await screen.findByRole("heading", { name: "No unmanaged stacks", level: 2 }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Clear filters" }).length).toBeGreaterThan(0);
+    cleanup();
+
+    extra = { unfilteredTotal: 2, kindCounts: { all: 2, managed: 0, unmanaged: 2 } };
+    mount({ kind: "managed" });
+    expect(
+      await screen.findByRole("heading", { name: "No managed stacks", level: 2 }),
+    ).toBeTruthy();
   });
 });

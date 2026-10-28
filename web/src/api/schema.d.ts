@@ -1932,14 +1932,14 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The stacks Bayplan manages on an environment
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         * The stacks of an environment: those Bayplan manages and those it found
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
         /**
          * Create a stack
-         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must match ^[a-z0-9][a-z0-9_-]{0,62}$ (422 stack_name_invalid) and be new on the environment (409 stack_name_taken). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
+         * @description Creates a stack and its first draft. Nothing is sent to any engine: the stack is Not deployed until it is deployed. The target is fixed here from the environment: swarm when the environment is a swarm, standalone otherwise. The name must follow the rule of the environment's target, the same rule that decides whether a stack made elsewhere can be adopted: on a swarm letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters; on a standalone host lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters (422 stack_name_invalid). It must be new on the environment (409 stack_name_taken; on a swarm names that differ only in case are one name). A name that something Bayplan does not manage already uses on the environment (a swarm namespace or a Compose project with that name, without this stack's bayplan.stack.id) is 409 stack_name_clash. start chooses the first compose.yaml: example (a starter with one service), empty, or upload (the file in compose, kept as it is even when it does not parse; over 1 MiB is 422 file_too_large); compose overrides example and empty. Audited as stack.created. Needs stacks.create (Admin).
          */
         post: operations["createStack"];
         delete?: never;
@@ -2096,6 +2096,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How what runs compares with the deployed revision
+         * @description Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, Bayplan's own bayplan.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two reads running; a third is 429 check_busy. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackDrift"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/drift/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept what runs into the stack's draft
+         * @description Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision, and a stack that is stopped is 409 stack_stopped (its services run no replicas, so there is nothing running to keep; start it first). A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.
+         */
+        post: operations["acceptStackDrift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/files/reveal": {
         parameters: {
             query?: never;
@@ -2207,9 +2247,69 @@ export interface paths {
         put?: never;
         /**
          * Review what a deploy of a stack would do
-         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. Needs stacks.deploy (Operator).
+         * @description Reviews the stack's saved draft (the latest good revision when there is no draft) against what is running and saves nothing. It runs the same check as the editor, looks up the digests of the images that need one, converts the stack the way a deploy does, reads what the swarm holds under the stack's namespace and answers the problems, a summary, an image table, each service's change with its masked current and next spec, and the other resources. A value derived from a secret of the stack is <hidden> on both sides; whether it changed is decided before it is hidden and listed in hiddenChanges as a path. A caller who does not hold secrets.reveal gets, in every mode, every environment value, command, argument, health check command and log option of the running service and of the next spec as <hidden> (the names and paths stay), and the live and desired text of a revertsDrift row at such a path as <hidden>, as the drift route does. Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). The review is of that revision, not of the draft: it is converted, judged for host access for the caller and compared with the services, networks, secrets and configs that run now, with each image set to the digest the revision stored (state pinned, note revision), and no registry is asked. yaml is the revision's rendering against the deployed revision's, and concurrent is never set. deployedSeq is the newest good revision's number, to send as expectedDeployed. On a standalone host the revision is compared with the host's containers by config hash and field diff, as a draft's review is, with each image set to the reference the revision stored; a network or volume a later revision added stays on the host and is not listed. In mode restore the revision is the stack's deployed one, which the review takes itself (409 no_deployed_revision for a stack with none), and the review is the same as a roll back to it: what it lists is what changed outside the stack, revision and deployedSeq are both the deployed revision's number, and nothing is looked up. A revision that cannot be redeployed as it stands is one blocking revision_not_deployable problem. Needs stacks.deploy (Operator).
          */
         post: operations["reviewStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The revisions of a stack
+         * @description Every deploy of the stack is a revision. They come newest first by revision number, with how each came to be (origin), the revision a roll back copied, the result (outcome, and for a failed one the service and the sentence of its failure code), who started it and when, and the images that changed against the next older good revision. The newest good revision is marked deployed. Only references, codes and names are listed: no file, variable or rendered text. A stack with no revision answers an empty list. A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One revision of a stack
+         * @description What a revision deployed: the rendering stored with it, its files (path and whether secret; a file's content is never sent), its variables (a secret variable's value is <hidden>, for every caller: there is no reveal for a revision), the images it pinned by service with their digests, and the difference of its rendering from the deployed revision's. A revision number the stack does not hold (never taken, or deleted by retention) is 404 revision_not_found; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/revisions/{seq}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What rolling back to a revision would change
+         * @description The services a roll back to the revision would add, change or remove against what is running now, the same comparison the roll back review makes (the revision converted with the digests it stored, no registry asked). Only a revision that ended good qualifies: a pending or failed one is 409 revision_not_good, a number the stack does not hold is 404 revision_not_found, and a stack ID of another environment is 404 stack_not_found. A revision that can no longer be redeployed is 409 revision_not_deployable. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. One user may have two of these reads running; a third is 429 check_busy. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackRevisionChanges"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2226,8 +2326,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Roll a stack back to the version that ran before
-         * @description Redeploys the last version of the stack that ran well, as a job, answering 202 with the job ID at once. That is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. It takes a revision of its own from it (the files, the variables and the images it ran) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. Rolling back a stack of a standalone host is 409 target_engine_missing: its engine is not in this version. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
+         * Roll a stack back to a revision that ran well
+         * @description Redeploys a revision of the stack that ran well, as a job, answering 202 with the job ID at once. With no body, that is the newest revision whose deploy succeeded, or, when the newest revision is itself the one that runs, the good one before it. With revision, it is that one: any revision whose deploy ended good, the deployed one included (useful after a newer attempt failed). A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. expectedDeployed is the number of the deployed revision the review was made against; if the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. It takes a revision of its own from it (the files, the variables and the images it ran, recorded as origin rollback with restored_from naming the revision it restored) and runs the same swarm deploy on it, so it is audited as stack.deployed with the mode rollback, the revision and restoredFrom. It uses exactly the images that revision ran and looks nothing up: a tag that has moved since is not followed. The draft is not touched. A stack with no earlier version that ran well is 409 no_previous_version. Everything a deploy is judged on is judged again: a revision that uses host access is refused 403 privileged_compose below env Admin, a stack that no longer loads is 422, and while another stack operation runs on the environment the answer is 409 operation_locked and nothing is stored. A stack of a standalone host rolls back the same way, through the Compose SDK: the containers whose configuration differs are recreated from the images the revision stored, networks and volumes a later revision added stay on the host, and the foreign-project check is made before anything is written. With mode restore, the roll back puts the deployed revision back to undo what was changed outside the stack (drift): revision must be the deployed one (409 deployed_changed when it is not, 409 no_deployed_revision when the stack has none, 422 revision_required without it), it is audited as stack.deployed with the mode restore and the job's mode is restore. Everything else is a roll back's, and it is recorded as a revision of origin rollback restoring the deployed one. A roll back is only ever sent by a person; nothing rolls a stack back by itself. Needs stacks.deploy (Operator).
          */
         post: operations["rollbackStack"];
         delete?: never;
@@ -2328,6 +2428,106 @@ export interface paths {
          * @description The engine card and the counts of running and stopped containers, images, volumes and networks, plus nodes and services on a swarm manager. Every count is the length of the list its tile links to, because both come from the same snapshot, cached for a few seconds. On a swarm the counts are the cluster's totals over the nodes that answered, with each node's own counts in byNode; notReporting names the nodes that did not, and while it is not empty the totals are not the whole cluster. 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.
          */
         get: operations["getEnvironmentSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/unmanaged-stacks/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A stack Bayplan did not make
+         * @description The services of a swarm namespace or a Compose project that Bayplan does not manage, found by that label and read now, with what its labels say about it: an orphan Bayplan ID (it carries a bayplan.stack.id, which is never sent), a Portainer marker, whether it is Bayplan's own stack or its agent's. Only names, states, images and published ports are part of the answer: no environment value, command or log option. Nothing is stored and no engine is written to. A name no labelled service or container carries is 404 unmanaged_stack_not_found; so is a name one of Bayplan's stacks holds now, with that stack's ID in errors as managedStackId. Needs stacks.read (Viewer).
+         */
+        get: operations["getUnmanagedStack"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Adopt a stack Bayplan did not make
+         * @description Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. Adopting never fails on the host-access policy: it only records what already runs. With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).
+         */
+        post: operations["adoptStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/unmanaged-stacks/{name}/adopt-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check what adopting a stack would change on its first deploy
+         * @description Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. The fingerprint it answers is the one to send with the adoption. With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.
+         */
+        post: operations["checkAdoption"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/unmanaged-stacks/{name}/compose": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The compose file Bayplan would use if it adopted the stack
+         * @description The compose file rebuilt from the running services of a swarm stack, or from the containers of a docker compose project, that Bayplan does not manage, read now. It is a preview: nothing is stored and no engine is written to. Environment values are written as literals, with every $ doubled so the file loads back as it reads. Existing swarm secrets and configs are external, by name: their values are never read. Networks and volumes that carry the stack's label are the stack's own, written under their existing names; the others are external. The services pass through the same mask as the service detail and the container inspect: without secrets.reveal on the environment every environment value, command, argument, health check command and log option reads <hidden>. A stack whose services cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getGeneratedCompose"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/unmanaged-stacks/{name}/resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What an unmanaged stack uses, and what adopting it would own
+         * @description The tasks (a swarm) or containers (a standalone host) of the services found by the label, and the networks, volumes, secrets and configs they use. The ownership of each is a preview of adopting: a network or a volume that carries the stack's namespace or project label reads stack, any other external; a secret or a config is always external. Each card is read on its own and carries its own error (a code, never the engine's text). No secret value, config content or label is part of the answer, and no engine is written to. A name no labelled service or container carries, or one a stack of Bayplan's holds, is 404 unmanaged_stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["listUnmanagedStackResources"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3150,6 +3350,50 @@ export interface paths {
         patch: operations["updateShellSettings"];
         trace?: never;
     };
+    "/api/settings/stack-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get how many revisions of each stack are kept
+         * @description kept is how many revisions of each stack Bayplan keeps (5 to 200, default 20). The deployed revision and any revision still deploying are kept besides. Older revisions are deleted, with their variables and secret files.
+         */
+        get: operations["getStackHistorySettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change how many revisions of each stack are kept
+         * @description A value outside 5 to 200 answers 422. Lowering the limit deletes the older revisions of every stack at once, in the same transaction as the new value, and the answer's pruned says how many; the deployed revision and any revision still deploying are never deleted. Deleted revisions cannot be recovered. A request that changes nothing answers 200 and is not audited. Each change is audited as settings.updated with the old and new limit and the number of revisions deleted.
+         */
+        patch: operations["updateStackHistorySettings"];
+        trace?: never;
+    };
+    "/api/settings/stack-history/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count the revisions a lower limit would delete
+         * @description Answers how many revisions across how many stacks a limit of keep (5 to 200) would delete now, by the rule pruning applies: the newest keep of each stack, the deployed revision and any revision still deploying stay. It only reads. Needs settings.write, as the change it previews does.
+         */
+        get: operations["previewStackHistoryPrune"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/setup/complete": {
         parameters: {
             query?: never;
@@ -3255,8 +3499,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The stacks Bayplan manages on every environment the caller may read them on
-         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         * The stacks of every environment the caller may read them on, managed or found
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -3899,11 +4143,123 @@ export interface components {
              */
             added: number;
         };
+        AdoptCheckBody: {
+            /** @description True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty */
+            blocked: boolean;
+            /** @description True when nothing will change on the first deploy except Bayplan's ownership labels */
+            clean: boolean;
+            /** @description How many objects of each kind there are */
+            counts: components["schemas"]["AdoptCheckCountsBody"];
+            /** @description The state of the engine the check was made of. Adopt sends it back; when what runs has changed since, the adoption is refused 409 adopt_stale */
+            fingerprint: string;
+            /**
+             * Format: int64
+             * @description How many services are in gaps
+             */
+            gapCount: number;
+            /** @description The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges */
+            gaps: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description True when a pasted file differs from what runs in nothing but Bayplan's ownership labels. Always false for the rebuild */
+            matches: boolean;
+            /** @description What the rebuild could not say plainly, by service then code. Empty for a pasted file */
+            notes: components["schemas"]["GeneratedNoteBody"][] | null;
+            /** @description The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name */
+            objects: components["schemas"]["AdoptCheckObjectBody"][] | null;
+            /** @description True when an object of the stack carries the ID of a Bayplan stack this instance does not hold */
+            orphan: boolean;
+            /** @description The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else */
+            ownershipOnly: string[] | null;
+            /** @description The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for */
+            policy: components["schemas"]["AdoptCheckPolicyBody"];
+            /** @description True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it */
+            portainer: boolean;
+            /** @description For a pasted file, what the check found in it, as the editor's check lists problems. Always empty for the rebuild */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /**
+             * @description Which definition was checked: the rebuild from what runs, or the pasted file
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For a pasted file, the variables it uses with the value a deploy would use; a secret one reads <hidden>. Always empty for the rebuild */
+            variables: components["schemas"]["StackVariableBody"][] | null;
+        };
+        AdoptCheckCountsBody: {
+            /**
+             * Format: int64
+             * @description Configs the stack references
+             */
+            configs: number;
+            /**
+             * Format: int64
+             * @description Networks, owned and external
+             */
+            networks: number;
+            /**
+             * Format: int64
+             * @description Secrets the stack references
+             */
+            secrets: number;
+            /**
+             * Format: int64
+             * @description Volumes, owned and external
+             */
+            volumes: number;
+        };
+        AdoptCheckObjectBody: {
+            /**
+             * @description What it is
+             * @enum {string}
+             */
+            kind: "network" | "volume" | "secret" | "config";
+            /** @description Its name on the engine */
+            name: string;
+            /**
+             * @description owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Bayplan never changes it (any other network or volume, and every existing secret and config)
+             * @enum {string}
+             */
+            treatment: "owned" | "external";
+        };
+        AdoptCheckPolicyBody: {
+            /** @description Each setting, as a phrase with its service, such as a bind mount of /var/run/docker.sock in web */
+            entries: components["schemas"]["AdoptCheckPolicyEntry"][] | null;
+            /** @description The kinds of host access, such as bind mounts or extra privileges, in a fixed order */
+            kinds: string[] | null;
+        };
+        AdoptCheckPolicyEntry: {
+            /** @description What the setting is and the service that has it */
+            text: string;
+        };
+        AdoptCheckRequest: {
+            /** @description For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) */
+            compose?: string;
+            /**
+             * @description rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values
+             * @default rebuild
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For source paste, the values of the variables the pasted file uses */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
         AdoptClusterBody: {
             /** @description The swarm cluster ID the environment is bound to now */
             clusterId: string;
             /** @description The cluster ID it was bound to; absent if it had none */
             previousClusterId?: string;
+        };
+        AdoptStackRequest: {
+            /** @description For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB). Never rewritten */
+            compose?: string;
+            /** @description The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored */
+            fingerprint: string;
+            /**
+             * @description rebuild: Bayplan writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written
+             * @default rebuild
+             * @enum {string}
+             */
+            source: "rebuild" | "paste";
+            /** @description For source paste, the values of the variables the pasted file uses. A secret one is stored sealed, like any secret variable */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
         };
         AgentBody: {
             /** @description The agent's version when it last connected or enrolled */
@@ -3980,6 +4336,8 @@ export interface components {
             failedEnvironments: components["schemas"]["FailedEnvironmentBody"][] | null;
             /** @description One group for each environment that has stacks among the rows returned, by environment name. An environment the caller holds no stacks.read on is absent */
             groups: components["schemas"]["AllStacksGroup"][] | null;
+            /** @description How many stacks the Show toggle counts (all, managed, unmanaged), over the environments read and before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description How many stacks each status chip counts, over the environments read and before the search and the status filter */
             statusCounts: components["schemas"]["StackStatusCountsBody"];
             /**
@@ -3996,10 +4354,14 @@ export interface components {
         AllStacksGroup: {
             /** @description How many of the environment's stacks each status chip counts, before the search and the status filter */
             counts: components["schemas"]["StackStatusCountsBody"];
+            /** @description True when the look for unmanaged stacks on this environment failed just now: its managed stacks are listed all the same */
+            discoveryFailed: boolean;
             /** @description The environment */
             envId: string;
             /** @description Its name */
             envName: string;
+            /** @description How many of the environment's stacks are managed and unmanaged, before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description The environment's stacks among the rows returned, in the order asked for */
             stacks: components["schemas"]["StackItem"][] | null;
             /**
@@ -5456,6 +5818,30 @@ export interface components {
             envId: string;
             /** @description Its name */
             envName: string;
+        };
+        GeneratedComposeBody: {
+            /**
+             * Format: int64
+             * @description Configs the file references as external. Bayplan reads their names, never their contents
+             */
+            externalConfigs: number;
+            /**
+             * Format: int64
+             * @description Secrets the file references as external. Bayplan reads their names, never their values
+             */
+            externalSecrets: number;
+            /** @description What the rebuild could not say plainly, by service then code */
+            notes: components["schemas"]["GeneratedNoteBody"][] | null;
+            /** @description The compose file rebuilt from the running services. For a caller without secrets.reveal every environment value, command, health check command and log option reads <hidden> */
+            yaml: string;
+        };
+        GeneratedNoteBody: {
+            /** @description A stable name for the kind of note: service_name_prefix, network_not_overlay, image_unpinned or cpus_inexact */
+            code: string;
+            /** @description The note as a sentence */
+            message: string;
+            /** @description The compose service the note is about; empty when it concerns the whole file */
+            service: string;
         };
         GrantBody: {
             /**
@@ -8452,6 +8838,12 @@ export interface components {
             /** @description The team's name; set when kind is team */
             teamName?: string;
         };
+        StackAdoptionBody: {
+            /** @description The name of the stack on the engine that was adopted */
+            adoptedFrom: string;
+            /** @description True until the stack's first good deploy: its services do not carry Bayplan's ownership labels yet, and that deploy adds them and recreates each service (a brief restart) */
+            pending: boolean;
+        };
         StackCancelBody: {
             /** @description The deploy that is being stopped: follow it at GET .../deploys/{jobId} or its stream until it reads cancelled */
             jobId: string;
@@ -8527,7 +8919,7 @@ export interface components {
         StackCreateRequest: {
             /** @description The text of the first compose.yaml. When it is given, start is ignored; with start upload it is the uploaded file as it was read, kept even when it does not parse (the editor shows the problems). Over 1 MiB is 422 file_too_large */
             compose?: string;
-            /** @description The stack's name: lowercase letters, numbers, dash and underscore, starting with a letter or number, at most 63 characters. Anything else is 422 stack_name_invalid */
+            /** @description The stack's name. On a swarm: letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters. On a standalone host: lowercase letters, numbers, dash and underscore, starting with a letter or number, up to 255 characters. Anything else is 422 stack_name_invalid */
             name: string;
             /** @description What the first draft holds when compose is left out: example (the default) is a starter file with one web service, empty is an empty compose.yaml, upload is the file the person chose (compose, which may be empty). Anything else is 422 stack_start_invalid */
             start?: string;
@@ -8554,7 +8946,7 @@ export interface components {
              * @enum {string}
              */
             mode?: "deploy" | "update";
-            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
+            /** @description The images the review chose, by swarm service name (the review's pins). The deploy uses exactly these digests and asks no registry to choose or change one. The platforms of a looked-up image are the ones its review found, which the server remembers by repository and digest (an answer of none too) and asks the registry for, once, only when it no longer holds them (after a restart, say), so a registry that cannot answer then stops the deploy; a request never says a platform. Each is checked against what the server decides itself: a service that keeps its running digest must be sent that digest, and a looked-up one a sha256 digest of the repository its reference names; anything else is 422 pins_invalid. Left out, the deploy looks the images up itself */
             pins?: {
                 [key: string]: string;
             };
@@ -8562,14 +8954,23 @@ export interface components {
             services?: string[] | null;
         };
         StackDetail: {
+            /** @description Left out unless the stack was adopted (source adopted): whether its first deploy is still to come */
+            adoption?: components["schemas"]["StackAdoptionBody"];
             /** @description When it was created, RFC 3339 UTC */
             createdAt: string;
             /** @description Who created the stack */
             createdBy: string;
+            /**
+             * Format: int64
+             * @description Left out for a stack with no revision that deployed: the number of the newest one that did, the revision the stack stands at
+             */
+            deployedRevision?: number;
             /** @description When the draft that holds changes that have not been deployed was last saved, RFC 3339 UTC; empty when there is no such draft */
             draftSavedAt: string;
             /** @description Who saved it, as a name; empty when there is no such draft */
             draftSavedBy: string;
+            /** @description Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services */
+            drift?: components["schemas"]["StackDriftSummaryBody"];
             /** @description The environment the stack belongs to */
             envId: string;
             /** @description True when the draft holds changes that have not been deployed */
@@ -8584,6 +8985,8 @@ export interface components {
             lastOperation?: components["schemas"]["StackOperationBody"];
             /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
             lock?: components["schemas"]["StackLockBody"];
+            /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /** @description Whether a roll back has a version to restore: the newest version that ran well, or, when the newest version is the one that runs, the one before it */
@@ -8599,10 +9002,10 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today
+             * @description Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
-            source: "inline" | "adopted" | "git";
+            source: "inline" | "adopted" | "git" | "unmanaged";
             /** @description A reference to the stack's source: empty for an inline stack */
             sourceRef: string;
             /**
@@ -8617,6 +9020,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Set on an unmanaged stack only: what was found about it */
+            unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackDiffHunkBody: {
             /** @description The hunk's lines in order */
@@ -8709,6 +9114,137 @@ export interface components {
              */
             version: number;
         };
+        StackDriftAcceptBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision the draft starts from
+             */
+            revision: number;
+            /** @description When, RFC 3339 UTC */
+            savedAt: string;
+            /** @description Who saved the draft last, which is the caller */
+            savedBy: string;
+            /**
+             * Format: int64
+             * @description How many services the draft was rebuilt from
+             */
+            services: number;
+            /**
+             * Format: int64
+             * @description The draft's version now
+             */
+            version: number;
+        };
+        StackDriftAcceptInputBody: {
+            /**
+             * Format: int64
+             * @description The version of the draft the person saw, 0 for a stack that has none. A draft that has moved since is 409 draft_conflict
+             */
+            draftVersion: number;
+        };
+        StackDriftBody: {
+            /** @description The cause to name for the stack: the newest action of Bayplan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * Format: int64
+             * @description How many drifted services an action of Bayplan's own explains
+             */
+            causes: number;
+            /** @description When the stack was read, RFC 3339 UTC */
+            checkedAt: string;
+            /**
+             * Format: int64
+             * @description How many settings differ in all: the settings of each changed service plus one for each missing or extra service
+             */
+            count: number;
+            /** @description When that revision's deploy was started, RFC 3339 UTC; empty for none */
+            deployedAt: string;
+            /** @description Who started it, as a name; empty for none */
+            deployedBy: string;
+            /**
+             * Format: int64
+             * @description The number of the revision compared with, the newest one that deployed; 0 for none
+             */
+            revision: number;
+            /** @description The services that differ, in name order (changed and missing ones, then extra ones) */
+            services: components["schemas"]["StackDriftServiceBody"][] | null;
+            /**
+             * @description none: what runs matches the revision. drifted: it differs. stopped: a person stopped the stack, which is not drift. not_deployed: the stack has no revision that deployed. unknown: the revision cannot be compared (it can no longer be redeployed, or this kind of stack is not checked yet)
+             * @enum {string}
+             */
+            state: "none" | "drifted" | "stopped" | "not_deployed" | "unknown";
+        };
+        StackDriftCauseBody: {
+            /**
+             * @description scaled: a scale from the service page. rolled_back: a service roll back. edited: a service edit. adopted: the difference was there when the stack was adopted and its first deploy has not put it right yet
+             * @enum {string}
+             */
+            action: "scaled" | "rolled_back" | "edited" | "adopted";
+            /** @description When, RFC 3339 UTC; empty for adopted */
+            at: string;
+            /** @description The display name of who did it; empty for adopted */
+            by: string;
+            /** @description For scaled, the replica count before; empty when the audit row did not say, and for any other action */
+            from: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description For scaled, the replica count after; empty for any other action */
+            to: string;
+        };
+        StackDriftServiceBody: {
+            /** @description Why the service differs, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Bayplan */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * @description changed: the service runs with other settings than the revision deployed. missing: the revision has the service and the swarm does not. extra: the swarm has a service under the stack's ownership that the revision does not have
+             * @enum {string}
+             */
+            change: "changed" | "missing" | "extra";
+            /** @description What the revision deployed, masked: a value derived from a secret of the stack is <hidden>, and for a caller without secrets.reveal so is every environment value, command, argument, health check command and log option. Null for an extra service */
+            current: {
+                [key: string]: unknown;
+            } | null;
+            /** @description Paths of settings whose value changed to or from one that is hidden. The values are never sent */
+            hiddenChanges: string[] | null;
+            /** @description The swarm service name */
+            name: string;
+            /** @description What runs now, masked the same way. Null for a missing service */
+            next: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Format: int64
+             * @description How many settings differ between current and next, hidden ones included
+             */
+            settings: number;
+            /** @description The service's name in the compose file */
+            short: string;
+        };
+        StackDriftSummaryBody: {
+            /** @description As the drift route's cause */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * Format: int64
+             * @description As the drift route's causes
+             */
+            causes: number;
+            /** @description When the stack was read, RFC 3339 UTC */
+            checkedAt: string;
+            /**
+             * Format: int64
+             * @description How many settings differ in all
+             */
+            count: number;
+            /**
+             * Format: int64
+             * @description The revision the check compared with
+             */
+            revision: number;
+            /**
+             * @description As the drift route's state
+             * @enum {string}
+             */
+            state: "none" | "drifted" | "stopped" | "not_deployed" | "unknown";
+        };
         StackFileDiffBody: {
             /**
              * Format: int64
@@ -8737,7 +9273,43 @@ export interface components {
             /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
             path: string;
         };
+        StackHistoryPreviewBody: {
+            /**
+             * Format: int64
+             * @description How many revisions the limit would delete now, across all stacks
+             */
+            revisions: number;
+            /**
+             * Format: int64
+             * @description How many stacks those revisions belong to
+             */
+            stacks: number;
+        };
+        StackHistorySettingsBody: {
+            /**
+             * Format: int64
+             * @description How many revisions of each stack Bayplan keeps. The deployed revision and any revision still deploying are kept besides
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description The highest value Kept may have
+             */
+            max: number;
+            /**
+             * Format: int64
+             * @description The lowest value Kept may have
+             */
+            min: number;
+            /**
+             * Format: int64
+             * @description How many revisions this request deleted: those beyond a lowered limit, and 0 for a read or a limit that was not lowered
+             */
+            pruned: number;
+        };
         StackItem: {
+            /** @description Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services */
+            drift?: components["schemas"]["StackDriftSummaryBody"];
             /** @description True when the draft holds changes that have not been deployed */
             hasDraft: boolean;
             /** @description The stack ID */
@@ -8746,6 +9318,8 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
+            managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
             name: string;
             /**
@@ -8759,10 +9333,10 @@ export interface components {
              */
             servicesTotal?: number;
             /**
-             * @description Where the stack's definition lives. Only inline exists today
+             * @description Where the stack's definition lives: inline (made in Bayplan), adopted (taken over from the engine, see the adopt route) or git. unmanaged is a stack found on the engine that Bayplan did not make (see unmanaged)
              * @enum {string}
              */
-            source: "inline" | "adopted" | "git";
+            source: "inline" | "adopted" | "git" | "unmanaged";
             /**
              * @description The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run
              * @enum {string}
@@ -8773,6 +9347,8 @@ export interface components {
              * @enum {string}
              */
             target: "swarm" | "standalone";
+            /** @description Set on an unmanaged stack only: what was found about it */
+            unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackJobBody: {
             /** @description When the job started, RFC 3339 UTC */
@@ -8784,12 +9360,22 @@ export interface components {
             /** @description The steps and services, in the order they were added. Read the steps in run order by following parent: a top-level step, then its children */
             items: components["schemas"]["StackJobItemBody"][] | null;
             /**
-             * @description What the operation is: a deploy of the draft, an update of images, a roll back to the last version that ran well, a stop or a start of the stack, or its removal
+             * @description What the operation is: a deploy of the draft, an update of images, a roll back to a revision that ran well, a restore of the deployed revision, a stop or a start of the stack, or its removal
              * @enum {string}
              */
-            mode: "deploy" | "update" | "rollback" | "stop" | "start" | "remove";
+            mode: "deploy" | "update" | "rollback" | "restore" | "stop" | "start" | "remove";
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
+            /**
+             * Format: int64
+             * @description Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none
+             */
+            recordedRevision?: number;
+            /**
+             * Format: int64
+             * @description Left out unless set: for a roll back or a restore, the number of the revision it restores
+             */
+            revision?: number;
             /** @description The stack being deployed */
             stackId: string;
             /** @description Who started the deploy, as a name */
@@ -8865,7 +9451,7 @@ export interface components {
              * @description What the operation is
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            kind: "deploy" | "update" | "rollback" | "restore" | "start" | "stop" | "remove";
             /** @description The stack the operation is on */
             stackId: string;
             /** @description The stack's name when the operation started */
@@ -8880,6 +9466,23 @@ export interface components {
              */
             state: "running" | "done" | "failed" | "cancelled";
         };
+        StackKindCountsBody: {
+            /**
+             * Format: int64
+             * @description Managed and unmanaged stacks together
+             */
+            all: number;
+            /**
+             * Format: int64
+             * @description Stacks Bayplan manages
+             */
+            managed: number;
+            /**
+             * Format: int64
+             * @description Stacks found on the engine that Bayplan did not make
+             */
+            unmanaged: number;
+        };
         StackLifecycleBody: {
             /** @description The job: read it at GET .../deploys/{jobId}, the same console route a deploy uses */
             jobId: string;
@@ -8889,8 +9492,12 @@ export interface components {
         StackListBody: {
             /** @description True when total is more than the rows returned */
             capped: boolean;
+            /** @description True when the look for unmanaged stacks failed just now: the managed stacks are listed all the same and the unmanaged ones are missing */
+            discoveryFailed: boolean;
             /** @description At most 500 stacks that match the search and the status filter, in the order asked for (by name unless sort says otherwise) */
             items: components["schemas"]["StackItem"][] | null;
+            /** @description How many stacks the Show toggle counts (all, managed, unmanaged), before the search, the status filter and the kind */
+            kindCounts: components["schemas"]["StackKindCountsBody"];
             /** @description How many stacks each status chip counts, before the search and the status filter, so the numbers never shrink with what was typed */
             statusCounts: components["schemas"]["StackStatusCountsBody"];
             /**
@@ -8911,7 +9518,7 @@ export interface components {
              * @description What the operation is
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
             /** @description The stack the running operation is on */
             stackId: string;
             /** @description Its name */
@@ -8993,7 +9600,7 @@ export interface components {
              * @description What the operation was
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
             /** @description When it started, RFC 3339 UTC */
             startedAt: string;
             /** @description Who started it, as a name */
@@ -9076,9 +9683,42 @@ export interface components {
             /** @description The Volumes card */
             volumes: components["schemas"]["StackVolumesCardBody"];
         };
+        StackRevertsDriftBody: {
+            /** @description Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Bayplan */
+            cause?: components["schemas"]["StackDriftCauseBody"];
+            /**
+             * @description changed: a setting that runs other than the deployed revision has it and that the deploy sets back. created: the deployed revision has the service, it no longer runs and the deploy creates it again. removed: the service runs under the stack and neither the deployed revision nor the deploy declares it, so the deploy removes it
+             * @enum {string}
+             */
+            change: "changed" | "created" | "removed";
+            /** @description For changed, the value the deploy sets, masked the same way; empty when the deploy removes the setting */
+            desired: string;
+            /** @description For changed, the value that runs now as text, masked as the rest of the review; empty when the setting is not there now */
+            live: string;
+            /** @description For changed, the setting's path in the service's settings (the keys joined with a dot, an environment entry as Env[NAME]); empty otherwise */
+            path: string;
+            /** @description The service's name in the compose file */
+            service: string;
+        };
+        StackReviewAdoptionBody: {
+            /**
+             * Format: int64
+             * @description How many services the deploy recreates for the ownership labels alone (they restart briefly)
+             */
+            ownershipOnly: number;
+            /** @description True: the deploy is the stack's first since it was adopted, and adds Bayplan's ownership labels to every service */
+            pending: boolean;
+        };
         StackReviewBody: {
+            /** @description Left out unless set: set while the stack is adopted and has not been deployed yet, and says what taking ownership does */
+            adoption?: components["schemas"]["StackReviewAdoptionBody"];
             /** @description Left out unless set: set when the last good revision is newer than the revision the draft started from: someone deployed after the draft began. A deploy of the draft then needs acknowledgeConcurrent */
             concurrent?: components["schemas"]["StackConcurrentBody"];
+            /**
+             * Format: int64
+             * @description The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed
+             */
+            deployedSeq: number;
             /**
              * Format: int64
              * @description The version of the draft the review was made of: send it with the deploy
@@ -9096,6 +9736,15 @@ export interface components {
             };
             /** @description What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy */
             problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The changes made outside the stack that this deploy, update or roll back would put back, apart from the draft's own changes: a setting counts when the deployed revision's value differs from what runs and the draft (or the revision rolled back to) has the deployed revision's value. A service of the revision that no longer runs and that is kept, and a service that runs under the stack that neither declares, are listed too. It never blocks a deploy. Empty for a restore, which is the drift itself, and for a stack with no deployed revision */
+            revertsDrift: components["schemas"]["StackRevertsDriftBody"][] | null;
+            /** @description True when the drift could not be computed, so revertsDrift is empty for want of knowing; the rest of the review is accurate */
+            revertsDriftUnavailable: boolean;
+            /**
+             * Format: int64
+             * @description For mode rollback and restore, the number of the revision the review restores (for restore, the deployed one); 0 for any other mode
+             */
+            revision: number;
             /** @description The services a deploy would add or change, by name, then the ones it would remove */
             services: components["schemas"]["StackReviewServiceBody"][] | null;
             /** @description The counts of what would change */
@@ -9155,10 +9804,15 @@ export interface components {
         };
         StackReviewRequest: {
             /**
-             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs
+             * @description deploy (the default) reviews the draft; update reviews a newly looked-up digest for the services named in services, with every other service keeping the image it runs; rollback reviews restoring the revision named in revision, with the digests it stored, against what is running; restore reviews putting back the stack's deployed revision, so what it lists is what changed outside the stack
              * @enum {string}
              */
-            mode?: "deploy" | "update";
+            mode?: "deploy" | "update" | "rollback" | "restore";
+            /**
+             * Format: int64
+             * @description For mode rollback: the number of the revision to restore. Required for it (422 revision_required); a revision the stack does not hold is 404 revision_not_found, one that did not end good 409 revision_not_good. Not read for mode restore, which takes the deployed revision itself
+             */
+            revision?: number;
             /** @description For mode update: the services to look up again, by the name in the compose file or by the swarm name */
             services?: string[] | null;
         };
@@ -9182,6 +9836,8 @@ export interface components {
             next: {
                 [key: string]: unknown;
             } | null;
+            /** @description Left out unless true: true when the service differs from what runs in nothing but Bayplan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false */
+            ownershipOnly?: boolean;
             /**
              * Format: int64
              * @description How many settings differ between current and next, hidden ones included
@@ -9205,12 +9861,145 @@ export interface components {
             imagesPinned: number;
             /** @description Networks the stack owns */
             networks: components["schemas"]["StackReviewCountsBody"];
+            /**
+             * Format: int64
+             * @description Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review
+             */
+            ownershipOnly: number;
+            /**
+             * Format: int64
+             * @description How many changes made outside the stack this deploy, update or roll back would put back (revertsDrift in the answer). Zero for a restore, which is the drift itself
+             */
+            revertsDrift: number;
             /** @description Secrets Bayplan makes from the stack's files; a changed file counts as changed */
             secrets: components["schemas"]["StackReviewCountsBody"];
             /** @description Services */
             services: components["schemas"]["StackReviewCountsBody"];
             /** @description Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it */
             volumes: components["schemas"]["StackReviewCountsBody"];
+        };
+        StackRevisionChangesBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one) the revision is compared with; 0 when the stack has none
+             */
+            deployedSeq: number;
+            /** @description For each service of the roll back that the stack's newest drift check found drifted, by swarm service name (the name on a standalone host), the paths of the settings that check found to differ from the deployed revision, so the tab can say a setting differs because it was changed outside the stack and not because of the revision. Empty when the stack has not been checked since its newest deploy, start or stop. No value is sent */
+            driftedPaths: {
+                [key: string]: string[] | null;
+            };
+            /** @description True when rolling back would change no service: the revision has the same content as what runs, or is the deployed revision */
+            identical: boolean;
+            /** @description The services a roll back would add, change or remove, by name, as the roll back review lists them. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden> */
+            services: components["schemas"]["StackReviewServiceBody"][] | null;
+            /** @description How many services the roll back would add, change and remove */
+            summary: components["schemas"]["StackReviewCountsBody"];
+        };
+        StackRevisionDetailBody: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one); 0 when the stack has none
+             */
+            deployedSeq: number;
+            /** @description The stack's files in the revision, by path */
+            files: components["schemas"]["StackRevisionFileBody"][] | null;
+            /** @description The revision as the list shows it */
+            item: components["schemas"]["StackRevisionItem"];
+            /** @description The images the revision was deployed with, by service */
+            pins: components["schemas"]["StackRevisionPinBody"][] | null;
+            /** @description The rendering stored with the revision, masked when it was stored: a secret value is <hidden>. Empty for a revision with none */
+            rendered: string;
+            /** @description The stack's variables in the revision, by name */
+            vars: components["schemas"]["StackRevisionVarBody"][] | null;
+            /** @description The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering */
+            yaml: components["schemas"]["StackTextDiffBody"];
+        };
+        StackRevisionFileBody: {
+            /** @description The file's path in the stack */
+            path: string;
+            /** @description True for a secret file. Its content is not in any answer about a revision */
+            secret: boolean;
+        };
+        StackRevisionImageChange: {
+            /** @description The reference the previous good revision ran, tag@sha256; empty for a service that revision did not have */
+            from: string;
+            /** @description The service's name in the compose file */
+            service: string;
+            /** @description The reference this revision pinned, tag@sha256 */
+            to: string;
+        };
+        StackRevisionItem: {
+            /** @description The swarm namespace or Compose project an adopted stack was taken over from; empty for any other revision */
+            adoptedFrom: string;
+            /** @description The code of the failure; empty when the revision did not fail */
+            code: string;
+            /**
+             * Format: date-time
+             * @description When the revision was taken, RFC 3339 UTC
+             */
+            createdAt: string;
+            /** @description Who started the deploy the revision was taken for */
+            createdBy: string;
+            /** @description True for the newest good revision, the one the stack stands at */
+            deployed: boolean;
+            /** @description The service a failed deploy stopped at; empty when it did not fail or the failure names none */
+            failedService: string;
+            /** @description The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with */
+            images: components["schemas"]["StackRevisionImageChange"][] | null;
+            /**
+             * @description How the revision came to be: a deploy, an Update images deploy, a roll back that copied an earlier revision, or the first revision of an adopted stack
+             * @enum {string}
+             */
+            origin: "deploy" | "update" | "rollback" | "adopted";
+            /**
+             * @description pending while its deploy runs, then good or failed
+             * @enum {string}
+             */
+            outcome: "pending" | "good" | "failed";
+            /**
+             * Format: int64
+             * @description How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise
+             */
+            pinned: number;
+            /** @description The sentence of the failure code; empty when there is no code or Bayplan has no sentence for it */
+            reason: string;
+            /**
+             * Format: int64
+             * @description The number of the revision a roll back copied; 0 for any other revision
+             */
+            restoredFrom: number;
+            /**
+             * Format: int64
+             * @description The revision number, unique per stack and never reused
+             */
+            seq: number;
+        };
+        StackRevisionListBody: {
+            /** @description True when the stack has more revisions than the 500 the list holds; the oldest are left out */
+            capped: boolean;
+            /** @description The revisions of the stack, newest first by revision number. A pruned revision is gone from the list */
+            items: components["schemas"]["StackRevisionItem"][] | null;
+            /**
+             * Format: int64
+             * @description How many revisions of each stack Bayplan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides
+             */
+            kept: number;
+        };
+        StackRevisionPinBody: {
+            /** @description The sha256 digest of the reference; empty when it has none */
+            digest: string;
+            /** @description The reference the revision pinned, tag@sha256 */
+            image: string;
+            /** @description The service's name in the compose file */
+            service: string;
+        };
+        StackRevisionVarBody: {
+            /** @description The variable's name */
+            name: string;
+            /** @description True for a secret variable */
+            secret: boolean;
+            /** @description The value; <hidden> for a secret variable, whoever asks */
+            value: string;
         };
         StackRollbackBody: {
             /** @description True when there is an earlier version that ran well to roll back to */
@@ -9219,6 +10008,28 @@ export interface components {
             deployedAt: string;
             /** @description Who started it, as a name; empty when there is none */
             deployedBy: string;
+            /**
+             * Format: int64
+             * @description Left out when there is none: the number of that revision, the one a roll back with no body would restore
+             */
+            revision?: number;
+        };
+        StackRollbackRequest: {
+            /**
+             * Format: int64
+             * @description The number of the deployed revision (the newest good one) the review was made against. If the stack was deployed again since, the answer is 409 deployed_changed and nothing is stored. Left out, the roll back is not checked against it
+             */
+            expectedDeployed?: number;
+            /**
+             * @description rollback (the default), or restore to put back what changed outside the stack by deploying the deployed revision again (D-23). A restore needs revision to be the deployed one (409 deployed_changed otherwise, 409 no_deployed_revision for a stack with none) and is recorded as a roll back of it, audited with the mode restore
+             * @enum {string}
+             */
+            mode?: "rollback" | "restore";
+            /**
+             * Format: int64
+             * @description The revision to restore: any revision of the stack whose deploy ended good, the deployed one included. A revision that failed or is still deploying is 409 revision_not_good; one the stack does not hold is 404 revision_not_found. Left out, the roll back restores the version that ran well before the deployed one
+             */
+            revision?: number;
         };
         StackServiceBody: {
             /** @description The containers of a standalone service, by name; empty on a swarm */
@@ -9282,6 +10093,11 @@ export interface components {
             draft: number;
             /**
              * Format: int64
+             * @description Stacks whose newest drift check found that what runs differs from the deployed revision
+             */
+            drifted: number;
+            /**
+             * Format: int64
              * @description Stacks a person stopped
              */
             stopped: number;
@@ -9302,6 +10118,21 @@ export interface components {
             hunks: components["schemas"]["StackDiffHunkBody"][] | null;
             /** @description The lines of the newer text, masked, so that the unchanged lines between hunks can be shown; empty when there are no hunks */
             lines: string[] | null;
+        };
+        StackUnmanagedBody: {
+            /** @description False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
+            adoptable: boolean;
+            /** @description True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never linked to a stack */
+            orphan: boolean;
+            /**
+             * @description bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other
+             * @enum {string}
+             */
+            owner: "" | "bayplan" | "agent";
+            /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
+            portainer: boolean;
+            /** @description Why the stack cannot be adopted; empty when it can */
+            reason: string;
         };
         StackVariableBody: {
             /** @description The default written in the compose file, when hasDefault is true */
@@ -9722,6 +10553,55 @@ export interface components {
             /** @description Newest attempt first; empty when there are none */
             items: components["schemas"]["UnknownAgentBody"][] | null;
         };
+        UnmanagedFoundByBody: {
+            /** @description com.docker.stack.namespace on a swarm, com.docker.compose.project on a standalone host */
+            label: string;
+            /** @description The stack's name */
+            value: string;
+        };
+        UnmanagedStackBody: {
+            /** @description False for Bayplan's own stack, an agent's and a stack whose name the stack-name rule of its target refuses */
+            adoptable: boolean;
+            /** @description A digest of what runs: each service's ID and version on a swarm, each container's ID, config hash and image ID on a standalone host. The adopt request sends it back, and when what runs has changed since, the adoption is refused 409 adopt_stale and stores nothing. Empty when the stack cannot be adopted */
+            fingerprint: string;
+            /** @description The label the stack was found by */
+            foundBy: components["schemas"]["UnmanagedFoundByBody"];
+            /** @description The swarm namespace or the Compose project */
+            name: string;
+            /** @description True when an object of the stack carries a bayplan.stack.id: Bayplan made it once, for a record this instance does not hold (another instance or a lost record). The ID is never sent or linked */
+            orphan: boolean;
+            /**
+             * @description bayplan for the stack the Bayplan server itself runs in, agent for a stack that holds a Bayplan agent, empty for any other
+             * @enum {string}
+             */
+            owner: "" | "bayplan" | "agent";
+            /** @description True when the stack carries a Portainer marker: a label key starting io.portainer., or a Compose working directory under /data/compose/ */
+            portainer: boolean;
+            /** @description Why the stack cannot be adopted; empty when it can */
+            reason: string;
+            /** @description The services found by the label, by name. Their environment values, commands and log options are never part of the answer */
+            services: components["schemas"]["StackServiceBody"][] | null;
+            /**
+             * Format: int64
+             * @description Services that run now
+             */
+            servicesRunning: number;
+            /**
+             * Format: int64
+             * @description Services the stack has on the engine
+             */
+            servicesTotal: number;
+            /**
+             * @description How many of its services run: running, degraded (some do) or not_running (none do)
+             * @enum {string}
+             */
+            state: "not_running" | "degraded" | "running";
+            /**
+             * @description Where the stack runs: a swarm or a standalone host
+             * @enum {string}
+             */
+            target: "swarm" | "standalone";
+        };
         UpdateAgentsBody: {
             /**
              * Format: int64
@@ -9765,6 +10645,13 @@ export interface components {
              * @description New per-person cap on open shells, 1 to 50
              */
             maxPerUser?: number;
+        };
+        UpdateStackHistorySettingsInputBody: {
+            /**
+             * Format: int64
+             * @description The new number of revisions kept per stack, 5 to 200
+             */
+            kept: number;
         };
         UpdateStateBody: {
             /** @description Why the last update failed, as a stable code: the agent's own (image_not_own_repository, not_a_manager, self_update_disabled, insecure_session, busy, update_failed and so on) or no_answer, no_new_version or rolled_back. Present only when state is failed */
@@ -14124,8 +15011,10 @@ export interface operations {
             query?: {
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */
@@ -14527,6 +15416,83 @@ export interface operations {
             };
         };
     };
+    getStackDrift: {
+        parameters: {
+            query?: {
+                /** @description True reads the stack again instead of answering the newest check. Callers that ask at the same moment share one read */
+                fresh?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDriftBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acceptStackDrift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackDriftAcceptInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDriftAcceptBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     revealStackFile: {
         parameters: {
             query?: never;
@@ -14753,7 +15719,7 @@ export interface operations {
             };
         };
     };
-    rollbackStack: {
+    listStackRevisions: {
         parameters: {
             query?: never;
             header?: never;
@@ -14766,6 +15732,119 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The revision number */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionDetailBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackRevisionChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+                /** @description The revision number */
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackRevisionChangesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rollbackStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StackRollbackRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {
@@ -14977,6 +16056,189 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["EnvironmentProblem"];
+                };
+            };
+        };
+    };
+    getUnmanagedStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnmanagedStackBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    adoptStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptStackRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackDetail"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkAdoption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AdoptCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdoptCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGeneratedCompose: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratedComposeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUnmanagedStackResources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The swarm namespace or the Compose project that names the stack */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackResourcesBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
                 };
             };
         };
@@ -16616,6 +17878,103 @@ export interface operations {
             };
         };
     };
+    getStackHistorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistorySettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateStackHistorySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStackHistorySettingsInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistorySettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewStackHistoryPrune: {
+        parameters: {
+            query: {
+                /** @description The limit to count for, 5 to 200 */
+                keep: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackHistoryPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     completeSetup: {
         parameters: {
             query?: never;
@@ -16789,8 +18148,10 @@ export interface operations {
                 env?: string;
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed) or deploy_failed. Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
+                /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
+                kind?: string;
                 /** @description What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name */
                 sort?: "name" | "state" | "lastDeployed";
                 /** @description asc (the default) or desc */

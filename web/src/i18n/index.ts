@@ -49,23 +49,41 @@ import settings from "./en/settings.json";
 import setup from "./en/setup.json";
 import shell from "./en/shell.json";
 import specedit from "./en/specedit.json";
+import stackacceptlive from "./en/stackacceptlive.json";
+import stackadopt from "./en/stackadopt.json";
+import stackadoptcheck from "./en/stackadoptcheck.json";
+import stackadoptpaste from "./en/stackadoptpaste.json";
+import stackchanges from "./en/stackchanges.json";
 import stackconverge from "./en/stackconverge.json";
 import stackdeploy from "./en/stackdeploy.json";
+import stackdrift from "./en/stackdrift.json";
+import stackdriftcause from "./en/stackdriftcause.json";
+import stackdriftlist from "./en/stackdriftlist.json";
 import stackeditor from "./en/stackeditor.json";
+import stackgenerated from "./en/stackgenerated.json";
+import stackhistory from "./en/stackhistory.json";
 import stackimport from "./en/stackimport.json";
 import stacklinks from "./en/stacklinks.json";
 import stacklists from "./en/stacklists.json";
 import stacklogs from "./en/stacklogs.json";
 import stackoverview from "./en/stackoverview.json";
+import stackownership from "./en/stackownership.json";
 import stackproblems from "./en/stackproblems.json";
 import stackpull from "./en/stackpull.json";
 import stackremove from "./en/stackremove.json";
 import stackrendered from "./en/stackrendered.json";
 import stackresources from "./en/stackresources.json";
+import stackrestore from "./en/stackrestore.json";
+import stackretention from "./en/stackretention.json";
+import stackrevertsdrift from "./en/stackrevertsdrift.json";
 import stackreview from "./en/stackreview.json";
+import stackrevision from "./en/stackrevision.json";
+import stackrollback from "./en/stackrollback.json";
 import stacks from "./en/stacks.json";
 import stackstandalone from "./en/stackstandalone.json";
 import stackstop from "./en/stackstop.json";
+import stackunmanaged from "./en/stackunmanaged.json";
+import stackunmanagedpage from "./en/stackunmanagedpage.json";
 import stackupdate from "./en/stackupdate.json";
 import stackvars from "./en/stackvars.json";
 import stackyamldiff from "./en/stackyamldiff.json";
@@ -83,7 +101,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackConverge, stackDeploy, stackEditor, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackProblems, stackPull, stackRendered, stackResources, stackReview, stackStandalone, stackVars, stackYamlDiff) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -135,22 +153,40 @@ export const resources = {
     setup,
     shell,
     specEditor: specedit,
+    stackAcceptLive: stackacceptlive,
+    stackAdopt: stackadopt,
+    stackAdoptCheck: stackadoptcheck,
+    stackAdoptPaste: stackadoptpaste,
+    stackChanges: stackchanges,
     stackConverge: stackconverge,
     stackDeploy: stackdeploy,
+    stackDrift: stackdrift,
+    stackDriftCause: stackdriftcause,
+    stackDriftList: stackdriftlist,
     stackEditor: stackeditor,
+    stackHistory: stackhistory,
+    stackGenerated: stackgenerated,
     stackImport: stackimport,
     stackLogs: stacklogs,
     stackLinks: stacklinks,
     stackLists: stacklists,
     stackOverview: stackoverview,
+    stackOwnership: stackownership,
     stackProblems: stackproblems,
     stackPull: stackpull,
     stackRemove: stackremove,
     stackRendered: stackrendered,
     stackResources: stackresources,
+    stackRestore: stackrestore,
+    stackRetention: stackretention,
     stackStop: stackstop,
+    stackUnmanaged: stackunmanaged,
+    stackUnmanagedPage: stackunmanagedpage,
     stackUpdate: stackupdate,
     stackReview: stackreview,
+    stackRevertsDrift: stackrevertsdrift,
+    stackRevision: stackrevision,
+    stackRollback: stackrollback,
     stackStandalone: stackstandalone,
     stackVars: stackvars,
     stackYamlDiff: stackyamldiff,

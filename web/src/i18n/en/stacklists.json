@@ -3,7 +3,6 @@
     "title": "Stacks",
     "documentTitle": "All stacks",
     "global": {
-      "caption": "Stacks Bayplan manages across your environments.",
       "count_one": "{{count, number}} stack in {{environments}}",
       "count_other": "{{count, number}} stacks in {{environments}}",
       "environments_one": "{{count, number}} environment",
@@ -68,6 +67,7 @@
       "stopped": "Stopped",
       "draft": "Draft",
       "deploy_failed": "Deploy failed",
+      "drifted": "Drifted",
       "chip": "{{label}} {{count, number}}"
     },
     "clearFilters": "Clear filters",
@@ -105,7 +105,8 @@
         "fileTooLarge": "That file is over 1 MiB. Choose a smaller one.",
         "fileUnreadable": "Couldn't read that file. Choose another.",
         "nameClash": "A stack named {{name}} already exists on this environment, not managed by Bayplan.",
-        "clashHint": "Pick another name. Bayplan will be able to take over existing stacks in a later version."
+        "clashHint": "Pick another name, or adopt the existing stack.",
+        "openClash": "Open {{name}}"
       }
     }
   }

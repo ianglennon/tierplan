@@ -3,7 +3,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
@@ -44,23 +44,62 @@ import { formatBytes } from "@/lib/format";
 import { toastSuccess } from "@/lib/toast";
 import { z } from "@/lib/zod-config";
 
-// A stack name is also its swarm namespace and compose project, so it follows the server's
-// rule: lowercase letters, numbers, dash and underscore, starting with a letter or number, at
-// most 63 characters.
-const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
-const NAME_MAX = 63;
+// A stack name is also its swarm namespace or compose project, so it follows the server's rule for the
+// target of the environment it is made on, the same rule that decides whether a stack made elsewhere can be
+// adopted (D-48, D-53). On a swarm: letters in either case, numbers, dash and underscore, starting with a
+// letter or number, at most 61 characters (no dot: swarm refuses one in a service or network name). On a
+// standalone host: compose-go's project name, lowercase only, at most 255 characters. While no target is
+// known (the All stacks list before an environment is chosen) the union of the two applies and the server's
+// check decides.
+interface NameRule {
+  pattern: RegExp;
+  max: number;
+  // The i18n keys of the error and of the helper line.
+  error: string;
+  helper: string;
+}
+
+const SWARM_RULE: NameRule = {
+  pattern: /^[A-Za-z0-9][A-Za-z0-9_-]*$/,
+  max: 61,
+  error: "stacks.create.errors.nameInvalidSwarm",
+  helper: "stacks.create.name.helperSwarm",
+};
+const STANDALONE_RULE: NameRule = {
+  pattern: /^[a-z0-9][a-z0-9_-]*$/,
+  max: 255,
+  error: "stacks.create.errors.nameInvalidStandalone",
+  helper: "stacks.create.name.helperStandalone",
+};
+const UNION_RULE: NameRule = {
+  pattern: /^[A-Za-z0-9][A-Za-z0-9_-]*$/,
+  max: 255,
+  error: "stacks.create.errors.nameInvalid",
+  helper: "stacks.create.name.helper",
+};
+
+// ruleFor is the name rule of a target: true for a swarm, false for a standalone host, undefined while unknown.
+function ruleFor(swarm: boolean | undefined): NameRule {
+  if (swarm === undefined) return UNION_RULE;
+  return swarm ? SWARM_RULE : STANDALONE_RULE;
+}
+
+function nameFits(rule: NameRule, name: string): boolean {
+  return name.length <= rule.max && rule.pattern.test(name);
+}
 
 // The largest compose file the server takes (1 MiB). A bigger one is refused here, before it is read.
 const MAX_FILE_BYTES = 1024 * 1024;
 
 // Messages are i18n keys, never literals (D-65).
-function schemaFor(needsEnvironment: boolean) {
+function schemaFor(needsEnvironment: boolean, rule: NameRule) {
   return z.object({
     env: needsEnvironment ? z.string().min(1, "stackLists.create.errors.envRequired") : z.string(),
     name: z
       .string()
       .min(1, "stacks.create.errors.nameRequired")
-      .regex(NAME_PATTERN, "stacks.create.errors.nameInvalid"),
+      .max(rule.max, rule.error)
+      .regex(rule.pattern, rule.error),
     start: z.enum(["example", "empty", "upload"]),
   });
 }
@@ -104,10 +143,12 @@ interface Upload {
 }
 
 // A refusal of the whole request, shown inside the dialog with role=alert. A foreign stack's name
-// carries the spec's second line.
+// carries the spec's second line and, for a user who can read stacks there, the way to the stack that is there.
 interface Refusal {
   text: string;
   hint?: string;
+  // The stack, not managed by Bayplan, that holds the name: its environment and its name.
+  existing?: { envId: string; name: string };
 }
 
 // readText reads a file as UTF-8 text, and refuses what is not: a binary file is not a compose file.
@@ -126,8 +167,8 @@ function readText(file: File): Promise<string> {
   });
 }
 
-// useTarget says whether an environment is a swarm, from the list the sidebar has loaded or, for the
-// local socket, the summary. It is undefined while no environment is chosen.
+// useIsSwarm says whether an environment is a swarm, from the list the sidebar has loaded or, for the
+// local socket, the summary. It is undefined while no environment is chosen or its kind is not known yet.
 function useIsSwarm(envId: string | undefined): boolean | undefined {
   const { data: environments } = useQuery(environmentsQuery);
   const { data: summary } = useQuery({ ...summaryQuery(envId ?? ""), enabled: Boolean(envId) });
@@ -136,7 +177,7 @@ function useIsSwarm(envId: string | undefined): boolean | undefined {
   const type = summary?.environment.type;
   const kind =
     listed?.envType ?? (type ? (type === "standalone" ? "standalone" : "swarm") : undefined);
-  return kind === "swarm";
+  return kind === undefined ? undefined : kind === "swarm";
 }
 
 function CreateStackForm({
@@ -164,14 +205,28 @@ function CreateStackForm({
     [environments, me],
   );
 
+  // The target decides the name rule. The environment is the fixed one or, on the All stacks list, the one
+  // chosen in the select. The form is declared first (the select's value is the form's), so the rule it
+  // validates with is read through a ref that is set on every render.
+  const ruleRef = useRef<NameRule>(UNION_RULE);
   const form = useForm<Values>({
-    resolver: zodResolver(schemaFor(needsEnvironment)),
+    resolver: (values, context, options) =>
+      zodResolver(schemaFor(needsEnvironment, ruleRef.current))(values, context, options),
     defaultValues: { env: "", name: "", start: "example" },
     mode: "onSubmit",
   });
   const fixedName = environments?.items?.find((e) => e.id === fixedEnvId)?.name ?? "";
-  const swarm = useIsSwarm(fixedEnvId);
+  const chosenEnv = fixedEnvId ?? form.watch("env");
+  const swarm = useIsSwarm(chosenEnv || undefined);
+  const rule = ruleFor(swarm);
+  ruleRef.current = rule;
   const start = form.watch("start");
+
+  // A name that is already filled is judged again with the rule of the target when the target changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a change of the target runs it
+  useEffect(() => {
+    if (form.getValues("name")) void form.trigger("name");
+  }, [swarm]);
 
   useEffect(() => {
     if (needsEnvironment && options.length === 1 && !form.getValues("env")) {
@@ -202,18 +257,19 @@ function CreateStackForm({
   );
 
   // show puts a verdict of the name check in the dialog and says whether the name can be used.
-  function show(verdict: StackNameCheck, name: string): boolean {
+  function show(verdict: StackNameCheck, name: string, env: string): boolean {
     switch (verdict.status) {
       case "available":
         setRefusal(null);
         return true;
       case "invalid":
-        form.setError("name", { type: "server", message: "stacks.create.errors.nameInvalid" });
+        form.setError("name", { type: "server", message: ruleRef.current.error });
         return false;
       case "clash":
         setRefusal({
           text: t("stackLists.create.errors.nameClash", { name }),
           hint: t("stackLists.create.errors.clashHint"),
+          existing: { envId: env, name },
         });
         return false;
       default:
@@ -225,7 +281,7 @@ function CreateStackForm({
   // check asks the server about a name on an environment. A name the rule refuses is not asked about:
   // the field says so. A check that cannot be answered is null, and the create decides again.
   async function check(env: string, name: string, show_: boolean): Promise<StackNameCheck | null> {
-    if (!env || !NAME_PATTERN.test(name)) return null;
+    if (!env || !nameFits(ruleRef.current, name)) return null;
     const no = ++checkNo.current;
     if (show_) setChecking(true);
     try {
@@ -241,19 +297,20 @@ function CreateStackForm({
 
   async function checkOnBlur() {
     const name = form.getValues("name");
-    if (!NAME_PATTERN.test(name)) {
+    if (!nameFits(ruleRef.current, name)) {
       // Say what is wrong with it now, rather than at the submit.
       if (name) await form.trigger("name");
       return;
     }
-    const verdict = await check(fixedEnvId ?? form.getValues("env"), name, true);
-    if (verdict) show(verdict, name);
+    const env = fixedEnvId ?? form.getValues("env");
+    const verdict = await check(env, name, true);
+    if (verdict) show(verdict, name, env);
   }
 
   function refusalOf(err: StackRequestError, name: string, env: string): Refusal | null {
     switch (err.type) {
       case "stack_name_invalid":
-        form.setError("name", { type: "server", message: "stacks.create.errors.nameInvalid" });
+        form.setError("name", { type: "server", message: ruleRef.current.error });
         form.setFocus("name");
         return null;
       case "stack_name_taken":
@@ -267,6 +324,7 @@ function CreateStackForm({
         return {
           text: t("stackLists.create.errors.nameClash", { name }),
           hint: t("stackLists.create.errors.clashHint"),
+          existing: { envId: env, name },
         };
       case "file_too_large":
         return { text: t("stackLists.create.errors.fileTooLarge") };
@@ -284,7 +342,7 @@ function CreateStackForm({
     setSubmitting(true);
     // The name is checked again: it may have been taken since the field lost focus.
     const verdict = await check(env, values.name, false);
-    if (verdict && !show(verdict, values.name)) {
+    if (verdict && !show(verdict, values.name, env)) {
       setSubmitting(false);
       return;
     }
@@ -348,7 +406,23 @@ function CreateStackForm({
         <Alert variant="destructive" role="alert">
           <AlertDescription className="flex flex-col gap-1">
             <span>{refusal.text}</span>
-            {refusal.hint ? <span className="text-muted-foreground">{refusal.hint}</span> : null}
+            {refusal.hint ? (
+              <span className="text-muted-foreground">
+                {refusal.hint}
+                {refusal.existing && hasPermission(me, "stacks.read", refusal.existing.envId) ? (
+                  <>
+                    {" "}
+                    <Link
+                      to="/env/$envId/unmanaged-stacks/$name"
+                      params={{ envId: refusal.existing.envId, name: refusal.existing.name }}
+                      className="rounded-sm text-accent-ink underline underline-offset-3 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    >
+                      {t("stackLists.create.errors.openClash", { name: refusal.existing.name })}
+                    </Link>
+                  </>
+                ) : null}
+              </span>
+            ) : null}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -372,7 +446,7 @@ function CreateStackForm({
                       // The same name may be free on one environment and taken on another.
                       const name = form.getValues("name");
                       void check(next, name, true).then((verdict) => {
-                        if (verdict) show(verdict, name);
+                        if (verdict) show(verdict, name, next);
                       });
                     }}
                   >
@@ -406,7 +480,7 @@ function CreateStackForm({
                 autoCapitalize="off"
                 autoCorrect="off"
                 spellCheck={false}
-                maxLength={NAME_MAX}
+                maxLength={rule.max}
                 aria-invalid={Boolean(nameError)}
                 aria-describedby={`${ids}-name-helper`}
                 className={`${TOUCH_HEIGHT} ${checking ? "pe-9" : ""}`}
@@ -428,9 +502,7 @@ function CreateStackForm({
                 />
               ) : null}
             </div>
-            <FieldDescription id={`${ids}-name-helper`}>
-              {t("stacks.create.name.helper")}
-            </FieldDescription>
+            <FieldDescription id={`${ids}-name-helper`}>{t(rule.helper)}</FieldDescription>
             {nameError ? <FieldError>{nameError}</FieldError> : null}
           </Field>
 

@@ -189,7 +189,7 @@ describe("container list: the name opens the container", () => {
 });
 
 describe("container list: stack links", () => {
-  it("links a stack or project Bayplan manages in its group header, and leaves a foreign one as text", async () => {
+  it("links a stack or project Bayplan manages in its group header, and a foreign one to its read-only page", async () => {
     answer = () =>
       Response.json(
         body([
@@ -207,7 +207,9 @@ describe("container list: stack links", () => {
     expect(within(shop).getByRole("link", { name: "shop" }).getAttribute("href")).toBe(
       "/env/e1/stacks/stk-shop",
     );
-    expect(within(blog).queryByRole("link")).toBeNull();
+    expect(within(blog).getByRole("link", { name: "Blog" }).getAttribute("href")).toBe(
+      "/env/e1/unmanaged-stacks/Blog",
+    );
   });
 });
 
@@ -763,10 +765,17 @@ describe("container list: live updates in place", () => {
     mount({ group: "none" });
     await screen.findByText("shop-web");
     answer = () => Response.json(body([...ROWS, row("zeta")]));
-    await refetch();
-    await screen.findByText("zeta");
-    expect(rowOf("zeta").hasAttribute("data-added")).toBe(true);
-    expect(rowOf("zeta").className).toContain("motion-safe:animate-in");
+    // The mark lasts 300 ms of Date.now(); a loaded host can spend that between the render and
+    // the assertion, so the clock stands still until the mark has been seen.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      await refetch();
+      await screen.findByText("zeta");
+      expect(rowOf("zeta").hasAttribute("data-added")).toBe(true);
+      expect(rowOf("zeta").className).toContain("motion-safe:animate-in");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("fades a removed row out and then drops it", async () => {

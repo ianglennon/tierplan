@@ -716,3 +716,16 @@ func TestServiceInspectOfAServiceOnNoNetworkHasNoNetworkIDs(t *testing.T) {
 		t.Errorf("NetworkIDs = %v, want nil", d.NetworkIDs)
 	}
 }
+
+// TestSwarmPlatformsTurnsThePlatformsOfAnImageIntoThoseASwarmSchedulesBy: the architecture of arm is blanked, the
+// variant is dropped and a platform comes once, in the order of its first appearance.
+func TestSwarmPlatformsTurnsThePlatformsOfAnImageIntoThoseASwarmSchedulesBy(t *testing.T) {
+	got := dockerx.SwarmPlatforms([]string{"linux/amd64", "linux/arm/v7", "linux/arm/v6", "linux/arm64/v8", "linux/amd64", "windows"})
+	want := []swarm.Platform{{OS: "linux", Architecture: "amd64"}, {OS: "linux"}, {OS: "linux", Architecture: "arm64"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("SwarmPlatforms = %+v, want %+v", got, want)
+	}
+	if got := dockerx.SwarmPlatforms(nil); len(got) != 0 {
+		t.Errorf("SwarmPlatforms(nil) = %+v, want none", got)
+	}
+}

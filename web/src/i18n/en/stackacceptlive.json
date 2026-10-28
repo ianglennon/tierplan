@@ -1,0 +1,24 @@
+{
+  "stackAcceptLive": {
+    "action": "Accept live into draft",
+    "working": "Rebuilding…",
+    "noDrift": "No drift to restore.",
+    "replace": {
+      "title": "Replace the draft?",
+      "before": "This rebuilds the draft from what's running. The saved draft by {{user}},",
+      "after": ", is replaced, including files and variables. It can't be undone.",
+      "keep": "Keep draft",
+      "confirm": "Replace draft"
+    },
+    "toast": {
+      "rebuilt": "Rebuilt the draft of {{name}} from what's running. Review it, then deploy."
+    },
+    "errors": {
+      "rebuildFailed": "Couldn't rebuild the draft from what's running: {{reason}}. Your draft wasn't changed.",
+      "none": "This stack has not been deployed yet, so there's nothing to keep.",
+      "stopped": "This stack is stopped, so there's nothing running to keep. Start it first.",
+      "lost": "The server didn't answer. The draft may have been rebuilt: open the Editor to see it before you try again.",
+      "generic": "Couldn't rebuild the draft. Check the connection and try again."
+    }
+  }
+}

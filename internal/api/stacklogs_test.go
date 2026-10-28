@@ -661,6 +661,68 @@ func TestStackLogsOfAStandaloneStackFollowEachContainerAndMergeThemWithTheirServ
 	}
 }
 
+// soloCLIContainer is the container docker compose up --scale adds to the project from the host CLI: none of
+// Bayplan's labels, the CLI's own config hash and version (G-08-6).
+func soloCLIContainer(id, service string, number int, state string, created int64) dockertest.FakeContainer {
+	c := soloContainer("", id, service, number, state, created)
+	delete(c.Labels, "bayplan.stack.id")
+	c.Labels["com.docker.compose.config-hash"] = "cli-hash"
+	c.Labels["com.docker.compose.version"] = "5.6.1"
+	return c
+}
+
+// soloWithCLIAndStranger is web-1 and db-1 the stack owns, web-2 the host CLI added, and web-3 that carries another
+// stack's ID.
+func soloWithCLIAndStranger(stackID string) []dockertest.FakeContainer {
+	return []dockertest.FakeContainer{
+		soloContainer(stackID, "cweb1", "web", 1, "running", 100),
+		soloCLIContainer("cweb2", "web", 2, "running", 110),
+		soloContainer("stack-other", "cweb3", "web", 3, "running", 120),
+		soloContainer(stackID, "cdb1", "db", 1, "running", 90),
+	}
+}
+
+// TestStackLogsOfAStandaloneStackFollowAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the
+// project with none of Bayplan's labels. Beside the containers the stack owns it is the person's own change to the
+// stack, so the stack's merged log follows it under its service and number, and masks the stack's known secret
+// values in it. A container that carries another stack's ID is not followed (G-08-6, P7 D-12, T-08-47).
+func TestStackLogsOfAStandaloneStackFollowAContainerTheHostCLIAdded(t *testing.T) {
+	t.Parallel()
+	f := newSoloFix(t, soloWithCLIAndStranger, nil)
+	f.fake.AppendLogs("cweb1", soloLine(10, "web1 a"))
+	f.fake.AppendLogs("cweb2", soloLine(30, "login with s3cr3t-value ok"))
+	f.fake.AppendLogs("cweb3", soloLine(40, "stranger"))
+	f.fake.AppendLogs("cdb1", soloLine(20, "db a"))
+	operator := f.caller(t, f.env, "operator-1", "operator")
+	if rec := operator.saveDraft(f.stack.ID, saveBody(1, soloCompose, `[{"name":"DB_PASSWORD","value":"s3cr3t-value","secret":true}]`)); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+
+	c := f.open(t, "sid="+sidA, "")
+	if c.status0() != http.StatusOK {
+		t.Fatalf("status = %d: %s", c.status0(), c.bodyString())
+	}
+	rd := stackReadyOf(t, c)
+	want := []stackReadyTask{
+		{"cdb1", "db", 1, "", "running"},
+		{"cweb1", "web", 1, "", "running"},
+		{"cweb2", "web", 2, "", "running"},
+	}
+	if !slices.Equal(rd.Tasks, want) {
+		t.Fatalf("ready tasks = %+v, want the stack's containers and the one the host CLI added, not another stack's: %+v", rd.Tasks, want)
+	}
+	lines, _ := readStackLines(t, c, 3)
+	if got, want := stackTexts(lines), []string{"web1 a", "db a", "login with <hidden> ok"}; !slices.Equal(got, want) {
+		t.Fatalf("lines = %v, want %v: the added container's line merged by time, its secret hidden", got, want)
+	}
+	if l := lines[2]; l.Service != "web" || l.Slot != 2 || l.Task != "cweb2" {
+		t.Errorf("web-2 line = %+v, want service web, number 2 and the container's ID as task", l)
+	}
+	if strings.Contains(c.bodyString(), "s3cr3t-value") || strings.Contains(c.bodyString(), "stranger") {
+		t.Errorf("the stream holds a secret value or another stack's line: %q", c.bodyString())
+	}
+}
+
 func TestStackLogsOfAStandaloneStackOrderLinesAtTheSameTimeByServiceThenNumber(t *testing.T) {
 	t.Parallel()
 	f := newSoloFix(t, soloTwoServices, nil)
@@ -841,7 +903,13 @@ func TestStackLogsOfAStandaloneStackFollowAContainerThatRestartedFromItsLastLine
 // stackDownload runs a download of a stack's log as the given signed-in user, to its end.
 func stackDownload(t *testing.T, f *envFix, envID, stackID, query, cookie string) *dlWriter {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/env/"+envID+"/stacks/"+stackID+"/logs/download?"+query, nil)
+	return downloadAt(t, f, "/api/env/"+envID+"/stacks/"+stackID+"/logs/download?"+query, cookie)
+}
+
+// downloadAt runs a download of a log at a path, as the given signed-in user, to its end.
+func downloadAt(t *testing.T, f *envFix, path, cookie string) *dlWriter {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("User-Agent", authUA)
 	req.RemoteAddr = authIP + ":40000"
 	req.AddCookie(&http.Cookie{Name: auth.CookieName(f.inst.CookieScope()), Value: cookie}) //nolint:gosec // a request cookie as a browser sends it

@@ -42,6 +42,9 @@ const (
 	CodePortsTooMany = "ports_too_many"
 	// CodePortRangeInvalid is a port range outside 0 to 65535, or one that runs backwards.
 	CodePortRangeInvalid = "port_range_invalid"
+	// CodeSwarmNameInvalid is a service or network the stack would create on a swarm whose engine name swarm
+	// refuses (D-48, D-53).
+	CodeSwarmNameInvalid = "swarm_name_invalid"
 	// CodeObjectTooLarge is a secret or config with more content than the target takes.
 	CodeObjectTooLarge = "object_too_large"
 

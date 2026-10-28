@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -156,6 +157,28 @@ func (m *Monitor) watch(started, stopped func(envID string)) {
 	defer m.mu.Unlock()
 	m.watchers = append(m.watchers, watcher{started: started, stopped: stopped})
 }
+
+// Watch is watch for a worker outside this package that follows environments by their ID (the background drift check of
+// stacks). It is told of the environments the monitor holds under their own ID, which is the local host, and of no target
+// of an agent environment ("agent:<agent id>") or of a socket folded into a swarm ("socket:<environment id>"): a worker handed
+// one would look for the environment under a key nothing else knows. An agent environment is announced by
+// Service.WatchAgentEnvironments. Register it before the first environment starts: an environment that is already
+// monitored is not announced.
+func (m *Monitor) Watch(started, stopped func(envID string)) {
+	m.watch(func(key string) {
+		if isEnvironmentID(key) {
+			started(key)
+		}
+	}, func(key string) {
+		if isEnvironmentID(key) {
+			stopped(key)
+		}
+	})
+}
+
+// isEnvironmentID is whether a monitor key is an environment's own ID and not the key of one of its targets, which are
+// "agent:<agent id>" and "socket:<environment id>". An environment ID is a bare UUID.
+func isEnvironmentID(key string) bool { return !strings.Contains(key, ":") }
 
 func (m *Monitor) currentWatchers() []watcher {
 	m.mu.Lock()

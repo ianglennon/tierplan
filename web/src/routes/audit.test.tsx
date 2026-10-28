@@ -214,6 +214,35 @@ describe("the audit log", () => {
     expect(within(unknown).getByText("Failure")).toBeTruthy();
   });
 
+  it("labels a stack deploy that was a roll back with the revision it restored", async () => {
+    answer = () =>
+      Response.json({
+        items: [
+          entry({
+            id: "a",
+            seq: 2,
+            action: "stack.deployed",
+            targetType: "stack",
+            target: "s1",
+            details: { mode: "rollback", stack: "web", revision: "4", restoredFrom: "1" },
+          }),
+          entry({
+            id: "b",
+            seq: 1,
+            action: "stack.deployed",
+            targetType: "stack",
+            target: "s1",
+            details: { mode: "deploy", stack: "web", revision: "3" },
+          }),
+        ],
+        nextCursor: null,
+        retentionDays: 90,
+      });
+    renderAt("/audit");
+    expect(await screen.findByText("Rolled back stack web to revision #1")).toBeTruthy();
+    expect(screen.getByText("Stack deployed")).toBeTruthy();
+  });
+
   it("shows a dash for a global action's environment and for a missing target or IP", async () => {
     answer = () =>
       Response.json({

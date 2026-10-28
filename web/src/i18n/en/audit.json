@@ -238,10 +238,16 @@
         "draft_saved": "Stack draft saved",
         "draft_discarded": "Stack draft discarded",
         "deployed": "Stack deployed",
+        "deployed_rollback": "Rolled back stack {{name}} to revision #{{revision}}",
+        "deployed_rollback_anon": "Rolled back stack {{name}}",
+        "deployed_restore": "Restored stack {{name}} from drift",
         "stopped": "Stack stopped",
         "started": "Stack started",
         "removed": "Stack removed",
-        "value_revealed": "Stack secret value revealed"
+        "value_revealed": "Stack secret value revealed",
+        "adopted": "Stack adopted",
+        "drift_accepted": "Accepted live state into the draft",
+        "drift_accepted_named": "Accepted live state into the draft of {{name}}"
       }
     },
     "coalesced": {

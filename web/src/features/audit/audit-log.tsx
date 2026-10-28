@@ -222,7 +222,7 @@ function EntryRow({ entry, environmentName }: EntryRowProps) {
   const t = useT();
   const panelId = useId();
   const [open, setOpen] = useState(false);
-  const label = actionLabel(entry.action, t);
+  const label = actionLabel(entry.action, t, entry.details);
   const none = t("audit.none");
   const coalesced = coalescedRefusal(entry);
   const environment = entry.environment ? (environmentName ?? entry.environment) : none;

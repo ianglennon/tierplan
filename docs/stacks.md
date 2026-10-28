@@ -6,8 +6,9 @@
 A stack is a compose file that Bayplan deploys and keeps tidy: its services, networks, secrets and configs go
 together, and nothing is left behind when you remove it. This page explains how to write one, what the review
 shows before anything changes, what a deploy does on a swarm and on a standalone host, how it stops, starts and
-goes away again, and what Bayplan writes on your hosts. It also says plainly what Phase 7 does not do, and a few
-behaviours that are open decisions, not oversights.
+goes away again, how to see its history and roll back, how to take over a stack that something else made (for
+instance Portainer), how Bayplan spots changes made behind its back, and what Bayplan writes on your hosts. It
+also says plainly what is not in this version, and a few behaviours that are open decisions, not oversights.
 
 The workflow is always the same: **edit, save, review, deploy**. Nothing is sent to any engine until you press
 **Deploy stack** on the review, and the review shows what that will change on the environment as it is now.
@@ -32,6 +33,10 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 - [Deploying](#deploying)
 - [When a deploy fails, is cancelled or is interrupted](#when-a-deploy-fails-is-cancelled-or-is-interrupted)
 - [Stop, Start and Remove](#stop-start-and-remove)
+- [History and roll back](#history-and-roll-back)
+- [Unmanaged stacks](#unmanaged-stacks)
+- [Adopting a stack](#adopting-a-stack)
+- [Drift](#drift)
 - [One operation at a time](#one-operation-at-a-time)
 - [What Bayplan writes on your hosts](#what-bayplan-writes-on-your-hosts)
 - [Host access and who may do what](#host-access-and-who-may-do-what)
@@ -39,7 +44,7 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 - [Limits](#limits)
 - [What is recorded](#what-is-recorded)
 - [Behaviour that is still open](#behaviour-that-is-still-open)
-- [What Phase 7 does not do](#what-phase-7-does-not-do)
+- [What is not in this version](#what-is-not-in-this-version)
 
 ## Create a stack
 
@@ -48,20 +53,48 @@ environment you may read, grouped by environment, with search, status chips and 
 the Admin role on the environment (`stacks.create`).
 
 **Create stack** asks for a name and a starting point (the starter example, an empty file, or a compose file you
-upload). The name is lowercase letters, numbers, dash or underscore, starts with a letter or number, is at most
-63 characters, and **can't change later**: it is the swarm namespace or the Compose project name on the host.
-Bayplan checks it as you type.
+upload). The name starts with a letter or number and **can't change later**: it is the swarm namespace or the
+Compose project name on the host. The rule for it is under [Stack names](#stack-names). Bayplan checks it as you
+type, against the environment you create the stack on.
 
 A stack whose name a stack on that environment already has, that Bayplan does not manage, is refused: *a stack
-named X already exists on this environment, not managed by Bayplan*. Bayplan never silently takes over a stack
-(see [what Phase 7 does not do](#what-phase-7-does-not-do)). The same check runs again at the review and at the
-deploy.
+named X already exists on this environment, not managed by Bayplan*, with the advice to pick another name or
+[adopt the existing stack](#adopting-a-stack). Bayplan never silently takes over a stack. The same check runs
+again at the review and at the deploy.
 
 Creating a stack sends nothing to any engine. It reads **Not deployed** until you deploy it.
 
+### Stack names
+
+One rule decides a stack's name, whether you create the stack in Bayplan or adopt one that something else made.
+There is no second, stricter rule for creating.
+
+| Target | A name is | Longest |
+|--------|-----------|---------|
+| A swarm | letters in either case, numbers, dash and underscore; starting with a letter or number; no dot | 61 characters |
+| A standalone host | Compose's project-name rule: lowercase letters, numbers, dash and underscore; starting with a letter or number; no dot | 255 characters |
+
+Why a swarm is stricter: it names a stack's services and networks `{stack}_{key}`, and it takes only letters,
+numbers, dash and underscore in such a name, up to 63 characters. A dot would make a service that can never be
+created, and 61 is the longest stack name that still leaves room for a one-character service. So **a stack name
+with a dot, a space or a slash is refused** (*Use only letters, numbers, dash and underscore, ...*), and an
+unmanaged stack with such a name is listed but cannot be [adopted](#adopting-a-stack), with the same reason. A
+swarm stack may have capital letters now (`MyApp`); Phase 7 allowed only lowercase.
+
+Two more consequences on a swarm:
+
+- **A name swarm would refuse is stopped at the check, not half way through a deploy.** The name of a service or a
+  network the stack would create is `{stack}_{key}`, and when the key is long or has a dot, or a network has an
+  explicit `name:` swarm refuses, the check reports an error `swarm_name_invalid` on that key and the deploy does not
+  start. A stack with a 61-character name and no network of its own is such a case: its implicit network
+  `{stack}_default` is 8 characters longer than the name, so give it a short explicit network name or a shorter
+  stack name.
+- **Two stack names that differ only in case are the same name.** Swarm treats `myapp` and `MyApp` as one, so
+  creating the second is refused as taken (*409 `stack_name_taken`*).
+
 ## The editor
 
-A stack page has four tabs: **Overview**, **Editor**, **Resources** and **Logs**. The Editor has three panes:
+A stack page has five tabs: **Overview**, **Editor**, **History**, **Resources** and **Logs**. The Editor has three panes:
 
 - **Files**: `compose.yaml` and any other [stack files](#stack-files), in a code editor with YAML highlighting.
   Errors are marked on their line and listed under **Problems**, each with its file and line; pressing one jumps
@@ -247,7 +280,9 @@ fresh digest and compares the result with **what is running now**, not with an e
   *Changed (hidden)* at their path, and the services a recreate carries with it named (a service that shares the
   network, processes or volumes of a recreated one is recreated with it, and one with `depends_on: restart: true`
   is restarted);
-- **Other resources**: networks, volumes, secrets and configs added, changed, removed or external;
+- **Other resources**: networks, volumes, secrets and configs added, changed, removed or external. On a standalone
+  host it also flags a network or volume whose settings on the host differ from the compose file (see
+  [below](#network-and-volume-changes-in-a-standalone-review));
 - **Rendered YAML**: a text diff of the rendered stack **against the last deploy**.
 
 The field diff and the Rendered YAML answer different questions, and both are labelled. **The field diff compares
@@ -256,6 +291,11 @@ it rebuilds every running container's settings. A container changed by hand on t
 instance) is therefore listed as changed at that setting even though your compose file did not change, and the
 next deploy recreates it. **The Rendered YAML tab compares with the last deploy Bayplan made**, so it shows what
 you changed in the file, whatever someone did on the host.
+
+Two more parts appear only when they apply, and neither holds a deploy back. **Reverts drift** lists the changes
+somebody made outside Bayplan that this deploy would put back (see [Drift](#drift)). **Ownership labels only** groups
+the services or containers of a freshly [adopted stack](#adopting-a-stack) that the deploy recreates only to take
+Bayplan's labels.
 
 **Errors stop the deploy** and are listed with a link to the line; **Deploy stack** says why it is off.
 **Warnings do not.** A review of a stack that is the same as what runs says *No changes* and has nothing to deploy.
@@ -268,6 +308,23 @@ someone's deploy silently.
 
 A review right after a successful deploy is empty on both targets.
 
+### Network and volume changes in a standalone review
+
+**On a standalone host, the review also compares each network and volume the stack declares with the one that
+exists on the host.** When the object's configuration hash on the host (the `com.docker.compose.config-hash` label
+Docker Compose wrote when it made it) differs from the one the compose file gives, the review adds a row to **Other
+resources**:
+
+- a **network** row: *Its settings differ from the compose file. The deploy recreates it, which restarts the
+  containers attached to it.* Docker Compose recreates a network whose settings changed, and no data is lost, but
+  the containers on it restart;
+- a **volume** row: *Its settings differ from the compose file. Bayplan keeps it as it is.* A volume is never
+  recreated (see [Volumes are never recreated](#volumes-are-never-recreated)), so the change is not applied.
+
+**This applies to every standalone stack, those created before this release included.** A standalone review in
+Phase 7 had no such rows. Objects the file marks `external`, objects that do not exist on the host yet and objects
+with no hash label are not flagged.
+
 ## Image pinning and Update images
 
 **A redeploy never changes an image by itself.** Bayplan resolves a tag to a digest when a service is new or the
@@ -279,6 +336,12 @@ on the Overview, in the review and in the Rendered YAML. A standalone host is pi
 - A service that needs a fresh digest needs its registry. If the registry can't be reached, only the services that
   need it are blocked, with the reason. A service that keeps its running digest never needs the registry.
   Registry credentials are the ones stored in Bayplan ([registries.md](registries.md)).
+- **On a swarm, when Bayplan looks an image up it also writes the image's platforms** (for example `linux/amd64` and
+  `linux/arm64`) into the service's placement, as `docker stack deploy` does with its default
+  `--resolve-image=always`. The swarm then schedules the service's tasks only on nodes that can run the image. A kept
+  digest keeps the platforms recorded for it, and asks no registry for them. A service deployed before this version
+  has none recorded: it gains them the next time its image is looked up (**Update images**, or a changed tag),
+  because a kept digest never asks a registry.
 - An image no registry has (built on the host) is pinned to its local image ID, with a warning *isn't from a
   registry*. See [behaviour that is still open](#behaviour-that-is-still-open) for Engine 29.
 
@@ -324,6 +387,23 @@ and an output log, all with the stack's secret values removed before anything is
 
 You may have at most five jobs running at once.
 
+### Volumes are never recreated
+
+On a standalone host, the Docker Compose engine notices when a named volume exists but its driver, options or
+labels differ from the compose file, and it asks: *"Recreate (data will be lost)?"*. Answering yes removes the
+volume and creates it again, which deletes the data in it. **Bayplan always answers no** (decision D-46): a deploy
+whose compose file changes a volume's driver, options or labels leaves the volume as it is, goes on, and the
+containers mount the existing volume with its data. The change is not applied, and the console log says which
+volume was left alone.
+
+To change those settings, remove the volume by hand on the **Volumes** page and deploy the stack again. Docker
+refuses to remove a volume a container still mounts, so the containers that use it must be gone first. The volume
+is then created with the new settings and is empty, so copy the data out first if you need it.
+
+This changed in Phase 8: a standalone stack deployed with an earlier version recreated a volume whose settings
+differed, so the same edit that was applied then is left alone now. Networks are different: the Compose engine
+still recreates a network when its settings change, which restarts the containers attached to it and loses no data.
+
 ## When a deploy fails, is cancelled or is interrupted
 
 **Bayplan stops, reports and never rolls back by itself.** The console names the service it stopped at with
@@ -340,9 +420,8 @@ updated.
 - **Roll back to previous version** redeploys the last version that ran well, as a revision of its own, with its
   stored image digests and **no registry call**, under the same lock and the same host-access check. It is offered
   on a failed or cancelled deploy and on the stack page's failure alert, and it never starts without your click.
-  Rolling back across a secret or config change recreates the object that version needs. **Roll back is a swarm
-  feature in this version**: on a standalone stack the server answers *this version cannot deploy to a standalone
-  Docker host yet*. Fix the file, review and deploy again.
+  Rolling back across a secret or config change recreates the object that version needs. It works on a swarm and on
+  a standalone host, and it is the one-click form of [rolling back to a chosen revision](#history-and-roll-back).
 - **A deploy that was running when Bayplan stopped is marked interrupted** when it starts again. The stack reads
   *Deploy failed* with *The deploy was interrupted when Bayplan stopped. The swarm may be partly updated.* The next
   deploy finds what is left by its labels and reconciles it.
@@ -367,6 +446,9 @@ deletes everything the stack owns and needs a typed confirm of the stack's name.
 
 1. The dialog lists what will go: the services (or containers), the stack's own networks, its own secrets and
    configs, and the definition.
+   On a standalone host the containers include any that someone added to one of the stack's services from the host's
+   CLI (for example with `docker compose up --scale`), and Remove waits for them like the rest, so nothing of the
+   stack is left.
 2. **Volumes are opt-in.** Each volume the stack owns is listed (per node on a swarm) with a checkbox, unticked.
    Only a ticked volume is deleted, and only if it carries this stack's label on that node. Unticked volumes stay
    on the host.
@@ -379,6 +461,371 @@ deletes everything the stack owns and needs a typed confirm of the stack's name.
 If a removal fails part-way, what was removed stays removed and **the definition is kept**: remove again to finish.
 A node whose agent is not connected is not waited for, and its volumes are not offered; remove the stack again
 once it is back to see them.
+
+## History and roll back
+
+Every deploy is stored as a **revision** of the stack: its compose file, its other files, its variables, the image
+digests it pinned and the compose file as it was rendered. The **History** tab, after Editor, lists them newest
+first. History only grows: nothing is rewritten, and a roll back adds a revision of its own.
+
+| Column | Shows |
+|--------|-------|
+| Revision | Its number, and *Deployed* on the newest good one, which is what runs now |
+| Kind | *Deploy*, *Update images*, *Roll back* (with the revision it restored, *of #5*) or *Adopted* (*from* the namespace or project it was taken from) |
+| Result | *Good*, *Failed* (with the service and the reason, in the words of the failed-deploy alert) or *In progress* |
+| Who, When | Who started it and when |
+| Images | The digest changes against the previous good revision, or the number of images pinned for a first or adopted revision |
+
+Select a revision to open its card. It has four tabs:
+
+- **Changes** (the first): per service, what rolling back to this revision would change against **what runs now**,
+  field by field. The values of environment variables, commands, health check commands and log options are
+  withheld from anyone without `secrets.reveal` (the path that changed is still listed). A setting that differs
+  because the stack [drifted](#drift) carries a *Drifted* mark.
+- **YAML diff**: the rendered YAML of this revision against the deployed revision.
+- **Rendered**: the revision's rendered compose file as it was stored, read only, with Copy and Download.
+- **Contents**: its files (a secret file reads *Hidden*), its variables (a secret one is hidden) and its pinned
+  images. A roll back restores all of this exactly.
+
+A secret variable and the content of a secret file never leave the server from a revision. The other values in a
+rendering, such as plain variables, are shown to anyone who holds `stacks.read`, as the draft is.
+
+There is no comparison of two arbitrary revisions, and no *open this revision as a draft* action: roll back, then
+edit.
+
+### Rolling back to a revision
+
+An Operator (`stacks.deploy`) can roll a stack back to **any revision that finished well**, on a swarm and on a
+standalone host. Press **Roll back to revision #n** on the revision's card, or in the row's menu. A *Failed* or *In
+progress* revision has no such action: it stays in the list for the record. The page hides the action on the deployed
+revision, since there is nothing to restore; the server would accept it, and it is how [restoring from
+drift](#drift) works.
+
+- **It goes through the review.** The review compares the revision with what runs now and lists the Images as
+  *Pinned (revision #n)*. Nothing else changes until you press **Roll back stack**.
+- **It restores everything exactly**: the compose file, the other files, the variables and the pinned image
+  digests. **It never looks anything up in a registry**, so a tag that has moved since cannot change what comes
+  back. A secret or config that version used is recreated from its stored content.
+- **The platforms come back too.** A revision stores the platforms its images were deployed with, next to their
+  digests, and a roll back restores them without asking a registry.
+- **Your draft stays as it is.** After the roll back the draft shows the notice that the deployed version changed
+  since you started editing, and its review asks you to acknowledge it, as for any deploy by someone else.
+- **It is recorded as a new revision** (for example #9, *Roll back of #5*), audited as `stack.deployed` with mode
+  `rollback` and the revision it restored.
+- The same rules as a deploy hold: the [operation lock](#one-operation-at-a-time), and the host-access check, which
+  judges the version being restored for the person who asks (so someone below Admin cannot bring back host access an
+  Admin removed). If the stack was deployed again since you opened the review, the roll back is refused (*The stack
+  was deployed again since you opened this review*) and you review again.
+
+### How many revisions are kept
+
+Bayplan keeps the last **N** revisions of each stack. N is **Revisions kept per stack** under **Settings, General,
+Stack history**: 20 by default, from 5 to 200, one value for the whole instance, changed by an instance admin
+(`settings.write`).
+
+- Never deleted, however old: the **newest good revision (the deployed one)** and any revision whose deploy is still
+  running. The draft is not a revision and is never touched.
+- A deleted revision takes its files and variables with it, **sealed secret variables and secret files included**,
+  so old secrets do not live for ever. Its card then reads *That revision is gone*.
+- Pruning runs after every deploy's outcome is recorded, at start-up, and when you lower the limit. Raising the limit
+  deletes nothing.
+- **Lowering the limit asks first.** The dialog says how many revisions across how many stacks go (*Save and delete
+  n revisions*), and they cannot be recovered. The change is audited as `settings.updated` with the old limit, the
+  new one and the number deleted, in the same transaction as the deletion.
+- Deleted rows leave free pages in the database file that are not wiped. What was sealed there is encrypted under the
+  master key (see [threat-model.md](threat-model.md)).
+
+## Unmanaged stacks
+
+Bayplan lists the stacks it did not create (made by `docker stack deploy`, `docker compose up` or Portainer) beside
+its own, read only. They are **Unmanaged**. Nothing about them is stored: Bayplan reads them from the engine each
+time, and Docker stays the source of truth.
+
+**What counts as a stack.** Only labels define one. On a swarm, the services that share a
+`com.docker.stack.namespace` label are a stack. On a standalone host, the containers that share a
+`com.docker.compose.project` label are a stack (a one-off container from `docker compose run` is left out). A
+service or container with neither label is not a stack and stays on the Services or Containers page.
+
+**Where they show.** The environment's stack list and **All stacks** list them with an *Unmanaged* badge, a count in
+the caption (*3 stacks, 1 unmanaged*) and a **Show** filter with *All*, *Managed* and *Unmanaged* (kept in the page
+address, so a link keeps it). Their row menu offers *Open stack* and *Adopt stack…*. If Bayplan cannot read the
+engine to look for them, the list says *Couldn't look for unmanaged stacks on {environment}* with a **Retry**, and your
+own stacks still list. A stack that Bayplan is deploying for the first time is never listed twice.
+
+**The page of an unmanaged stack** has **Overview**, **Generated compose**, **Resources** and **Logs**, and no
+Editor or History: Bayplan holds no definition of it. Its note says so: *You can look at it here. Adopt it to deploy,
+update and roll it back with Bayplan. Adopting changes nothing until you deploy.*
+
+- **Generated compose** is a preview of the compose file [adoption](#adopting-a-stack) would use, rebuilt from the
+  running services. Nothing is saved. It needs only `stacks.read`, and **for anyone without `secrets.reveal` every
+  environment value, command, entrypoint, health check command and log option is `<hidden>`**, as are those fields
+  in the adopt check. The names of the secrets and configs it references are shown and their values are never read.
+- **Resources** shows what the stack's services use, and which networks and volumes would be owned by the stack
+  after adopting (those carrying its label) and which stay external.
+- **Logs** is the merged log of the stack, with the same streams, limits and audit as a managed stack's.
+- The only action is **Adopt stack** (Admin). There is **no Remove** on an unmanaged stack: adopt it first, or remove
+  its objects one by one on their own pages (*To remove it, adopt it first.*). The normal actions on its service and
+  container pages are unchanged.
+
+**Flags on an unmanaged stack:**
+
+| Flag | Meaning |
+|------|---------|
+| *Portainer* | Looks like Portainer made it: a label whose key starts with `io.portainer.`, or a Compose working directory under `/data/compose/`. The page says: *Remove it from Portainer without deleting it, or the two tools will fight over it. Bayplan doesn't contact Portainer.* See [behaviour that is still open](#behaviour-that-is-still-open) for how far those markers are verified. |
+| *Created by Bayplan (another instance or a lost record)* | Its objects carry a `bayplan.stack.id` that no stack of this instance has, for instance after a restore from an old backup, or because another Bayplan made it. The label is only a note: it never links the stack to anything. It is adopted like any other, and the first deploy replaces the old ID. |
+| *Bayplan*, *Bayplan agent* | The stack Bayplan itself runs in, or one that runs a Bayplan agent. It is listed, and **Adopt is off** (*This is Bayplan's own stack.*, *This stack runs Bayplan's agent.*), so Bayplan cannot be made to deploy or remove itself. |
+| *Can't be adopted* | Its name breaks the [stack-name rule](#stack-names), for example a space or a slash. The reason is shown. |
+
+## Adopting a stack
+
+**Adopting** turns an unmanaged stack into one Bayplan manages fully, so you can edit, deploy, update, roll back,
+stop and remove it, and see its drift. It is how you move off Portainer. It needs the Admin role on the environment
+(`stacks.create`; adoption adds no permission of its own). The check beforehand needs only `stacks.read`.
+
+**Adopting changes nothing on the engine.** Pressing **Adopt stack** stores a record in Bayplan, and no request is
+sent to Docker. The first deploy afterwards is what changes things, and it is **not restart-free**: see [the first
+deploy](#the-first-deploy-of-an-adopted-stack).
+
+Open the stack's page and press **Adopt stack** (or use the row menu). Work through the adopt page in three steps.
+
+### 1. Choose where the definition comes from
+
+- **Rebuild from the running services** (the default). Bayplan reads what runs and writes a compose file from it. It
+  is the reverse of what a deploy does, and it leaves out engine defaults so the file reads like one a person would
+  write. A stack that cannot be written as a compose file that passes the check is refused with the reason
+  (`rebuild_failed`).
+- **I have the original compose file.** Paste it (or choose a file, up to 1 MiB), fill in the values of any variables
+  it uses, and Bayplan checks it against what runs. It says *Matches what's running* or *Differs from what's running
+  in n settings*, with the differences, and **Use the rebuild instead** is always one click away. A file that
+  matches is used **exactly as you wrote it** (comments and key order kept). The file goes through the same check as
+  any draft, so `include`, `extends` and files on the Bayplan server are refused, and the server checks it again when
+  you press Adopt. The variable values you type are saved with the stack (a secret one sealed). Nothing of the file
+  or the values is kept in the browser after you leave the page.
+
+### 2. Read the check
+
+Before anything is stored, the page runs a review of the definition against what runs, with these results.
+
+- **What happens on the first deploy.** *Nothing will change except Bayplan's ownership labels*, or a list of
+  **differences** (*3 differences will change on the first deploy*) with what runs now and what the first deploy
+  would set. **Differences are shown, and they do not block adopting.** A rebuild is close but not always perfect, so
+  read them: for example a setting the engine reports in a form the compose file cannot say. The ownership labels are
+  counted apart: *2 services will be recreated to take Bayplan ownership labels (brief restart)*.
+- **How the pieces are treated.** A table of every network, volume, secret and config:
+  - a **network or volume that carries the stack's label** (`com.docker.stack.namespace` or
+    `com.docker.compose.project`) is **owned by the stack under its existing name** and is not recreated. A later
+    Remove cleans it up (a volume only if you tick it);
+  - a network or volume **without** the label is **External**. Bayplan does not change it;
+  - an existing **swarm secret or config** is referenced as **external** and left untouched: *Not stack-owned. Move it
+    to a stack file to rotate it.* Bayplan never reads their values and does not import their contents;
+  - on a standalone host a network or volume is written in the form whose configuration hash equals the one on the
+    host, so the Compose engine does not see a change. If no form matches, the object is kept **external** with a
+    note, so the first deploy cannot recreate it.
+- **Host access.** If the definition uses settings that need Admin (a privileged container, the Docker socket, a host
+  path), the page lists them (*Deploying this stack needs Admin*). Adopting is fine; the policy is judged when you
+  deploy, as for any stack.
+- **Portainer** and **orphan ID** advice, when they apply (see [Unmanaged stacks](#unmanaged-stacks)).
+- **Environment values are copied in as literals.** The definition holds each service's environment values as they
+  are, **passwords included**, in the stored draft and in revision #1. Bayplan does not guess which ones are secret.
+  After adopting, move secret values to **Variables** as secret variables and refer to them as `${NAME}`. Until you
+  do, anyone who holds `stacks.read` on the environment can read them in the draft and in History's *Rendered* and
+  *YAML diff* views of revision #1. [threat-model.md](threat-model.md) records this as an accepted residual risk.
+
+### 3. Adopt
+
+Press **Adopt stack**. The page sends the fingerprint of the state it checked. The server reads what runs again,
+rebuilds the definition itself (the browser sends no definition, only your pasted file if you chose that) and
+compares: if what runs changed since the check, it refuses (*What is running changed since the check. Run the check
+again before you adopt.*, with **Check again**) and stores nothing. It takes the environment's [operation
+lock](#one-operation-at-a-time) for the moment of storing, and it is refused while another operation holds it.
+
+In one step it then stores:
+
+- the **stack**, with *Adopted* as its source and the namespace or project as its reference. It reads as running or
+  degraded straight away and shows no draft badge;
+- the **draft** and **revision #1** (*Adopted from {name}*, Good), both holding the definition, with the images
+  **pinned to the digests that run**, so no tag is looked up and nothing can move;
+- a record of what it adopted: the networks and volumes it owns, the secrets and configs it references, the old
+  Bayplan ID if there was one, and the places where the definition differed from what runs.
+
+The audit log gets `stack.adopted` (the stack, its target, where it was taken from, the number of services and the
+revision).
+
+A stack that is Bayplan's own or an agent's, or whose name breaks the rule, is refused (`stack_not_adoptable`), and a
+name Bayplan already manages is refused with a link to that stack (`stack_already_managed`).
+
+**Names.** Adopting takes any name the [stack-name rule](#stack-names) allows, which includes capital letters on a
+swarm that Phase 7 refused. Docker itself accepts more than that rule (a dot, for example), but a name outside it
+is listed and cannot be adopted, because a stack named so could not be deployed again.
+
+### The first deploy of an adopted stack
+
+An adopted stack's Overview says *{name} is adopted but not yet deployed by Bayplan* until its first deploy. The review
+of that deploy shows **Ownership labels only** apart from real changes, with how many services or containers are
+recreated.
+
+- **The first deploy puts Bayplan's labels on everything**, as for any stack, so removal, history and later phases
+  find the stack's things the same way. A label change **restarts the workload briefly**: on a swarm Docker restarts
+  the tasks of each service whose container labels change, and on a standalone host Docker Compose recreates each container, because the labels
+  change its configuration hash. Plan the deploy for a time a restart is acceptable. The review says so plainly before
+  you press anything.
+- **Platforms are kept.** A stack made with `docker stack deploy` carries the platforms the CLI wrote into each
+  service's placement. Adopting records them with the first revision, and the first deploy sends them again, so the
+  review shows no placement change.
+- **A named volume's mount gets the label too.** Bayplan's `bayplan.stack.id` is added to the volume options of a
+  service's mount of a named volume. It counts as an ownership label, so the first review lists it under *Ownership
+  labels only*. The volume itself is not touched.
+- **Data is kept.** The networks and volumes the stack owns are reused under their names. A volume is never
+  recreated, and the first deploy of an adopted standalone project was proved on real engines to keep a marker file
+  in a volume. Secrets and configs that already exist are not created, changed or removed.
+- **The differences from the check are applied** by this deploy, since the definition is what gets deployed.
+- **Host access is judged here**: whoever deploys needs Admin if the definition uses it.
+- After a first deploy that went well, Bayplan treats a service or container of the same namespace or project that
+  has no Bayplan ID as someone else's, and a deploy that would clash with it stops (*a stack named X already exists
+  ... not managed by Bayplan*). Until then such workloads count as part of the stack.
+
+**Differences found at adoption are shown as drift until then.** If the definition differs from what runs, the
+stack's [drift](#drift) page lists those differences with the cause *Differed from the rebuilt definition when {name}
+was adopted*, and they are cleared by the first deploy.
+
+### Removing an adopted stack
+
+Remove works as for any stack: the services or containers, the networks the stack owns, the definition, and the
+volumes you tick. **It leaves the secrets and configs the stack only referenced**, because Bayplan never owned them.
+The Remove dialog lists them as external. Delete them on the **Secrets** and **Configs** pages when nothing else uses
+them. An external network is left too, as for every stack.
+
+### What adopting owns
+
+Later phases decide what is safe to clean up (Phase 10, orphaned networks and volumes; Phase 11, the janitor). They
+must not infer an adopted stack's ownership from `bayplan.stack.id` labels alone.
+
+- **Networks and volumes are owned by name.** The stack's record lists the engine names of the networks and volumes
+  that carried its label when it was adopted. They are the stack's **for as long as the stack exists**, and they are
+  **never recreated, so they never get a `bayplan.stack.id` label**. A rule that finds a stack's objects by that label
+  would call them orphans.
+- **Secrets and configs it references are not owned.** They are recorded by name as external and are never removed
+  with the stack.
+- **A `bayplan.stack.id` label alone never links an object to a stack.** Another ID is another stack's. Between the
+  adoption and its first good deploy, a service or container of the stack's namespace or project counts as its own if
+  it has no ID or the old one recorded at adoption; afterwards only its own ID counts.
+- **On a standalone host, a container added to the stack's project from the host's CLI counts with the stack.** A
+  container of the project with no `bayplan.stack.id` is the stack's once the stack owns another container of the
+  same service (drift, the stack's page, restore and Remove). Another stack's ID never counts, and a project the stack
+  holds no container of, or a service it runs no container of, stays a name clash and is not taken over.
+- The one place that decides this is `Ownership` in `internal/stackops` (`OwnershipOf(stack)`). A guard test fails on
+  code elsewhere that decides ownership by a Bayplan ID label. Ask it, do not copy the rule.
+
+## Drift
+
+**Drift** is a difference between what a managed stack's **deployed revision** says and what runs. Bayplan checks for
+it so a hot-fix made on a host, or a service scaled by hand, does not stay unnoticed until the next deploy quietly
+puts it back. **Bayplan shows drift and never fixes it by itself**, and there is no way to dismiss it: you restore
+the revision, or you keep what runs.
+
+**What counts.** On a swarm, each service of the stack is compared with the deployed revision (converted with the
+digests it stored). On a standalone host, each container of the stack's project is compared by its configuration hash
+and then field by field, and its image against the revision's pin. Any difference in a setting counts: replicas,
+image or digest, environment, ports, labels, mounts, placement (including the platforms the image runs on), restart
+policy and the rest. A revision stored before platforms were recorded is compared through the platforms of the same
+image, so an old revision does not read as drift. A service the revision
+has and the engine does not is **Missing**; a service or container the stack owns that the revision does not declare
+is **Extra**.
+
+**A container added from the host's CLI counts with the stack.** On a standalone host, a container someone adds to the
+stack's Compose project from the host, such as `docker compose up -d --scale web=2 --no-recreate` run on your own copy
+of the file, carries none of Bayplan's labels, but it belongs to the stack's project. Bayplan counts it with the
+stack while the stack owns another container of the same service: a second container of `web` reads as
+**web Changed** with two containers, and a restore removes it. The same container shows on the stack's page, in its **Resources** tab and in its logs, does not
+block a deploy, a restore, Stop or Start as a name clash, and is listed and removed by **Remove**. A container that
+carries **another Bayplan stack's ID** never counts as this stack's. A Compose project of the same name that the stack
+owns **no container of** is not taken over: it stays a name clash, so Bayplan never acts on a project it did not deploy
+or adopt. Nor is a container with none of Bayplan's labels of a service the stack runs **no container of**, such as a
+`postgres` from an unrelated `compose.yaml` whose project happens to have the same name: it is not drift, and a deploy,
+restore or Remove is refused as a name clash until you remove it or rename one of the projects.
+
+**What is not drift:**
+
+- Bayplan's own ownership labels (including the one on a named volume's mount), and the swarm's force-update counter. A **restart** or a **force update** does
+  not change the spec and is not drift.
+- Runtime state such as task churn and a service's update status.
+- A **stopped** stack. Stop scales it down on purpose, and it is not checked until it is started.
+- A stack that was never deployed.
+- Networks, volumes, secrets and configs are not compared on their own; only the services and containers are.
+
+If the deployed revision cannot be redeployed any more (for instance a file it needs is gone), the page says it
+*couldn't compare* instead of guessing.
+
+**Scaling from Bayplan's own service page counts as drift**, because the next stack deploy would put the old count
+back.
+
+### Where you see it
+
+- The stack lists show a **Drifted** badge after the name, and a **Drifted** status chip (with the number of stacks) to
+  filter by. A stack nobody has checked yet, a stopped one and a never-deployed one show nothing.
+- The stack's **Overview** shows an alert (*{name} has drifted from revision #n*, with **View drift**) and a *Drift* row
+  in the Details card (*3 differences*, a link).
+- The **drift page** (not a tab; open it from the alert or the Details card) has a summary of how many services or containers changed,
+  went missing or are extra, and for each a *Deployed* against *Running now* table. Values of environment
+  variables, commands, health check commands and log options are withheld from anyone without `secrets.reveal`.
+  **Check again** reads the engine at once.
+
+### When Bayplan checks
+
+The check is read only and runs in the background for every environment, so the badge is there before anyone opens the
+stack. It runs
+
+- about **every five minutes**, with a little random spread so environments do not all read at the same moment;
+- **a few seconds after a Docker event that names the stack** (a 3-second quiet period lets a burst of events become
+  one check). On a swarm the event carries only the **service's name**, not its stack, so Bayplan finds the stack
+  that owns a service of that name. Drift is therefore found within seconds, and the five-minute timer is the backstop;
+- when an operation on the stack (deploy, update, roll back, stop, start) ends;
+- when you open the Overview or the drift page.
+
+It never runs **while a stack operation holds the environment's [lock](#one-operation-at-a-time)** (a deploy under
+way is not drift), and it never writes to an engine. A remote environment is checked while at least one of its agents
+is connected.
+
+### Why it differs
+
+Under each drifted service the page says what Bayplan knows from its **audit log**, and nothing it cannot back up:
+
+- *web was scaled from 1 to 3 by alice in Bayplan, 5 minutes ago.* (a scale, a roll back or an edit made from the
+  service pages);
+- *Changed outside Bayplan.* when no audit row explains it;
+- *Differed from the rebuilt definition when the stack was adopted* until the first deploy, for a difference found at
+  [adoption](#adopting-a-stack).
+
+The badge's tooltip says the same, shortened. A scale only explains a change of the replica count, never an image
+change made after it.
+
+### What you can do
+
+- **Redeploy to restore** (Operator, `stacks.deploy`). On the drift page and the Overview alert. It opens a review of
+  the **deployed revision against what runs**, so its changes are exactly the drift, with the revision's stored
+  digests and no registry lookup. **Restore stack** deploys it through the console. The result is recorded as a new
+  revision (listed as *Roll back*) and audited as `stack.deployed` with mode `restore`. If the revision uses host
+  access you need Admin, and if the stack was deployed again meanwhile the restore is refused and you review again.
+- **Accept live into draft** (Operator, `stacks.update`). It makes what runs the stack's **next draft**: Bayplan
+  rebuilds the compose file from the running services **on top of the deployed revision**, then you review and
+  deploy it, which records a revision. It sends nothing to the engine. Because it starts from the revision, the
+  secrets and configs the stack made stay declared as files, a value that equals a secret variable's is written as
+  `${NAME}`, and an image keeps the text you wrote (`nginx:${TAG}`) while it is still the image that runs, so no
+  secret is copied into `compose.yaml`. If a saved draft holds changes, a dialog asks **Replace the draft?**, naming who
+  saved it and when (*Keep draft* is focused), because the draft, its files and variables are replaced and that
+  cannot be undone. If somebody saved the draft after you opened the page it is refused (`draft_conflict`).
+  It is audited as `stack.drift_accepted`. Note that a live value that is not a secret variable's, such as a key
+  somebody set by hand on a service, is written into the draft as it is, where `stacks.read` holders can read it (see
+  [threat-model.md](threat-model.md)).
+
+### Reverts drift
+
+When you review a deploy, an update or a roll back, anything it would **put back** is listed apart from your own
+changes, in a section above the Summary: *This deploy reverts 2 changes made outside the stack*, with each setting,
+what runs now and what the deploy sets, and the cause under it. It is a warning so nobody undoes a hot-fix by
+accident, and it **never holds Deploy back**. A setting your draft changes itself, or one that already matches, is not
+listed. If Bayplan could not check, the section says *Couldn't check for drift; the changes below are still accurate.*
+There is no such section on a restore, an adoption or a first deploy, and none for a stopped stack.
 
 ## One operation at a time
 
@@ -394,12 +841,17 @@ Everything a stack creates carries labels, and **Remove, the cleanup after a fai
 find the stack's things by them**, never by a name alone. They are on-host contracts: a network or volume a stack
 made keeps its labels for as long as it lives.
 
+**The one exception is an [adopted stack](#adopting-a-stack).** Its networks and volumes were made before Bayplan
+knew the stack, and a deploy reuses them as they are, so they keep the labels they had and **never get a
+`bayplan.stack.id`**. They are the stack's by the names its record holds (see [What adopting
+owns](#what-adopting-owns)). Its services and containers get the label at the first deploy.
+
 | Label | On | Meaning |
 |-------|----|---------|
 | `com.docker.stack.namespace` | swarm services, networks, secrets and configs | The stack's name, as `docker stack deploy` writes it. A stack that Bayplan did not make but that uses the same name is a foreign stack. |
 | `com.docker.compose.project` | standalone containers, networks and volumes | The stack's name, as Docker Compose writes it. |
 | `com.docker.compose.service`, `.oneoff`, `.config-hash`, `.project.working_dir`, `.project.config_files` | standalone containers | Docker Compose's own labels. The working directory and config files carry neutral constants (`/bayplan-stack`, `compose.yaml`), never a path of the Bayplan server. A container whose config hash differs from its service is recreated. |
-| `bayplan.stack.id` | services, containers, networks, volumes, secrets and configs | The ID of the Bayplan stack record that owns the object. |
+| `bayplan.stack.id` | services, containers, networks, volumes, secrets and configs; on a swarm also the volume options of a service's mount of a named volume | The ID of the Bayplan stack record that owns the object. Not on an adopted stack's existing networks and volumes. On a mount it is an ownership label, like the one on the service. A label alone never links an object to a stack. |
 | `bayplan.stack.image` | services and containers | The image exactly as you wrote it, before it was pinned. |
 | `bayplan.stack.object` | secrets and configs | Marks an object made from one of the stack's files; its value is the name the compose file uses. |
 | `bayplan.stack.object.hash` | secrets and configs | The 8-hex-digit content hash that ends the object's name. |
@@ -418,9 +870,9 @@ networks, its own secrets and configs, the volumes you ticked, and the definitio
 
 | Who | May |
 |-----|-----|
-| Viewer (`stacks.read`) | See stacks, their files, reviews, deploys, resources and logs. Secret values stay hidden. |
-| Operator (`stacks.update`, `stacks.deploy`) | Save and discard a draft; review; deploy, update images, roll back, stop, start and cancel. |
-| Env Admin (`stacks.create`, `stacks.delete`) | Create and remove stacks, and **deploy a stack that uses host access**. |
+| Viewer (`stacks.read`) | See stacks, their files, reviews, deploys, resources, logs, history, drift, and unmanaged stacks with their generated compose and adopt check. Secret values stay hidden, and so do the environment values of services Bayplan did not deploy. |
+| Operator (`stacks.update`, `stacks.deploy`) | Save and discard a draft; review; deploy, update images, roll back to any good revision, restore from drift, accept live into the draft, stop, start and cancel. |
+| Env Admin (`stacks.create`, `stacks.delete`) | Create and remove stacks, **adopt an unmanaged stack**, and **deploy a stack that uses host access**. |
 | Anyone holding `secrets.reveal` | Read a secret variable or a secret file, one at a time, audited. |
 
 A compose file that uses **host access** needs Admin on the environment, and the error names the keys and lines.
@@ -441,9 +893,11 @@ stack**.
 
 - **Overview**: one state for the stack (*Not deployed, Deploying, Running, Degraded, Not running, Deploy failed,
   Stopped, Stopping, Starting, Rolling back, Removing*, and *Unknown* when Bayplan can't read the engine), the
-  services or containers with digest chips, replicas and ports, the last deploy and who made it, and banners for a
-  running operation, a saved draft that is not deployed and a stopped stack. A failed last deploy is never hidden
-  behind *Running* or *Degraded*.
+  services or containers with digest chips, replicas and ports, the last deploy and who made it, the deployed
+  revision and its [drift](#drift), and banners for a running operation, a saved draft that is not deployed, a
+  stopped stack, drift, and an [adopted stack](#the-first-deploy-of-an-adopted-stack) that Bayplan has not deployed
+  yet. A failed last deploy is never hidden behind *Running* or *Degraded*.
+- **History**: the [revisions](#history-and-roll-back) of the stack, with roll back.
 - **Resources**: everything the stack owns on the environment, found by its labels: the tasks or containers, the
   networks, the volumes (per node, naming nodes that did not answer), and the secrets and configs with their
   version and the services that use them. An object the file only refers to is marked **External**.
@@ -454,19 +908,24 @@ stack**.
   written. A log that can't be masked is not served.
 - **Links.** A stack's name, wherever it appears (the services, containers, secrets and configs lists, their
   detail pages' owner and the managed-by-stack notices), links to the Bayplan stack that owns it. A stack Bayplan
-  does not manage stays plain text.
+  does not manage links to its read-only [unmanaged page](#unmanaged-stacks) (tooltip *Not managed by Bayplan.*).
 
 ## Limits
 
 | What | Limit |
 |------|-------|
-| Stack name | `^[a-z0-9][a-z0-9_-]{0,62}$`, fixed for life |
+| Stack name | swarm `^[A-Za-z0-9][A-Za-z0-9_-]{0,60}$` (no dot, 61 characters), standalone `^[a-z0-9][a-z0-9_-]{0,254}$` (255 characters), fixed for life; see [Stack names](#stack-names) |
+| Revisions kept | 20 per stack by default, 5 to 200 (instance setting); the deployed and any running revision are always kept |
+| Pasted compose file (adopt) | 1 MiB |
 | Files | 50 per stack, 1 MiB each, 8 MiB in all; a path of at most 255 characters, a name in it at most 100 |
 | Secret file | 500 KB on a swarm, 1,000 KB on a standalone host (config: 1 MB, 1,000 KB) |
 | Secret variable | at least 4 characters |
 | Convergence | each service `BAYPLAN_STACK_CONVERGE_TIMEOUT`, 10 minutes by default, 1 minute to 2 hours |
 | Jobs | 5 running per person; one stack operation per environment |
 | Checks | the editor's check has a 5-second deadline, and a load still running at the deadline is abandoned; 2 run at once per person |
+| Adopt check, drift check, revision changes | each reads the engine, so 2 run at once per person (*Too many checks are running*) |
+| Revisions listed | the newest 500 of a stack |
+| Drift check | about every 5 minutes per stack, 3 seconds after a Docker event that names it |
 | Ports | the `ports:` and `expose:` ranges of one compose file add up to at most 20,000 ports, counted after variables are filled in; a port is 0 to 65535 and a range runs upwards |
 | Rendered YAML diff | bounded (20,000 lines, 4,000 edits) |
 | Console output | the newest 2,000 lines |
@@ -476,10 +935,13 @@ stack**.
 ## What is recorded
 
 Every stack action writes an audit row, with the stack and who did it and never a value: `stack.created`,
-`stack.draft_saved`, `stack.draft_discarded`, `stack.deployed` (with its mode: deploy, update or rollback; its
-result, revision, job and service count), `stack.stopped`, `stack.started`, `stack.removed` (how many volumes were
+`stack.draft_saved`, `stack.draft_discarded`, `stack.deployed` (with its mode: deploy, update, rollback or restore; its
+result, revision, job and service count, and for a roll back or restore the revision it restored), `stack.stopped`, `stack.started`, `stack.removed` (how many volumes were
 removed and kept, and whether the definition was kept), and `stack.value_revealed` (the kind and name of the
-variable or file shown, never its value). Opening and downloading a stack's logs write `logs.viewed` and
+variable or file shown, never its value), and `stack.adopted` (the stack, its target, the namespace or project it was
+taken from, how many services it has and the revision it started with), `stack.drift_accepted` (the stack, the revision, the
+draft version and the number of services) and, when the number of revisions kept
+changes, `settings.updated` (the old and the new limit and how many revisions went). Opening and downloading a stack's logs write `logs.viewed` and
 `logs.downloaded` with the stack as the target and none of the lines. See [access.md](access.md) for the audit log itself.
 
 ## Behaviour that is still open
@@ -508,9 +970,8 @@ them is hidden.
 - **Text the Docker Engine or the Compose SDK writes while a deploy, stop or start runs is masked for whole secret
   values only.** The job's console and item details can show part of a value the engine refuses: for example, the
   name of a restart policy taken from a secret. This waits for a decision.
-- **Roll back is not available on a standalone stack** (see [above](#when-a-deploy-fails-is-cancelled-or-is-interrupted)).
 - **A network or a volume a file stops declaring is not removed** on either target, as `docker compose up` does
-  not either; Remove deletes the networks the stack owns, and the volumes you tick.
+  not either; Remove deletes the networks the stack owns, and the volumes you tick. A roll back inherits this.
 - **A secret or config that is declared and used by no service is not created.** `docker stack deploy` creates
   every declared secret and config; Bayplan creates the ones a service uses.
 - **A changed secret or config on a standalone host reads "changed, 0 settings"** in the review, because its
@@ -520,18 +981,45 @@ them is hidden.
   one of about a megabyte of ordinary content takes seconds.
 - **The Remove dialog's progress panel disappears** when the stack's own page turns into *This stack is gone*; the
   answer arrives as a toast.
+- **The list of Portainer markers has not been checked against a real Portainer.** An unmanaged stack is flagged
+  *Portainer* when a label key starts with `io.portainer.` or its Compose working directory is under
+  `/data/compose/`. The working directory rests on one third-party note, and Portainer's own documentation describes its
+  `io.portainer.` labels as access-control settings a person sets, not as marks of how a stack was made. Nobody has
+  yet deployed a stack from Portainer CE, in swarm mode and in standalone mode, and compared. A stack Portainer made may
+  carry neither marker and then lists as unmanaged without the Portainer advice, and a stack with a marker that
+  Portainer does not use would be flagged wrongly. Adopt it the same either way. Removing the stack from Portainer
+  *without deleting it* is still your step, and Bayplan never calls Portainer.
+- **Compose's network and volume hashes are proved on two Compose versions only.** Adopting a standalone project
+  relies on the hash Docker Compose stored on its networks and volumes matching the one Bayplan's engine computes for
+  the same settings, so the first deploy leaves them alone. Real-engine tests made a project with Docker Compose
+  2.29.1 (Engine 24) and 5.5.1 (Engine 29) and adopted it with no network or volume change. Projects made with other
+  versions, such as an older v2 Compose or the one inside Portainer, have not been tried. If the hashes ever differ,
+  the review shows the network as recreated (a brief restart) and the volume as kept, and a rebuild that finds no
+  matching form keeps the object external.
+- **A swarm's service events carry no stack.** Docker's service events name only the service, so Bayplan finds the
+  stack of a changed service by the service's name.
+- **A stack name of 61 characters works only with a short network name.** The 61-character cap is chosen so that
+  `{stack}_{key}` fits swarm's 63-character limit for a one-character service. A stack that uses the implicit
+  `default` network needs a name of at most 55 characters, and a longer one is stopped at the check
+  (`swarm_name_invalid`).
+- **Adopting copies environment values as literals.** Secret values in a service's environment end up in the stored
+  draft and in revision #1, readable by `stacks.read` holders, until you move them to secret variables. *Accept live
+  into draft* does the same for a value that is not a secret variable's (see [threat-model.md](threat-model.md)).
 
-## What Phase 7 does not do
+## What is not in this version
 
 These are decided and planned for later phases. None of them is in this version.
 
-- **A revision list, and roll back to any revision.** Bayplan keeps the last deployed version for **Roll back to
-  previous version**, not a history you can browse.
-- **Adopting a stack Bayplan did not create**, discovering foreign stacks and showing **drift** between a stack and
-  what runs. A foreign stack is only refused when its name is taken, never taken over.
+- **Opening an old revision as a draft**, and comparing two arbitrary revisions. Roll back, then edit.
+- **Dismissing a drift**, and any automatic fix. Drift is shown, and you restore or accept it.
+- **Moving secrets out of an adoption for you.** Environment values are copied as literals and not sorted into secret
+  variables, and the contents of existing swarm secrets and configs are referenced as external and never imported.
+- **Removing an unmanaged stack without adopting it first**, and adopting services or containers that carry no stack
+  label.
 - **Git-backed stacks.** Every stack is *Inline*: its files live in Bayplan.
 - **Update detection.** Nothing says an image has a newer version, and there is no fleet view of updates.
-- **A janitor** for old objects (it will share the operation lock).
+- **A janitor** for old objects (it will share the operation lock), and orphan rules for networks and volumes (they
+  will treat [an adopted stack's recorded networks and volumes as owned](#what-adopting-owns)).
 - **Variables shared across stacks or environments.**
 - **A folder on the host, synced by the agent, for relative bind mounts.**
 - **Delivering a secret variable as a Docker secret.**

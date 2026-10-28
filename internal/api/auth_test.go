@@ -35,6 +35,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/registry"
 	"github.com/ianglennon/bayplan/internal/shells"
+	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/store"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 	"github.com/ianglennon/bayplan/internal/store/storetest"
@@ -130,6 +131,14 @@ type authFixture struct {
 	// (plan 07-06); zero and nil are the defaults.
 	stackCheckDeadline time.Duration
 	stackOnCheck       func(context.Context)
+	// stackOnChanges is called as a read of a revision's changes holds its slot (plan 08-04).
+	stackOnChanges func(context.Context)
+	// stackOnAdoptCheck is called as an adopt check holds its slot (plan 08-14).
+	stackOnAdoptCheck func(context.Context)
+	// stackOnDrift is called as a read of a stack for drift holds its slot (plan 08-19).
+	stackOnDrift func(context.Context)
+	// stackDriftRecheck is called when an operation on a stack ends, as the background drift check is asked (plan 08-21).
+	stackDriftRecheck func(envID, stackID string)
 	// stackBeforeJob is called in a deploy just before its job starts (plan 07-18).
 	stackBeforeJob func(context.Context)
 	// stackReadEnv is called before the stacks of an environment are read for the All stacks list (plan 07-24).
@@ -363,8 +372,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterStacks(r, api.StacksDeps{
 			Logs:       stackLogs,
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
-			Audit: f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log,
-			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
+			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
+			Platforms: stackops.NewPlatformMemo(),
+			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
+			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		})
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {
