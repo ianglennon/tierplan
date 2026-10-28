@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 )
@@ -355,5 +356,34 @@ func TestGitStackOverlayClash(t *testing.T) {
 				t.Errorf("db_pw.txt = %+v, want the overlay that fills a missing path", f)
 			}
 		}
+	}
+}
+
+func TestGitStackCheckRateLimit(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	// The first checks of the minute are served, here cheap ones that fail on the compose path before any git call:
+	// the limit counts every check a user makes, whatever it finds. The clock does not move, so the count is exact.
+	cheap := g.checkBody(func(b map[string]any) { b["composeFiles"] = []string{"../x.yaml"} })
+	for i := range 60 {
+		if rec := g.check(t, g.admin, cheap); rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "compose_path_invalid" {
+			t.Fatalf("check %d: %d %s, want 422 compose_path_invalid", i+1, rec.Code, rec.Body)
+		}
+	}
+	rec := g.check(t, g.admin, g.checkBody(nil))
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Fatalf("the 61st check: %d %s, want 429 rate_limited", rec.Code, rec.Body)
+	}
+
+	// The limit is the user's: another user is served.
+	other := g.f.asRoleOn(t, "u-other", g.env, "admin")
+	if rec := g.check(t, other, g.checkBody(nil)); rec.Code != http.StatusOK {
+		t.Errorf("another user: %d %s, want 200", rec.Code, rec.Body)
+	}
+
+	// A token comes back every second.
+	g.f.clk.t = g.f.clk.t.Add(2 * time.Second)
+	if rec := g.check(t, g.admin, g.checkBody(nil)); rec.Code != http.StatusOK {
+		t.Errorf("after the clock moved: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
