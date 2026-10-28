@@ -716,7 +716,7 @@ describe("GitPage row highlight", () => {
         .find((r) => r.textContent?.includes("alpha"))
         ?.getAttribute("data-changed"),
     ).toBeNull();
-    await waitFor(() => expect(row.getAttribute("data-changed")).toBeNull(), { timeout: 4000 });
+    await waitFor(() => expect(row.getAttribute("data-changed")).toBeNull());
   });
 
   it("does not highlight the rows of the first load", async () => {
