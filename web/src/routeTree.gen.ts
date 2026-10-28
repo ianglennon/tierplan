@@ -17,6 +17,7 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppEnvironmentsRouteImport } from './routes/_app/environments'
+import { Route as AppGitRouteImport } from './routes/_app/git'
 import { Route as AppRegistriesRouteImport } from './routes/_app/registries'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppStacksRouteImport } from './routes/_app/stacks'
@@ -147,6 +148,11 @@ const AppAuditRoute = AppAuditRouteImport.update({
 const AppEnvironmentsRoute = AppEnvironmentsRouteImport.update({
   id: '/environments',
   path: '/environments',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppGitRoute = AppGitRouteImport.update({
+  id: '/git',
+  path: '/git',
   getParentRoute: () => AppRoute,
 } as any)
 const AppRegistriesRoute = AppRegistriesRouteImport.update({
@@ -682,6 +688,7 @@ export interface FileRoutesByFullPath {
   '/welcome': typeof WelcomeRoute
   '/audit': typeof AppAuditRoute
   '/environments': typeof AppEnvironmentsRoute
+  '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
   '/settings': typeof AppSettingsRouteWithChildren
   '/stacks': typeof AppStacksRoute
@@ -782,6 +789,7 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/audit': typeof AppAuditRoute
   '/environments': typeof AppEnvironmentsRoute
+  '/git': typeof AppGitRoute
   '/registries': typeof AppRegistriesRoute
   '/stacks': typeof AppStacksRoute
   '/': typeof AppIndexRoute
@@ -871,6 +879,7 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_app/audit': typeof AppAuditRoute
   '/_app/environments': typeof AppEnvironmentsRoute
+  '/_app/git': typeof AppGitRoute
   '/_app/registries': typeof AppRegistriesRoute
   '/_app/settings': typeof AppSettingsRouteWithChildren
   '/_app/stacks': typeof AppStacksRoute
@@ -975,6 +984,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/audit'
     | '/environments'
+    | '/git'
     | '/registries'
     | '/settings'
     | '/stacks'
@@ -1075,6 +1085,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/audit'
     | '/environments'
+    | '/git'
     | '/registries'
     | '/stacks'
     | '/'
@@ -1163,6 +1174,7 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_app/audit'
     | '/_app/environments'
+    | '/_app/git'
     | '/_app/registries'
     | '/_app/settings'
     | '/_app/stacks'
@@ -1326,6 +1338,13 @@ declare module '@tanstack/react-router' {
       path: '/environments'
       fullPath: '/environments'
       preLoaderRoute: typeof AppEnvironmentsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/git': {
+      id: '/_app/git'
+      path: '/git'
+      fullPath: '/git'
+      preLoaderRoute: typeof AppGitRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/registries': {
@@ -2341,6 +2360,7 @@ const AppEnvEnvIdRouteWithChildren = AppEnvEnvIdRoute._addFileChildren(
 interface AppRouteChildren {
   AppAuditRoute: typeof AppAuditRoute
   AppEnvironmentsRoute: typeof AppEnvironmentsRoute
+  AppGitRoute: typeof AppGitRoute
   AppRegistriesRoute: typeof AppRegistriesRoute
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppStacksRoute: typeof AppStacksRoute
@@ -2352,6 +2372,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppAuditRoute: AppAuditRoute,
   AppEnvironmentsRoute: AppEnvironmentsRoute,
+  AppGitRoute: AppGitRoute,
   AppRegistriesRoute: AppRegistriesRoute,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppStacksRoute: AppStacksRoute,

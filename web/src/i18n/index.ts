@@ -21,6 +21,7 @@ import envaccess from "./en/envaccess.json";
 import envsettings from "./en/envsettings.json";
 import events from "./en/events.json";
 import fullpage from "./en/fullpage.json";
+import git from "./en/git.json";
 import grants from "./en/grants.json";
 import images from "./en/images.json";
 import install from "./en/install.json";
@@ -125,6 +126,7 @@ export const resources = {
     envsettings,
     events,
     fullpage,
+    git,
     grants,
     images,
     install,

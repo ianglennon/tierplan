@@ -33,6 +33,7 @@ export type ResourceKind =
   | "volumes"
   | "networks"
   | "registries"
+  | "git"
   | "services"
   | "nodes"
   | "secrets"
@@ -167,6 +168,11 @@ interface ResourceTableProps<T> {
   // The primary action of the page, at the right end of the header. Drawn while the
   // list loads, so the header does not move when it arrives.
   actions?: ReactNode;
+  // Replaces the page title when the page is not named after this list (the Git page is "Git"
+  // over a Repositories table and a Credentials table).
+  title?: string;
+  // Replaces the table's accessible name, which is the title otherwise.
+  tableLabel?: string;
 }
 
 export interface NodeFilter {
@@ -339,6 +345,8 @@ export function ResourceTable<T>({
   errorBody,
   retryLabel,
   actions,
+  title,
+  tableLabel,
 }: ResourceTableProps<T>) {
   const t = useT();
   const groupsId = useId();
@@ -408,7 +416,7 @@ export function ResourceTable<T>({
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
       <header className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="text-2xl font-semibold">{t(`${key}.title`)}</h1>
+        <h1 className="text-2xl font-semibold">{title ?? t(`${key}.title`)}</h1>
         {data && !bulkBar ? (
           <span className="text-sm text-muted-foreground tabular-nums">{caption}</span>
         ) : null}
@@ -478,7 +486,7 @@ export function ResourceTable<T>({
           <table
             data-slot="table"
             aria-busy={loading || undefined}
-            aria-label={t(`${key}.title`)}
+            aria-label={tableLabel ?? t(`${key}.title`)}
             className="w-full caption-bottom text-sm"
           >
             <TableHeader>
