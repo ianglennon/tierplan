@@ -4,12 +4,17 @@
 package api_test
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/gitx/gittest"
@@ -564,4 +569,114 @@ func TestGitConnAudit(t *testing.T) {
 			}
 		}
 	}
+}
+
+// deployKey is an unencrypted OpenSSH ed25519 private key, its authorized_keys line and fingerprint,
+// and the base64 body of the key, which must never come back.
+func deployKey(t *testing.T) (pemText, authorized, fingerprint, body string) {
+	t.Helper()
+	pubKey, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(block)), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))), ssh.FingerprintSHA256(sshPub),
+		strings.Join(strings.Split(strings.TrimSpace(string(pem.EncodeToMemory(block))), "\n")[1:3], "")
+}
+
+func TestSSHCredentialBodyHasNoKey(t *testing.T) {
+	t.Parallel()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	a, _ := f.twoEnvironments(t)
+	admin := f.asAdmin(t)
+	key, authorized, fingerprint, body := deployKey(t)
+
+	rec := f.credCall(t, admin, http.MethodPost, "/api/git/credentials", gitJSON(map[string]any{"name": "deploy", "type": "ssh", "secret": key}))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	c := decodeGitCred(t, rec)
+	if c.Type != "ssh" || c.Username != "git" || c.PublicKey != authorized || c.Fingerprint != fingerprint || c.Last4 != "" {
+		t.Errorf("credential = %+v, want user git, the public key %q and fingerprint %q", c, authorized, fingerprint)
+	}
+	repo := f.mustCreate(t, admin, "/api/git/repos", gitJSON(map[string]any{"name": "app", "url": "git@git.example.org:acme/app.git", "credentialId": c.ID}))
+
+	// Nowhere the key is read back: not in the answer to the create, the list, the get, the
+	// environment's list, the repository that uses it, nor the audit log.
+	var bodies []string
+	bodies = append(bodies, rec.Body.String())
+	for _, path := range []string{
+		"/api/git/credentials", "/api/git/credentials/" + c.ID, "/api/env/" + a.ID + "/git/credentials",
+		"/api/env/" + a.ID + "/git/credentials/" + c.ID, "/api/git/repos", "/api/git/repos/" + repo,
+	} {
+		got := f.credCall(t, admin, http.MethodGet, path, "")
+		if got.Code != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", path, got.Code, got.Body)
+		}
+		bodies = append(bodies, got.Body.String())
+	}
+	put := f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+c.ID, gitJSON(map[string]any{"name": "deploy-2", "type": "ssh"}))
+	if put.Code != http.StatusOK {
+		t.Fatalf("PUT without a key: %d %s", put.Code, put.Body)
+	}
+	if got := decodeGitCred(t, put); got.PublicKey != authorized || got.Fingerprint != fingerprint {
+		t.Errorf("after a rename without a key = %+v, want the same public key", got)
+	}
+	bodies = append(bodies, put.Body.String())
+	for i, text := range bodies {
+		if strings.Contains(text, "PRIVATE KEY") || strings.Contains(text, body) {
+			t.Errorf("response %d carries the private key: %s", i, text)
+		}
+	}
+	for _, action := range []string{"git.credential_created", "git.credential_updated"} {
+		for _, r := range f.auditRows(t, action) {
+			for k, v := range r.Details {
+				if strings.Contains(v, "PRIVATE KEY") || strings.Contains(v, body) {
+					t.Errorf("%s detail %s carries the private key", action, k)
+				}
+			}
+			if r.Details["fingerprint"] != fingerprint {
+				t.Errorf("%s detail fingerprint = %q, want %q", action, r.Details["fingerprint"], fingerprint)
+			}
+		}
+	}
+
+	// The refusals the sheet words, each on body.secret.
+	protected := ed25519PEMWithPassphrase(t)
+	wantFieldProblem(t, "a key with a passphrase",
+		f.credCall(t, admin, http.MethodPost, "/api/git/credentials", gitJSON(map[string]any{"name": "p", "type": "ssh", "secret": protected})), "secret", "key_passphrase")
+	wantFieldProblem(t, "garbage",
+		f.credCall(t, admin, http.MethodPost, "/api/git/credentials", gitJSON(map[string]any{"name": "g", "type": "ssh", "secret": "not a key"})), "secret", "key_invalid")
+	wantFieldProblem(t, "a key over 16 KiB",
+		f.credCall(t, admin, http.MethodPost, "/api/git/credentials", gitJSON(map[string]any{"name": "big", "type": "ssh", "secret": key + strings.Repeat("\n#", 17<<10)})), "secret", "key_too_large")
+	wantFieldProblem(t, "a missing key",
+		f.credCall(t, admin, http.MethodPost, "/api/git/credentials", gitJSON(map[string]any{"name": "none", "type": "ssh"})), "secret", "secret_required")
+	// Switching an https credential to a key needs the key typed now.
+	h := f.mustCreate(t, admin, "/api/git/credentials", httpsCred("token"))
+	wantFieldProblem(t, "https to ssh without a key",
+		f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+h, gitJSON(map[string]any{"name": "token", "type": "ssh"})), "secret", "secret_required")
+	if rec := f.credCall(t, admin, http.MethodPut, "/api/git/credentials/"+h, gitJSON(map[string]any{"name": "token", "type": "ssh", "secret": key})); rec.Code != http.StatusOK ||
+		decodeGitCred(t, rec).Fingerprint != fingerprint {
+		t.Errorf("https to ssh with a key: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func ed25519PEMWithPassphrase(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte("correct horse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(block))
 }

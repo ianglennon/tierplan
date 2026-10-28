@@ -6,13 +6,20 @@ package gitconn_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitx"
@@ -473,5 +480,148 @@ func TestGitCredentialInUse(t *testing.T) {
 	var sealed int
 	if err := st.Read.QueryRow(`SELECT count(*) FROM git_credentials`).Scan(&sealed); err != nil || sealed != 0 {
 		t.Errorf("credentials left = %d, %v", sealed, err)
+	}
+}
+
+// pemKey is a private key in OpenSSH format, with the passphrase when there is one.
+func pemKey(t *testing.T, pass string) (pemText string, pub ssh.PublicKey) {
+	t.Helper()
+	pubKey, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var block *pem.Block
+	if pass == "" {
+		block, err = ssh.MarshalPrivateKey(priv, "")
+	} else {
+		block, err = ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(pass))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(block)), sshPub
+}
+
+func TestSSHCredentialParse(t *testing.T) {
+	ed, edPub := pemKey(t, "")
+
+	got, err := gitconn.ParsePrivateKey(ed)
+	if err != nil {
+		t.Fatalf("ParsePrivateKey(ed25519): %v", err)
+	}
+	wantAuthorized := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(edPub)))
+	if got.AuthorizedKey != wantAuthorized || !strings.HasPrefix(got.AuthorizedKey, "ssh-ed25519 ") || got.Fingerprint != ssh.FingerprintSHA256(edPub) ||
+		!strings.HasPrefix(got.Fingerprint, "SHA256:") || got.Signer == nil {
+		t.Errorf("parsed = %+v, want the authorized_keys line and the SHA256 fingerprint of the key", got)
+	}
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)})
+	if got, err := gitconn.ParsePrivateKey(string(rsaPEM)); err != nil || !strings.HasPrefix(got.AuthorizedKey, "ssh-rsa ") {
+		t.Errorf("ParsePrivateKey(rsa) = %+v, %v", got, err)
+	}
+
+	protected, _ := pemKey(t, "correct horse")
+	if _, err := gitconn.ParsePrivateKey(protected); !errors.Is(err, gitconn.ErrKeyPassphrase) {
+		t.Errorf("a key with a passphrase: %v, want ErrKeyPassphrase", err)
+	}
+	for name, text := range map[string]string{
+		"garbage":           "this is not a key",
+		"empty":             "",
+		"a public key":      got.AuthorizedKey,
+		"a truncated key":   ed[:len(ed)/2],
+		"a certificate PEM": "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+	} {
+		if _, err := gitconn.ParsePrivateKey(text); !errors.Is(err, gitconn.ErrKeyInvalid) {
+			t.Errorf("%s: %v, want ErrKeyInvalid", name, err)
+		}
+	}
+	if _, err := gitconn.ParsePrivateKey(ed + strings.Repeat("\n#", gitconn.MaxPrivateKeyBytes)); !errors.Is(err, gitconn.ErrKeyTooLarge) {
+		t.Errorf("a key over 16 KiB: %v, want ErrKeyTooLarge", err)
+	}
+	// No error carries any part of the text it refused.
+	_, err = gitconn.ParsePrivateKey("BEGIN-SECRET-MARKER " + ed)
+	if err == nil || strings.Contains(err.Error(), "SECRET-MARKER") {
+		t.Errorf("the refusal of a key carries its text: %v", err)
+	}
+}
+
+func TestSSHCredentialIsSealedAndShownAsPublicKeyAndFingerprint(t *testing.T) {
+	s, st, v := newStore(t)
+	ctx := context.Background()
+	key, pub := pemKey(t, "")
+	c, err := s.CreateCredential(ctx, gitconn.CredentialInput{Name: "deploy", Type: gitconn.TypeSSH, Secret: key}, "u", nil)
+	if err != nil {
+		t.Fatalf("CreateCredential(ssh): %v", err)
+	}
+	if c.Type != gitconn.TypeSSH || c.Username != "git" || c.Last4 != "" || c.Fingerprint != ssh.FingerprintSHA256(pub) ||
+		c.PublicKey != strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))) {
+		t.Errorf("credential = %+v, want user git, no last4, the public key and its fingerprint", c)
+	}
+	plain, err := v.Open(vault.ContextGitCred+c.ID, sealedOf(t, st, c.ID))
+	if err != nil || !strings.Contains(string(plain), "OPENSSH PRIVATE KEY") {
+		t.Errorf("the sealed value = %q, %v, want the private key", plain, err)
+	}
+	if strings.Contains(c.PublicKey+c.Fingerprint+c.Username, "PRIVATE KEY") {
+		t.Errorf("the shown values carry the private key: %+v", c)
+	}
+
+	// An ssh address with the key: Remote gives the address and no token.
+	r, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: "app", URL: "git@git.example.org:acme/app.git", CredentialID: &c.ID}, "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rem, err := s.Remote(ctx, r); err != nil || rem.Auth != nil || rem.URL != r.URL {
+		t.Errorf("Remote of an ssh repository = %+v, %v; the key is for the SSH transport, never a token", rem, err)
+	}
+
+	// Rotating the key replaces what is shown; keeping it (no secret) leaves both alone.
+	key2, pub2 := pemKey(t, "")
+	got, changed, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "deploy", Type: gitconn.TypeSSH, Username: "git", Secret: key2}, nil)
+	if err != nil || !slices.Equal(changed, []string{"secret"}) || got.Fingerprint != ssh.FingerprintSHA256(pub2) {
+		t.Fatalf("rotate the key: %+v %v %v", got, changed, err)
+	}
+	kept, changed, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "deploy-2", Type: gitconn.TypeSSH, Username: "git"}, nil)
+	if err != nil || !slices.Equal(changed, []string{"name"}) || kept.Fingerprint != got.Fingerprint || kept.PublicKey != got.PublicKey {
+		t.Errorf("rename without a key: %+v %v %v, want the key kept", kept, changed, err)
+	}
+
+	// Switching the type needs a secret typed now, either way.
+	var ve *gitconn.ValidationError
+	if _, _, err := s.UpdateCredential(ctx, "", c.ID, gitconn.CredentialUpdate{Name: "deploy-2", Type: gitconn.TypeHTTPS, Username: "bot"}, nil); !errors.As(err, &ve) ||
+		ve.Fields[0].Field != "secret" || ve.Fields[0].Code != gitconn.CodeSecretRequired {
+		t.Errorf("ssh to https without a token: %v, want secret: secret_required", err)
+	}
+	h, err := s.CreateCredential(ctx, httpsCredential(nil, "token"), "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.UpdateCredential(ctx, "", h.ID, gitconn.CredentialUpdate{Name: "token", Type: gitconn.TypeSSH, Username: "git"}, nil); !errors.As(err, &ve) ||
+		ve.Fields[0].Field != "secret" || ve.Fields[0].Code != gitconn.CodeSecretRequired {
+		t.Errorf("https to ssh without a key: %v, want secret: secret_required", err)
+	}
+	if conv, _, err := s.UpdateCredential(ctx, "", h.ID, gitconn.CredentialUpdate{Name: "token", Type: gitconn.TypeSSH, Username: "git", Secret: key}, nil); err != nil ||
+		conv.Type != gitconn.TypeSSH || conv.Last4 != "" || conv.Fingerprint == "" {
+		t.Errorf("https to ssh with a key: %+v %v", conv, err)
+	}
+
+	// The refusals the sheet words.
+	for name, tc := range map[string]struct{ secret, code string }{
+		"a passphrase": {func() string { k, _ := pemKey(t, "pw"); return k }(), gitconn.CodeKeyPassphrase},
+		"garbage":      {"not a key", gitconn.CodeKeyInvalid},
+		"too large":    {key + strings.Repeat("\n#", gitconn.MaxPrivateKeyBytes), gitconn.CodeKeyTooLarge},
+		"nothing":      {"", gitconn.CodeSecretRequired},
+	} {
+		_, err := s.CreateCredential(ctx, gitconn.CredentialInput{Name: "bad", Type: gitconn.TypeSSH, Secret: tc.secret}, "u", nil)
+		if !errors.As(err, &ve) || ve.Fields[0].Field != "secret" || ve.Fields[0].Code != tc.code {
+			t.Errorf("%s: %v, want secret: %s", name, err, tc.code)
+		}
 	}
 }
