@@ -4687,6 +4687,17 @@
             "description": "The host of its address",
             "type": "string"
           },
+          "hostKey": {
+            "description": "The SSH host key a person trusted for it; null when none was (and always for a host with built-in keys, which need none)",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GitRepoHostKeyBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "description": "The repository's ID",
             "type": "string"
@@ -4738,6 +4749,7 @@
           "credential",
           "caPem",
           "hasCa",
+          "hostKey",
           "lastTest",
           "usedBy",
           "readOnly",
@@ -4766,6 +4778,30 @@
           "id",
           "name",
           "scope"
+        ],
+        "type": "object"
+      },
+      "GitRepoHostKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "description": "Its SHA256 fingerprint (SHA256:...)",
+            "type": "string"
+          },
+          "trustedAt": {
+            "description": "When a person trusted it",
+            "format": "date-time",
+            "type": "string"
+          },
+          "type": {
+            "description": "The key type (ssh-ed25519)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "fingerprint",
+          "trustedAt"
         ],
         "type": "object"
       },
@@ -4799,6 +4835,11 @@
           "credentialId": {
             "description": "The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope",
             "maxLength": 64,
+            "type": "string"
+          },
+          "hostKey": {
+            "description": "For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Bayplan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh",
+            "maxLength": 4096,
             "type": "string"
           },
           "name": {
@@ -4868,6 +4909,46 @@
         ],
         "type": "object"
       },
+      "GitTestHostKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "description": "The SHA256 fingerprint of the key the host showed (SHA256:...)",
+            "type": "string"
+          },
+          "key": {
+            "description": "The key the host showed in authorized_keys form, set when state is untrusted or changed: send it back as hostKey, or to trust-host-key, after comparing the fingerprint",
+            "type": "string"
+          },
+          "savedFingerprint": {
+            "description": "When state is changed, the fingerprint of the trusted key the new one differs from",
+            "type": "string"
+          },
+          "state": {
+            "description": "none for an https address, or an ssh host Bayplan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically",
+            "enum": [
+              "none",
+              "builtin",
+              "trusted",
+              "untrusted",
+              "changed"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "description": "The key type the host showed (ssh-ed25519); empty when it showed none",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "type",
+          "fingerprint",
+          "key",
+          "savedFingerprint"
+        ],
+        "type": "object"
+      },
       "GitTestRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4879,6 +4960,11 @@
           "credentialId": {
             "description": "The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested",
             "maxLength": 64,
+            "type": "string"
+          },
+          "hostKey": {
+            "description": "For an ssh address, the host key the person confirmed after an earlier test answered hostKey.state untrusted, in authorized_keys form (hostKey.key of that answer). It is treated as trusted for this one test only and saved nowhere; no credential is ever sent to a host whose key is not trusted. 422 host_key_invalid when it is not one public key",
+            "maxLength": 4096,
             "type": "string"
           },
           "url": {
@@ -4918,6 +5004,10 @@
             "$ref": "#/components/schemas/GitTestFailureBody",
             "description": "Set when the test failed; null when it passed"
           },
+          "hostKey": {
+            "$ref": "#/components/schemas/GitTestHostKeyBody",
+            "description": "What the test found out about the SSH host key; state none for an https address"
+          },
           "steps": {
             "$ref": "#/components/schemas/GitTestStepsBody"
           },
@@ -4944,7 +5034,8 @@
           "branchCount",
           "tagCount",
           "defaultBranch",
-          "failure"
+          "failure",
+          "hostKey"
         ],
         "type": "object"
       },

@@ -64,12 +64,13 @@ UPDATE git_credentials SET last_failure_at = ?, last_failure_code = ? WHERE id =
 
 -- name: InsertGitRepo :exec
 INSERT INTO git_repos (
-    id, env_id, name, url, credential_id, ca_pem, created_at, updated_at, created_by
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    id, env_id, name, url, credential_id, ca_pem, host_key, host_key_fp, host_key_trusted_by, host_key_trusted_at,
+    created_at, updated_at, created_by
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetGitRepo :one
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
-       r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
+       r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
        COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
 FROM git_repos r
@@ -79,7 +80,7 @@ WHERE r.id = ?;
 -- name: ListGitRepos :many
 -- Instance repositories first, then each environment's, by name.
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
-       r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
+       r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
        COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
 FROM git_repos r
@@ -117,3 +118,11 @@ UPDATE git_repos SET last_test_at = ?, last_test_ok = ?, last_test_code = ? WHER
 -- Forgets when a credential last signed in and the last refusal after its secret, type or user
 -- name changed: they were seen with something that no longer applies.
 UPDATE git_credentials SET last_use_at = NULL, last_failure_at = NULL, last_failure_code = '' WHERE id = ?;
+
+-- name: SetGitRepoHostKey :execrows
+-- Stores the SSH host key a person trusted (an authorized_keys line, public material), its
+-- fingerprint, who trusted it and when. An empty key forgets the trust. Not bounded to a layer:
+-- the caller has already read the repository and checked its layer.
+UPDATE git_repos
+SET host_key = ?, host_key_fp = ?, host_key_trusted_by = ?, host_key_trusted_at = ?, updated_at = ?
+WHERE id = ?;

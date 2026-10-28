@@ -196,6 +196,8 @@ const (
 	ActionGitRepoUpdated             = "git.repo_updated"
 	ActionGitRepoDeleted             = "git.repo_deleted"
 	ActionGitRepoTested              = "git.repo_tested"
+	ActionGitHostKeyTrusted          = "git.host_key_trusted"
+	ActionGitHostKeyRetrusted        = "git.host_key_retrusted"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

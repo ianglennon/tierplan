@@ -148,6 +148,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.repo_updated",
   "git.repo_deleted",
   "git.repo_tested",
+  "git.host_key_trusted",
+  "git.host_key_retrusted",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped

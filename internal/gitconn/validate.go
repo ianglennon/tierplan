@@ -10,6 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/registry"
 )
@@ -49,6 +51,8 @@ const (
 	CodeKeyTooLarge        = "key_too_large"
 	CodeURLUnsupported     = "url_unsupported"
 	CodeURLUserinfo        = "url_userinfo"
+	CodeHostKeyInvalid     = "host_key_invalid"
+	CodeHostKeyNotSSH      = "host_key_not_ssh"
 	CodeCAInvalid          = "ca_invalid"
 	CodeCATooLarge         = "ca_too_large"
 	CodeCredentialScope    = "credential_scope"    //nolint:gosec // G101: a stable code, not a credential
@@ -208,4 +212,40 @@ func CheckCredentialScope(repoEnv string, c Credential) error {
 		return nil
 	}
 	return invalid("credentialId", CodeCredentialScope)
+}
+
+// maxHostKeyBytes is the longest host key line accepted. The longest real key, RSA 8192, is a
+// little over 1.5 KiB in authorized_keys form.
+const maxHostKeyBytes = 4096
+
+// cleanHostKey is a validated SSH host key.
+type cleanHostKey struct {
+	// Line is the key in authorized_keys form, with no options, comment or newline.
+	Line string
+	// Fingerprint is its SHA256 fingerprint (SHA256:...).
+	Fingerprint string
+}
+
+// validHostKey reads one SSH host key in authorized_keys form (`ssh-ed25519 AAAA...`, as `ssh-keyscan`
+// prints after its host column) and returns it normalised. The empty string is "no key" and is fine.
+// A key for an address that is not ssh is refused: it could never be used.
+func validHostKey(line, rawURL string) (cleanHostKey, *FieldError) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return cleanHostKey{}, nil
+	}
+	if len(line) > maxHostKeyBytes || strings.ContainsAny(line, "\r\n") {
+		return cleanHostKey{}, &FieldError{Field: "hostKey", Code: CodeHostKeyInvalid}
+	}
+	pub, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(line))
+	if err != nil || len(strings.TrimSpace(string(rest))) > 0 {
+		return cleanHostKey{}, &FieldError{Field: "hostKey", Code: CodeHostKeyInvalid}
+	}
+	if u, err := gitx.ValidateURL(rawURL); err == nil && u.Scheme != "ssh" {
+		return cleanHostKey{}, &FieldError{Field: "hostKey", Code: CodeHostKeyNotSSH}
+	}
+	return cleanHostKey{
+		Line:        strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))),
+		Fingerprint: ssh.FingerprintSHA256(pub),
+	}, nil
 }

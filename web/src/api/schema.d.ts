@@ -6204,6 +6204,8 @@ export interface components {
             hasCa: boolean;
             /** @description The host of its address */
             host: string;
+            /** @description The SSH host key a person trusted for it; null when none was (and always for a host with built-in keys, which need none) */
+            hostKey: components["schemas"]["GitRepoHostKeyBody"] | null;
             /** @description The repository's ID */
             id: string;
             /** @description The last test of the saved repository; null when it was never tested */
@@ -6235,6 +6237,17 @@ export interface components {
             /** @description Where it can be used */
             scope: components["schemas"]["CredentialScopeBody"];
         };
+        GitRepoHostKeyBody: {
+            /** @description Its SHA256 fingerprint (SHA256:...) */
+            fingerprint: string;
+            /**
+             * Format: date-time
+             * @description When a person trusted it
+             */
+            trustedAt: string;
+            /** @description The key type (ssh-ed25519) */
+            type: string;
+        };
         GitRepoListBody: {
             /** @description Instance repositories first, then each environment's, by name */
             items: components["schemas"]["GitRepoBody"][] | null;
@@ -6244,6 +6257,8 @@ export interface components {
             caPem?: string;
             /** @description The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope */
             credentialId?: string;
+            /** @description For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Bayplan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh */
+            hostKey?: string;
             /** @description What the repository is called, unique among the repositories of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
             name?: string;
             /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
@@ -6269,11 +6284,28 @@ export interface components {
             /** @description The host the test was made to */
             host: string;
         };
+        GitTestHostKeyBody: {
+            /** @description The SHA256 fingerprint of the key the host showed (SHA256:...) */
+            fingerprint: string;
+            /** @description The key the host showed in authorized_keys form, set when state is untrusted or changed: send it back as hostKey, or to trust-host-key, after comparing the fingerprint */
+            key: string;
+            /** @description When state is changed, the fingerprint of the trusted key the new one differs from */
+            savedFingerprint: string;
+            /**
+             * @description none for an https address, or an ssh host Bayplan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically
+             * @enum {string}
+             */
+            state: "none" | "builtin" | "trusted" | "untrusted" | "changed";
+            /** @description The key type the host showed (ssh-ed25519); empty when it showed none */
+            type: string;
+        };
         GitTestRequest: {
             /** @description A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
             caPem?: string;
             /** @description The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested */
             credentialId?: string;
+            /** @description For an ssh address, the host key the person confirmed after an earlier test answered hostKey.state untrusted, in authorized_keys form (hostKey.key of that answer). It is treated as trusted for this one test only and saved nowhere; no credential is ever sent to a host whose key is not trusted. 422 host_key_invalid when it is not one public key */
+            hostKey?: string;
             /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
             url: string;
         };
@@ -6289,6 +6321,8 @@ export interface components {
             defaultBranch: string;
             /** @description Set when the test failed; null when it passed */
             failure: components["schemas"]["GitTestFailureBody"];
+            /** @description What the test found out about the SSH host key; state none for an https address */
+            hostKey: components["schemas"]["GitTestHostKeyBody"];
             steps: components["schemas"]["GitTestStepsBody"];
             /**
              * Format: int64

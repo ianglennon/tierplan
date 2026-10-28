@@ -14,6 +14,8 @@ import (
 	"context"
 	"log/slog"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/ianglennon/bayplan/internal/registry"
 )
 
@@ -34,6 +36,16 @@ type Remote struct {
 	// added to the trusted roots for this one call; there is no option to skip verification
 	// (Phase 9 D-05).
 	CAPEM string
+	// HostKeys are the SSH host keys a person trusted for this repository's host, one per entry.
+	// They are ignored for a host that has built-in keys (BuiltinHostKeys) and for an https
+	// address. An ssh address with no built-in and no saved key fails host_key_untrusted before
+	// any credential is sent (Phase 9 D-03).
+	HostKeys []HostKey
+}
+
+// HostKey is a trusted SSH host key in authorized_keys form (`ssh-ed25519 AAAA...`), one line.
+type HostKey struct {
+	Line string
 }
 
 // Auth is how to sign in to a remote. It is sealed: only this package defines the kinds.
@@ -56,6 +68,21 @@ func (TokenAuth) GoString() string { return "gitx.TokenAuth{redacted}" }
 // LogValue keeps the token out of structured logs.
 func (TokenAuth) LogValue() slog.Value { return slog.StringValue("redacted") }
 
+// SSHKeyAuth is an SSH deploy key with the user name the server expects (git on every large host).
+type SSHKeyAuth struct {
+	User   string
+	Signer ssh.Signer
+}
+
+func (SSHKeyAuth) isAuth() {}
+
+// String and GoString keep the key out of anything that formats the value (%v, %+v, %#v).
+func (SSHKeyAuth) String() string   { return "gitx.SSHKeyAuth{redacted}" }
+func (SSHKeyAuth) GoString() string { return "gitx.SSHKeyAuth{redacted}" }
+
+// LogValue keeps the key out of structured logs.
+func (SSHKeyAuth) LogValue() slog.Value { return slog.StringValue("redacted") }
+
 // Ref is a branch or a tag and the commit it points at. For an annotated tag the commit is the one
 // the tag object points at (the peeled commit), never the tag object itself.
 type Ref struct {
@@ -74,6 +101,8 @@ type RefList struct {
 	Tags     []Ref
 	// Default is the short name of the branch HEAD points at; empty when the server does not say.
 	Default string
+	// HostKey is the SSH host key the server presented and Bayplan verified; nil over https.
+	HostKey *PresentedKey
 }
 
 // Client is what Bayplan asks of git. Later plans add the mirror and read methods.

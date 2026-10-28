@@ -210,7 +210,11 @@
         "repo_deleted": "Git repository deleted",
         "repo_deleted_named": "Deleted repository {{name}}",
         "repo_tested": "Git repository tested",
-        "repo_tested_named": "Tested repository {{name}}"
+        "repo_tested_named": "Tested repository {{name}}",
+        "host_key_trusted": "Git host key trusted",
+        "host_key_trusted_named": "Trusted a host key for {{name}}",
+        "host_key_retrusted": "Git host key re-trusted",
+        "host_key_retrusted_named": "Re-trusted a changed host key for {{name}}"
       },
       "logs": {
         "viewed": "Container logs viewed",

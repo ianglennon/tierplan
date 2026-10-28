@@ -372,7 +372,9 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // word secret (plan 09-04, GIT-01). A repository row names the repository, its layer, the host of its address
 // (never the whole address), the credential it uses by name and layer, and whether it has a custom CA; an update
 // adds the changed fields and, when the address moved, the host it pointed at before. A test of a saved
-// repository records its host, the credential used and the code of a failure.
+// repository records its host, the credential used and the code of a failure. Trusting an SSH host key records
+// the repository, its layer, its host and the key's fingerprint (public material, never the key itself); trusting
+// a key again also records the fingerprint it replaced (plan 09-06, D-03).
 var phase9DetailKeys = map[string][]string{
 	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
 	audit.ActionGitCredentialUpdated: {"name", "layer", "type", "username", "fingerprint", "changed"},
@@ -381,6 +383,8 @@ var phase9DetailKeys = map[string][]string{
 	audit.ActionGitRepoUpdated:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca", "changed", "host_from"},
 	audit.ActionGitRepoDeleted:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca"},
 	audit.ActionGitRepoTested:        {"name", "layer", "host", "credential", "credential_layer", "code"},
+	audit.ActionGitHostKeyTrusted:    {"name", "layer", "host", "fingerprint"},
+	audit.ActionGitHostKeyRetrusted:  {"name", "layer", "host", "fingerprint", "fingerprint_from"},
 }
 
 func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -411,6 +415,8 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"git.repo_updated":       audit.ActionGitRepoUpdated,
 		"git.repo_deleted":       audit.ActionGitRepoDeleted,
 		"git.repo_tested":        audit.ActionGitRepoTested,
+		"git.host_key_trusted":   audit.ActionGitHostKeyTrusted,
+		"git.host_key_retrusted": audit.ActionGitHostKeyRetrusted,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

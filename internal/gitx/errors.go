@@ -61,10 +61,45 @@ func ValidateCA(pem string) error {
 	return nil
 }
 
+// PresentedKey is an SSH host key a server presented: its type (ssh-ed25519), its SHA256
+// fingerprint (SHA256:...) and the authorized_keys line to save when a person trusts it.
+type PresentedKey struct {
+	Type        string
+	Fingerprint string
+	Line        string
+}
+
+// HostKeyChangedError is what the host-key callback returns when the host has a trusted key of the
+// presented key's type and the presented one differs. It is never accepted automatically.
+type HostKeyChangedError struct {
+	Host string
+	// Saved is the fingerprint of the trusted key of the same type.
+	Saved     string
+	Presented PresentedKey
+}
+
+func (e *HostKeyChangedError) Error() string { return "gitx: the host key of " + e.Host + " changed" }
+
+// HostKeyUntrustedError is what the host-key callback returns for a host with no trusted key.
+type HostKeyUntrustedError struct {
+	Host      string
+	Presented PresentedKey
+}
+
+func (e *HostKeyUntrustedError) Error() string {
+	return "gitx: the host key of " + e.Host + " is not trusted"
+}
+
 // Error is a failed git call: a code and the host it was made to. Its text carries nothing else.
 type Error struct {
 	Code Code
 	Host string
+	// Presented is the SSH host key the server showed, for host_key_untrusted and
+	// host_key_changed: it is public material, so a person can compare it and trust it.
+	Presented *PresentedKey
+	// SavedFingerprint is the fingerprint of the trusted key a changed key differs from
+	// (host_key_changed only).
+	SavedFingerprint string
 }
 
 func (e *Error) Error() string { return fmt.Sprintf("git: %s (%s)", e.Code, e.Host) }
@@ -79,6 +114,16 @@ func Classify(err error, host string) error {
 	var already *Error
 	if errors.As(err, &already) {
 		return already
+	}
+	var changed *HostKeyChangedError
+	var untrusted *HostKeyUntrustedError
+	switch {
+	case errors.As(err, &changed):
+		p := changed.Presented
+		return &Error{Code: CodeHostKeyChanged, Host: host, Presented: &p, SavedFingerprint: changed.Saved}
+	case errors.As(err, &untrusted):
+		p := untrusted.Presented
+		return &Error{Code: CodeHostKeyUntrusted, Host: host, Presented: &p}
 	}
 	return &Error{Code: codeOf(err), Host: host}
 }
@@ -100,7 +145,7 @@ func codeOf(err error) Code {
 		return CodeTooLarge
 	case errors.As(err, &unknownAuthority), errors.As(err, &invalidCert), errors.As(err, &wrongHost), errors.As(err, &verification):
 		return CodeCertUntrusted
-	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed), errors.Is(err, transport.ErrInvalidAuthMethod):
+	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed), errors.Is(err, transport.ErrInvalidAuthMethod), isSSHAuthFailure(err):
 		return CodeAuthRefused
 	case errors.Is(err, transport.ErrRepositoryNotFound):
 		return CodeNotFound

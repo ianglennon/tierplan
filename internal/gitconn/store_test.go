@@ -573,13 +573,14 @@ func TestSSHCredentialIsSealedAndShownAsPublicKeyAndFingerprint(t *testing.T) {
 		t.Errorf("the shown values carry the private key: %+v", c)
 	}
 
-	// An ssh address with the key: Remote gives the address and no token.
+	// An ssh address with the key: Remote gives the address and the key to sign in with, never a token.
 	r, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: "app", URL: "git@git.example.org:acme/app.git", CredentialID: &c.ID}, "u", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rem, err := s.Remote(ctx, r); err != nil || rem.Auth != nil || rem.URL != r.URL {
-		t.Errorf("Remote of an ssh repository = %+v, %v; the key is for the SSH transport, never a token", rem, err)
+	rem, err := s.Remote(ctx, r)
+	if _, isKey := rem.Auth.(gitx.SSHKeyAuth); err != nil || !isKey || rem.URL != r.URL {
+		t.Errorf("Remote of an ssh repository = %+v, %v; want the deploy key as SSHKeyAuth, never a token", rem, err)
 	}
 
 	// Rotating the key replaces what is shown; keeping it (no secret) leaves both alone.
@@ -623,5 +624,83 @@ func TestSSHCredentialIsSealedAndShownAsPublicKeyAndFingerprint(t *testing.T) {
 		if !errors.As(err, &ve) || ve.Fields[0].Field != "secret" || ve.Fields[0].Code != tc.code {
 			t.Errorf("%s: %v, want secret: %s", name, err, tc.code)
 		}
+	}
+}
+
+// A host key is stored with who trusted it and when, comes back in the Remote of the repository, and
+// stays with the machine it was confirmed for (plan 09-06, D-03).
+func TestSSHRepositoryStoresItsHostKeyAndUsesItsKeyToSignIn(t *testing.T) {
+	s, _, _ := newStore(t)
+	ctx := context.Background()
+	key, pub := pemKey(t, "")
+	c, err := s.CreateCredential(ctx, gitconn.CredentialInput{Name: "deploy", Type: gitconn.TypeSSH, Secret: key}, "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hostPub := pemKey(t, "")
+	hostLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostPub)))
+
+	r, err := s.CreateRepo(ctx, gitconn.RepoInput{
+		Name: "app", URL: "ssh://git@git.example.org:2222/acme/app.git", CredentialID: &c.ID,
+		HostKey: "  " + hostLine + " root@somewhere\n",
+	}, "admin-1", nil)
+	if err != nil {
+		t.Fatalf("CreateRepo: %v", err)
+	}
+	if r.HostKey != hostLine || r.HostKeyFP != ssh.FingerprintSHA256(hostPub) || r.HostKeyTrustedBy != "admin-1" || r.HostKeyTrustedAt == nil || !r.HostKeyTrustedAt.Equal(now) {
+		t.Errorf("repo = %+v, want the key normalised (no comment) with its fingerprint, who trusted it and when", r)
+	}
+
+	rem, err := s.Remote(ctx, r)
+	if err != nil {
+		t.Fatalf("Remote: %v", err)
+	}
+	auth, ok := rem.Auth.(gitx.SSHKeyAuth)
+	if !ok || auth.User != "git" || auth.Signer == nil || ssh.FingerprintSHA256(auth.Signer.PublicKey()) != ssh.FingerprintSHA256(pub) {
+		t.Errorf("Remote auth = %+v, want the deploy key as SSHKeyAuth", rem.Auth)
+	}
+	if len(rem.HostKeys) != 1 || rem.HostKeys[0].Line != hostLine {
+		t.Errorf("Remote host keys = %+v, want the saved one", rem.HostKeys)
+	}
+
+	// Nothing else about the key is a field of the repository, and a key that is not a key is refused.
+	for name, bad := range map[string]string{"garbage": "not a key", "truncated": "ssh-ed25519 AAAA", "two keys": hostLine + "\n" + hostLine} {
+		_, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: "x " + name, URL: "ssh://git@git.example.org/a.git", HostKey: bad}, "u", nil)
+		var ve *gitconn.ValidationError
+		if !errors.As(err, &ve) || len(ve.Fields) != 1 || ve.Fields[0] != (gitconn.FieldError{Field: "hostKey", Code: gitconn.CodeHostKeyInvalid}) {
+			t.Errorf("%s: %v, want hostKey host_key_invalid", name, err)
+		}
+	}
+	_, err = s.CreateRepo(ctx, gitconn.RepoInput{Name: "https", URL: "https://git.example.org/a.git", HostKey: hostLine}, "u", nil)
+	var ve *gitconn.ValidationError
+	if !errors.As(err, &ve) || ve.Fields[0].Code != gitconn.CodeHostKeyNotSSH {
+		t.Errorf("a host key on an https address: %v, want host_key_not_ssh", err)
+	}
+}
+
+func TestAHostKeyStaysWithTheMachineItWasTrustedFor(t *testing.T) {
+	s, _, _ := newStore(t)
+	ctx := context.Background()
+	_, hostPub := pemKey(t, "")
+	hostLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostPub)))
+	r, err := s.CreateRepo(ctx, gitconn.RepoInput{Name: "app", URL: "ssh://git@git.example.org/acme/app.git", HostKey: hostLine}, "u", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another path on the same host keeps the key.
+	same, changed, err := s.UpdateRepo(ctx, "", r.ID, gitconn.RepoUpdate{Name: "app", URL: "ssh://git@git.example.org/acme/other.git"}, nil)
+	if err != nil || same.HostKey != hostLine || slices.Contains(changed, "host_key") {
+		t.Fatalf("update of the path: %+v changed %v, %v; want the key kept", same, changed, err)
+	}
+	// A different host forgets it: the person confirmed another machine.
+	moved, changed, err := s.UpdateRepo(ctx, "", r.ID, gitconn.RepoUpdate{Name: "app", URL: "ssh://git@other.example.org/acme/app.git"}, nil)
+	if err != nil || moved.HostKey != "" || moved.HostKeyFP != "" || moved.HostKeyTrustedAt != nil || !slices.Contains(changed, "host_key") {
+		t.Fatalf("update of the host: %+v changed %v, %v; want the key forgotten", moved, changed, err)
+	}
+	// Sending a key with the move trusts that one, by whoever sent it.
+	again, _, err := s.UpdateRepo(ctx, "", r.ID, gitconn.RepoUpdate{Name: "app", URL: "ssh://git@other.example.org/acme/app.git", HostKey: hostLine, TrustedBy: "admin-2"}, nil)
+	if err != nil || again.HostKey != hostLine || again.HostKeyTrustedBy != "admin-2" {
+		t.Fatalf("update with a key: %+v, %v; want it stored for admin-2", again, err)
 	}
 }

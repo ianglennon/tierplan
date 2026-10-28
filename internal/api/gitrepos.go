@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/envs"
@@ -56,6 +58,7 @@ type GitTestRequest struct {
 	URL          string `json:"url" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
 	CAPEM        string `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
 	CredentialID string `json:"credentialId,omitempty" maxLength:"64" doc:"The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested"`
+	HostKey      string `json:"hostKey,omitempty" maxLength:"4096" doc:"For an ssh address, the host key the person confirmed after an earlier test answered hostKey.state untrusted, in authorized_keys form (hostKey.key of that answer). It is treated as trusted for this one test only and saved nowhere; no credential is ever sent to a host whose key is not trusted. 422 host_key_invalid when it is not one public key"`
 }
 
 // TestGitAddressInput is the request of the instance test route.
@@ -91,6 +94,15 @@ type GitTestFailureBody struct {
 	Host string `json:"host" doc:"The host the test was made to"`
 }
 
+// GitTestHostKeyBody is what a test of an ssh address found out about the machine it talked to.
+type GitTestHostKeyBody struct {
+	State            string `json:"state" enum:"none,builtin,trusted,untrusted,changed" doc:"none for an https address, or an ssh host Bayplan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically"`
+	Type             string `json:"type" doc:"The key type the host showed (ssh-ed25519); empty when it showed none"`
+	Fingerprint      string `json:"fingerprint" doc:"The SHA256 fingerprint of the key the host showed (SHA256:...)"`
+	Key              string `json:"key" doc:"The key the host showed in authorized_keys form, set when state is untrusted or changed: send it back as hostKey, or to trust-host-key, after comparing the fingerprint"`
+	SavedFingerprint string `json:"savedFingerprint" doc:"When state is changed, the fingerprint of the trusted key the new one differs from"`
+}
+
 // GitTestResultBody is the answer to a repository test. A test that failed is still a 200: it is a
 // result, not an error of the request.
 type GitTestResultBody struct {
@@ -101,6 +113,7 @@ type GitTestResultBody struct {
 	TagCount      int                 `json:"tagCount" doc:"How many tags the repository has"`
 	DefaultBranch string              `json:"defaultBranch" doc:"The branch HEAD points at; empty when the server does not say"`
 	Failure       *GitTestFailureBody `json:"failure" doc:"Set when the test failed; null when it passed"`
+	HostKey       GitTestHostKeyBody  `json:"hostKey" doc:"What the test found out about the SSH host key; state none for an https address"`
 }
 
 // GitTestOutput is the answer of both test routes.
@@ -129,6 +142,7 @@ func (d GitDeps) lsRemote(ctx context.Context, rem gitx.Remote, signedIn bool) (
 			return gitTestOutcome{}, huma.Error500InternalServerError("internal error")
 		}
 		out.Body.Steps, out.Body.Failure = failedSteps(ge.Code), &GitTestFailureBody{Code: string(ge.Code), Host: ge.Host}
+		out.Body.HostKey = hostKeyBody(rem, nil, ge)
 		return gitTestOutcome{out: out, failure: ge}, nil
 	}
 	signIn := "not_needed"
@@ -145,7 +159,24 @@ func (d GitDeps) lsRemote(ctx context.Context, rem gitx.Remote, signedIn bool) (
 		out.Body.Tags = append(out.Body.Tags, t.Name)
 	}
 	out.Body.BranchCount, out.Body.TagCount, out.Body.DefaultBranch = len(refs.Branches), len(refs.Tags), refs.Default
+	out.Body.HostKey = hostKeyBody(rem, refs.HostKey, nil)
 	return gitTestOutcome{out: out}, nil
+}
+
+// hostKeyBody words what a test found out about the host key. verified is the key a successful test
+// checked; failure is the failure of a test that did not pass.
+func hostKeyBody(rem gitx.Remote, verified *gitx.PresentedKey, failure *gitx.Error) GitTestHostKeyBody {
+	b := GitTestHostKeyBody{State: string(gitx.HostKeyStateOf(rem))}
+	switch {
+	case failure != nil && failure.Code == gitx.CodeHostKeyUntrusted && failure.Presented != nil:
+		b.State, b.Type, b.Fingerprint, b.Key = string(gitx.HostKeyUntrusted), failure.Presented.Type, failure.Presented.Fingerprint, failure.Presented.Line
+	case failure != nil && failure.Code == gitx.CodeHostKeyChanged && failure.Presented != nil:
+		b.State, b.Type, b.Fingerprint, b.Key = string(gitx.HostKeyChanged), failure.Presented.Type, failure.Presented.Fingerprint, failure.Presented.Line
+		b.SavedFingerprint = failure.SavedFingerprint
+	case verified != nil:
+		b.Type, b.Fingerprint = verified.Type, verified.Fingerprint
+	}
+	return b
 }
 
 // testGitAddress validates a submission and lists the repository's branches and tags from this
@@ -176,6 +207,10 @@ func testGitAddress(ctx context.Context, d GitDeps, limiter *testLimiter, userAg
 			return nil, d.gitFail("pick the credential to test with", err)
 		}
 		rem, cred = r, &c
+	}
+	if req.HostKey != "" {
+		// Trusted for this one call: it is in the Remote and nowhere else.
+		rem.HostKeys = []gitx.HostKey{{Line: strings.TrimSpace(req.HostKey)}}
 	}
 	if !limiter.allow(p.ID) {
 		return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many tests. Wait a minute and try again.")
@@ -258,6 +293,11 @@ func validateGitTest(req GitTestRequest) error {
 	case err != nil:
 		problems = append(problems, &huma.ErrorDetail{Location: "body.caPem", Message: "ca_invalid"})
 	}
+	if k := strings.TrimSpace(req.HostKey); k != "" {
+		if _, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(k)); err != nil || strings.TrimSpace(string(rest)) != "" || strings.ContainsAny(k, "\r\n") {
+			problems = append(problems, &huma.ErrorDetail{Location: "body.hostKey", Message: "host_key_invalid"})
+		}
+	}
 	if len(problems) == 0 {
 		return nil
 	}
@@ -316,6 +356,7 @@ type GitRepoRequest struct {
 	URL          string  `json:"url,omitempty" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
 	CredentialID *string `json:"credentialId,omitempty" maxLength:"64" doc:"The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope"`
 	CAPEM        string  `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
+	HostKey      string  `json:"hostKey,omitempty" maxLength:"4096" doc:"For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Bayplan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh"`
 }
 
 // GitRepoCredentialBody is the credential a repository uses.
@@ -323,6 +364,13 @@ type GitRepoCredentialBody struct {
 	ID    string              `json:"id" doc:"The credential's ID"`
 	Name  string              `json:"name" doc:"Its name"`
 	Scope CredentialScopeBody `json:"scope" doc:"Where it can be used"`
+}
+
+// GitRepoHostKeyBody is the SSH host key a person trusted for a repository.
+type GitRepoHostKeyBody struct {
+	Type        string    `json:"type" doc:"The key type (ssh-ed25519)"`
+	Fingerprint string    `json:"fingerprint" doc:"Its SHA256 fingerprint (SHA256:...)"`
+	TrustedAt   time.Time `json:"trustedAt" format:"date-time" doc:"When a person trusted it"`
 }
 
 // GitRepoTestBody is the outcome of the last test of a saved repository.
@@ -342,6 +390,7 @@ type GitRepoBody struct {
 	Credential Nullable[GitRepoCredentialBody] `json:"credential" doc:"The credential picked for it; null for a public repository"`
 	CAPEM      string                          `json:"caPem" doc:"The custom certificate authority in PEM, public material, for people who may manage the repository; empty for everyone else and when there is none"`
 	HasCA      bool                            `json:"hasCa" doc:"Whether the repository carries a custom certificate authority, whoever is asking"`
+	HostKey    Nullable[GitRepoHostKeyBody]    `json:"hostKey" doc:"The SSH host key a person trusted for it; null when none was (and always for a host with built-in keys, which need none)"`
 	LastTest   Nullable[GitRepoTestBody]       `json:"lastTest" doc:"The last test of the saved repository; null when it was never tested"`
 	UsedBy     int                             `json:"usedBy" doc:"How many stacks use it"`
 	ReadOnly   bool                            `json:"readOnly" doc:"True when the caller may see the repository but not change or delete it"`
@@ -405,6 +454,10 @@ func (d GitDeps) gitRepoBody(ctx context.Context, r gitconn.Repo, readOnly bool)
 	if r.CredentialID != "" {
 		b.Credential = Some(GitRepoCredentialBody{ID: r.CredentialID, Name: r.CredentialName, Scope: d.scopeBody(ctx, r.CredentialEnvID)})
 	}
+	if r.HostKey != "" && r.HostKeyTrustedAt != nil {
+		typ, _, _ := strings.Cut(r.HostKey, " ")
+		b.HostKey = Some(GitRepoHostKeyBody{Type: typ, Fingerprint: r.HostKeyFP, TrustedAt: *r.HostKeyTrustedAt})
+	}
 	if r.LastTest != nil {
 		b.LastTest = Some(GitRepoTestBody{At: r.LastTest.At, OK: r.LastTest.OK, Code: r.LastTest.Code})
 	}
@@ -428,15 +481,31 @@ func gitRepoAuditDetails(r gitconn.Repo) map[string]string {
 	return details
 }
 
+// hostKeyAuditDetails is what the audit row of trusting a host key records: the repository, its layer,
+// its host and the fingerprint of the key (public material), and the fingerprint it replaced.
+func hostKeyAuditDetails(r gitconn.Repo, replaced string) map[string]string {
+	details := map[string]string{"name": r.Name, "layer": r.Layer(), "host": r.Host(), "fingerprint": r.HostKeyFP}
+	if replaced != "" {
+		details["fingerprint_from"] = replaced
+	}
+	return details
+}
+
 // createGitRepo stores a repository of the instance layer (envID empty) or of one environment and
 // audits it in the same transaction.
 func (d GitDeps) createGitRepo(ctx context.Context, p *rbac.Principal, envID, userAgent string, req GitRepoRequest) (*GitRepoOutput, error) {
-	in := gitconn.RepoInput{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM}
+	in := gitconn.RepoInput{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM, HostKey: req.HostKey}
 	if envID != "" {
 		in.EnvID = &envID
 	}
 	r, err := d.Conns.CreateRepo(ctx, in, p.ID, func(ctx context.Context, tx *sql.Tx, r gitconn.Repo) error {
-		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoCreated, gitRepoTargetType, r.ID, envID, gitRepoAuditDetails(r))
+		if err := d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoCreated, gitRepoTargetType, r.ID, envID, gitRepoAuditDetails(r)); err != nil {
+			return err
+		}
+		if r.HostKey == "" {
+			return nil
+		}
+		return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitHostKeyTrusted, gitRepoTargetType, r.ID, envID, hostKeyAuditDetails(r, ""))
 	})
 	if err != nil {
 		return nil, d.gitFail("create repository", err)
@@ -680,7 +749,7 @@ func (d GitDeps) updateGitRepo(ctx context.Context, p *rbac.Principal, envID, id
 		return nil, d.repoFail("get repository to update", err)
 	}
 	r, _, err := d.Conns.UpdateRepo(ctx, envID, id,
-		gitconn.RepoUpdate{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM},
+		gitconn.RepoUpdate{Name: req.Name, URL: req.URL, CredentialID: req.CredentialID, CAPEM: req.CAPEM, HostKey: req.HostKey, TrustedBy: p.ID},
 		func(ctx context.Context, tx *sql.Tx, r gitconn.Repo, changed []string) error {
 			details := gitRepoAuditDetails(r)
 			details["changed"] = strings.Join(changed, ",")
@@ -688,7 +757,17 @@ func (d GitDeps) updateGitRepo(ctx context.Context, p *rbac.Principal, envID, id
 				// Where the repository pointed before, so a redirect of it is on record (T-09-14).
 				details["host_from"] = cur.Host()
 			}
-			return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoUpdated, gitRepoTargetType, r.ID, envID, details)
+			if err := d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitRepoUpdated, gitRepoTargetType, r.ID, envID, details); err != nil {
+				return err
+			}
+			if !slices.Contains(changed, "host_key") || r.HostKey == "" {
+				return nil
+			}
+			// A key that replaces another is a re-trust; a first key, or one for a moved address, is a trust.
+			if cur.HostKey != "" && r.Host() == cur.Host() {
+				return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitHostKeyRetrusted, gitRepoTargetType, r.ID, envID, hostKeyAuditDetails(r, cur.HostKeyFP))
+			}
+			return d.gitAudit(ctx, tx, p, userAgent, audit.ActionGitHostKeyTrusted, gitRepoTargetType, r.ID, envID, hostKeyAuditDetails(r, ""))
 		})
 	if err != nil {
 		return nil, d.repoFail("update repository", err)

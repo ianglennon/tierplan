@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/store"
@@ -103,7 +104,11 @@ type Repo struct {
 	CredentialEnvID string
 	// CAPEM is a custom certificate authority, public material.
 	CAPEM string
-	// HostKeyFP, HostKeyTrustedBy and HostKeyTrustedAt describe the SSH host key a person trusted.
+	// HostKey is the SSH host key a person trusted for the repository's host, in authorized_keys
+	// form (public material); empty when none was.
+	HostKey string
+	// HostKeyFP, HostKeyTrustedBy and HostKeyTrustedAt describe that key: its SHA256 fingerprint,
+	// the user who trusted it and when.
 	HostKeyFP        string
 	HostKeyTrustedBy string
 	HostKeyTrustedAt *time.Time
@@ -226,6 +231,9 @@ type RepoInput struct {
 	CredentialID *string
 	// CAPEM is an optional custom certificate authority for a server with its own.
 	CAPEM string
+	// HostKey is the SSH host key the person confirmed, in authorized_keys form; empty for none.
+	// The creator is recorded as who trusted it. 422 hostKey: host_key_invalid or host_key_not_ssh.
+	HostKey string
 }
 
 // CreateRepo validates in and stores the repository, then runs hook (which may be nil) in the same
@@ -235,6 +243,10 @@ type RepoInput struct {
 // a refused address, CA or name, and ErrNameTaken for a name the layer already has.
 func (s *Store) CreateRepo(ctx context.Context, in RepoInput, actorID string, hook RepoHook) (Repo, error) {
 	name, url, ca, _, errs := validRepo(in.Name, in.URL, in.CAPEM)
+	key, keyErr := validHostKey(in.HostKey, url)
+	if keyErr != nil {
+		errs = append(errs, *keyErr)
+	}
 	if len(errs) > 0 {
 		return Repo{}, &ValidationError{Fields: errs}
 	}
@@ -244,6 +256,11 @@ func (s *Store) CreateRepo(ctx context.Context, in RepoInput, actorID string, ho
 	}
 	id := uid.String()
 	now := s.now().UTC().UnixNano()
+	var trustedBy string
+	var trustedAt sql.NullInt64
+	if key.Line != "" {
+		trustedBy, trustedAt = actorID, sql.NullInt64{Int64: now, Valid: true}
+	}
 	tx, err := s.st.Write.BeginTx(ctx, nil)
 	if err != nil {
 		return Repo{}, fmt.Errorf("gitconn: begin: %w", err)
@@ -256,7 +273,8 @@ func (s *Store) CreateRepo(ctx context.Context, in RepoInput, actorID string, ho
 	}
 	if err := q.InsertGitRepo(ctx, sqlc.InsertGitRepoParams{
 		ID: id, EnvID: nullString(deref(in.EnvID)), Name: name, Url: url, CredentialID: nullString(cred),
-		CaPem: ca, CreatedAt: now, UpdatedAt: now, CreatedBy: actorID,
+		CaPem: ca, HostKey: key.Line, HostKeyFp: key.Fingerprint, HostKeyTrustedBy: trustedBy, HostKeyTrustedAt: trustedAt,
+		CreatedAt: now, UpdatedAt: now, CreatedBy: actorID,
 	}); err != nil {
 		return Repo{}, writeError(err)
 	}
@@ -309,19 +327,28 @@ func (s *Store) GetRepo(ctx context.Context, id string) (Repo, error) {
 	return repoOf(row), nil
 }
 
-// Remote is what gitx needs to talk to the repository: its address, its certificate authority and,
-// when it has a credential, the sign-in. The token is opened here, in memory, for this one call; it
-// is in no field of the Repo and no route returns it. SSH keys are used by the SSH transport and
-// give no Auth here yet.
+// Remote is what gitx needs to talk to the repository: its address, its certificate authority, the
+// SSH host key a person trusted and, when it has a credential, the sign-in. A token or a private
+// key is opened here, in memory, for this one call; it is in no field of the Repo and no route
+// returns it.
 func (s *Store) Remote(ctx context.Context, r Repo) (gitx.Remote, error) {
+	rem := gitx.Remote{URL: r.URL, CAPEM: r.CAPEM}
+	if r.HostKey != "" {
+		rem.HostKeys = []gitx.HostKey{{Line: r.HostKey}}
+	}
 	if r.CredentialID == "" {
-		return gitx.Remote{URL: r.URL, CAPEM: r.CAPEM}, nil
+		return rem, nil
 	}
 	c, err := s.GetCredential(ctx, r.CredentialID)
 	if err != nil {
 		return gitx.Remote{}, err
 	}
-	return s.remote(ctx, r.URL, r.CAPEM, c)
+	auth, err := s.auth(ctx, c)
+	if err != nil {
+		return gitx.Remote{}, err
+	}
+	rem.Auth = auth
+	return rem, nil
 }
 
 // RemoteFor is Remote for an address that is not saved, with a credential picked by ID for a
@@ -340,29 +367,35 @@ func (s *Store) RemoteFor(ctx context.Context, repoEnv, url, caPEM, credID strin
 	if err := CheckCredentialScope(repoEnv, c); err != nil {
 		return gitx.Remote{}, Credential{}, err
 	}
-	rem, err := s.remote(ctx, url, caPEM, c)
-	return rem, c, err
+	auth, err := s.auth(ctx, c)
+	if err != nil {
+		return gitx.Remote{}, Credential{}, err
+	}
+	return gitx.Remote{URL: url, CAPEM: caPEM, Auth: auth}, c, nil
 }
 
-// remote opens the secret of c, when it is a token, into the Remote of one call.
-func (s *Store) remote(ctx context.Context, url, caPEM string, c Credential) (gitx.Remote, error) {
-	rem := gitx.Remote{URL: url, CAPEM: caPEM}
-	if c.Type != TypeHTTPS {
-		return rem, nil
-	}
+// auth opens the secret of c into the sign-in of one call: a token with its user name, or an SSH
+// key as a signer.
+func (s *Store) auth(ctx context.Context, c Credential) (gitx.Auth, error) {
 	sealed, err := s.st.RQ.GetGitCredentialSecret(ctx, c.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return gitx.Remote{}, ErrNotFound
+		return nil, ErrNotFound
 	}
 	if err != nil {
-		return gitx.Remote{}, fmt.Errorf("gitconn: read the secret of credential %s: %w", c.ID, err)
+		return nil, fmt.Errorf("gitconn: read the secret of credential %s: %w", c.ID, err)
 	}
 	plain, err := s.v.Open(vault.ContextGitCred+c.ID, sealed)
 	if err != nil {
-		return gitx.Remote{}, fmt.Errorf("gitconn: open the secret of credential %s: %w", c.ID, err)
+		return nil, fmt.Errorf("gitconn: open the secret of credential %s: %w", c.ID, err)
 	}
-	rem.Auth = gitx.TokenAuth{Username: c.Username, Token: string(plain)}
-	return rem, nil
+	if c.Type != TypeSSH {
+		return gitx.TokenAuth{Username: c.Username, Token: string(plain)}, nil
+	}
+	key, err := ParsePrivateKey(string(plain))
+	if err != nil {
+		return nil, fmt.Errorf("gitconn: read the key of credential %s: %w", c.ID, err)
+	}
+	return gitx.SSHKeyAuth{User: c.Username, Signer: key.Signer}, nil
 }
 
 // RecordTest remembers the outcome of a test of the saved repository, now: whether it passed and,
@@ -440,7 +473,7 @@ func repoOf(r sqlc.GetGitRepoRow) Repo {
 	out := Repo{
 		ID: r.ID, EnvID: r.EnvID.String, Name: r.Name, URL: r.Url, CredentialID: r.CredentialID.String,
 		CredentialName: r.CredentialName, CredentialEnvID: r.CredentialEnvID.String, CAPEM: r.CaPem,
-		HostKeyFP: r.HostKeyFp, HostKeyTrustedBy: r.HostKeyTrustedBy,
+		HostKey: r.HostKey, HostKeyFP: r.HostKeyFp, HostKeyTrustedBy: r.HostKeyTrustedBy,
 		CreatedAt: time.Unix(0, r.CreatedAt).UTC(), UpdatedAt: time.Unix(0, r.UpdatedAt).UTC(), CreatedBy: r.CreatedBy,
 	}
 	if r.HostKeyTrustedAt.Valid {
@@ -655,6 +688,11 @@ type RepoUpdate struct {
 	Name, URL    string
 	CredentialID *string
 	CAPEM        string
+	// HostKey is an SSH host key the person confirmed, in authorized_keys form. Empty keeps the
+	// saved key unless the address moved to another host or port, which forgets it: a key trusted
+	// for one machine is never aimed at another. TrustedBy is who confirmed it.
+	HostKey   string
+	TrustedBy string
 }
 
 // RepoUpdateHook is UpdateHook for a repository.
@@ -666,7 +704,7 @@ type RepoUpdateHook func(ctx context.Context, tx *sql.Tx, r Repo, changed []stri
 // credential again (the same one, another, or none with an empty ID): else *ValidationError
 // (credentialId: credential_reselect), so a token the person picked for one server is never aimed
 // at another by an edit that did not mention it. It returns the repository as it now is and the
-// names of the fields that changed, sorted (ca_pem, credential, name, url). A form that changes
+// names of the fields that changed, sorted (ca_pem, credential, host_key, name, url). A form that changes
 // nothing writes nothing and runs no hook. The last test is forgotten when the address, the
 // credential or the CA changed: it was seen against something that no longer applies.
 func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate, hook RepoUpdateHook) (Repo, []string, error) {
@@ -690,8 +728,20 @@ func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate,
 		return Repo{}, nil, ErrNotFound
 	}
 	name, url, ca, _, errs := validRepo(in.Name, in.URL, in.CAPEM)
+	key, keyErr := validHostKey(in.HostKey, url)
+	if keyErr != nil {
+		errs = append(errs, *keyErr)
+	}
 	if len(errs) > 0 {
 		return Repo{}, nil, &ValidationError{Fields: errs}
+	}
+	// The trusted key stays with the machine it was confirmed for.
+	hostKey := cur.HostKey
+	if destinationOf(cur.URL) != destinationOf(url) {
+		hostKey = ""
+	}
+	if key.Line != "" {
+		hostKey = key.Line
 	}
 	cred := cur.CredentialID
 	if in.CredentialID != nil {
@@ -711,6 +761,7 @@ func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate,
 	}{
 		{"ca_pem", ca != cur.CAPEM},
 		{"credential", cred != cur.CredentialID},
+		{"host_key", hostKey != cur.HostKey},
 		{"name", name != cur.Name},
 		{"url", url != cur.URL},
 	} {
@@ -738,7 +789,12 @@ func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate,
 	if n == 0 {
 		return Repo{}, nil, ErrNotFound
 	}
-	if slices.Contains(changed, "ca_pem") || slices.Contains(changed, "credential") || slices.Contains(changed, "url") {
+	if slices.Contains(changed, "host_key") {
+		if err := setHostKey(ctx, q, id, hostKey, in.TrustedBy, now); err != nil {
+			return Repo{}, nil, err
+		}
+	}
+	if slices.Contains(changed, "ca_pem") || slices.Contains(changed, "credential") || slices.Contains(changed, "url") || slices.Contains(changed, "host_key") {
 		if _, err := q.ClearGitRepoTest(ctx, id); err != nil {
 			return Repo{}, nil, fmt.Errorf("gitconn: clear the last test: %w", err)
 		}
@@ -757,6 +813,81 @@ func (s *Store) UpdateRepo(ctx context.Context, envID, id string, in RepoUpdate,
 		return Repo{}, nil, fmt.Errorf("gitconn: commit: %w", err)
 	}
 	return r, changed, nil
+}
+
+// setHostKey stores line as the trusted SSH host key of repository id, with who trusted it and when;
+// an empty line forgets the trust. line has been validated.
+func setHostKey(ctx context.Context, q *sqlc.Queries, id, line, trustedBy string, now int64) error {
+	var fp string
+	var at sql.NullInt64
+	if line != "" {
+		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
+		if err != nil {
+			return fmt.Errorf("gitconn: read the host key to store: %w", err)
+		}
+		fp, at = ssh.FingerprintSHA256(pub), sql.NullInt64{Int64: now, Valid: true}
+	} else {
+		trustedBy = ""
+	}
+	if _, err := q.SetGitRepoHostKey(ctx, sqlc.SetGitRepoHostKeyParams{
+		HostKey: line, HostKeyFp: fp, HostKeyTrustedBy: trustedBy, HostKeyTrustedAt: at, UpdatedAt: now, ID: id,
+	}); err != nil {
+		return fmt.Errorf("gitconn: store the host key of repository %s: %w", id, err)
+	}
+	return nil
+}
+
+// HostKeyHook is TxHook for trusting a host key: it sees the repository as it was and as it now is.
+type HostKeyHook func(ctx context.Context, tx *sql.Tx, before, after Repo) error
+
+// TrustHostKey stores line, an SSH host key in authorized_keys form, as the one the repository's host
+// is trusted by, replacing any earlier one, and records actorID and the time. It is the explicit
+// act that follows a host_key_changed or a first look at an unknown host; nothing in a fetch or a
+// test ever calls it. The last test is forgotten, and hook (which may be nil) runs in the same
+// transaction with the repository before and after. It returns ErrNotFound, or *ValidationError
+// (hostKey: host_key_invalid, or host_key_not_ssh for an address that is not ssh).
+func (s *Store) TrustHostKey(ctx context.Context, repoID, line, actorID string, hook HostKeyHook) (Repo, error) {
+	tx, err := s.st.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := s.st.Q.WithTx(tx)
+	row, err := q.GetGitRepo(ctx, repoID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Repo{}, ErrNotFound
+	}
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: read: %w", err)
+	}
+	before := repoOf(row)
+	key, keyErr := validHostKey(line, before.URL)
+	if keyErr == nil && key.Line == "" {
+		keyErr = &FieldError{Field: "hostKey", Code: CodeHostKeyInvalid}
+	}
+	if keyErr != nil {
+		return Repo{}, &ValidationError{Fields: []FieldError{*keyErr}}
+	}
+	if err := setHostKey(ctx, q, repoID, key.Line, actorID, s.now().UTC().UnixNano()); err != nil {
+		return Repo{}, err
+	}
+	if _, err := q.ClearGitRepoTest(ctx, repoID); err != nil {
+		return Repo{}, fmt.Errorf("gitconn: clear the last test: %w", err)
+	}
+	row, err = q.GetGitRepo(ctx, repoID)
+	if err != nil {
+		return Repo{}, fmt.Errorf("gitconn: read back: %w", err)
+	}
+	after := repoOf(row)
+	if hook != nil {
+		if err := hook(ctx, tx, before, after); err != nil {
+			return Repo{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Repo{}, fmt.Errorf("gitconn: commit: %w", err)
+	}
+	return after, nil
 }
 
 // destinationOf is where an address connects to: its host and port.

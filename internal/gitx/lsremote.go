@@ -39,11 +39,14 @@ func (g *GoGit) LsRemote(ctx context.Context, r Remote) (RefList, error) {
 	if err := ValidateCA(r.CAPEM); err != nil {
 		return RefList{}, err
 	}
-	if u.Scheme != "https" {
-		// ssh is validated but not offered by this client yet: go-git would fall back to the
-		// server user's own known_hosts (RESEARCH Pitfall 2), so it is refused until the host-key
-		// and egress checks are in place.
-		return RefList{}, &Error{Code: CodeUnreachable, Host: u.Host}
+	if u.Scheme == "ssh" {
+		return g.lsRemoteSSH(ctx, r, u)
+	}
+	switch r.Auth.(type) {
+	case nil, TokenAuth:
+	default:
+		// A deploy key does not sign in to an https address.
+		return RefList{}, &Error{Code: CodeAuthRefused, Host: u.Host}
 	}
 	ctx, cancel := context.WithTimeout(registry.WithEgressPolicy(ctx, g.policy), lsRemoteDeadline)
 	defer cancel()

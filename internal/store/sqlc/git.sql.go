@@ -146,7 +146,7 @@ func (q *Queries) GetGitCredentialSecret(ctx context.Context, id string) (string
 
 const getGitRepo = `-- name: GetGitRepo :one
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
-       r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
+       r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
        COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
 FROM git_repos r
@@ -161,6 +161,7 @@ type GetGitRepoRow struct {
 	Url              string
 	CredentialID     sql.NullString
 	CaPem            string
+	HostKey          string
 	HostKeyFp        string
 	HostKeyTrustedBy string
 	HostKeyTrustedAt sql.NullInt64
@@ -184,6 +185,7 @@ func (q *Queries) GetGitRepo(ctx context.Context, id string) (GetGitRepoRow, err
 		&i.Url,
 		&i.CredentialID,
 		&i.CaPem,
+		&i.HostKey,
 		&i.HostKeyFp,
 		&i.HostKeyTrustedBy,
 		&i.HostKeyTrustedAt,
@@ -245,20 +247,25 @@ func (q *Queries) InsertGitCredential(ctx context.Context, arg InsertGitCredenti
 
 const insertGitRepo = `-- name: InsertGitRepo :exec
 INSERT INTO git_repos (
-    id, env_id, name, url, credential_id, ca_pem, created_at, updated_at, created_by
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, env_id, name, url, credential_id, ca_pem, host_key, host_key_fp, host_key_trusted_by, host_key_trusted_at,
+    created_at, updated_at, created_by
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertGitRepoParams struct {
-	ID           string
-	EnvID        sql.NullString
-	Name         string
-	Url          string
-	CredentialID sql.NullString
-	CaPem        string
-	CreatedAt    int64
-	UpdatedAt    int64
-	CreatedBy    string
+	ID               string
+	EnvID            sql.NullString
+	Name             string
+	Url              string
+	CredentialID     sql.NullString
+	CaPem            string
+	HostKey          string
+	HostKeyFp        string
+	HostKeyTrustedBy string
+	HostKeyTrustedAt sql.NullInt64
+	CreatedAt        int64
+	UpdatedAt        int64
+	CreatedBy        string
 }
 
 func (q *Queries) InsertGitRepo(ctx context.Context, arg InsertGitRepoParams) error {
@@ -269,6 +276,10 @@ func (q *Queries) InsertGitRepo(ctx context.Context, arg InsertGitRepoParams) er
 		arg.Url,
 		arg.CredentialID,
 		arg.CaPem,
+		arg.HostKey,
+		arg.HostKeyFp,
+		arg.HostKeyTrustedBy,
+		arg.HostKeyTrustedAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.CreatedBy,
@@ -344,7 +355,7 @@ func (q *Queries) ListGitCredentials(ctx context.Context) ([]ListGitCredentialsR
 
 const listGitRepos = `-- name: ListGitRepos :many
 SELECT r.id, r.env_id, r.name, r.url, r.credential_id, r.ca_pem,
-       r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
+       r.host_key, r.host_key_fp, r.host_key_trusted_by, r.host_key_trusted_at,
        r.last_test_at, r.last_test_ok, r.last_test_code, r.created_at, r.updated_at, r.created_by,
        COALESCE(c.name, '') AS credential_name, c.env_id AS credential_env_id
 FROM git_repos r
@@ -359,6 +370,7 @@ type ListGitReposRow struct {
 	Url              string
 	CredentialID     sql.NullString
 	CaPem            string
+	HostKey          string
 	HostKeyFp        string
 	HostKeyTrustedBy string
 	HostKeyTrustedAt sql.NullInt64
@@ -389,6 +401,7 @@ func (q *Queries) ListGitRepos(ctx context.Context) ([]ListGitReposRow, error) {
 			&i.Url,
 			&i.CredentialID,
 			&i.CaPem,
+			&i.HostKey,
 			&i.HostKeyFp,
 			&i.HostKeyTrustedBy,
 			&i.HostKeyTrustedAt,
@@ -445,6 +458,39 @@ type SetGitCredentialUseParams struct {
 // A call with the credential signed in: remembers when and forgets an earlier refusal.
 func (q *Queries) SetGitCredentialUse(ctx context.Context, arg SetGitCredentialUseParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setGitCredentialUse, arg.LastUseAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setGitRepoHostKey = `-- name: SetGitRepoHostKey :execrows
+UPDATE git_repos
+SET host_key = ?, host_key_fp = ?, host_key_trusted_by = ?, host_key_trusted_at = ?, updated_at = ?
+WHERE id = ?
+`
+
+type SetGitRepoHostKeyParams struct {
+	HostKey          string
+	HostKeyFp        string
+	HostKeyTrustedBy string
+	HostKeyTrustedAt sql.NullInt64
+	UpdatedAt        int64
+	ID               string
+}
+
+// Stores the SSH host key a person trusted (an authorized_keys line, public material), its
+// fingerprint, who trusted it and when. An empty key forgets the trust. Not bounded to a layer:
+// the caller has already read the repository and checked its layer.
+func (q *Queries) SetGitRepoHostKey(ctx context.Context, arg SetGitRepoHostKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setGitRepoHostKey,
+		arg.HostKey,
+		arg.HostKeyFp,
+		arg.HostKeyTrustedBy,
+		arg.HostKeyTrustedAt,
+		arg.UpdatedAt,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}
