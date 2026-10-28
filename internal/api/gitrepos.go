@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -15,7 +16,6 @@ import (
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/registry"
 )
 
 // problemGitUnavailable is the problem type of a server built without git support.
@@ -113,7 +113,8 @@ func testGitAddress(ctx context.Context, d GitDeps, limiter *testLimiter, req Gi
 	if err != nil {
 		var ge *gitx.Error
 		if !errors.As(err, &ge) {
-			d.Log.Error("git test failed unexpectedly", "error", err)
+			// The text of an unknown error could carry the address or a token: log its type only.
+			d.Log.Error("git test failed unexpectedly", "error_type", fmt.Sprintf("%T", err))
 			return nil, huma.Error500InternalServerError("internal error")
 		}
 		out.Body.Steps, out.Body.Failure = failedSteps(ge.Code), &GitTestFailureBody{Code: string(ge.Code), Host: ge.Host}
@@ -155,12 +156,11 @@ func validateGitTest(req GitTestRequest) error {
 		}
 		problems = append(problems, &huma.ErrorDetail{Location: "body.url", Message: code})
 	}
-	if req.CAPEM != "" {
-		if len(req.CAPEM) > registry.MaxCAPEMBytes {
-			problems = append(problems, &huma.ErrorDetail{Location: "body.caPem", Message: "ca_too_large"})
-		} else if !registry.ValidCAPEM(req.CAPEM) {
-			problems = append(problems, &huma.ErrorDetail{Location: "body.caPem", Message: "ca_invalid"})
-		}
+	switch err := gitx.ValidateCA(req.CAPEM); {
+	case errors.Is(err, gitx.ErrCATooLarge):
+		problems = append(problems, &huma.ErrorDetail{Location: "body.caPem", Message: "ca_too_large"})
+	case err != nil:
+		problems = append(problems, &huma.ErrorDetail{Location: "body.caPem", Message: "ca_invalid"})
 	}
 	if len(problems) == 0 {
 		return nil

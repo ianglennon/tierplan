@@ -76,8 +76,8 @@ func TestValidateURLRefusesACredentialInTheAddress(t *testing.T) {
 		if !errors.Is(err, gitx.ErrURLUserinfo) {
 			t.Errorf("ValidateURL(%q) = %v, want ErrURLUserinfo", in, err)
 		}
-		if err != nil && strings.Contains(err.Error(), "pass") {
-			t.Errorf("the error for %q carries the password: %v", in, err)
+		if err != nil && (strings.Contains(err.Error(), "git.example.org") || strings.Contains(err.Error(), ":pass") || strings.Contains(err.Error(), ":pw")) {
+			t.Errorf("the error for %q carries part of the address: %v", in, err)
 		}
 	}
 }

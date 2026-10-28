@@ -3,7 +3,20 @@
 
 package gitx
 
-import "fmt"
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+
+	"github.com/ianglennon/bayplan/internal/registry"
+)
 
 // Code is why a git call failed, as one of a fixed set. The screens word each one; no text from
 // go-git, the network or the server ever leaves this package (RESEARCH Pitfall 16).
@@ -27,6 +40,27 @@ const (
 	CodeCommitMissing Code = "commit_missing"
 )
 
+// ErrCAInvalid is what a certificate authority that is not a PEM certificate is refused with.
+var ErrCAInvalid = errors.New("gitx: the certificate authority is not a PEM certificate")
+
+// ErrCATooLarge is what a certificate authority over the registry limit (64 KiB) is refused with.
+var ErrCATooLarge = errors.New("gitx: the certificate authority is larger than 64 KiB")
+
+// ValidateCA checks a custom certificate authority bundle with the rule registry credentials use
+// (Phase 9 D-05): empty is fine, else at most 64 KiB and at least one PEM certificate. It returns
+// ErrCATooLarge or ErrCAInvalid.
+func ValidateCA(pem string) error {
+	switch {
+	case pem == "":
+		return nil
+	case len(pem) > registry.MaxCAPEMBytes:
+		return ErrCATooLarge
+	case !registry.ValidCAPEM(pem):
+		return ErrCAInvalid
+	}
+	return nil
+}
+
 // Error is a failed git call: a code and the host it was made to. Its text carries nothing else.
 type Error struct {
 	Code Code
@@ -35,11 +69,45 @@ type Error struct {
 
 func (e *Error) Error() string { return fmt.Sprintf("git: %s (%s)", e.Code, e.Host) }
 
-// Classify turns what a git call returned into an *Error. err is never copied: only the code it
-// maps to and host.
+// Classify turns what a git call returned into an *Error. err is never copied or wrapped: only the
+// code it maps to and host, because go-git's text can carry the address, a token or a response.
+// Anything it does not know is CodeUnreachable.
 func Classify(err error, host string) error {
 	if err == nil {
 		return nil
 	}
-	return &Error{Code: CodeUnreachable, Host: host}
+	var already *Error
+	if errors.As(err, &already) {
+		return already
+	}
+	return &Error{Code: codeOf(err), Host: host}
+}
+
+// codeOf maps an error to its code. The order matters: a blocked dial and a size cap are decided
+// before the network errors they are wrapped in, and a certificate error before a timeout.
+func codeOf(err error) Code {
+	var (
+		unknownAuthority x509.UnknownAuthorityError
+		invalidCert      x509.CertificateInvalidError
+		wrongHost        x509.HostnameError
+		verification     *tls.CertificateVerificationError
+		netErr           net.Error
+	)
+	switch {
+	case errors.Is(err, registry.ErrEgressBlocked), errors.Is(err, ErrProtocolRefused):
+		return CodeEgressBlocked
+	case errors.Is(err, registry.ErrResponseTooLarge):
+		return CodeTooLarge
+	case errors.As(err, &unknownAuthority), errors.As(err, &invalidCert), errors.As(err, &wrongHost), errors.As(err, &verification):
+		return CodeCertUntrusted
+	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed), errors.Is(err, transport.ErrInvalidAuthMethod):
+		return CodeAuthRefused
+	case errors.Is(err, transport.ErrRepositoryNotFound):
+		return CodeNotFound
+	case errors.Is(err, plumbing.ErrReferenceNotFound):
+		return CodeRefMissing
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return CodeTimeout
+	}
+	return CodeUnreachable
 }

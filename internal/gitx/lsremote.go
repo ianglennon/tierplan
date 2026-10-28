@@ -36,6 +36,9 @@ func (g *GoGit) LsRemote(ctx context.Context, r Remote) (RefList, error) {
 	if err != nil {
 		return RefList{}, err
 	}
+	if err := ValidateCA(r.CAPEM); err != nil {
+		return RefList{}, err
+	}
 	if u.Scheme != "https" {
 		// ssh is validated but not offered by this client yet: go-git would fall back to the
 		// server user's own known_hosts (RESEARCH Pitfall 2), so it is refused until the host-key

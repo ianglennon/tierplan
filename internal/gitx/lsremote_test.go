@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -202,24 +203,27 @@ func TestLsRemoteRefusesAMetadataAddressAndARedirectToOne(t *testing.T) {
 	_, err := g.LsRemote(ctx, gitx.Remote{URL: "https://169.254.169.254/latest/meta-data.git"})
 	wantCode(t, err, gitx.CodeEgressBlocked)
 
-	for name, target := range map[string]string{
-		"a blocked address": "https://169.254.169.254/x.git/info/refs?service=git-upload-pack",
-		"plain http":        "http://127.0.0.1:1/x.git/info/refs?service=git-upload-pack",
-	} {
-		redirect := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A server that sends the client elsewhere.
+	redirectTo := func(target string) gitx.Remote {
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, target, http.StatusFound)
 		}))
-		t.Cleanup(redirect.Close)
-		caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: redirect.Certificate().Raw}))
-		_, err := g.LsRemote(ctx, gitx.Remote{URL: redirect.URL + "/x.git", CAPEM: caPEM})
-		if err == nil {
-			t.Errorf("%s: a redirect to it was followed", name)
-			continue
-		}
-		var ge *gitx.Error
-		if !errors.As(err, &ge) || ge.Code != gitx.CodeEgressBlocked {
-			t.Errorf("%s: err = %v, want egress_blocked", name, err)
-		}
+		t.Cleanup(srv.Close)
+		return gitx.Remote{URL: srv.URL + "/x.git", CAPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))}
+	}
+
+	_, err = g.LsRemote(ctx, redirectTo("https://169.254.169.254/x.git/info/refs?service=git-upload-pack"))
+	wantCode(t, err, gitx.CodeEgressBlocked)
+
+	// A redirect from https to plain http is never followed: the target sees no request.
+	var plainHits atomic.Int64
+	plain := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { plainHits.Add(1) }))
+	t.Cleanup(plain.Close)
+	if _, err := g.LsRemote(ctx, redirectTo(plain.URL+"/x.git/info/refs?service=git-upload-pack")); err == nil {
+		t.Error("a redirect to plain http was followed")
+	}
+	if n := plainHits.Load(); n != 0 {
+		t.Errorf("the plain http server saw %d requests, want 0", n)
 	}
 }
 
@@ -311,7 +315,7 @@ func TestNoOptionSkipsCertificateVerification(t *testing.T) {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(name)
+		src, err := os.ReadFile(name) //nolint:gosec // G304: the names are this package's own files
 		if err != nil {
 			t.Fatal(err)
 		}

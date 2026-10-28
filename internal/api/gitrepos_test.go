@@ -244,7 +244,7 @@ func TestGitAddressTestFailuresAreFixedCodesAndNeverRawText(t *testing.T) {
 	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	admin := f.asAdmin(t)
-	const password = "basic-auth-password-0123456789"
+	const password = "basic-auth-password-0123456789" //nolint:gosec // G101: a made-up password for the test fixture
 	locked := publicRepo(t, gittest.HTTPOptions{BasicAuth: &[2]string{"ci-user", password}})
 	open := publicRepo(t, gittest.HTTPOptions{})
 
