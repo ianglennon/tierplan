@@ -8,13 +8,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
+	"github.com/ianglennon/bayplan/internal/gitx/gittest"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/vault"
@@ -52,6 +56,13 @@ type checkFixture struct {
 // commit is the deployed one.
 func newCheckFixture(t *testing.T, wrap func(gitx.Client) gitx.Client, joined func(string, int)) *checkFixture {
 	t.Helper()
+	return newCheckFixtureWith(t, wrap, joined, nil)
+}
+
+// newCheckFixtureWith is newCheckFixture for a stack that follows something else than the branch main: tune may change
+// the request the stack is made from, and make the refs it names, once the repository has its first commit.
+func newCheckFixtureWith(t *testing.T, wrap func(gitx.Client) gitx.Client, joined func(string, int), tune func(f *fixture, req *gitsync.ImportRequest)) *checkFixture {
+	t.Helper()
 	f := newFixture(t, webFiles(), nil)
 	v, err := vault.New(bytes.Repeat([]byte{5}, 32), "test")
 	if err != nil {
@@ -72,7 +83,11 @@ func newCheckFixture(t *testing.T, wrap func(gitx.Client) gitx.Client, joined fu
 	})
 
 	ctx := context.Background()
-	imp, err := f.svc.Import(ctx, f.request())
+	req := f.request()
+	if tune != nil {
+		tune(f, &req)
+	}
+	imp, err := f.svc.Import(ctx, req)
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
@@ -437,5 +452,364 @@ func TestCheckJoinsACheckThatRuns(t *testing.T) {
 	}
 	if f.svc.InFlight(f.stackID) {
 		t.Error("InFlight = true once the check ended")
+	}
+}
+
+// --- the state machine and the behind edges (plan 09-15, GIT-09, GIT-03, D-12, D-13, D-16) ---
+
+// faultyClient fails every fetch with err while err is set.
+type faultyClient struct {
+	gitx.Client
+	err error
+}
+
+func (c *faultyClient) FetchRef(ctx context.Context, m gitx.MirrorID, r gitx.Remote, kind gitx.RefKind, ref string) (gitx.Commit, error) {
+	if c.err != nil {
+		return gitx.Commit{}, c.err
+	}
+	return c.Client.FetchRef(ctx, m, r, kind, ref)
+}
+
+func newFaultyFixture(t *testing.T) (*checkFixture, *faultyClient) {
+	t.Helper()
+	fc := &faultyClient{}
+	f := newCheckFixture(t, func(c gitx.Client) gitx.Client { fc.Client = c; return fc }, nil)
+	f.deploy(t)
+	return f, fc
+}
+
+func TestCheckMonorepo(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	f.deploy(t)
+
+	other := f.repo.Commit(t, map[string]string{"stacks/other/compose.yml": "services: {a: {image: x}}\n"}, "another stack")
+	if out := f.check(t); out != gitsync.OutcomeInSync {
+		t.Fatalf("check after a commit to another folder = %s, want in_sync", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.Behind != 0 || s.HeadCommit != other || s.DeployedCommit != f.sha {
+		t.Errorf("state = %+v, want in sync with the head %s recorded", s, other)
+	}
+
+	// A different commit with the same tree for the folder (GIT-09 adjacency).
+	empty := f.repo.Commit(t, nil, "nothing changed")
+	if out := f.check(t); out != gitsync.OutcomeInSync {
+		t.Fatalf("check after an empty commit = %s, want in_sync", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.Behind != 0 || s.HeadCommit != empty || s.HeadTree != s.DeployedTree {
+		t.Errorf("state = %+v, want in sync at %s with the deployed tree", s, empty)
+	}
+}
+
+// countFetches counts the fetches of a ref.
+type countFetches struct {
+	gitx.Client
+	n atomic.Int32
+}
+
+func (c *countFetches) FetchRef(ctx context.Context, m gitx.MirrorID, r gitx.Remote, kind gitx.RefKind, ref string) (gitx.Commit, error) {
+	c.n.Add(1)
+	return c.Client.FetchRef(ctx, m, r, kind, ref)
+}
+
+func TestCheckFixedCommit(t *testing.T) {
+	t.Parallel()
+	count := &countFetches{}
+	f := newCheckFixtureWith(t, func(c gitx.Client) gitx.Client { count.Client = c; return count }, nil,
+		func(f *fixture, req *gitsync.ImportRequest) { req.RefKind, req.Ref = gitx.RefCommit, f.sha })
+	ctx := context.Background()
+	if sg, err := f.rr.StackGit(ctx, f.stackID); err != nil || sg.RefKind != "commit" {
+		t.Fatalf("the stack follows %+v, %v, want a commit", sg, err)
+	}
+
+	// Never deployed: nothing to compare with.
+	if out := f.check(t); out != gitsync.OutcomeSkipped {
+		t.Fatalf("check before any deploy = %s, want skipped", out)
+	}
+	f.deploy(t)
+	f.changeWeb(t, "1") // the repository moves on; the stack doesn't care
+	requests := f.srv.Requests()
+	if out := f.check(t); out != gitsync.OutcomeInSync {
+		t.Fatalf("check of a fixed commit = %s, want in_sync", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.Behind != 0 || s.HeadCommit != f.sha || s.ReasonCode != "" {
+		t.Errorf("state = %+v, want in sync at the fixed commit, never behind", s)
+	}
+	if n := count.n.Load(); n != 0 {
+		t.Errorf("%d fetches for a fixed commit, want none", n)
+	}
+	if got := f.srv.Requests(); got != requests {
+		t.Errorf("the git server saw %d requests during the check (was %d), want no more", got, requests)
+	}
+}
+
+func TestCheckMovedTagAndForcePush(t *testing.T) {
+	t.Parallel()
+	t.Run("a tag moved to a later commit", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixtureWith(t, nil, nil, func(f *fixture, req *gitsync.ImportRequest) {
+			f.repo.Tag(t, "v1", f.sha, false)
+			req.RefKind, req.Ref = gitx.RefTag, "v1"
+		})
+		f.deploy(t)
+		if out := f.check(t); out != gitsync.OutcomeInSync {
+			t.Fatalf("check with the tag in place = %s, want in_sync", out)
+		}
+		moved := f.changeWeb(t, "1")
+		f.repo.Tag(t, "v1", moved, false)
+		if out := f.check(t); out != gitsync.OutcomeBehind {
+			t.Fatalf("check after the tag moved = %s, want behind", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusBehind || s.Behind != 1 || s.HeadCommit != moved {
+			t.Errorf("state = %+v, want behind 1 at %s", s, moved)
+		}
+	})
+	t.Run("a branch force-pushed to an unrelated history", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		head := f.repo.Orphan(t, map[string]string{"stacks/web/compose.yaml": webCompose, "stacks/web/web.env": "A=z\n"}, "rewritten")
+		if out := f.check(t); out != gitsync.OutcomeBehind {
+			t.Fatalf("check after a force-push = %s, want behind", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusBehind || s.Behind < 1 || s.HeadCommit != head || s.DeployedCommit != f.sha {
+			t.Errorf("state = %+v, want behind at least 1 at %s with %s still deployed", s, head, f.sha)
+		}
+	})
+	t.Run("a force-push that keeps the folder as it was", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		head := f.repo.Orphan(t, webFiles(), "rewritten, same folder")
+		if out := f.check(t); out != gitsync.OutcomeInSync {
+			t.Fatalf("check after a force-push that changed nothing here = %s, want in_sync", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusInSync || s.Behind != 0 || s.HeadCommit != head {
+			t.Errorf("state = %+v, want in sync at %s: the folder is the deployed one", s, head)
+		}
+	})
+}
+
+func TestCheckCap(t *testing.T) {
+	t.Parallel()
+	t.Run("2100 commits that change the folder", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		f.repo.CommitMany(t, 2100, func(int) string { return "stacks/web/web.env" })
+		if out := f.check(t); out != gitsync.OutcomeBehind {
+			t.Fatalf("check = %s, want behind", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusBehind || s.Behind != gitsync.BehindCap || gitsync.BehindCap != 2000 {
+			t.Errorf("state = %+v, want behind %d (capped)", s, gitsync.BehindCap)
+		}
+	})
+	t.Run("a walk that stops at the cap reads as the cap even when fewer commits changed the folder", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		f.repo.CommitMany(t, 2100, func(i int) string {
+			if i%2 == 0 {
+				return "stacks/web/web.env"
+			}
+			return "stacks/other/n.env"
+		})
+		f.check(t)
+		if s := f.state(t); s.Status != stackops.GitStatusBehind || s.Behind != gitsync.BehindCap {
+			t.Errorf("state = %+v, want behind %d: the walk stopped, so the count is a floor the screens mark with a plus", s, gitsync.BehindCap)
+		}
+	})
+}
+
+func TestCheckErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		code   gitsync.ReasonCode
+		detail string
+	}{
+		{"the server is down", &gitx.Error{Code: gitx.CodeUnreachable}, gitsync.ReasonFetchFailed, "The server couldn't be reached."},
+		{"the credential is refused", &gitx.Error{Code: gitx.CodeAuthRefused}, gitsync.ReasonFetchFailed, "The server refused the credential."},
+		{"the host key changed", &gitx.Error{Code: gitx.CodeHostKeyChanged}, gitsync.ReasonHostKeyChanged, "The server's host key changed."},
+		{"the host key is not trusted", &gitx.Error{Code: gitx.CodeHostKeyUntrusted}, gitsync.ReasonHostKeyUntrusted, "The server's host key isn't trusted yet."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f, fc := newFaultyFixture(t)
+			if out := f.check(t); out != gitsync.OutcomeInSync {
+				t.Fatalf("first check = %s, want in_sync", out)
+			}
+			fc.err = tc.err
+			if out := f.check(t); out != gitsync.OutcomeError {
+				t.Fatalf("check = %s, want error", out)
+			}
+			s := f.state(t)
+			if s.Status != stackops.GitStatusError || s.ReasonCode != string(tc.code) || s.ReasonDetail != tc.detail || s.ErrorSince == nil ||
+				s.DeployedCommit != f.sha {
+				t.Errorf("state = %+v, want error %s %q with the deployed commit kept", s, tc.code, tc.detail)
+			}
+		})
+	}
+
+	t.Run("the git host is down", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		f.srv.Close()
+		if out := f.check(t); out != gitsync.OutcomeError {
+			t.Fatalf("check with the server down = %s, want error", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusError || s.ReasonCode != string(gitsync.ReasonFetchFailed) || s.ReasonDetail == "" {
+			t.Errorf("state = %+v, want error fetch_failed with a sentence", s)
+		}
+	})
+
+	t.Run("the folder is removed", func(t *testing.T) {
+		t.Parallel()
+		f := newCheckFixture(t, nil, nil)
+		f.deploy(t)
+		gone := map[string]string{}
+		for p := range webFiles() {
+			if strings.HasPrefix(p, "stacks/web/") {
+				gone[p] = gittest.Delete
+			}
+		}
+		f.repo.Commit(t, gone, "remove the stack")
+		if out := f.check(t); out != gitsync.OutcomeError {
+			t.Fatalf("check after the folder went = %s, want error", out)
+		}
+		if s := f.state(t); s.Status != stackops.GitStatusError || s.ReasonCode != string(gitsync.ReasonFolderGone) {
+			t.Errorf("state = %+v, want error folder_gone", s)
+		}
+	})
+}
+
+func TestCheckHeadFailsChecks(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	f.deploy(t)
+	ctx := context.Background()
+	draftBefore, err := f.rr.Draft(ctx, f.stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The new commit needs a variable nobody has set.
+	bad := f.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:${NEWTAG}\n    env_file: web.env\n"}, "needs NEWTAG")
+	if out := f.check(t); out != gitsync.OutcomeError {
+		t.Fatalf("check of a head that fails the checks = %s, want error", out)
+	}
+	s := f.state(t)
+	if s.Status != stackops.GitStatusError || s.ReasonCode != string(gitsync.ReasonChecksFailed) || !strings.Contains(s.ReasonDetail, "NEWTAG") ||
+		s.HeadCommit != bad || s.DeployedCommit != f.sha || s.Behind != 1 {
+		t.Fatalf("state = %+v, want error checks_failed naming NEWTAG at %s, the deployed commit kept", s, bad)
+	}
+	// Nothing was deployed and nothing was drafted.
+	draftAfter, err := f.rr.Draft(ctx, f.stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draftAfter.Version != draftBefore.Version || draftAfter.Git.Commit != f.sha {
+		t.Errorf("draft = v%d at %s, was v%d: a failed check must not change it", draftAfter.Version, draftAfter.Git.Commit, draftBefore.Version)
+	}
+	if good, ok, err := f.rr.LatestGoodRevision(ctx, f.stackID); err != nil || !ok || good.Git.Commit != f.sha {
+		t.Errorf("latest good revision = %+v, %v, %v, want the one deployed before", good.Git, ok, err)
+	}
+
+	// The stack's own variable fills it: the head passes and the stack is behind.
+	copy := draftAfter.Copy
+	copy.Vars = append(slices.Clone(copy.Vars), stacks.Var{Name: "NEWTAG", Value: "2"})
+	if _, _, err := f.rr.SaveDraft(ctx, f.stackID, draftAfter.Version, "ada", copy); err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+	if out := f.check(t); out != gitsync.OutcomeBehind {
+		t.Fatalf("check once the variable is set = %s, want behind", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusBehind || s.Behind != 1 || s.ReasonCode != "" || s.ErrorSince != nil || s.ConsecutiveFailures != 0 {
+		t.Errorf("state = %+v, want behind 1 with the error cleared", s)
+	}
+}
+
+func TestCheckSourceChanged(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	f.deploy(t)
+	f.repo.Branch(t, "dev", f.sha)
+	if _, err := f.st.Write.Exec(`UPDATE stack_git SET ref = 'dev' WHERE stack_id = ?`, f.stackID); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.check(t); out != gitsync.OutcomeBehind {
+		t.Fatalf("check after the ref changed = %s, want behind", out)
+	}
+	if s := f.state(t); s.Status != stackops.GitStatusBehind || s.ReasonCode != string(gitsync.ReasonSourceChanged) || s.Behind != 0 && s.Behind != 1 {
+		t.Errorf("state = %+v, want behind with source_changed", s)
+	}
+	// The ref is put back: the note goes.
+	if _, err := f.st.Write.Exec(`UPDATE stack_git SET ref = 'main' WHERE stack_id = ?`, f.stackID); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.check(t); out != gitsync.OutcomeInSync {
+		t.Fatalf("check with the ref back = %s, want in_sync", out)
+	}
+	if s := f.state(t); s.ReasonCode != "" || s.ReasonDetail != "" {
+		t.Errorf("state = %+v, want no reason", s)
+	}
+}
+
+func TestCheckAuditOnce(t *testing.T) {
+	t.Parallel()
+	f, fc := newFaultyFixture(t)
+	fc.err = &gitx.Error{Code: gitx.CodeUnreachable}
+	f.check(t)
+	f.clock.advance(time.Minute)
+	f.check(t)
+	if s := f.state(t); s.ConsecutiveFailures != 2 {
+		t.Errorf("consecutive failures = %d, want 2", s.ConsecutiveFailures)
+	}
+	if rows := f.syncFailures(t); len(rows) != 1 {
+		t.Fatalf("audit rows after two identical errors = %d, want 1", len(rows))
+	}
+
+	// Another reason is a new error: a second row, and the run starts again.
+	fc.err = &gitx.Error{Code: gitx.CodeHostKeyChanged}
+	f.clock.advance(time.Minute)
+	f.check(t)
+	s := f.state(t)
+	if s.ReasonCode != string(gitsync.ReasonHostKeyChanged) || s.ConsecutiveFailures != 1 {
+		t.Errorf("state = %+v, want host_key_changed on its first failure", s)
+	}
+	rows := f.syncFailures(t)
+	if len(rows) != 2 || rows[1].Details["reason_code"] != "host_key_changed" {
+		t.Fatalf("audit rows = %+v, want a second one for host_key_changed", rows)
+	}
+
+	// A good check clears everything.
+	fc.err = nil
+	f.check(t)
+	if s := f.state(t); s.Status != stackops.GitStatusInSync || s.ReasonCode != "" || s.ErrorSince != nil || s.ConsecutiveFailures != 0 {
+		t.Errorf("state = %+v, want the error cleared", s)
+	}
+}
+
+func TestCheckEmptyStates(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	s := f.state(t)
+	if s.Status != stackops.GitStatusUnknown || s.CheckedAt != nil || s.DeployedCommit != "" || s.Behind != 0 {
+		t.Errorf("state before any check = %+v, want unknown, never checked, nothing deployed", s)
+	}
+	// Checked but never deployed: the head is known, the deployed commit is empty and the stack is not behind.
+	f.check(t)
+	s = f.state(t)
+	if s.Status != stackops.GitStatusUnknown || s.CheckedAt == nil || s.DeployedCommit != "" || s.HeadCommit != f.sha || s.Behind != 0 {
+		t.Errorf("state after a check of a stack never deployed = %+v, want unknown with only the head", s)
+	}
+	// Whenever the status is behind, it says by how much or why.
+	f.deploy(t)
+	f.changeWeb(t, "1")
+	f.check(t)
+	if s := f.state(t); s.Status != stackops.GitStatusBehind || (s.Behind < 1 && s.ReasonCode != string(gitsync.ReasonSourceChanged)) {
+		t.Errorf("state = %+v, want behind >= 1 or source_changed", s)
 	}
 }

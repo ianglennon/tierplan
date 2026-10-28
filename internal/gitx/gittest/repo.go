@@ -9,6 +9,7 @@ package gittest
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,9 +22,10 @@ const Delete = "\x00gittest:delete"
 
 // Repo is a bare repository and the working tree commits are made in.
 type Repo struct {
-	bare string
-	work string
-	env  []string
+	bare    string
+	work    string
+	env     []string
+	orphans int
 }
 
 // requireGit fails the test when git is not on the PATH.
@@ -91,6 +93,47 @@ func (r *Repo) Commit(tb testing.TB, files map[string]string, msg string) string
 	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
 	r.git(tb, r.work, "push", "--force", "origin", "HEAD:refs/heads/main")
 	return sha
+}
+
+// CommitMany makes n commits on the current branch with one fast-import, which is how a test gets a long history
+// quickly, and pushes the branch. Commit i (from 0) writes the file file(i) with content "i". It returns the last
+// commit's ID. The repository needs a commit already.
+func (r *Repo) CommitMany(tb testing.TB, n int, file func(i int) string) string {
+	tb.Helper()
+	var in bytes.Buffer
+	const base = 1893456000 // a time after the commits Commit makes, and rising
+	for i := range n {
+		msg := fmt.Sprintf("bulk %d", i)
+		content := fmt.Sprintf("%d\n", i)
+		fmt.Fprintf(&in, "commit refs/heads/main\ncommitter Bayplan Test <test@bayplan.invalid> %d +0000\ndata %d\n%s\n", base+i, len(msg), msg)
+		if i == 0 {
+			in.WriteString("from refs/heads/main^0\n")
+		}
+		fmt.Fprintf(&in, "M 100644 inline %s\ndata %d\n%s\n", file(i), len(content), content)
+	}
+	cmd := exec.Command("git", "fast-import", "--quiet") //nolint:gosec // G204: constant arguments
+	cmd.Dir = r.work
+	cmd.Env = r.env
+	cmd.Stdin = &in
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		tb.Fatalf("git fast-import: %v\n%s", err, errb.String())
+	}
+	r.git(tb, r.work, "reset", "--hard", "main")
+	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
+	r.git(tb, r.work, "push", "--force", "origin", "HEAD:refs/heads/main")
+	return sha
+}
+
+// Orphan makes a commit with no parent that holds only files, and force-pushes it as main: the history so far is
+// no longer reachable from main, as after a force-push of an unrelated history. Later calls of Commit build on it.
+func (r *Repo) Orphan(tb testing.TB, files map[string]string, msg string) string {
+	tb.Helper()
+	r.orphans++
+	r.git(tb, r.work, "checkout", "--orphan", fmt.Sprintf("orphan-%d", r.orphans))
+	r.git(tb, r.work, "rm", "-rf", "--ignore-unmatch", ".")
+	return r.Commit(tb, files, msg)
 }
 
 // Tree is the hash of the tree object of the folder dir of the commit sha ("" is the commit's root tree), as

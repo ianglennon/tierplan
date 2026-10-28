@@ -156,3 +156,46 @@ func TestCommitsTouchingNeedsTheHead(t *testing.T) {
 		t.Errorf("unknown head err = %v, want commit_missing", err)
 	}
 }
+
+func TestCommitsTouchingNotAncestorAndCap(t *testing.T) {
+	t.Parallel()
+	f := newTouchFixture(t)
+	ctx := context.Background()
+	fetch := func() string {
+		t.Helper()
+		c, err := f.g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main")
+		if err != nil {
+			t.Fatalf("FetchRef: %v", err)
+		}
+		return c.SHA
+	}
+
+	// Twelve more commits: eight change a and four change b.
+	head := f.repo.CommitMany(t, 12, func(i int) string {
+		if i%3 == 2 {
+			return "b/n.env"
+		}
+		return "a/n.env"
+	})
+	if got := fetch(); got != head {
+		t.Fatalf("head = %s, want %s", got, head)
+	}
+	exact, err := f.g.CommitsTouching(ctx, f.m, head, f.fourth, "a", 12)
+	if err != nil || exact.Capped || exact.NotAncestor || exact.Count != 8 {
+		t.Errorf("a walk of exactly the 12 commits = %+v, %v, want 8 and neither capped nor not-ancestor", exact, err)
+	}
+	short, err := f.g.CommitsTouching(ctx, f.m, head, f.fourth, "a", 11)
+	if err != nil || !short.Capped || short.NotAncestor {
+		t.Errorf("a walk of 11 over 12 commits = %+v, %v, want capped", short, err)
+	}
+
+	// A history that replaces the old one: the deployed commit is no ancestor of the new head.
+	orphan := f.repo.Orphan(t, map[string]string{"a/compose.yaml": "services: {z: {image: z}}\n"}, "replacement")
+	if got := fetch(); got != orphan {
+		t.Fatalf("head after the force-push = %s, want %s", got, orphan)
+	}
+	gone, err := f.g.CommitsTouching(ctx, f.m, orphan, f.fourth, "a", 0)
+	if err != nil || !gone.NotAncestor || gone.Count != 0 || gone.Capped || len(gone.Commits) != 0 {
+		t.Errorf("after a force-push = %+v, %v, want not an ancestor with nothing counted", gone, err)
+	}
+}
