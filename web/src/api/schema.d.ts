@@ -10139,6 +10139,8 @@ export interface components {
             checkedAt?: string;
             /** @description True while a check of the stack runs now */
             checking: boolean;
+            /** @description The compose files of the folder the stack merges, in merge order: a key of a later file wins over the same key of an earlier one */
+            composeFiles: string[] | null;
             /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository */
             deployedSha: string;
             /** @description The folder of the repository the stack lives in; empty for the root */

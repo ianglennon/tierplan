@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { GIT_TAB } from "@/features/stack-git/git-tab-link";
 import { ShaLink } from "@/features/stack-git/sha-link";
 import { SyncStatus } from "@/features/stack-git/sync-status";
 import { useNeeds } from "@/hooks/use-needs";
@@ -177,11 +178,6 @@ export function GitStrip({ stack }: GitStripProps) {
     </section>
   );
 }
-
-// The Git tab's path, where the stack's source, polling and auto-deploy are set. The tab and its route arrive with plan
-// 09-18, so the typed router cannot name it yet; the path is written as the other tabs' are and typed as the stack's
-// page, whose parameters it shares. Plan 09-18 registers the route and replaces this with a plain typed `to`.
-const GIT_TAB = "/env/$envId/stacks/$stackId/git" as string as "/env/$envId/stacks/$stackId";
 
 // The link to the Git tab.
 export function GitSettingsLink({ envId, stackId }: { envId: string; stackId: string }) {

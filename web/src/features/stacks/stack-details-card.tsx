@@ -6,12 +6,14 @@ import { Check, Copy, Loader2 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { DriftView } from "@/api/stack-drift";
+import type { StackGit } from "@/api/stack-git";
 import type { StackDetail } from "@/api/stacks";
 import { copyText } from "@/components/copyable-code";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { ShaLink } from "@/features/stack-git/sha-link";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
 
@@ -35,7 +37,19 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 // CopyId is the stack ID in mono with a button that copies it. The result is told in words for a
 // screen reader and by the icon for everyone else.
-function CopyId({ id }: { id: string }) {
+function CopyId({
+  id,
+  label,
+  copiedLabel,
+  extra,
+}: {
+  id: string;
+  // The accessible name of the button and what is announced after it copied; the stack ID's by default.
+  label?: string;
+  copiedLabel?: string;
+  // Something after the value and before the button, such as the link to a commit.
+  extra?: ReactNode;
+}) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const host = useRef<HTMLSpanElement>(null);
@@ -55,20 +69,92 @@ function CopyId({ id }: { id: string }) {
   return (
     <span ref={host} className="flex min-w-0 items-start gap-1">
       <span className="min-w-0 font-mono text-xs break-all">{id}</span>
+      {extra}
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
         className="-my-1 shrink-0 max-md:size-11"
-        aria-label={t("stackOverview.details.copy")}
+        aria-label={label ?? t("stackOverview.details.copy")}
         onClick={() => void onCopy()}
       >
         {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
       </Button>
       <span role="status" className="sr-only">
-        {copied ? t("stackOverview.details.copied") : ""}
+        {copied ? (copiedLabel ?? t("stackOverview.details.copied")) : ""}
       </span>
     </span>
+  );
+}
+
+// GitRows are the rows that replace Source for a stack from a repository (UI-SPEC "Stack page (git stack)"): where it
+// lives, which commit is deployed and the newest the repository has, whether a commit is deployed on its own, and when
+// the repository was last checked. Every value is the server's and is drawn as text; the only link out is the commit's
+// on a known host.
+function GitRows({ git }: { git: StackGit }) {
+  const t = useT();
+  const files = git.composeFiles ?? [];
+  const behind = git.status === "behind" && git.headSha !== "";
+  return (
+    <>
+      <Row label={t("stackGit.details.source")}>{t("stacks.source.git")}</Row>
+      <Row label={t("stackGit.details.repository")}>
+        {git.repoName || t("stackGit.strip.repoUnknown")}
+      </Row>
+      <Row label={t("stackGit.details.ref")}>
+        <code className="font-mono text-xs break-all">{git.ref}</code>{" "}
+        <span className="text-muted-foreground">{t(`stackGit.kind.${git.refKind}`)}</span>
+      </Row>
+      <Row label={t("stackGit.details.folder")}>
+        {git.folder ? (
+          <code className="font-mono text-xs break-all">{git.folder}</code>
+        ) : (
+          t("stackGit.details.rootFolder")
+        )}
+      </Row>
+      <Row label={t("stackGit.details.composeFiles")}>
+        {files.length > 0 ? (
+          <ol className="flex flex-col">
+            {files.map((f) => (
+              <li key={f}>
+                <code className="font-mono text-xs break-all">{f}</code>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          t("stackLists.missing")
+        )}
+      </Row>
+      <Row label={t("stackGit.details.deployedCommit")}>
+        {git.deployedSha ? (
+          <CopyId
+            id={git.deployedSha}
+            label={t("stackGit.details.copyCommit")}
+            copiedLabel={t("stackGit.details.copiedCommit")}
+            extra={
+              <ShaLink sha={git.deployedSha} repoHost={git.repoHost} repoPath={git.repoPath} />
+            }
+          />
+        ) : (
+          t("stackGit.strip.notDeployed")
+        )}
+      </Row>
+      {behind ? (
+        <Row label={t("stackGit.details.latestCommit")}>
+          <ShaLink sha={git.headSha} repoHost={git.repoHost} repoPath={git.repoPath} />
+        </Row>
+      ) : null}
+      <Row label={t("stackGit.details.autoDeploy")}>
+        {git.autoDeployPaused
+          ? t("stackGit.details.autoDeployPaused")
+          : git.autoDeploy
+            ? t("stackGit.details.autoDeployOn")
+            : t("stackGit.details.autoDeployOff")}
+      </Row>
+      <Row label={t("stackGit.details.checked")}>
+        {git.checkedAt ? <RelativeTime value={git.checkedAt} /> : t("stackGit.strip.never")}
+      </Row>
+    </>
   );
 }
 
@@ -133,7 +219,11 @@ export function StackDetailsCard({ stack, drift }: StackDetailsCardProps) {
         <Row label={t("stackOverview.details.target")}>
           {t(`stackOverview.details.targets.${stack.target}`)}
         </Row>
-        <Row label={t("stackOverview.details.source")}>{t(`stacks.source.${stack.source}`)}</Row>
+        {stack.git ? (
+          <GitRows git={stack.git} />
+        ) : (
+          <Row label={t("stackOverview.details.source")}>{t(`stacks.source.${stack.source}`)}</Row>
+        )}
         <Row label={t("stackOverview.details.created")}>
           <RelativeTime value={stack.createdAt} /> {by(stack.createdBy)}
         </Row>

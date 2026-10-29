@@ -34,6 +34,8 @@ type StackGitSummary struct {
 	Ref      string `json:"ref" doc:"The branch, tag or commit ID the stack follows"`
 	Folder   string `json:"folder" doc:"The folder of the repository the stack lives in; empty for the root"`
 
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files of the folder the stack merges, in merge order: a key of a later file wins over the same key of an earlier one"`
+
 	DeployedSha  string `json:"deployedSha" doc:"The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository"`
 	HeadSha      string `json:"headSha" doc:"The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was"`
 	Behind       int    `json:"behind" minimum:"0" doc:"How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1"`
@@ -52,7 +54,7 @@ type StackGitSummary struct {
 // repo leaves the repository's name and address empty.
 func gitSummaryOf(sg stackops.StackGit, st stackops.GitState, repo gitconn.Repo, checking bool) StackGitSummary {
 	out := StackGitSummary{
-		RepoID: sg.RepoID, RepoName: repo.Name, RefKind: sg.RefKind, Ref: sg.Ref, Folder: sg.Folder,
+		RepoID: sg.RepoID, RepoName: repo.Name, RefKind: sg.RefKind, Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: composeFilesOf(sg.ComposeFiles),
 		DeployedSha: st.DeployedCommit, HeadSha: st.HeadCommit, Behind: st.Behind, BehindCapped: st.Behind >= gitsync.BehindCap,
 		Status: st.Status, ReasonCode: st.ReasonCode, ReasonDetail: st.ReasonDetail, Checking: checking,
 		AutoDeploy: sg.AutoDeploy, AutoDeployPaused: sg.AutoDeployPausedReason != "",
@@ -70,6 +72,14 @@ func gitSummaryOf(sg stackops.StackGit, st stackops.GitState, repo gitconn.Repo,
 		}
 	}
 	return out
+}
+
+// composeFilesOf is the list as the body sends it: an empty list and not null.
+func composeFilesOf(files []string) []string {
+	if files == nil {
+		return []string{}
+	}
+	return files
 }
 
 // gitSummaries are the git summaries of the git stacks of an environment, by stack ID: one query for their settings, one

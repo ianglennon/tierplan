@@ -76,6 +76,32 @@
       "behindSourceTip": "The repository, ref or folder is not the one that is deployed. Review update.",
       "syncError": "Sync error",
       "errorTip": "The last check of the repository failed."
+    },
+    "details": {
+      "source": "Source",
+      "repository": "Repository",
+      "ref": "Ref",
+      "folder": "Folder",
+      "rootFolder": "Repository root",
+      "composeFiles": "Compose files",
+      "deployedCommit": "Deployed commit",
+      "copyCommit": "Copy commit ID",
+      "latestCommit": "Latest commit",
+      "autoDeploy": "Auto-deploy",
+      "autoDeployOn": "On",
+      "autoDeployOff": "Off. Waits for review.",
+      "autoDeployPaused": "Paused",
+      "checked": "Checked",
+      "copiedCommit": "Copied the commit ID"
+    },
+    "alert": {
+      "title": "{{name}} can't sync with {{repo}}",
+      "titleNoRepo": "{{name}} can't sync with its repository",
+      "body": "{{reason}} The last good version, {{sha}}, is still running.",
+      "bodyNoVersion": "{{reason}}",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "openSettings": "Open git settings"
     }
   }
 }

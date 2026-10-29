@@ -31,6 +31,7 @@ function makeGit(over: Partial<StackGit> = {}): StackGit {
     refKind: "branch",
     ref: "main",
     folder: "",
+    composeFiles: ["compose.yaml"],
     deployedSha: DEPLOYED,
     headSha: DEPLOYED,
     behind: 0,
@@ -557,7 +558,7 @@ describe("the Details rows of a git stack", () => {
         status: "behind",
         behind: 2,
         headSha: HEAD,
-      } as Partial<StackGit>),
+      }),
     );
     await screen.findByText("Repository", { selector: "dt" });
     expect(row("Source").textContent).toBe("Git");
@@ -571,10 +572,7 @@ describe("the Details rows of a git stack", () => {
   });
 
   it("reads Repository root for the root folder", async () => {
-    await mountPart(
-      "details",
-      makeGit({ folder: "", composeFiles: ["compose.yaml"] } as Partial<StackGit>),
-    );
+    await mountPart("details", makeGit({ folder: "", composeFiles: ["compose.yaml"] }));
     await screen.findByText("Folder", { selector: "dt" });
     expect(row("Folder").textContent).toBe("Repository root");
   });

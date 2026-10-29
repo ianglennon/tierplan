@@ -20,6 +20,7 @@ function makeGit(over: Partial<StackGit> = {}): StackGit {
     refKind: "branch",
     ref: "main",
     folder: "",
+    composeFiles: ["compose.yaml"],
     deployedSha: DEPLOYED,
     headSha: DEPLOYED,
     behind: 0,
