@@ -312,6 +312,8 @@ describe("CredentialSheet add mode", () => {
     expect(screen.getByText("SHA256:AbCdEfGh0123456789")).toBeTruthy();
     expect(document.body.textContent).not.toContain("BEGIN OPENSSH PRIVATE KEY");
     expect(saved).toHaveLength(1);
+    // The sheet is still open, and the key it sent is no longer held by the mutation (IN-E01).
+    expect(client.getMutationCache().getAll()).toHaveLength(0);
   });
 });
 
