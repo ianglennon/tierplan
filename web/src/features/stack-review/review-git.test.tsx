@@ -20,6 +20,7 @@ const STACK = "s1";
 const D1 = `sha256:${"a1".repeat(32)}`;
 const DEPLOYED = "0123456789abcdef0123456789abcdef01234567";
 const HEAD = "fedcba9876543210fedcba9876543210fedcba98";
+const NEWER = "1111111111111111111111111111111111111111";
 
 type Git = Record<string, unknown> | undefined;
 
@@ -36,6 +37,10 @@ async function openCard() {
 // The answer of the commits route; undefined makes it fail.
 let commits: Record<string, unknown> | undefined;
 let commitRequests: string[];
+// The head the stack's own page last saw, and every request made, in order.
+let stackHead: string;
+let sent: { method: string; path: string; body?: unknown }[];
+let reviewReads: number;
 
 const counts = (added = 0, changed = 0, removed = 0) => ({ added, changed, removed });
 
@@ -73,6 +78,7 @@ function gitBody(over: Record<string, unknown> = {}) {
     deployedCommit: DEPLOYED,
     touched: 3,
     sourceChanged: false,
+    headCommit: HEAD,
     ...over,
   };
 }
@@ -101,6 +107,9 @@ beforeEach(() => {
   git = gitBody();
   commits = commitList(2);
   commitRequests = [];
+  stackHead = HEAD;
+  sent = [];
+  reviewReads = 0;
   stackGit = true;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -108,6 +117,17 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
+      sent.push({
+        method: req.method,
+        path,
+        body:
+          req.method === "POST"
+            ? await req
+                .clone()
+                .json()
+                .catch(() => undefined)
+            : undefined,
+      });
       if (path === "/api/me") return Response.json(makeMe({ envs: { [ENV]: "operator" } }));
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
@@ -137,7 +157,7 @@ beforeEach(() => {
                   folder: "stacks/web",
                   composeFiles: ["compose.yaml"],
                   deployedSha: DEPLOYED,
-                  headSha: HEAD,
+                  headSha: stackHead,
                   behind: 3,
                   behindCapped: false,
                   status: "behind",
@@ -151,7 +171,25 @@ beforeEach(() => {
             : {}),
         });
       }
-      if (path === `/api/env/${ENV}/stacks/${STACK}/review`) return Response.json(reviewBody());
+      if (path === `/api/env/${ENV}/stacks/${STACK}/review`) {
+        reviewReads++;
+        return Response.json(reviewBody());
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/draft`) return Response.json({ version: 7 });
+      if (path === `/api/env/${ENV}/stacks/${STACK}/git/pull`) {
+        // The pull refreshes the draft to the newest commit, which is then what the review shows.
+        git = gitBody({ commit: NEWER, headCommit: NEWER });
+        return Response.json({
+          draftVersion: 8,
+          commit: NEWER,
+          ref: "main",
+          deployedCommit: DEPLOYED,
+          touched: 4,
+        });
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/deploys`) {
+        return Response.json({ jobId: "j1", revision: 3 }, { status: 202 });
+      }
       if (path === `/api/env/${ENV}/stacks/${STACK}/git/commits`) {
         commitRequests.push(new URL(req.url).search);
         return commits ? Response.json(commits) : Response.json({}, { status: 500 });
@@ -347,5 +385,87 @@ describe("the Commits card of a git review", () => {
     const wrapped = await screen.findByText(long);
     expect(wrapped.className).not.toContain("truncate");
     expect(wrapped.className).toContain("break-words");
+  });
+});
+
+const IMAGE_NOTE =
+  "Only images whose reference changed in the repository are looked up again. The others keep the digest they run.";
+
+describe("the Images card of a git review", () => {
+  it("says which images are looked up again", async () => {
+    mount();
+    expect(await screen.findByText(IMAGE_NOTE)).toBeTruthy();
+  });
+
+  it("has no such note for a stack that is not from git", async () => {
+    git = undefined;
+    stackGit = false;
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByText(IMAGE_NOTE)).toBeNull();
+  });
+});
+
+describe("the moved-head note of a git review", () => {
+  it("says the branch moved on after the review, and offers to review the new commit", async () => {
+    git = gitBody({ headCommit: NEWER });
+    mount();
+    expect(await screen.findByText("main has moved on")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "This deploy uses fedcba9, the commit you reviewed. main is now at 1111111.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review 1111111" })).toBeTruthy();
+  });
+
+  it("learns of a head the stack's page saw after the review was prepared", async () => {
+    stackHead = NEWER;
+    mount();
+    expect(await screen.findByText("main has moved on")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review 1111111" })).toBeTruthy();
+  });
+
+  it("is not shown while the head is the reviewed commit, or when no head is known", async () => {
+    mount();
+    await screen.findByTestId("review-commit-line");
+    expect(screen.queryByText("main has moved on")).toBeNull();
+    cleanup();
+    git = gitBody({ headCommit: "" });
+    stackHead = "";
+    mount();
+    await screen.findAllByTestId("review-commit-line");
+    expect(screen.queryByText("main has moved on")).toBeNull();
+  });
+
+  it("is not shown for a fixed commit, which does not move", async () => {
+    git = gitBody({ refKind: "commit", ref: HEAD, headCommit: NEWER });
+    mount();
+    await screen.findByTestId("review-commit-line");
+    expect(screen.queryByText(/has moved on/)).toBeNull();
+  });
+
+  it("pulls again and reviews the new commit when Review is pressed", async () => {
+    git = gitBody({ headCommit: NEWER });
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Review 1111111" }));
+    expect(
+      await screen.findByText(
+        "Bayplan fetched main just now and rendered stacks/web at commit 1111111. This shows what would change on Prod.",
+      ),
+    ).toBeTruthy();
+    expect(sent.filter((r) => r.path.endsWith("/git/pull"))).toHaveLength(1);
+    expect(reviewReads).toBe(2);
+    expect(screen.queryByText("main has moved on")).toBeNull();
+  });
+
+  it("still deploys the commit that was reviewed", async () => {
+    git = gitBody({ headCommit: NEWER });
+    mount();
+    await screen.findByText("main has moved on");
+    fireEvent.click(await screen.findByRole("button", { name: "Deploy stack" }));
+    await waitFor(() => expect(sent.some((r) => r.path.endsWith("/deploys"))).toBe(true));
+    expect(sent.find((r) => r.path.endsWith("/deploys"))?.body).toMatchObject({ draftVersion: 7 });
+    expect(sent.some((r) => r.path.endsWith("/git/pull"))).toBe(false);
   });
 });

@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -108,5 +109,52 @@ func TestStackGitCommitsOfAnInlineStack(t *testing.T) {
 	rec := admin.do(http.MethodGet, "stacks/"+st.ID+"/git/commits?head="+strings.Repeat("a", 40), "")
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "stack_not_git") {
 		t.Errorf("commits of an inline stack = %d %s, want 409 stack_not_git", rec.Code, rec.Body)
+	}
+}
+
+// The head a check recorded is in the review, so the page can say the branch moved on after the review was prepared
+// (plan 09-20, D-17). The draft keeps the commit it was pulled at, and a deploy deploys that one.
+func TestReviewHeadCommit(t *testing.T) {
+	t.Parallel()
+	ended := make(checkEnded, 4)
+	g, operator, stackID := deployedGitStackWith(t, func(f *envFix) { f.gitOnCheck = ended.tell })
+
+	g.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": gitCompose("1.28")}, "newer web")
+	if rec := operator.pullGit(stackID, draftVersion(t, operator, stackID)); rec.Code != http.StatusOK {
+		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
+	}
+	pulled := g.readGit(t, g.admin, stackID).HeadSha
+	got, _ := operator.reviewGit(stackID)
+	if got == nil || got.Commit != pulled || got.HeadCommit != pulled {
+		t.Fatalf("review git after a pull = %+v, want the pulled commit %s as the head too", got, pulled)
+	}
+
+	// The branch moves on, and a check sees it.
+	moved := g.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": gitCompose("1.29")}, "newest web")
+	g.checkNow(t, g.admin, stackID, ended)
+	got, rv := operator.reviewGit(stackID)
+	if got == nil || got.HeadCommit != moved || got.Commit != pulled {
+		t.Fatalf("review git after the branch moved = %+v, want the head %s and the reviewed commit %s", got, moved, pulled)
+	}
+
+	// The deploy deploys the commit that was reviewed.
+	job := g.f.deployAndWait(t, operator, stackID, `{"draftVersion":`+itoaT(rv.DraftVersion)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
+	if job.State != "done" {
+		t.Fatalf("deploy = %+v, want done", job)
+	}
+	good, ok, err := g.stackRepo().LatestGoodRevision(context.Background(), stackID)
+	if err != nil || !ok || good.Git.Commit != pulled {
+		t.Errorf("deployed commit = %+v, %v, %v, want the reviewed %s and not the head %s", good.Git, ok, err, pulled, moved)
+	}
+}
+
+func TestReviewOfAnInlineStackHasNoHeadCommit(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "plain")
+	rec := admin.do(http.MethodPost, "stacks/"+st.ID+"/review", `{}`)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "headCommit") {
+		t.Errorf("review of an inline stack = %d %s, want no headCommit", rec.Code, rec.Body)
 	}
 }

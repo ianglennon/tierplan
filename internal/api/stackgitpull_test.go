@@ -38,7 +38,13 @@ func gitCompose(webTag string) string { return strings.Replace(gitWebAndDb, "%s"
 // The repository's first commit is then the deployed one.
 func deployedGitStack(t *testing.T) (*gitStackFix, *roleCaller, string) {
 	t.Helper()
-	g := newGitStackFixWith(t, nil)
+	return deployedGitStackWith(t, nil)
+}
+
+// deployedGitStackWith is deployedGitStack for a test that sets a field of the fixture before the router is built.
+func deployedGitStackWith(t *testing.T, tune func(*envFix)) (*gitStackFix, *roleCaller, string) {
+	t.Helper()
+	g := newGitStackFixWith(t, tune)
 	g.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": gitCompose("1.27")}, "two services")
 	rec := g.create(t, g.admin, g.body(nil))
 	if rec.Code != http.StatusCreated {
@@ -147,6 +153,7 @@ type reviewGit struct {
 	DeployedCommit string `json:"deployedCommit"`
 	Touched        int    `json:"touched"`
 	SourceChanged  bool   `json:"sourceChanged"`
+	HeadCommit     string `json:"headCommit"`
 }
 
 func (c *roleCaller) reviewGit(stackID string) (*reviewGit, stackReviewAnswer) {
@@ -177,7 +184,7 @@ func TestReviewGitFields(t *testing.T) {
 	got, _ := operator.reviewGit(stackID)
 	want := reviewGit{
 		Commit: deployed.Commit, Ref: "main", RefKind: "branch", Folder: "stacks/web", RepoName: "acme",
-		DeployedCommit: deployed.Commit, Touched: 0, SourceChanged: false,
+		DeployedCommit: deployed.Commit, Touched: 0, SourceChanged: false, HeadCommit: deployed.Commit,
 	}
 	if got == nil || *got != want {
 		t.Fatalf("review git = %+v, want %+v", got, want)
@@ -191,7 +198,7 @@ func TestReviewGitFields(t *testing.T) {
 		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
 	}
 	got, _ = operator.reviewGit(stackID)
-	want.Commit, want.Touched = head, 2
+	want.Commit, want.Touched, want.HeadCommit = head, 2, head
 	if got == nil || *got != want {
 		t.Fatalf("review git after a pull = %+v, want %+v", got, want)
 	}
