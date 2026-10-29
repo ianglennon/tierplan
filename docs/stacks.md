@@ -1038,7 +1038,7 @@ folder, and a roll back does not change the draft.
   overlay files, and a path clash is a blocking error. Needs Admin.
 - **Detach from git** (the *Advanced* section at the end of the Git tab, for Admins; not among the header actions) turns
   a git stack back into an inline stack. The files now deployed are copied into an editable draft, **replacing any draft
-  the stack already had** (an unreviewed pull or an overlay edit is overwritten, and the dialog does not warn about it),
+  the stack already had** (an unreviewed pull, an overlay edit or a variable edit is overwritten and can't be recovered; when the stack has a draft the confirm dialog says so),
   polling stops, the webhook is removed, auto-deploy is turned off, and nothing running changes. It is audited as
   `git.stack_detached`. You can point the stack at a repository again later.
 

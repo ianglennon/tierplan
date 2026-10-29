@@ -75,6 +75,7 @@ function makeStack(git: StackGit | undefined, over: Partial<StackDetail> = {}): 
 
 let git: StackGit | undefined;
 let revision: number | undefined;
+let hasDraft: boolean;
 let role: "viewer" | "operator" | "admin";
 // How the detach route answers, and how often it was called.
 let detachAnswer: () => Response;
@@ -84,6 +85,7 @@ let client: QueryClient;
 beforeEach(() => {
   git = makeGit();
   revision = 3;
+  hasDraft = false;
   role = "admin";
   detaches = 0;
   detachAnswer = () => new Response(null, { status: 204 });
@@ -114,7 +116,7 @@ beforeEach(() => {
         return Response.json(git);
       }
       if (path === `/api/env/${ENV}/stacks/s1`) {
-        return Response.json(makeStack(git, { deployedRevision: revision }));
+        return Response.json(makeStack(git, { deployedRevision: revision, hasDraft }));
       }
       return Response.json({}, { status: 404 });
     }),
@@ -216,6 +218,30 @@ describe("Detach, in the Advanced section", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(detaches).toBe(0);
     expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("says nothing about a draft when the stack has none", async () => {
+    mount();
+    fireEvent.click(await openAdvanced());
+    const dialog = await screen.findByRole("alertdialog", { name: "Detach web from git?" });
+    expect(within(dialog).queryByText(/has a draft that hasn't been deployed/)).toBeNull();
+  });
+
+  it("warns that the draft, with its overlay files and variable edits, is replaced and lost", async () => {
+    hasDraft = true;
+    mount();
+    fireEvent.click(await openAdvanced());
+    const dialog = await screen.findByRole("alertdialog", { name: "Detach web from git?" });
+    await waitFor(() =>
+      expect(
+        within(dialog).getByText(
+          "This stack has a draft that hasn't been deployed. Detaching replaces it with the deployed files, and its overlay file contents and variable edits are lost. This can't be undone.",
+        ),
+      ).toBeTruthy(),
+    );
+    // The warning does not take the place of the rest: the question is still asked, with the choice to keep tracking git.
+    expect(within(dialog).getByRole("button", { name: "Keep tracking git" })).toBeTruthy();
+    expect(detaches).toBe(0);
   });
 
   it("does not name a revision for a stack not deployed yet", async () => {

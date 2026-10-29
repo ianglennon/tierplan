@@ -37,6 +37,8 @@ interface DetachCardProps {
   // The number of the revision that is deployed and the commit it was made from; absent for a stack not deployed yet.
   revision?: number;
   commit?: string;
+  // True when the stack has a saved draft. A detach replaces it with the deployed files, so the dialog says so.
+  hasDraft?: boolean;
 }
 
 // DetachCard is the Advanced section at the end of the Git tab (UI-SPEC "Git tab", D-25): a collapsible, closed by
@@ -49,6 +51,7 @@ export function DetachCard({
   repoName,
   revision,
   commit,
+  hasDraft,
 }: DetachCardProps) {
   const t = useT();
   const needs = useNeeds("git.manage", envId);
@@ -105,6 +108,7 @@ export function DetachCard({
         repoName={repoName}
         revision={revision}
         commit={commit}
+        hasDraft={hasDraft}
         open={dialog}
         onOpenChange={setDialog}
       />
@@ -126,7 +130,7 @@ function refusalOf(e: unknown): "gone" | "permission" | "failed" {
 }
 
 // DetachDialog is "Detach {name} from git?" (UI-SPEC "Git tab"): focus starts on "Keep tracking git"; "Detach from git" is
-// destructive. The dialog stays open, with a refusal inside it, until the server answers. A stack that is not from git
+// destructive. When the stack has a draft the dialog says the detach replaces it. The dialog stays open, with a refusal inside it, until the server answers. A stack that is not from git
 // any more was detached already, and is treated as done.
 export function DetachDialog({
   envId,
@@ -135,6 +139,7 @@ export function DetachDialog({
   repoName,
   revision,
   commit,
+  hasDraft,
   open,
   onOpenChange,
 }: DetachDialogProps) {
@@ -187,6 +192,11 @@ export function DetachDialog({
                 })
               : t("stackGit.detach.dialog.bodyNoRevision", { repo: repoName })}
           </AlertDialogDescription>
+          {hasDraft ? (
+            <p className="text-sm font-medium text-destructive">
+              {t("stackGit.detach.dialog.draftLost")}
+            </p>
+          ) : null}
         </AlertDialogHeader>
         {error ? (
           <Alert variant="destructive" role="alert">

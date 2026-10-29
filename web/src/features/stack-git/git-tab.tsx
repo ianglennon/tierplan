@@ -83,6 +83,7 @@ export function GitTab({ envId, stackId }: GitTabProps) {
             repoName={git.data.repoName}
             revision={stack.data?.deployedRevision || undefined}
             commit={git.data.deployedSha}
+            hasDraft={stack.data?.hasDraft}
           />
         </>
       ) : (

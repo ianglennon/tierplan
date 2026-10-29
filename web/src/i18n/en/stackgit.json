@@ -301,6 +301,7 @@
         "title": "Detach {{name}} from git?",
         "body": "Revision #{{revision}} (commit {{sha}}) is copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
         "bodyNoRevision": "The files of the stack are copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "draftLost": "This stack has a draft that hasn't been deployed. Detaching replaces it with the deployed files, and its overlay file contents and variable edits are lost. This can't be undone.",
         "cancel": "Keep tracking git",
         "confirm": "Detach from git",
         "pending": "Detaching…"
