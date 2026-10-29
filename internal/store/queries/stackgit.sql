@@ -166,6 +166,18 @@ UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id
 UPDATE stack_git SET auto_deploy = ?, auto_deploy_paused_reason = ?, auto_deploy_paused_seq = ?, updated_at = ?
 WHERE stack_id = ?;
 
+-- name: ResumeStackGitAutoDeployOwner :execrows
+-- Lifts the pause for the owner's permission, and only that pause: a stack whose auto-deploy was turned off or paused for
+-- a roll back since the caller looked matches nothing, so a stale resume cannot undo a person's or a roll back's change.
+UPDATE stack_git SET auto_deploy_paused_reason = '', auto_deploy_paused_seq = 0, updated_at = ?
+WHERE stack_id = ? AND auto_deploy = 1 AND auto_deploy_paused_reason = 'owner';
+
+-- name: PauseStackGitAutoDeployOwner :execrows
+-- Pauses a running auto-deploy for the owner's permission. A stack that was turned off or paused meanwhile (a roll back
+-- turns it off) matches nothing and is left as it is.
+UPDATE stack_git SET auto_deploy_paused_reason = 'owner', auto_deploy_paused_seq = 0, updated_at = ?
+WHERE stack_id = ? AND auto_deploy = 1 AND auto_deploy_paused_reason = '';
+
 -- name: SetStackGitEvent :execrows
 -- The last thing an automatic deploy did that a person should hear about (D-19); an empty kind clears it. A stack
 -- with no state row matches nothing.

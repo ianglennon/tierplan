@@ -156,9 +156,15 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 		return
 	}
 	if sg.AutoDeployPausedReason == stackops.PausedOwner {
-		// The owner holds the permission again (or the automation was handed to someone who does).
-		if err := s.repo.SetAutoDeploy(ctx, stackID, true, "", 0, nil); err != nil {
+		// The owner holds the permission again (or the automation was handed to someone who does). The resume lifts that
+		// pause only: if a person turned auto-deploy off or a roll back paused it since the settings were read, nothing is
+		// written and nothing is deployed.
+		resumed, err := s.repo.ResumeAutoDeployFromOwner(ctx, stackID)
+		if err != nil {
 			s.log.Warn("could not resume the automatic deploys of a stack", "stack", stackID, "error", err)
+			return
+		}
+		if !resumed {
 			return
 		}
 	}
@@ -199,6 +205,18 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 	reverted, revertsErr := deployer.RevertedDrift(ctx, p, envID, stackID, pulled.DraftVersion)
 	if revertsErr != nil {
 		s.log.Warn("could not work out what an automatic deploy puts back", "stack", stackID, "error", revertsErr)
+	}
+
+	// The pull and the drift check took their time; a person may have turned auto-deploy off, or a roll back paused it,
+	// meanwhile. The settings are read again so that no deploy starts on authority that was withdrawn.
+	if cur, err := s.repo.StackGit(ctx, stackID); err != nil {
+		if !errors.Is(err, stackops.ErrNoGit) {
+			s.log.Warn("could not read the git settings before an automatic deploy", "stack", stackID, "error", err)
+		}
+		return
+	} else if !autoRuns(cur) {
+		s.log.Debug("an automatic deploy stopped: auto-deploy was turned off or paused meanwhile", "stack", stackID)
+		return
 	}
 
 	started, err := deployer.DeployDraft(ctx, p, envID, stackID, pulled.DraftVersion, syncTrigger)
@@ -276,8 +294,13 @@ func (s *Service) pauseForOwner(ctx context.Context, st stackops.Stack, sg stack
 	if sg.AutoDeployPausedReason == stackops.PausedOwner {
 		return
 	}
-	if err := s.repo.SetAutoDeploy(ctx, st.ID, true, stackops.PausedOwner, 0, nil); err != nil {
+	// The pause applies to a running auto-deploy only: one a person turned off, or a roll back paused, meanwhile stays so.
+	paused, err := s.repo.PauseAutoDeployForOwner(ctx, st.ID)
+	if err != nil {
 		s.log.Warn("could not pause the automatic deploys of a stack", "stack", st.ID, "error", err)
+		return
+	}
+	if !paused {
 		return
 	}
 	s.setEvent(ctx, st.ID, stackops.GitEventPaused, "owner lacks permission")
