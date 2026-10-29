@@ -248,9 +248,17 @@ func (d GitDeps) importProblem(repo gitconn.Repo, kind gitx.RefKind, ref, folder
 	var pe *gitsync.PathError
 	var fe *stacks.FileError
 	var le *gitx.LimitError
+	var clash *gitsync.OverlayClashError
 	switch {
 	case errors.Is(err, gitconn.ErrNotFound):
 		return d.repoFail("import a repository folder", err)
+	case errors.As(err, &clash):
+		// A pull or a change of source found a file of the repository at the path of an overlay file: nothing is stored.
+		return &huma.ErrorModel{
+			Type: problemOverlayClash, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+			Detail: clash.Path + " is now in the repository and also an overlay file here. Remove the overlay file, then try again.",
+			Errors: []*huma.ErrorDetail{{Location: "files", Message: clash.Path}},
+		}
 	case errors.Is(err, gitsync.ErrFolderInvalid):
 		return httpx.Problem(http.StatusUnprocessableEntity, problemFolderInvalid, "The folder must be a path inside the repository: no .. or . name, no backslash or colon, no leading or doubled slash.")
 	case errors.Is(err, gitsync.ErrNoComposeFiles):

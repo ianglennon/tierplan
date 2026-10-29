@@ -176,7 +176,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 		}
 	}
 	if in.Target == TargetStandalone {
-		res.Problems = append(res.Problems, oversizeObjects(loaded.Project, NewFileSet(in.Copy.Files), in.Copy.Vars, idx)...)
+		res.Problems = append(res.Problems, oversizeObjects(loaded.Project, NewFileSet(in.Copy.Files), objectVarsLayered(in.Copy.Vars, repoEnv), idx)...)
 	}
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
@@ -492,11 +492,7 @@ func stripBuild(project *types.Project) {
 // oversizeObjects reports a secret or config of a standalone stack whose content is over what the agent's
 // archive route writes into a container (MaxStandaloneFileBytes), at the object's key in the file. It
 // reports no other trouble with an object: the prescan and the review do.
-func oversizeObjects(p *types.Project, files FileSet, vars []Var, ix *PositionIndex) Problems {
-	table := make(map[string]string, len(vars))
-	for _, v := range vars {
-		table[v.Name] = v.Value
-	}
+func oversizeObjects(p *types.Project, files FileSet, table map[string]string, ix *PositionIndex) Problems {
 	var out Problems
 	for _, section := range []struct {
 		word  string

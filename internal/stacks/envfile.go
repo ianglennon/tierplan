@@ -215,3 +215,29 @@ func InterpolationEnv(c WorkingCopy) (map[string]string, error) {
 	}
 	return env, nil
 }
+
+// ObjectVars is the variables a secret or config that reads `environment: NAME` is resolved from at a check, a
+// review and a deploy: the table over the repository's .env (RepoEnv), the same layering the compose files are
+// interpolated with, so the three never disagree about which values exist. A blank table value hides nothing
+// the .env holds, but one the .env does not hold stays in the map as blank (an empty secret is refused as
+// empty, not reported as missing). A .env that cannot be read adds nothing: the load has already refused a
+// stack with one, and a table-only map can only fail closed (a missing variable).
+func ObjectVars(c WorkingCopy) map[string]string {
+	repoEnv, _ := RepoEnv(c)
+	return objectVarsLayered(c.Vars, repoEnv)
+}
+
+func objectVarsLayered(vars []Var, repoEnv map[string]string) map[string]string {
+	out := make(map[string]string, len(vars)+len(repoEnv))
+	for name, value := range repoEnv {
+		if value != "" {
+			out[name] = value
+		}
+	}
+	for _, v := range vars {
+		if _, held := out[v.Name]; v.Value != "" || !held {
+			out[v.Name] = v.Value
+		}
+	}
+	return out
+}

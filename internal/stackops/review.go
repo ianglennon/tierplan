@@ -328,7 +328,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		err = d.reviewStandalone(ctx, in, res, &rv)
 		return rv, err
 	}
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	project := res.Loaded.Project
 	objs, err := stacks.ResolveObjects(project, files, vars)
 	if err != nil {
@@ -464,15 +464,6 @@ func bump(c *Counts, change string) {
 	case stacks.ChangeRemoved:
 		c.Removed++
 	}
-}
-
-// varTable is the table of the stack's variables by name, as a deploy reads it.
-func varTable(vars []stacks.Var) map[string]string {
-	out := make(map[string]string, len(vars))
-	for _, v := range vars {
-		out[v.Name] = v.Value
-	}
-	return out
 }
 
 // reviewMasker hides the secrets of the working copy and, when there is one, of the revision that

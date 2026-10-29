@@ -547,6 +547,16 @@ func TestSetAppliedSource(t *testing.T) {
 	if err := f.repo.SetAppliedSource(ctx, "nope", src); !errors.Is(err, stackops.ErrNoGit) {
 		t.Errorf("SetAppliedSource of an unknown stack = %v, want ErrNoGit", err)
 	}
+
+	// Following another repository moves the stack's own source ref with it (WR-C02).
+	f.addGitRepo(t, "repo-2", "other")
+	src.RepoID = "repo-2"
+	if err := f.repo.SetAppliedSource(ctx, st.ID, src); err != nil {
+		t.Fatalf("SetAppliedSource to another repository: %v", err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceGit || got.Source.Ref != "repo-2" {
+		t.Errorf("stack = %+v, %v, want the new repository as its ref", got.Source, err)
+	}
 }
 
 // A git stack's draft may change its overlay files and variables and nothing that belongs to the repository (plan
@@ -818,6 +828,25 @@ func TestPendingGitSourceIsNotAGitStackUntilFinalized(t *testing.T) {
 		t.Errorf("stack = %+v, %v, want it inline until finalized", got, err)
 	}
 
+	// Nothing that writes the settings of a stack from a repository reaches a pending source (WR-C02).
+	moved := gitSource()
+	moved.Ref = "elsewhere"
+	if err := f.repo.SetAppliedSource(ctx, st.ID, moved); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAppliedSource on a pending source = %v, want ErrNoGit", err)
+	}
+	if err := f.repo.SetPolling(ctx, st.ID, false, stackops.MinPollInterval); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetPolling on a pending source = %v, want ErrNoGit", err)
+	}
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, true, "", 0, nil); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAutoDeploy on a pending source = %v, want ErrNoGit", err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline || got.Source.Ref != "" {
+		t.Errorf("stack = %+v, %v, want it inline with no source ref", got.Source, err)
+	}
+	if pending, ok, _ := f.repo.PendingGit(ctx, st.ID); !ok || pending.Ref != "main" || !pending.PollEnabled || pending.AutoDeploy {
+		t.Errorf("pending source = %+v, want it as it was made", pending)
+	}
+
 	// Asking again replaces the pending source.
 	other := rev
 	other.Source.Ref = "dev"
@@ -875,9 +904,6 @@ func TestDiscardingAConvertDraftDropsThePendingSource(t *testing.T) {
 	if _, ok, err := f.repo.PendingGit(ctx, st.ID); err != nil || ok {
 		t.Errorf("PendingGit after a discard = %v, %v, want none", ok, err)
 	}
-	if dropped, err := f.repo.DropPendingConvert(ctx, st.ID); err != nil || dropped {
-		t.Errorf("DropPendingConvert with nothing pending = %v, %v, want false", dropped, err)
-	}
 	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline {
 		t.Errorf("stack = %+v, %v, want inline", got, err)
 	}
@@ -894,5 +920,82 @@ func TestDiscardingAConvertDraftDropsThePendingSource(t *testing.T) {
 	}
 	if _, ok, _ := f.repo.PendingGit(ctx, st.ID); ok {
 		t.Error("a refused conversion left a pending source")
+	}
+}
+
+// A detached stack no longer reads the repository's .env, so the values it supplied move into the variable table: a
+// compose `${X:-default}` resolves the same before and after the detach (WR-C01).
+func TestDetachKeepsWhatTheRepositoryEnvSupplied(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	const compose = "services:\n  web:\n    image: nginx:1.27\n    environment:\n      TAG: ${TAG:-latest}\n      GREETING: ${GREETING:-hello}\n      DB_PASSWORD: ${DB_PASSWORD:-none}\n      BLANK: ${BLANK:-fallback}\n"
+	in := gitInput(f, "web")
+	in.Copy = stacks.WorkingCopy{
+		Files: []stacks.File{
+			repoFile("compose.yaml", compose),
+			repoFile(".env", "TAG=from-env\nGREETING=hi\nDB_PASSWORD=pw\nBLANK=\n"),
+		},
+		Vars:         []stacks.Var{{Name: "TAG", Value: "from-table"}, {Name: "GREETING"}},
+		ComposeFiles: []string{"compose.yaml"},
+	}
+	in.Rev.Source.ComposeFiles = []string{"compose.yaml"}
+	st, draft, err := f.repo.CreateGitStack(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := stacks.Check(ctx, stacks.CheckInput{Name: "web", Target: stacks.TargetStandalone, Copy: draft.Copy})
+	if before.Loaded == nil {
+		t.Fatalf("check before: %v", before.Problems)
+	}
+
+	if err := f.repo.Detach(ctx, st.ID, draft, "bob", nil); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	read, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := stacks.Check(ctx, stacks.CheckInput{Name: "web", Target: stacks.TargetStandalone, Copy: read.Copy})
+	if after.Loaded == nil {
+		t.Fatalf("check after: %v", after.Problems)
+	}
+
+	beforeEnv, err := stacks.InterpolationEnv(draft.Copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterEnv, err := stacks.InterpolationEnv(read.Copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeEnv) != len(afterEnv) {
+		t.Errorf("interpolation env after = %v, want %v", afterEnv, beforeEnv)
+	}
+	for name, want := range beforeEnv {
+		if got := afterEnv[name]; got != want {
+			t.Errorf("%s resolves to %q after the detach, %q before", name, got, want)
+		}
+	}
+	for _, name := range []string{"TAG", "GREETING", "DB_PASSWORD", "BLANK"} {
+		b, a := before.Loaded.Project.Services["web"].Environment[name], after.Loaded.Project.Services["web"].Environment[name]
+		if b == nil || a == nil || *a != *b {
+			t.Errorf("service env %s = %v after, %v before: want the same value", name, a, b)
+		}
+	}
+	// The table still wins over the .env, a blank table entry takes the .env's value, and a secret-like name is sealed.
+	byName := map[string]stacks.Var{}
+	for _, v := range read.Copy.Vars {
+		byName[v.Name] = v
+	}
+	if byName["TAG"].Value != "from-table" || byName["GREETING"].Value != "hi" {
+		t.Errorf("TAG = %q, GREETING = %q, want the table's value and the .env's for the blank one", byName["TAG"].Value, byName["GREETING"].Value)
+	}
+	if v := byName["DB_PASSWORD"]; v.Value != "pw" || !v.Secret {
+		t.Errorf("DB_PASSWORD = %+v, want the .env's value as a secret variable", v)
+	}
+	if _, ok := byName["BLANK"]; ok {
+		t.Error("a blank .env value became a variable")
 	}
 }

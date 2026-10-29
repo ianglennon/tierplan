@@ -536,7 +536,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 			"Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. " +
 			"A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). " +
 			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; " +
-			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks", "git"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitPullInput) (*StackGitPullOutput, error) {

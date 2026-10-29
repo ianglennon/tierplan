@@ -175,8 +175,13 @@ func TestDetach(t *testing.T) {
 			t.Errorf("overlay file = %q secret %v, want the deployed content, still secret", f.Content, f.Secret)
 		}
 	}
-	if !slices.Equal(got.Copy.ComposeFiles, good.Copy.ComposeFiles) || len(got.Copy.Vars) != len(good.Copy.Vars) {
-		t.Errorf("draft compose files %v vars %d, want %v and %d kept", got.Copy.ComposeFiles, len(got.Copy.Vars), good.Copy.ComposeFiles, len(good.Copy.Vars))
+	// The variables are kept, and the repository's .env (TAG=1), which an inline stack no longer reads, is now in the table
+	// so the same values resolve (WR-C01).
+	if !slices.Equal(got.Copy.ComposeFiles, good.Copy.ComposeFiles) || len(got.Copy.Vars) != len(good.Copy.Vars)+1 {
+		t.Errorf("draft compose files %v vars %d, want %v and %d kept plus the .env's", got.Copy.ComposeFiles, len(got.Copy.Vars), good.Copy.ComposeFiles, len(good.Copy.Vars))
+	}
+	if env, err := stacks.InterpolationEnv(got.Copy); err != nil || env["TAG"] != "1" {
+		t.Errorf("TAG after the detach = %q, %v, want 1 from the repository's .env", env["TAG"], err)
 	}
 
 	// It is not a git stack any more.

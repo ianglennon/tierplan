@@ -117,7 +117,7 @@ ON CONFLICT (stack_id) DO UPDATE SET next_check_at = excluded.next_check_at;
 
 -- name: SetStackGitPolling :execrows
 -- Polling on or off and how often (D-14). The interval is in seconds, 60 to 86400.
-UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ?;
+UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: ClearStackGitNextCheck :exec
 -- A stack whose polling was changed is scheduled afresh by the poller.
@@ -126,7 +126,7 @@ UPDATE stack_git_state SET next_check_at = NULL WHERE stack_id = ?;
 -- name: SetStackGitSource :execrows
 -- The repository, ref, folder and compose files a stack follows, set from the source of the revision that was
 -- deployed (the applied settings, D-08).
-UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ?;
+UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: SetStackGitWebhook :execrows
 -- Sets a git stack's one webhook (D-15): the git host, where the secret goes, the SHA-256 of the routing token, the
@@ -134,37 +134,37 @@ UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_fil
 -- webhook has had no delivery.
 UPDATE stack_git SET webhook_flavour = ?, webhook_placement = ?, webhook_token_hash = ?, webhook_secret_sealed = ?,
        webhook_secret_last4 = ?, webhook_created_by = ?, webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ?;
+WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: RotateStackGitWebhook :execrows
 -- Replaces a webhook's routing token hash and sealed secret at once (D-15), keeping its git host, placement and maker. The
 -- new webhook has had no delivery. A stack with no webhook matches nothing.
 UPDATE stack_git SET webhook_token_hash = ?, webhook_secret_sealed = ?, webhook_secret_last4 = ?,
        webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ? AND webhook_token_hash != '';
+WHERE stack_id = ? AND webhook_token_hash != '' AND pending_convert = 0;
 
 -- name: ClearStackGitWebhook :execrows
 -- Removes a git stack's webhook: every webhook column back to its default.
 UPDATE stack_git SET webhook_flavour = '', webhook_placement = '', webhook_token_hash = '', webhook_secret_sealed = '',
        webhook_secret_last4 = '', webhook_created_by = '', webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ?;
+WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: GetStackGitByTokenHash :one
 -- The stack a webhook delivery is for, found by the SHA-256 of the routing token in its address. An empty hash matches
 -- nothing: a stack with no webhook stores an empty one.
 SELECT g.stack_id, s.env_id, s.name, g.webhook_flavour, g.webhook_placement, g.webhook_secret_sealed
 FROM stack_git g JOIN stacks s ON s.id = g.stack_id
-WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != '';
+WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != '' AND g.pending_convert = 0;
 
 -- name: SetStackGitWebhookDelivery :exec
 -- The last delivery the webhook saw and what became of it ('accepted' or 'rejected').
-UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ?;
+UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: SetStackGitAutoDeploy :execrows
 -- Auto-deploy on or off (D-18) and whether it is paused and why: 'rollback' after a roll back (at revision
 -- seq) or 'owner' while its owner lacks the permission; empty means running. Turning it on or off also clears a pause.
 UPDATE stack_git SET auto_deploy = ?, auto_deploy_paused_reason = ?, auto_deploy_paused_seq = ?, updated_at = ?
-WHERE stack_id = ?;
+WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: ResumeStackGitAutoDeployOwner :execrows
 -- Lifts the pause for the owner's permission, and only that pause: a stack whose auto-deploy was turned off or paused for

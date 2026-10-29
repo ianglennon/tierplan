@@ -285,3 +285,44 @@ func TestPullOfAStackThatIsNotFromGit(t *testing.T) {
 		t.Errorf("Pull of an unknown stack = %v, want ErrStackNotFound", err)
 	}
 }
+
+// A commit that brings a repository file to the path of an overlay file would shadow a sealed secret of the person's, so
+// the pull is refused (overlay_clash) with the draft and its overlay untouched, rather than dropping the secret (WR-C03).
+func TestPullRefusesACommitThatHoldsAFileAtAnOverlayPath(t *testing.T) {
+	t.Parallel()
+	f := newCheckFixture(t, nil, nil)
+	f.deploy(t)
+	ctx := context.Background()
+	d := f.draft(t)
+	withOverlay := d.Copy
+	withOverlay.Files = append(slices.Clone(withOverlay.Files), stacks.File{Path: "extra.env", Content: []byte("PW=sealed\n"), Secret: true, Origin: stacks.OriginOverlay})
+	saved, _, err := f.rr.SaveDraft(ctx, f.stackID, d.Version, "ada", withOverlay)
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	// The repository now names extra.env and holds it.
+	f.repo.Commit(t, map[string]string{
+		"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:1.27\n    env_file: [web.env, extra.env]\n",
+		"stacks/web/extra.env":    "PW=repo\n",
+	}, "add extra.env")
+
+	_, err = f.pull(t, saved.Version)
+	var clash *gitsync.OverlayClashError
+	if !errors.As(err, &clash) || clash.Path != "extra.env" {
+		t.Fatalf("Pull = %v, want an overlay clash for extra.env", err)
+	}
+	after := f.draft(t)
+	if after.Version != saved.Version || after.Git.Commit != saved.Git.Commit {
+		t.Errorf("draft = version %d at %s, want it untouched (version %d at %s)", after.Version, after.Git.Commit, saved.Version, saved.Git.Commit)
+	}
+	var overlay stacks.File
+	for _, file := range after.Copy.Files {
+		if file.Path == "extra.env" {
+			overlay = file
+		}
+	}
+	if overlay.Origin != stacks.OriginOverlay || string(overlay.Content) != "PW=sealed\n" || !overlay.Secret {
+		t.Errorf("extra.env = %+v, want the person's sealed overlay kept", overlay)
+	}
+}

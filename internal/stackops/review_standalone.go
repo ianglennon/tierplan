@@ -37,7 +37,7 @@ const CodeExternalFileObject = stacks.CodeExternalFileObject
 //
 // res is the check of the draft, which loaded.
 func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.CheckResult, rv *Review) error {
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	project := res.Loaded.Project
 	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, files, vars)
 	if err != nil {
@@ -384,7 +384,7 @@ func (d Deps) preparedRevisions(ctx context.Context, in ReviewInput) ([]map[stri
 		}
 		copies = append(copies, rev.Copy)
 		p := checked.Loaded.Project
-		objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, p, stacks.NewFileSet(rev.Copy.Files), varTable(rev.Copy.Vars))
+		objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, p, stacks.NewFileSet(rev.Copy.Files), stacks.ObjectVars(rev.Copy))
 		if err != nil {
 			continue
 		}

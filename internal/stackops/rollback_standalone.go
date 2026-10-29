@@ -30,7 +30,7 @@ func (d Deps) PrepareRollbackStandalone(ctx context.Context, st Stack, target Sn
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}
-	files, vars := stacks.NewFileSet(target.Copy.Files), varTable(target.Copy.Vars)
+	files, vars := stacks.NewFileSet(target.Copy.Files), stacks.ObjectVars(target.Copy)
 	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, loaded.Project, files, vars); err != nil {
 		return RollbackPlan{}, refuse(PrepareObjects, err)
 	}

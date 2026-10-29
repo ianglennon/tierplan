@@ -354,6 +354,11 @@ func (s *Service) pullFailed(ctx context.Context, st stackops.Stack, commit stri
 		s.holdBack(ctx, st, commit, err.Error())
 		return
 	}
+	var clash *OverlayClashError
+	if errors.As(err, &clash) {
+		s.holdBack(ctx, st, commit, clash.Path+" is now in the repository and also an overlay file here. Remove the overlay file, then pull again.")
+		return
+	}
 	code := reasonOf(err)
 	defer s.lockState(st.ID)()
 	prev, serr := s.repo.GitState(ctx, st.ID)

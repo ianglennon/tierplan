@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -570,7 +571,8 @@ func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at 
 // commit, when the draft is still at version: the draft's repository files (origin repo) are dropped and repoFiles take
 // their place, a file of Bayplan's own (overlay, or one a person added) and the variables are kept, the compose files
 // are the source's, and the commit, tree and source the draft records are rev. A path both a kept file and a
-// repository file hold goes to the repository file, as an import does (D-09). The version of the draft goes up by one.
+// repository file hold goes to the repository file, as an import does (D-09); gitsync refuses the refresh before it gets
+// here (overlay_clash), so a sealed overlay is never dropped by a pull. The version of the draft goes up by one.
 // A stack with no draft (it was discarded) starts one from its last good revision, and only a caller at version 0 may,
 // as for a save. A draft that has moved is a *DraftConflictError. Nothing changes when the draft already holds exactly
 // this: it is returned as it is.
@@ -682,7 +684,7 @@ var ErrAlreadyGit = errors.New("stackops: the stack is already from a git reposi
 // the draft is still at version: the draft becomes wc, the files and variables the person chose to carry over together with
 // the repository's, and records rev as the commit, tree and source it was made from; the source is stored as the stack's
 // pending git settings. The stack is not a git stack yet and nothing about it changes on the environment: a good deploy of
-// this draft finishes the conversion (FinalizeConvert), and discarding the draft ends it (DropPendingConvert). Asking again
+// this draft finishes the conversion (FinalizeConvert), and discarding the draft ends it (DiscardDraft). Asking again
 // replaces the pending source. A stack that already has git settings is ErrAlreadyGit and nothing is stored; a draft that
 // has moved is a *DraftConflictError.
 func (r Repo) CreatePendingGitSource(ctx context.Context, stackID string, version int64, actor string, wc stacks.WorkingCopy, rev GitRevision) (Snapshot, error) {
@@ -754,24 +756,15 @@ func (r Repo) FinalizeConvert(ctx context.Context, stackID string) (bool, error)
 	return true, nil
 }
 
-// DropPendingConvert forgets the pending git settings of a stack whose convert draft was discarded; the stack is as it was.
-// It reports false when there were none.
-func (r Repo) DropPendingConvert(ctx context.Context, stackID string) (bool, error) {
-	n, err := r.Store.Q.DeletePendingStackGit(ctx, stackID)
-	if err != nil {
-		return false, fmt.Errorf("drop the pending git source: %w", err)
-	}
-	return n > 0, nil
-}
-
 // Detach turns a git stack back into an inline stack you edit in Bayplan (D-25), in one transaction: the files of rev (the
 // revision that is deployed) become the stack's draft as inline files, the variables and the ordered compose file list are
 // kept, the stack's source kind is inline, and its git settings (polling, webhook, auto-deploy) and sync state are deleted,
 // so the poller no longer lists it and no webhook address is routed to it. inTx runs in the same transaction, so the
 // owned automations of the stack are forgotten with the settings or not at all.
 //
-// Nothing that runs changes and no revision is made: the history keeps every revision, and the revisions made from the
-// repository keep what they were made from. A draft the stack already had is replaced (its version goes up by one, so an
+// Nothing that runs changes and no revision is made. The values the repository's .env supplied, which an inline stack
+// no longer reads, become variables where the table held none (withRepoEnvVars). The history keeps every revision,
+// and the revisions made from the repository keep what they were made from. A draft the stack already had is replaced (its version goes up by one, so an
 // editor holding the old one is told it moved); a stack with none gets a new one. A file that was an overlay file is a
 // secret inline file, so its content stays sealed. A stack that is not a git stack is ErrNoGit and nothing changes.
 func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor string, inTx func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error) error {
@@ -786,6 +779,7 @@ func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor st
 	}
 
 	wc := stacks.WorkingCopy{Vars: slices.Clone(rev.Copy.Vars), ComposeFiles: slices.Clone(rev.Copy.ComposeFiles), Files: slices.Clone(rev.Copy.Files)}
+	wc.Vars = withRepoEnvVars(wc.Vars, rev.Copy)
 	for i := range wc.Files {
 		if wc.Files[i].Origin == stacks.OriginOverlay {
 			wc.Files[i].Secret = true
@@ -863,6 +857,37 @@ func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor st
 	return nil
 }
 
+// withRepoEnvVars is vars with the values the repository's .env of the copy supplies, for each name the table holds no
+// value for. Once the stack is inline its .env is read by nobody (D-07), so without this a variable the .env set and a
+// compose file reads as ${NAME:-default} would silently fall back to the default at the next deploy. The table keeps
+// winning over the .env, as it did; a name that looks like a secret is stored as a secret variable. A .env that can't
+// be read supplies nothing: the stack could not have been loaded with it, so no deploy ran on it.
+func withRepoEnvVars(vars []stacks.Var, c stacks.WorkingCopy) []stacks.Var {
+	env, err := stacks.RepoEnv(c)
+	if err != nil || len(env) == 0 {
+		return vars
+	}
+	at := make(map[string]int, len(vars))
+	for i, v := range vars {
+		at[v.Name] = i
+	}
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		value := env[name]
+		if value == "" {
+			continue
+		}
+		if i, ok := at[name]; ok {
+			if vars[i].Value == "" {
+				vars[i].Value = value
+				vars[i].Secret = vars[i].Secret || stacks.SecretLikeName(name)
+			}
+			continue
+		}
+		vars = append(vars, stacks.Var{Name: name, Value: value, Secret: stacks.SecretLikeName(name)})
+	}
+	return vars
+}
+
 // refreshedCopy is the working copy of a draft with its repository files replaced by repoFiles and the compose files
 // set. A file of the draft that is not from the repository stays unless a repository file holds its path.
 func refreshedCopy(current stacks.WorkingCopy, repoFiles []stacks.File, composeFiles []string) stacks.WorkingCopy {
@@ -888,13 +913,20 @@ func sameGitRevision(a, b GitRevision) bool {
 }
 
 // SetAppliedSource makes the repository, ref, folder and compose files a git stack follows those of src: the settings
-// follow what was deployed (D-08). The sync state is not touched. A stack that is not from git is ErrNoGit.
+// follow what was deployed (D-08), and the stack's source ref is the repository it follows now. The sync state is not
+// touched. A stack that is not from git (a pending convert is not one) is ErrNoGit and nothing changes.
 func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSource) error {
 	raw, err := json.Marshal(nonNil(src.ComposeFiles))
 	if err != nil {
 		return fmt.Errorf("encode the compose files: %w", err)
 	}
-	n, err := r.Store.Q.SetStackGitSource(ctx, sqlc.SetStackGitSourceParams{
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	n, err := q.SetStackGitSource(ctx, sqlc.SetStackGitSourceParams{
 		RepoID: src.RepoID, RefKind: src.RefKind, Ref: src.Ref, Folder: src.Folder, ComposeFiles: string(raw),
 		UpdatedAt: r.now().UnixNano(), StackID: stackID,
 	})
@@ -903,6 +935,13 @@ func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSourc
 	}
 	if n == 0 {
 		return ErrNoGit
+	}
+	// stacks.source_ref is the repository's ID (as CreateGitStack and FinalizeConvert set it); the API returns it as sourceRef.
+	if _, err := q.SetStackSource(ctx, sqlc.SetStackSourceParams{SourceKind: string(stacks.SourceGit), SourceRef: src.RepoID, ID: stackID}); err != nil {
+		return fmt.Errorf("set the stack's source: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

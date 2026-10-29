@@ -478,10 +478,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 			return nil, targetProblem(d, env.ID, err)
 		}
 	}
-	files, vars := stacks.NewFileSet(draft.Copy.Files), make(map[string]string, len(draft.Copy.Vars))
-	for _, v := range draft.Copy.Vars {
-		vars[v.Name] = v.Value
-	}
+	files, vars := stacks.NewFileSet(draft.Copy.Files), stacks.ObjectVars(draft.Copy)
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
 		return nil, refuse(refusalObjects, objectProblem(err, masker))
@@ -597,7 +594,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 			return nil, targetProblem(d, env.ID, err)
 		}
 	}
-	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
+	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), stacks.ObjectVars(draft.Copy)); err != nil {
 		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	if checked.Problems.Errors() > 0 {
@@ -679,15 +676,6 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		},
 		rendering: rendering, release: release, owned: &jobOwnsLock,
 	})
-}
-
-// varMap is the stack's variable table by name.
-func varMap(vars []stacks.Var) map[string]string {
-	out := make(map[string]string, len(vars))
-	for _, v := range vars {
-		out[v.Name] = v.Value
-	}
-	return out
 }
 
 // rollbackStack redeploys the last version of a stack that ran well. It is judged like a deploy and runs
