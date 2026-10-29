@@ -36,6 +36,9 @@ const chromium = {
 // its own. It enrols that host afresh, because the agent spec leaves its host revoked, and it
 // leaves the engine as it found it. It sits before the services project because it assumes a
 // standalone host, as the specs before it do.
+// The git-stacks project makes a stack from a repository on the git service of this topology and
+// deploys it to the engine Bayplan manages, so it follows the stacks project and, like it, comes
+// before the services project, which turns that engine into a swarm.
 const order = [
   "setup-and-login",
   "dashboard",
@@ -48,6 +51,7 @@ const order = [
   "registries",
   "responsive",
   "stacks",
+  "git-stacks",
   "services",
   "backup",
 ] as const;
