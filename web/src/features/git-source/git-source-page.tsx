@@ -20,9 +20,11 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { RepositorySheet } from "@/features/git/repository-sheet";
+import { AddOverlayDialog } from "@/features/git-source/add-overlay-dialog";
 import { CheckSummary, useGitSourceCheck } from "@/features/git-source/check-summary";
 import { ComposeFileList } from "@/features/git-source/compose-file-list";
 import { FolderBrowser } from "@/features/git-source/folder-browser";
+import { OverlayFilesCard } from "@/features/git-source/overlay-files-card";
 import { RepoCard } from "@/features/git-source/repo-card";
 import {
   RequiredVariablesLine,
@@ -97,6 +99,11 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
   // The values typed for the stack's variables. They live in this component's state alone: they go
   // to the check and to the create, are never shown back, and go with the page.
   const [table, setTable] = useState<TableVar[]>([]);
+  // The overlay files added for paths the repository lacks, contents included: in memory only,
+  // sent once with the create, never with a check, and gone with the page. The dialog is open
+  // while dialogPath is set; "" is a blank one.
+  const [overlays, setOverlays] = useState<{ path: string; content: string }[]>([]);
+  const [dialogPath, setDialogPath] = useState<string | null>(null);
 
   const list = repos.data ?? [];
   const repo = list.find((r) => r.id === repoId);
@@ -116,6 +123,16 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
     enabled: repo !== undefined && refChosen,
   });
   const commit = resolved.data?.commit;
+  // What the stack folder holds, for refusing an overlay file that would shadow one of its files.
+  const folderTree = useQuery({
+    ...gitTreeQuery(envId, repo?.id ?? "", kind, gitRef, folder ?? ""),
+    enabled: repo !== undefined && refChosen && folder !== null,
+  });
+  const repoPaths = useMemo(
+    () => (folderTree.data?.entries ?? []).filter((e) => e.kind !== "dir").map((e) => e.name),
+    [folderTree.data],
+  );
+  const overlayPaths = useMemo(() => overlays.map((o) => o.path), [overlays]);
   // A variable with no value is not sent: a blank would hide the repository's .env value.
   const sentVars = useMemo(() => table.filter((v) => v.value !== ""), [table]);
   const request = useMemo(
@@ -130,9 +147,10 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
             composeFiles: files,
             ...(commit && FULL_COMMIT.test(commit) ? { commit } : {}),
             ...(sentVars.length > 0 ? { vars: sentVars } : {}),
+            ...(overlayPaths.length > 0 ? { overlayPaths } : {}),
           }
         : null,
-    [ready, repo, name, kind, gitRef, folder, files, commit, sentVars],
+    [ready, repo, name, kind, gitRef, folder, files, commit, sentVars, overlayPaths],
   );
   const check = useGitSourceCheck(envId, request);
 
@@ -184,10 +202,13 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
         folder,
         composeFiles: files,
         ...(sentVars.length > 0 ? { vars: sentVars } : {}),
+        ...(overlays.length > 0 ? { overlays } : {}),
       },
       {
         onSuccess: (made) => {
           setTable([]);
+          setOverlays([]);
+          create.reset();
           toastSuccess(t("stacks.create.success", { name }));
           void navigate({
             to: "/env/$envId/stacks/$stackId",
@@ -286,7 +307,9 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
                   onChange={setFiles}
                 />
               ) : null}
-              {request ? <CheckSummary state={check} repoName={repo.name} /> : null}
+              {request ? (
+                <CheckSummary state={check} repoName={repo.name} onAddOverlay={setDialogPath} />
+              ) : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -301,6 +324,14 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
           onChange={setTable}
           enabled={files.length > 0}
           checking={check.checking}
+        />
+
+        <OverlayFilesCard
+          missing={check.check?.missing ?? []}
+          overlays={overlayPaths}
+          problems={check.check?.problems ?? []}
+          onAdd={setDialogPath}
+          onRemove={(path) => setOverlays((all) => all.filter((o) => o.path !== path))}
         />
 
         <RequiredVariablesLine vars={check.check?.vars ?? null} />
@@ -319,6 +350,16 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
           {createButton}
         </NeedsTooltip>
       </EditorFooter>
+
+      {dialogPath !== null ? (
+        <AddOverlayDialog
+          existingRepoPaths={repoPaths}
+          overlays={overlayPaths}
+          initialPath={dialogPath}
+          onAdd={(overlay) => setOverlays((all) => [...all, overlay])}
+          onClose={() => setDialogPath(null)}
+        />
+      ) : null}
 
       {adding ? (
         <RepositorySheet

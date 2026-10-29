@@ -162,6 +162,36 @@
       "required_one": "{{count}} required variable has no value. Review won't deploy until you set it.",
       "required_other": "{{count}} required variables have no value. Review won't deploy until you set them."
     },
+    "overlay": {
+      "title": "Overlay files",
+      "body": "Files the repository doesn't have, such as a secret or a config. Bayplan keeps them encrypted.",
+      "list": "Overlay files",
+      "missing": "Missing",
+      "added": "Added",
+      "addContents": "Add contents",
+      "addContentsFor": "Add contents for {{path}}",
+      "remove": "Remove {{path}}",
+      "add": "Add overlay file",
+      "blocking": "Blocking",
+      "dialog": {
+        "title": "Add an overlay file",
+        "body": "Fills a path the repository doesn't have. The contents are encrypted and never shown again.",
+        "path": {
+          "label": "Path",
+          "placeholder": "secrets/db_pw.txt",
+          "helper": "Relative to the stack folder. No leading slash and no ..",
+          "invalid": "Use a path inside the stack folder.",
+          "inRepo": "{{path}} exists in the repository. Overlay files can only fill paths it doesn't have.",
+          "taken": "That path is already an overlay file."
+        },
+        "contents": "Contents",
+        "chooseFile": "Choose file",
+        "tooBig": "That file is over 1 MiB. Overlay files hold at most 1 MiB.",
+        "readFailed": "Couldn't read that file.",
+        "cancel": "Cancel",
+        "submit": "Add overlay file"
+      }
+    },
     "footer": {
       "note": "Checks the repository every 5 minutes and waits for your review. Change this under Git settings.",
       "cancel": "Cancel",
