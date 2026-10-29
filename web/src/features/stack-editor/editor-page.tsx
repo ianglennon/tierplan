@@ -122,6 +122,9 @@ export function StackEditorPage({
   const canReveal = usePermission("secrets.reveal", envId);
   const deployNeeds = useNeeds("stacks.deploy", envId);
   const stack = useQuery(stackQuery(envId, stackId));
+  // A stack from a git repository: its Files tab shows the repository's files read-only and Bayplan's own
+  // overlay files, and has no compose editor (D-09, D-11).
+  const fromGit = stack.data?.source === "git";
   const draft = useQuery(draftQuery(envId, stackId));
   const save$ = useSaveDraft(envId, stackId);
   const discard$ = useDiscardDraft(envId, stackId);
@@ -289,6 +292,12 @@ export function StackEditorPage({
     showInAddress(path);
   }
 
+  // An overlay file is secret from the start: it is stored sealed and shown hidden after the save.
+  function addOverlay(path: string, content: string) {
+    dispatch({ type: "addFile", path, content, origin: "overlay", secret: true });
+    showInAddress(path);
+  }
+
   function renameFile(from: string, to: string) {
     dispatch({ type: "renameFile", from, to });
     if (copy.selected === from) showInAddress(to);
@@ -320,6 +329,10 @@ export function StackEditorPage({
         return t("stackEditor.save.errors.variableTaken", { name: err.fields[0]?.message ?? "" });
       case "secret_too_short":
         return t("stackEditor.save.errors.secretTooShort", { name: err.fields[0]?.message ?? "" });
+      case "repo_file_read_only":
+        return t("stackEditor.save.errors.repoFileReadOnly", {
+          repo: copyRef.current.git?.repoName || t("stackEditor.git.theRepository"),
+        });
     }
     if (err.status === 0) return t("stackEditor.save.errors.lost");
     if (err.status === 403) return t("stackEditor.save.errors.permission");
@@ -510,72 +523,90 @@ export function StackEditorPage({
           }}
         />
       ) : (
-        <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
-          {ready ? (
-            <FileRail
-              files={copy.files}
-              selected={copy.selected}
-              readOnly={!canEdit}
-              unused={unused}
-              secret={secretFiles}
-              onSelect={selectFile}
-              onAdd={addFile}
-              onRename={renameFile}
-              onDelete={deleteFile}
-            />
-          ) : (
-            <div data-testid="rail-skeleton" className="flex flex-col gap-2" aria-hidden="true">
-              <Skeleton className="h-6 w-20" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-            </div>
-          )}
-          <div className="flex min-w-0 flex-col gap-2">
-            {ready && open ? (
-              open.hidden ? (
-                <SecretFileCard
-                  key={open.path}
-                  path={open.path}
-                  canReveal={canReveal}
-                  readOnly={!canEdit}
-                  reveal={() => revealFile(envId, stackId, open.path)}
-                  onReplace={() => dispatch({ type: "replaceFile", path: open.path })}
-                  onUpload={(content) => dispatch({ type: "edit", path: open.path, content })}
+        <div className="flex flex-col gap-4">
+          {fromGit && ready ? (
+            <p className="text-sm text-muted-foreground">
+              {copy.git ? (
+                <Trans
+                  i18nKey="stackEditor.git.caption"
+                  ns="stackEditor"
+                  values={{ repo: copy.git.repoName, sha: copy.git.commit.slice(0, 7) }}
+                  components={{ mono: <span className="font-mono" /> }}
                 />
               ) : (
-                <FileEditor
-                  key={open.path}
-                  ref={editor}
-                  file={open}
-                  readOnly={!canEdit}
-                  problems={markers}
-                  variableNames={completionNames}
-                  onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
-                />
-              )
+                t("stackEditor.git.captionNoSource")
+              )}
+            </p>
+          ) : null}
+          <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
+            {ready ? (
+              <FileRail
+                files={copy.files}
+                selected={copy.selected}
+                readOnly={!canEdit}
+                unused={unused}
+                secret={secretFiles}
+                git={fromGit}
+                onSelect={selectFile}
+                onAdd={addFile}
+                onAddOverlay={addOverlay}
+                onRename={renameFile}
+                onDelete={deleteFile}
+              />
             ) : (
-              <div role="status" aria-label={t("stackEditor.loading")}>
-                <Skeleton className="h-100 w-full" />
+              <div data-testid="rail-skeleton" className="flex flex-col gap-2" aria-hidden="true">
+                <Skeleton className="h-6 w-20" />
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
               </div>
             )}
-            {ready ? (
-              <ProblemsPanel
-                problems={check.problems}
-                checking={check.checking}
-                failed={check.failed}
-                checked={check.checked}
-                initiallyOpen={showProblems}
-                onOpen={openProblem}
-              />
-            ) : null}
-            <p className="text-sm text-muted-foreground">
-              <Trans
-                i18nKey="stackEditor.editor.helper"
-                ns="stackEditor"
-                values={keys}
-                components={{ kbd: <Kbd /> }}
-              />
-            </p>
+            <div className="flex min-w-0 flex-col gap-2">
+              {ready && open ? (
+                open.hidden ? (
+                  <SecretFileCard
+                    key={open.path}
+                    path={open.path}
+                    canReveal={canReveal}
+                    readOnly={!canEdit || open.origin === "repo"}
+                    reveal={() => revealFile(envId, stackId, open.path)}
+                    onReplace={() => dispatch({ type: "replaceFile", path: open.path })}
+                    onUpload={(content) => dispatch({ type: "edit", path: open.path, content })}
+                  />
+                ) : (
+                  <FileEditor
+                    key={open.path}
+                    ref={editor}
+                    file={open}
+                    readOnly={!canEdit || open.origin === "repo"}
+                    problems={markers}
+                    variableNames={completionNames}
+                    onChange={(content) => dispatch({ type: "edit", path: open.path, content })}
+                  />
+                )
+              ) : (
+                <div role="status" aria-label={t("stackEditor.loading")}>
+                  <Skeleton className="h-100 w-full" />
+                </div>
+              )}
+              {ready ? (
+                <ProblemsPanel
+                  problems={check.problems}
+                  checking={check.checking}
+                  failed={check.failed}
+                  checked={check.checked}
+                  initiallyOpen={showProblems}
+                  onOpen={openProblem}
+                />
+              ) : null}
+              <p className="text-sm text-muted-foreground">
+                <Trans
+                  i18nKey="stackEditor.editor.helper"
+                  ns="stackEditor"
+                  values={keys}
+                  components={{ kbd: <Kbd /> }}
+                />
+              </p>
+            </div>
           </div>
         </div>
       )}

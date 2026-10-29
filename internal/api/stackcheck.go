@@ -53,7 +53,7 @@ type StackVariableBody struct {
 	Value      string           `json:"value" doc:"The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden>"`
 	Secret     bool             `json:"secret" doc:"True when the variable is marked secret in the table"`
 	Source     string           `json:"source" enum:"table,repo-env,default,unset" doc:"Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)"`
-	SecretLike bool             `json:"secretLike" doc:"True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable"`
+	SecretLike bool             `json:"secretLike,omitempty" doc:"Left out unless true. True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable"`
 	Default    string           `json:"default" doc:"The default written in the compose file, when hasDefault is true"`
 	HasDefault bool             `json:"hasDefault" doc:"True when a reference in the compose file writes a default, even an empty one"`
 	Required   bool             `json:"required" doc:"True when the variable has no value in the table and no default, so a deploy is refused"`

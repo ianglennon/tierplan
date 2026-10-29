@@ -31,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AddOverlayDialog } from "@/features/git-source/add-overlay-dialog";
 import {
   COMPOSE_FILE,
   type FilePathProblem,
@@ -54,8 +55,13 @@ export interface FileRailProps {
   // Paths the compose file uses under secrets:, which are secret files even before a save has
   // sealed them (plan 07-13). They get the "Secret" badge a flagged file has.
   secret?: ReadonlySet<string>;
+  // True for the files of a stack from a git repository: each carries a Repo or Overlay badge, only overlay files
+  // can be renamed or deleted, and the Add file popover is Add overlay file (D-09, D-11).
+  git?: boolean;
   onSelect: (path: string) => void;
   onAdd: (path: string, content?: string) => void;
+  // A new overlay file of a git stack, with the contents typed for it.
+  onAddOverlay?: (path: string, content: string) => void;
   onRename: (from: string, to: string) => void;
   onDelete: (path: string) => void;
 }
@@ -71,8 +77,10 @@ export function FileRail({
   readOnly,
   unused,
   secret,
+  git = false,
   onSelect,
   onAdd,
+  onAddOverlay,
   onRename,
   onDelete,
 }: FileRailProps) {
@@ -84,8 +92,13 @@ export function FileRail({
   const rows = useRef(new Map<string, HTMLButtonElement>());
   const paths = files.map((f) => f.path);
 
-  // compose.yaml has no menu, and a Viewer has none at all.
-  const canAct = (file: WorkingFile) => !readOnly && file.path !== COMPOSE_FILE;
+  // compose.yaml has no menu, and a Viewer has none at all. In a git stack only an overlay file has one: the
+  // repository's files are not Bayplan's to rename or delete.
+  const canAct = (file: WorkingFile) =>
+    !readOnly && (git ? file.origin === "overlay" : file.path !== COMPOSE_FILE);
+  const hasOverlay = files.some((f) => f.origin === "overlay");
+  const originLabel = (file: WorkingFile) =>
+    file.origin ? t(`stackEditor.git.origin.${file.origin}`) : "";
 
   function focusRow(index: number) {
     const target = files[Math.min(Math.max(index, 0), files.length - 1)];
@@ -136,7 +149,11 @@ export function FileRail({
     <nav aria-label={t("stackEditor.rail.label")} className="flex min-w-0 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium">{t("stackEditor.rail.heading")}</h3>
-        {readOnly ? null : <AddFile paths={paths} onAdd={onAdd} />}
+        {readOnly ? null : git ? (
+          <AddOverlay files={files} onAdd={(path, content) => onAddOverlay?.(path, content)} />
+        ) : (
+          <AddFile paths={paths} onAdd={onAdd} />
+        )}
       </div>
       {mobile ? (
         <div data-testid="file-select" className="flex items-end gap-2">
@@ -150,7 +167,11 @@ export function FileRail({
             >
               {files.map((f) => (
                 <option key={f.path} value={f.path}>
-                  {unused?.has(f.path) ? `${f.path} (${t("stackEditor.rail.notUsed")})` : f.path}
+                  {[
+                    f.path,
+                    ...(f.origin ? [`(${originLabel(f)})`] : []),
+                    ...(unused?.has(f.path) ? [`(${t("stackEditor.rail.notUsed")})`] : []),
+                  ].join(" ")}
                 </option>
               ))}
             </select>
@@ -179,7 +200,12 @@ export function FileRail({
                     )}
                   >
                     <span className="truncate">{file.path}</span>
-                    {file.secret || secret?.has(file.path) ? (
+                    {file.origin ? (
+                      <Badge variant="outline" className="shrink-0 font-sans">
+                        {originLabel(file)}
+                      </Badge>
+                    ) : null}
+                    {(file.secret || secret?.has(file.path)) && file.origin !== "overlay" ? (
                       <Badge variant="outline" className="shrink-0 font-sans">
                         {t("stackEditor.rail.secret")}
                       </Badge>
@@ -198,7 +224,11 @@ export function FileRail({
           ))}
         </ul>
       )}
-      {files.length === 1 && !readOnly ? (
+      {git ? (
+        hasOverlay ? null : (
+          <p className="text-sm text-muted-foreground">{t("stackEditor.git.noOverlays")}</p>
+        )
+      ) : files.length === 1 && !readOnly ? (
         <p className="text-sm text-muted-foreground">{t("stackEditor.rail.empty")}</p>
       ) : null}
       {renaming ? (
@@ -254,6 +284,43 @@ function RowMenu({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// AddOverlay is the Add overlay file button of a git stack and the shared dialog it opens (D-09): a path the
+// repository does not hold, and the contents, which are write-only. The dialog is rendered while it is open, so
+// closing it lets go of what was typed.
+function AddOverlay({
+  files,
+  onAdd,
+}: {
+  files: readonly WorkingFile[];
+  onAdd: (path: string, content: string) => void;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="max-md:h-11"
+        onClick={() => setOpen(true)}
+      >
+        <FilePlus aria-hidden="true" />
+        {t("stackEditor.git.addOverlay")}
+      </Button>
+      {open ? (
+        <AddOverlayDialog
+          existingRepoPaths={files.filter((f) => f.origin !== "overlay").map((f) => f.path)}
+          overlays={files.filter((f) => f.origin === "overlay").map((f) => f.path)}
+          title={t("stackEditor.git.addOverlay")}
+          onAdd={(overlay) => onAdd(overlay.path, overlay.content)}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
+    </>
   );
 }
 

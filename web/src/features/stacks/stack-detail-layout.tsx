@@ -120,6 +120,25 @@ const GIT_TAB_ENTRY = {
   exact: false,
 } as const;
 
+interface TabEntry {
+  id: string;
+  to: (typeof TABS)[number]["to"] | typeof GIT_TAB_ENTRY.to;
+  labelKey: string;
+  exact: boolean;
+}
+
+// tabsOf is the tabs of a stack's page. A stack from a git repository reads Files where the others read Editor (the
+// route is the same: its files are the repository's, read-only, and Bayplan's overlay files), and has the Git tab last.
+function tabsOf(git: boolean): readonly TabEntry[] {
+  if (!git) return TABS;
+  return [
+    ...TABS.map((tab) =>
+      tab.id === "editor" ? { ...tab, labelKey: "stackEditor.tab.files" } : tab,
+    ),
+    GIT_TAB_ENTRY,
+  ];
+}
+
 function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {
   const t = useT();
   return (
@@ -421,7 +440,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
             aria-label={t("stacks.detail.tabs.label")}
             className="h-9 max-md:h-11"
           >
-            {(data?.source === "git" ? [...TABS, GIT_TAB_ENTRY] : TABS).map((tab) => (
+            {tabsOf(data?.source === "git").map((tab) => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}

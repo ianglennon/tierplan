@@ -38,7 +38,8 @@
         "composeMissing": "A stack needs a compose.yaml.",
         "variableName": "A variable name is letters, numbers and underscores, and doesn't start with a number.",
         "variableTaken": "Two variables are named {{name}}. Remove one.",
-        "secretTooShort": "A secret value needs at least 4 characters, so that hiding it can't hide ordinary words. Use a longer value, or turn Secret off for {{name}}."
+        "secretTooShort": "A secret value needs at least 4 characters, so that hiding it can't hide ordinary words. Use a longer value, or turn Secret off for {{name}}.",
+        "repoFileReadOnly": "Repository files can't be edited here. Change them in {{repo}} and pull."
       }
     },
     "secretFile": {
@@ -111,6 +112,20 @@
       "discarded": "The draft was discarded while you were editing. Reloading shows what is deployed now and drops your unsaved changes.",
       "reload": "Reload draft",
       "over": "Save over it"
+    },
+    "tab": {
+      "files": "Files"
+    },
+    "git": {
+      "caption": "These files come from {{repo}} at <mono>{{sha}}</mono>. They can't be edited here. Change them in the repository and pull.",
+      "captionNoSource": "These files come from the repository. They can't be edited here. Change them in the repository and pull.",
+      "theRepository": "the repository",
+      "origin": {
+        "repo": "Repo",
+        "overlay": "Overlay"
+      },
+      "addOverlay": "Add overlay file",
+      "noOverlays": "No overlay files. Add one for a secret or config file that isn't in the repository."
     }
   }
 }

@@ -443,9 +443,10 @@ describe("the Git strip", () => {
   it("adds the Git tab last, linking to the Git tab, for a stack from a repository only", async () => {
     mount();
     await screen.findByRole("tab", { name: "Git" });
+    // The Editor reads Files for a stack from a repository: the same route, the repository's files read-only.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Overview",
-      "Editor",
+      "Files",
       "History",
       "Resources",
       "Logs",
@@ -461,6 +462,10 @@ describe("the Git strip", () => {
     mount();
     await screen.findByRole("tab", { name: "Overview" });
     expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Editor" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/editor",
+    );
+    expect(screen.queryByRole("tab", { name: "Files" })).toBeNull();
   });
 
   it("is under the header and above the tabs of a git stack, and its Git badge names the repository and the ref", async () => {

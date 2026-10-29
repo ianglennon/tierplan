@@ -16726,7 +16726,7 @@
             "type": "boolean"
           },
           "secretLike": {
-            "description": "True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then \u003chidden\u003e and a warning offers to set a secret variable",
+            "description": "Left out unless true. True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then \u003chidden\u003e and a warning offers to set a secret variable",
             "type": "boolean"
           },
           "source": {
@@ -16753,7 +16753,6 @@
           "value",
           "secret",
           "source",
-          "secretLike",
           "default",
           "hasDefault",
           "required",

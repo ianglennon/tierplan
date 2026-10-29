@@ -15,6 +15,19 @@ export interface WorkingFile {
   content: string;
   secret: boolean;
   hidden: boolean;
+  // Where the file of a git stack came from: the repository (read-only) or Bayplan's own overlay (D-09). A file of
+  // any other stack has none.
+  origin?: FileOrigin;
+}
+
+export type FileOrigin = "repo" | "overlay";
+
+// What a git stack's draft says about its repository files: the commit they are from, the repository's name and the
+// ref the stack follows.
+export interface WorkingSource {
+  commit: string;
+  repoName: string;
+  ref: string;
 }
 
 // One variable of the working copy, with the same rule for a hidden secret value.
@@ -65,6 +78,10 @@ export interface WorkingCopy {
   files: WorkingFile[];
   vars: WorkingVar[];
   selected: string;
+  // The compose files of a git stack in merge order, and where its repository files are from. A stack that is not
+  // from git has neither. They come from the server and are never edited here.
+  composeFiles?: string[];
+  git?: WorkingSource;
 }
 
 export const emptyWorkingCopy: WorkingCopy = {
@@ -79,7 +96,7 @@ export type WorkingCopyAction =
   | { type: "load"; draft: StackDraft }
   // Replace the text of one file. Editing a hidden secret file replaces it.
   | { type: "edit"; path: string; content: string }
-  | { type: "addFile"; path: string; content?: string }
+  | { type: "addFile"; path: string; content?: string; origin?: FileOrigin; secret?: boolean }
   | { type: "renameFile"; from: string; to: string }
   | { type: "deleteFile"; path: string }
   | { type: "select"; path: string }
@@ -133,6 +150,14 @@ function upsertVar(
   return orderedVars([...vars, change({ name, value: "", secret: false, hidden: false })]);
 }
 
+// home is the file the editor opens when the person has not chosen one: compose.yaml, and for a git stack that has
+// none, its first compose file, else the first file.
+function home(files: readonly WorkingFile[], composeFiles: readonly string[] | undefined): string {
+  if (files.some((f) => f.path === COMPOSE_FILE)) return COMPOSE_FILE;
+  const first = composeFiles?.find((p) => files.some((f) => f.path === p)) ?? files[0]?.path;
+  return first ?? COMPOSE_FILE;
+}
+
 function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
   const files = ordered(
     (draft.files ?? []).map((f) => ({
@@ -140,6 +165,7 @@ function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
       content: f.secret && f.content === HIDDEN ? "" : f.content,
       secret: f.secret,
       hidden: f.secret && f.content === HIDDEN,
+      ...(f.origin ? { origin: f.origin } : {}),
     })),
   );
   const vars = (draft.vars ?? []).map((v) => ({
@@ -148,11 +174,14 @@ function fromDraft(draft: StackDraft, selected: string): WorkingCopy {
     secret: v.secret,
     hidden: v.secret && v.value === HIDDEN,
   }));
+  const composeFiles = draft.composeFiles ?? undefined;
   return {
     loaded: true,
     files,
     vars,
-    selected: files.some((f) => f.path === selected) ? selected : COMPOSE_FILE,
+    selected: files.some((f) => f.path === selected) ? selected : home(files, composeFiles),
+    ...(composeFiles && composeFiles.length > 0 ? { composeFiles } : {}),
+    ...(draft.git ? { git: draft.git } : {}),
   };
 }
 
@@ -189,7 +218,13 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
         ...state,
         files: ordered([
           ...state.files,
-          { path: action.path, content: action.content ?? "", secret: false, hidden: false },
+          {
+            path: action.path,
+            content: action.content ?? "",
+            secret: action.secret ?? false,
+            hidden: false,
+            ...(action.origin ? { origin: action.origin } : {}),
+          },
         ]),
         selected: action.path,
       };
@@ -209,7 +244,13 @@ export function workingCopyReducer(state: WorkingCopy, action: WorkingCopyAction
       return {
         ...state,
         files: state.files.filter((f) => f.path !== action.path),
-        selected: state.selected === action.path ? COMPOSE_FILE : state.selected,
+        selected:
+          state.selected === action.path
+            ? home(
+                state.files.filter((f) => f.path !== action.path),
+                state.composeFiles,
+              )
+            : state.selected,
       };
     case "select":
       return state.files.some((f) => f.path === action.path)
@@ -314,6 +355,7 @@ export function isDirty(saved: WorkingCopy, current: WorkingCopy): boolean {
 export function toSaveBody(copy: WorkingCopy, version: number): StackDraftSaveInput {
   return {
     version,
+    ...(copy.composeFiles ? { composeFiles: copy.composeFiles } : {}),
     files: copy.files.map((f) => ({
       path: f.path,
       content: f.hidden ? HIDDEN : f.content,

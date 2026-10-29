@@ -11263,8 +11263,8 @@ export interface components {
             required: boolean;
             /** @description True when the variable is marked secret in the table */
             secret: boolean;
-            /** @description True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable */
-            secretLike: boolean;
+            /** @description Left out unless true. True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable */
+            secretLike?: boolean;
             /**
              * @description Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)
              * @enum {string}
