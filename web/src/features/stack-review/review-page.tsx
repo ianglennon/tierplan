@@ -28,6 +28,7 @@ import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { shortSha } from "@/features/stack-git/sha-link";
 import { BlockingList } from "@/features/stack-review/blocking-list";
+import { CommitsCard } from "@/features/stack-review/commits-card";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
@@ -462,6 +463,16 @@ export function ReviewPage({
             />
           ) : null}
           <ReviewSummary summary={data?.summary} git={gitReview} />
+          {gitReview && gitReview.deployedCommit !== "" && !gitReview.sourceChanged ? (
+            <CommitsCard
+              envId={envId}
+              stackId={stackId}
+              head={gitReview.commit}
+              folder={gitReview.folder}
+              repoHost={stack.data?.git?.repoHost ?? ""}
+              repoPath={stack.data?.git?.repoPath ?? ""}
+            />
+          ) : null}
           <ImagePinTable
             images={data ? (data.images ?? []) : undefined}
             mode={mode}

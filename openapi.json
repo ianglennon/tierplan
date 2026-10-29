@@ -14139,6 +14139,71 @@
         ],
         "type": "object"
       },
+      "StackGitCommitBody": {
+        "additionalProperties": false,
+        "properties": {
+          "author": {
+            "description": "The author's name, at most 200 characters. Text, never markup",
+            "type": "string"
+          },
+          "sha": {
+            "description": "The full ID of the commit",
+            "type": "string"
+          },
+          "subject": {
+            "description": "The first line of the commit message, at most 200 characters. Text, never markup",
+            "type": "string"
+          },
+          "when": {
+            "description": "When the commit was authored, RFC 3339 UTC",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject",
+          "author",
+          "when"
+        ],
+        "type": "object"
+      },
+      "StackGitCommitsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "description": "False when Bayplan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty",
+            "type": "boolean"
+          },
+          "capped": {
+            "description": "True when the walk stopped at its limit of 2000 commits: there may be more than total",
+            "type": "boolean"
+          },
+          "commits": {
+            "description": "The commits that changed the stack's folder, newest first; commits of the same time are ordered by ID. At most 50 are named: total is how many there are",
+            "items": {
+              "$ref": "#/components/schemas/StackGitCommitBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many commits changed the folder between the deployed commit and head",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commits",
+          "total",
+          "capped",
+          "available"
+        ],
+        "type": "object"
+      },
       "StackGitPullBody": {
         "additionalProperties": false,
         "properties": {
@@ -27758,6 +27823,80 @@
           }
         },
         "summary": "Check a git stack against its repository now",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/commits": {
+      "get": {
+        "description": "Lists the commits reachable from head and not from the deployed commit that changed the stack's folder, newest first (commits of the same time are ordered by ID), each with its ID, subject, author and time. At most 50 are named; total is how many there are, counted over at most 2000 commits (capped says the walk stopped there). It reads the server's mirror of the repository and fetches nothing. available is false, with no commits, when the list can't be made: nothing is deployed from the repository, the stack follows another repository, ref or folder than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. head must be 40 lowercase hexadecimal characters. A stack that is not from a repository is 409 stack_not_git. Needs stacks.read (Viewer).",
+        "operationId": "listStackGitCommits",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The full ID of the newest commit to list, 40 lowercase hexadecimal characters",
+            "explode": false,
+            "in": "query",
+            "name": "head",
+            "required": true,
+            "schema": {
+              "description": "The full ID of the newest commit to list, 40 lowercase hexadecimal characters",
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitCommitsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The commits that changed a git stack's folder since it was deployed",
         "tags": [
           "stacks",
           "git"

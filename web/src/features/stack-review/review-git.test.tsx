@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
@@ -26,6 +26,16 @@ type Git = Record<string, unknown> | undefined;
 let git: Git;
 let stackGit: boolean;
 let client: QueryClient;
+// openCard waits for the commits to arrive, which close the card past 5, and opens it.
+async function openCard() {
+  const trigger = await screen.findByRole("button", { name: "What changed in the repository" });
+  await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+  fireEvent.click(trigger);
+}
+
+// The answer of the commits route; undefined makes it fail.
+let commits: Record<string, unknown> | undefined;
+let commitRequests: string[];
 
 const counts = (added = 0, changed = 0, removed = 0) => ({ added, changed, removed });
 
@@ -67,8 +77,30 @@ function gitBody(over: Record<string, unknown> = {}) {
   };
 }
 
+function commit(i: number, over: Record<string, unknown> = {}) {
+  return {
+    sha: i.toString(16).padStart(40, "0"),
+    subject: `change ${i}`,
+    author: "ada",
+    when: `2026-10-19T1${i % 10}:00:00Z`,
+    ...over,
+  };
+}
+
+function commitList(n: number, over: Record<string, unknown> = {}) {
+  return {
+    commits: Array.from({ length: n }, (_, i) => commit(i + 1)),
+    total: n,
+    capped: false,
+    available: true,
+    ...over,
+  };
+}
+
 beforeEach(() => {
   git = gitBody();
+  commits = commitList(2);
+  commitRequests = [];
   stackGit = true;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -120,6 +152,10 @@ beforeEach(() => {
         });
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/review`) return Response.json(reviewBody());
+      if (path === `/api/env/${ENV}/stacks/${STACK}/git/commits`) {
+        commitRequests.push(new URL(req.url).search);
+        return commits ? Response.json(commits) : Response.json({}, { status: 500 });
+      }
       return Response.json({}, { status: 404 });
     }),
   );
@@ -205,5 +241,111 @@ describe("the review of a git stack", () => {
     expect(await screen.findByText("Check what will change on Prod, then deploy.")).toBeTruthy();
     await screen.findByRole("table", { name: "Summary of changes" });
     expect(screen.queryByTestId("review-commit-line")).toBeNull();
+  });
+});
+
+describe("the Commits card of a git review", () => {
+  it("lists the commits that changed the folder, newest first, open when there are few", async () => {
+    mount();
+    const table = await screen.findByRole("table", { name: "Commits that changed stacks/web" });
+    expect(screen.getByRole("heading", { name: "What changed in the repository" })).toBeTruthy();
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0] as HTMLElement).getByText("0000000").tagName).toBe("CODE");
+    expect(within(rows[0] as HTMLElement).getByText("change 1")).toBeTruthy();
+    expect(rows[0]?.textContent).toContain("ada, ");
+    expect(rows[0]?.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-19T11:00:00Z");
+    // The review asks for the commits up to the one it deploys.
+    expect(commitRequests).toEqual([`?head=${HEAD}`]);
+  });
+
+  it("names the repository root when the folder is the root", async () => {
+    git = gitBody({ folder: "" });
+    mount();
+    expect(
+      await screen.findByRole("table", { name: "Commits that changed the repository root" }),
+    ).toBeTruthy();
+  });
+
+  it("is closed by default past 5 commits and opens on its title", async () => {
+    commits = commitList(7);
+    mount();
+    const trigger = await screen.findByRole("button", { name: "What changed in the repository" });
+    await waitFor(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+    expect(screen.queryByRole("table", { name: /Commits that changed/ })).toBeNull();
+    fireEvent.click(trigger);
+    const table = await screen.findByRole("table", { name: /Commits that changed/ });
+    expect(within(table).getAllByRole("row")).toHaveLength(8);
+  });
+
+  it("shows 10 rows then Show all, which shows every commit", async () => {
+    commits = commitList(12);
+    mount();
+    await openCard();
+    const table = await screen.findByRole("table", { name: /Commits that changed/ });
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 12" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(13);
+    expect(screen.getByRole("button", { name: "Show fewer" })).toBeTruthy();
+  });
+
+  it("says how many more there are when the list names only the newest", async () => {
+    commits = commitList(3, { total: 80 });
+    mount();
+    expect(await screen.findByText("Showing the newest 3 of 80.")).toBeTruthy();
+  });
+
+  it("says Bayplan can't list the commits when the route can't, and the review goes on", async () => {
+    commits = { commits: [], total: 0, capped: false, available: false };
+    mount();
+    expect(
+      await screen.findByText("Bayplan can't list the commits, so only the changes are shown."),
+    ).toBeTruthy();
+    expect(screen.getByRole("table", { name: "Summary of changes" })).toBeTruthy();
+  });
+
+  it("says the same when the request fails", async () => {
+    commits = undefined;
+    mount();
+    expect(
+      await screen.findByText("Bayplan can't list the commits, so only the changes are shown."),
+    ).toBeTruthy();
+  });
+
+  it("is left out for a first deploy and for a change of source, and asks for nothing", async () => {
+    git = gitBody({ deployedCommit: "", touched: 0 });
+    mount();
+    await screen.findByTestId("review-commit-line");
+    expect(screen.queryByRole("heading", { name: "What changed in the repository" })).toBeNull();
+    cleanup();
+    git = gitBody({ sourceChanged: true, touched: 0 });
+    mount();
+    await screen.findAllByTestId("review-commit-line");
+    expect(screen.queryByRole("heading", { name: "What changed in the repository" })).toBeNull();
+    expect(commitRequests).toEqual([]);
+  });
+
+  it("is left out of the review of a stack that is not from git", async () => {
+    git = undefined;
+    stackGit = false;
+    mount();
+    await screen.findByRole("table", { name: "Summary of changes" });
+    expect(screen.queryByRole("heading", { name: "What changed in the repository" })).toBeNull();
+  });
+
+  it("draws a long subject on one line with the whole subject in the page, and wraps it once all are shown", async () => {
+    const long = `${"a very long subject ".repeat(20)}<b>not bold</b>`;
+    commits = commitList(12);
+    (commits.commits as Record<string, unknown>[])[0] = commit(1, { subject: long });
+    mount();
+    await openCard();
+    const clamped = await screen.findByText(long);
+    expect(clamped.className).toContain("truncate");
+    // Text, never markup.
+    expect(clamped.querySelector("b")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show all 12" }));
+    const wrapped = await screen.findByText(long);
+    expect(wrapped.className).not.toContain("truncate");
+    expect(wrapped.className).toContain("break-words");
   });
 });

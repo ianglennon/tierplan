@@ -2440,6 +2440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The commits that changed a git stack's folder since it was deployed
+         * @description Lists the commits reachable from head and not from the deployed commit that changed the stack's folder, newest first (commits of the same time are ordered by ID), each with its ID, subject, author and time. At most 50 are named; total is how many there are, counted over at most 2000 commits (capped says the walk stopped there). It reads the server's mirror of the repository and fetches nothing. available is false, with no commits, when the list can't be made: nothing is deployed from the repository, the stack follows another repository, ref or folder than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. head must be 40 lowercase hexadecimal characters. A stack that is not from a repository is 409 stack_not_git. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackGitCommits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/git/pull": {
         parameters: {
             query?: never;
@@ -10160,6 +10180,32 @@ export interface components {
             /** @description True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer */
             checking: boolean;
         };
+        StackGitCommitBody: {
+            /** @description The author's name, at most 200 characters. Text, never markup */
+            author: string;
+            /** @description The full ID of the commit */
+            sha: string;
+            /** @description The first line of the commit message, at most 200 characters. Text, never markup */
+            subject: string;
+            /**
+             * Format: date-time
+             * @description When the commit was authored, RFC 3339 UTC
+             */
+            when: string;
+        };
+        StackGitCommitsBody: {
+            /** @description False when Bayplan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty */
+            available: boolean;
+            /** @description True when the walk stopped at its limit of 2000 commits: there may be more than total */
+            capped: boolean;
+            /** @description The commits that changed the stack's folder, newest first; commits of the same time are ordered by ID. At most 50 are named: total is how many there are */
+            commits: components["schemas"]["StackGitCommitBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many commits changed the folder between the deployed commit and head
+             */
+            total: number;
+        };
         StackGitPullBody: {
             /** @description The full ID of the commit the draft was refreshed from */
             commit: string;
@@ -17224,6 +17270,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackGitCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackGitCommits: {
+        parameters: {
+            query: {
+                /** @description The full ID of the newest commit to list, 40 lowercase hexadecimal characters */
+                head: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitCommitsBody"];
                 };
             };
             /** @description Error */

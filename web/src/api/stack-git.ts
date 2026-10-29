@@ -12,6 +12,8 @@ import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } 
 export type StackGit = components["schemas"]["StackGitSummary"];
 // What a pull did to the draft: the version to review and deploy, and the commit it holds.
 export type StackGitPull = components["schemas"]["StackGitPullBody"];
+// The commits that changed a git stack's folder between its deployed commit and a head, newest first.
+export type StackGitCommits = components["schemas"]["StackGitCommitsBody"];
 // Why a git stack's sync is in error, or why it is behind with a note: the union the server's enum generates.
 export type StackGitReason = NonNullable<StackGit["reasonCode"]>;
 
@@ -231,5 +233,31 @@ export function usePullStackGit(envId: string, stackId: string) {
       void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
       invalidateStacks(queryClient, envId);
     },
+  });
+}
+
+// The query key of the commits that changed a stack's folder up to head. It extends the git summary's key, so a pull or a
+// check that refreshes the summary refreshes the list.
+export function stackGitCommitsKey(envId: string, stackId: string, head: string) {
+  return [...stackGitKey(envId, stackId), "commits", head] as const;
+}
+
+// The commits that changed the stack's folder between the commit it runs and head (D-13), as the commits route lists
+// them. A list the server can't make comes back with available false, not as an error; a request that fails is an error
+// the caller words the same way, since the list only informs.
+export function stackGitCommitsQuery(envId: string, stackId: string, head: string) {
+  return queryOptions({
+    queryKey: stackGitCommitsKey(envId, stackId, head),
+    queryFn: async (): Promise<StackGitCommits> => {
+      const res = await api.GET("/api/env/{envId}/stacks/{stackId}/git/commits", {
+        params: { path: { envId, stackId }, query: { head } },
+      });
+      if (!res.data) {
+        const problem = readProblem(res.error, res.response);
+        throw new StacksLoadError(problem.status, problem.type);
+      }
+      return res.data;
+    },
+    retry: false,
   });
 }

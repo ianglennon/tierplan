@@ -195,6 +195,34 @@ type StackGitPullBody struct {
 	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with"`
 }
 
+// StackGitCommitsInput is the query of GET /api/env/{envId}/stacks/{stackId}/git/commits.
+type StackGitCommitsInput struct {
+	StackPathInput
+	Head string `query:"head" required:"true" pattern:"^[0-9a-f]{40}$" doc:"The full ID of the newest commit to list, 40 lowercase hexadecimal characters"`
+}
+
+// StackGitCommitBody is one commit that changed the stack's folder.
+type StackGitCommitBody struct {
+	SHA     string `json:"sha" doc:"The full ID of the commit"`
+	Subject string `json:"subject" doc:"The first line of the commit message, at most 200 characters. Text, never markup"`
+	Author  string `json:"author" doc:"The author's name, at most 200 characters. Text, never markup"`
+	When    string `json:"when" format:"date-time" doc:"When the commit was authored, RFC 3339 UTC"`
+}
+
+// StackGitCommitsBody is the commits between the deployed commit and a head that changed the stack's folder.
+type StackGitCommitsBody struct {
+	Commits   []StackGitCommitBody `json:"commits" doc:"The commits that changed the stack's folder, newest first; commits of the same time are ordered by ID. At most 50 are named: total is how many there are"`
+	Total     int                  `json:"total" minimum:"0" doc:"How many commits changed the folder between the deployed commit and head"`
+	Capped    bool                 `json:"capped" doc:"True when the walk stopped at its limit of 2000 commits: there may be more than total"`
+	Available bool                 `json:"available" doc:"False when Bayplan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty"`
+}
+
+// StackGitCommitsOutput wraps StackGitCommitsBody for huma.
+type StackGitCommitsOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackGitCommitsBody
+}
+
 // StackGitPullOutput wraps StackGitPullBody for huma.
 type StackGitPullOutput struct {
 	CacheControl string `header:"Cache-Control"`
@@ -237,6 +265,18 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitPullInput) (*StackGitPullOutput, error) {
 			return pullStackGit(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "listStackGitCommits", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/git/commits",
+		Summary: "The commits that changed a git stack's folder since it was deployed",
+		Description: "Lists the commits reachable from head and not from the deployed commit that changed the stack's folder, newest first (commits of the same time are ordered by ID), each with its ID, subject, author and time. " +
+			"At most 50 are named; total is how many there are, counted over at most 2000 commits (capped says the walk stopped there). It reads the server's mirror of the repository and fetches nothing. " +
+			"available is false, with no commits, when the list can't be made: nothing is deployed from the repository, the stack follows another repository, ref or folder than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. head must be 40 lowercase hexadecimal characters. " +
+			"A stack that is not from a repository is 409 stack_not_git. Needs stacks.read (Viewer).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitCommitsInput) (*StackGitCommitsOutput, error) {
+			return listStackGitCommits(ctx, s, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "updateStackGitUpdates", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/updates",
@@ -388,6 +428,38 @@ func pullStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitPull
 	return &StackGitPullOutput{CacheControl: "no-store", Body: StackGitPullBody{
 		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref, DeployedCommit: res.DeployedCommit, Touched: res.Touched,
 	}}, nil
+}
+
+func listStackGitCommits(ctx context.Context, d StacksDeps, in *StackGitCommitsInput) (*StackGitCommitsOutput, error) {
+	repo := d.repo()
+	st, err := repo.Stack(ctx, in.EnvID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, in.EnvID, err)
+	}
+	sg, err := repo.StackGit(ctx, st.ID)
+	if errors.Is(err, stackops.ErrNoGit) {
+		return nil, stackNotGit()
+	}
+	if err != nil {
+		return nil, stackInternal(d, "read the git settings", in.EnvID, err)
+	}
+	out := &StackGitCommitsOutput{CacheControl: "no-store", Body: StackGitCommitsBody{Commits: []StackGitCommitBody{}}}
+	dep, deployed, err := repo.DeployedGit(ctx, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the deployed commit", in.EnvID, err)
+	}
+	if !deployed || d.GitSync == nil || dep.Source.RepoID != sg.RepoID || dep.Source.Folder != sg.Folder {
+		return out, nil
+	}
+	touch, ok := d.GitSync.CommitsBetween(ctx, sg.RepoID, sg.Folder, dep.Commit, in.Head)
+	if !ok {
+		return out, nil
+	}
+	out.Body.Available, out.Body.Total, out.Body.Capped = true, touch.Count, touch.Capped
+	for _, c := range touch.Commits {
+		out.Body.Commits = append(out.Body.Commits, StackGitCommitBody{SHA: c.SHA, Subject: c.Subject, Author: c.Author, When: rfc3339(c.When)})
+	}
+	return out, nil
 }
 
 // stackNotGit is the 409 for a git route asked about a stack that is not from a repository.

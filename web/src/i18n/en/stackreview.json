@@ -29,7 +29,23 @@
       "commit": "Commit",
       "onRef": "on {{ref}}",
       "touched_one": "{{count}} commit changed this folder since {{sha}}.",
-      "touched_other": "{{count}} commits changed this folder since {{sha}}."
+      "touched_other": "{{count}} commits changed this folder since {{sha}}.",
+      "commits": {
+        "title": "What changed in the repository",
+        "caption": "Commits that changed {{folder}}",
+        "columns": {
+          "sha": "Commit",
+          "subject": "Subject",
+          "author": "Author"
+        },
+        "by": "{{author}}, ",
+        "showAll": "Show all {{count}}",
+        "showFewer": "Show fewer",
+        "partial": "Showing the newest {{shown}} of {{total}}.",
+        "capped": "Bayplan counted {{total}} commits and stopped there; there may be more.",
+        "unavailable": "Bayplan can't list the commits, so only the changes are shown.",
+        "loading": "Reading the commits…"
+      }
     },
     "loading": "Checking the stack…",
     "lookingUp": "Looking up the digest…",

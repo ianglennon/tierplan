@@ -125,6 +125,24 @@ func (s *Service) CommitsSince(ctx context.Context, repoID, folder, from, to str
 	return touch.Count
 }
 
+// CommitsBetween lists the commits that changed the folder between from and to, newest first with ties by ID, read from
+// the mirror of the repository only: nothing is fetched. It says false when the list can't be made: a mirror that
+// can't be read or does not hold the commits, or a from that is not an ancestor of to.
+func (s *Service) CommitsBetween(ctx context.Context, repoID, folder, from, to string) (gitx.Touch, bool) {
+	if from == "" || to == "" {
+		return gitx.Touch{}, false
+	}
+	touch, err := s.git.CommitsTouching(ctx, gitx.MirrorID(repoID), to, from, folder, BehindCap)
+	if err != nil {
+		s.log.Warn("could not list the commits that changed a folder", "repository", repoID, "error", err)
+		return gitx.Touch{}, false
+	}
+	if touch.NotAncestor {
+		return gitx.Touch{}, false
+	}
+	return touch, true
+}
+
 // recordPulledHead tells the sync state which head the pull found, so that the strip and the deploy that follows judge
 // the stack against it. A state in error is left alone. A failure to write it is logged: the draft is refreshed and the
 // pull is done.
