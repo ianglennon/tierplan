@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -770,8 +771,9 @@ func (r Repo) DropPendingConvert(ctx context.Context, stackID string) (bool, err
 // so the poller no longer lists it and no webhook address is routed to it. inTx runs in the same transaction, so the
 // owned automations of the stack are forgotten with the settings or not at all.
 //
-// Nothing that runs changes and no revision is made: the history keeps every revision, and the revisions made from the
-// repository keep what they were made from. A draft the stack already had is replaced (its version goes up by one, so an
+// Nothing that runs changes and no revision is made. The values the repository's .env supplied, which an inline stack
+// no longer reads, become variables where the table held none (withRepoEnvVars). The history keeps every revision,
+// and the revisions made from the repository keep what they were made from. A draft the stack already had is replaced (its version goes up by one, so an
 // editor holding the old one is told it moved); a stack with none gets a new one. A file that was an overlay file is a
 // secret inline file, so its content stays sealed. A stack that is not a git stack is ErrNoGit and nothing changes.
 func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor string, inTx func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error) error {
@@ -786,6 +788,7 @@ func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor st
 	}
 
 	wc := stacks.WorkingCopy{Vars: slices.Clone(rev.Copy.Vars), ComposeFiles: slices.Clone(rev.Copy.ComposeFiles), Files: slices.Clone(rev.Copy.Files)}
+	wc.Vars = withRepoEnvVars(wc.Vars, rev.Copy)
 	for i := range wc.Files {
 		if wc.Files[i].Origin == stacks.OriginOverlay {
 			wc.Files[i].Secret = true
@@ -861,6 +864,37 @@ func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor st
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// withRepoEnvVars is vars with the values the repository's .env of the copy supplies, for each name the table holds no
+// value for. Once the stack is inline its .env is read by nobody (D-07), so without this a variable the .env set and a
+// compose file reads as ${NAME:-default} would silently fall back to the default at the next deploy. The table keeps
+// winning over the .env, as it did; a name that looks like a secret is stored as a secret variable. A .env that can't
+// be read supplies nothing: the stack could not have been loaded with it, so no deploy ran on it.
+func withRepoEnvVars(vars []stacks.Var, c stacks.WorkingCopy) []stacks.Var {
+	env, err := stacks.RepoEnv(c)
+	if err != nil || len(env) == 0 {
+		return vars
+	}
+	at := make(map[string]int, len(vars))
+	for i, v := range vars {
+		at[v.Name] = i
+	}
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		value := env[name]
+		if value == "" {
+			continue
+		}
+		if i, ok := at[name]; ok {
+			if vars[i].Value == "" {
+				vars[i].Value = value
+				vars[i].Secret = vars[i].Secret || stacks.SecretLikeName(name)
+			}
+			continue
+		}
+		vars = append(vars, stacks.Var{Name: name, Value: value, Secret: stacks.SecretLikeName(name)})
+	}
+	return vars
 }
 
 // refreshedCopy is the working copy of a draft with its repository files replaced by repoFiles and the compose files

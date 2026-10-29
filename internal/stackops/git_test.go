@@ -896,3 +896,80 @@ func TestDiscardingAConvertDraftDropsThePendingSource(t *testing.T) {
 		t.Error("a refused conversion left a pending source")
 	}
 }
+
+// A detached stack no longer reads the repository's .env, so the values it supplied move into the variable table: a
+// compose `${X:-default}` resolves the same before and after the detach (WR-C01).
+func TestDetachKeepsWhatTheRepositoryEnvSupplied(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	const compose = "services:\n  web:\n    image: nginx:1.27\n    environment:\n      TAG: ${TAG:-latest}\n      GREETING: ${GREETING:-hello}\n      DB_PASSWORD: ${DB_PASSWORD:-none}\n      BLANK: ${BLANK:-fallback}\n"
+	in := gitInput(f, "web")
+	in.Copy = stacks.WorkingCopy{
+		Files: []stacks.File{
+			repoFile("compose.yaml", compose),
+			repoFile(".env", "TAG=from-env\nGREETING=hi\nDB_PASSWORD=pw\nBLANK=\n"),
+		},
+		Vars:         []stacks.Var{{Name: "TAG", Value: "from-table"}, {Name: "GREETING"}},
+		ComposeFiles: []string{"compose.yaml"},
+	}
+	in.Rev.Source.ComposeFiles = []string{"compose.yaml"}
+	st, draft, err := f.repo.CreateGitStack(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := stacks.Check(ctx, stacks.CheckInput{Name: "web", Target: stacks.TargetStandalone, Copy: draft.Copy})
+	if before.Loaded == nil {
+		t.Fatalf("check before: %v", before.Problems)
+	}
+
+	if err := f.repo.Detach(ctx, st.ID, draft, "bob", nil); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	read, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := stacks.Check(ctx, stacks.CheckInput{Name: "web", Target: stacks.TargetStandalone, Copy: read.Copy})
+	if after.Loaded == nil {
+		t.Fatalf("check after: %v", after.Problems)
+	}
+
+	beforeEnv, err := stacks.InterpolationEnv(draft.Copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterEnv, err := stacks.InterpolationEnv(read.Copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeEnv) != len(afterEnv) {
+		t.Errorf("interpolation env after = %v, want %v", afterEnv, beforeEnv)
+	}
+	for name, want := range beforeEnv {
+		if got := afterEnv[name]; got != want {
+			t.Errorf("%s resolves to %q after the detach, %q before", name, got, want)
+		}
+	}
+	for _, name := range []string{"TAG", "GREETING", "DB_PASSWORD", "BLANK"} {
+		b, a := before.Loaded.Project.Services["web"].Environment[name], after.Loaded.Project.Services["web"].Environment[name]
+		if b == nil || a == nil || *a != *b {
+			t.Errorf("service env %s = %v after, %v before: want the same value", name, a, b)
+		}
+	}
+	// The table still wins over the .env, a blank table entry takes the .env's value, and a secret-like name is sealed.
+	byName := map[string]stacks.Var{}
+	for _, v := range read.Copy.Vars {
+		byName[v.Name] = v
+	}
+	if byName["TAG"].Value != "from-table" || byName["GREETING"].Value != "hi" {
+		t.Errorf("TAG = %q, GREETING = %q, want the table's value and the .env's for the blank one", byName["TAG"].Value, byName["GREETING"].Value)
+	}
+	if v := byName["DB_PASSWORD"]; v.Value != "pw" || !v.Secret {
+		t.Errorf("DB_PASSWORD = %+v, want the .env's value as a secret variable", v)
+	}
+	if _, ok := byName["BLANK"]; ok {
+		t.Error("a blank .env value became a variable")
+	}
+}
