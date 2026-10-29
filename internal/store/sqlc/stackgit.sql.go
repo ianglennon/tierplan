@@ -358,6 +358,38 @@ func (q *Queries) SetStackGitPolling(ctx context.Context, arg SetStackGitPolling
 	return result.RowsAffected()
 }
 
+const setStackGitSource = `-- name: SetStackGitSource :execrows
+UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ?
+`
+
+type SetStackGitSourceParams struct {
+	RepoID       string
+	RefKind      string
+	Ref          string
+	Folder       string
+	ComposeFiles string
+	UpdatedAt    int64
+	StackID      string
+}
+
+// The repository, ref, folder and compose files a stack follows, set from the source of the revision that was
+// deployed (the applied settings, D-08).
+func (q *Queries) SetStackGitSource(ctx context.Context, arg SetStackGitSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackGitSource,
+		arg.RepoID,
+		arg.RefKind,
+		arg.Ref,
+		arg.Folder,
+		arg.ComposeFiles,
+		arg.UpdatedAt,
+		arg.StackID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertStackGitState = `-- name: UpsertStackGitState :exec
 INSERT INTO stack_git_state (stack_id, deployed_commit, deployed_tree, head_commit, head_tree, behind, status, reason_code,
                              reason_detail, checked_at, error_since, consecutive_failures, pending_commit, next_check_at)

@@ -282,7 +282,7 @@ var phase7DetailKeys = map[string][]string{
 	audit.ActionStackCreated:        {"stack", "target"},
 	audit.ActionStackDraftSaved:     {"stack", "version", "files", "vars"},
 	audit.ActionStackDraftDiscarded: {"stack", "version"},
-	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code"},
+	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code", "commit"},
 	audit.ActionStackStopped:        {"stack", "services", "recreated", "result"},
 	audit.ActionStackStarted:        {"stack", "services", "recreated", "result"},
 	audit.ActionStackRemoved:        {"stack", "volumes", "kept", "definition", "result"},

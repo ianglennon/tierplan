@@ -14139,6 +14139,57 @@
         ],
         "type": "object"
       },
+      "StackGitPullBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full ID of the commit the draft was refreshed from",
+            "type": "string"
+          },
+          "deployedCommit": {
+            "description": "The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository",
+            "type": "string"
+          },
+          "draftVersion": {
+            "description": "The version of the draft after the pull: review it and deploy it at this version",
+            "format": "int64",
+            "type": "integer"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the stack follows",
+            "type": "string"
+          },
+          "touched": {
+            "description": "How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draftVersion",
+          "commit",
+          "ref",
+          "deployedCommit",
+          "touched"
+        ],
+        "type": "object"
+      },
+      "StackGitPullInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "draftVersion": {
+            "description": "The version of the draft you read. If the draft moved since (a save, or another pull), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "draftVersion"
+        ],
+        "type": "object"
+      },
       "StackGitSummary": {
         "additionalProperties": false,
         "properties": {
@@ -27648,6 +27699,78 @@
           }
         },
         "summary": "Check a git stack against its repository now",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/pull": {
+      "post": {
+        "description": "Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+        "operationId": "pullStackGit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackGitPullInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitPullBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Pull a git stack's newest commit into its draft",
         "tags": [
           "stacks",
           "git"

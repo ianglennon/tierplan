@@ -24,7 +24,13 @@ import { shortSha } from "@/features/stack-git/sha-link";
 import { BehindBadge, GitSourceBadge, SyncErrorBadge } from "@/features/stack-git/sync-badges";
 import { DriftBadge } from "@/features/stacks/drift-badge";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
-import { canStart, canStop, canUpdateImages, useStackStart } from "@/features/stacks/stack-actions";
+import {
+  canStart,
+  canStop,
+  canUpdateImages,
+  usePullAndReview,
+  useStackStart,
+} from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
@@ -91,6 +97,18 @@ function CheckNowItem({ row }: { row: StackRow }) {
   );
 }
 
+// PullItem is Pull & redeploy… (or, for a stack that is behind, Review update) in the menu of a git stack, in the place
+// of Deploy…: it fetches the newest commit into the draft and opens the Review (D-17). It is its own component so that
+// only a menu that is open, and only for a git stack, holds the pull.
+function PullItem({ row, label }: { row: StackRow; label: string }) {
+  const { pull, pending } = usePullAndReview(row);
+  return (
+    <DropdownMenuItem className="max-md:min-h-11" disabled={pending} onSelect={() => void pull()}>
+      {label}
+    </DropdownMenuItem>
+  );
+}
+
 // RowActions is the row menu of the stack lists: Open stack for everyone, Deploy… (which opens the
 // review) for a user who may deploy and, for anyone else, disabled with the reason, and Stop stack… (which
 // opens its dialog) or Start stack (which starts at once) by the stack's state, off the same way. The server
@@ -127,18 +145,27 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
             </Link>
           </DropdownMenuItem>
           {deploy.allowed ? (
-            <DropdownMenuItem asChild className="max-md:min-h-11">
-              <Link
-                to="/env/$envId/stacks/$stackId/review"
-                params={{ envId: row.envId, stackId: row.id }}
-              >
-                {t("stackReview.deploy.action")}
-              </Link>
-            </DropdownMenuItem>
+            row.git ? (
+              <>
+                <PullItem row={row} label={t("stackGit.pull.action")} />
+                {row.git.status === "behind" ? (
+                  <PullItem row={row} label={t("stackGit.pull.reviewUpdate")} />
+                ) : null}
+              </>
+            ) : (
+              <DropdownMenuItem asChild className="max-md:min-h-11">
+                <Link
+                  to="/env/$envId/stacks/$stackId/review"
+                  params={{ envId: row.envId, stackId: row.id }}
+                >
+                  {t("stackReview.deploy.action")}
+                </Link>
+              </DropdownMenuItem>
+            )
           ) : (
             <NeedsTooltip reason={deploy.reason}>
               <DropdownMenuItem className="max-md:min-h-11">
-                {t("stackReview.deploy.action")}
+                {row.git ? t("stackGit.pull.action") : t("stackReview.deploy.action")}
               </DropdownMenuItem>
             </NeedsTooltip>
           )}

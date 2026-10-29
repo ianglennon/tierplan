@@ -38,7 +38,11 @@ import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
-import { StackActions, StoppedAlertWithStart } from "@/features/stacks/stack-actions";
+import {
+  PullAndRedeployAction,
+  StackActions,
+  StoppedAlertWithStart,
+} from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -378,7 +382,11 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
             </div>
             {flow ? null : (
               <div className="flex flex-wrap items-start gap-2 max-md:w-full">
-                <DeployAction envId={envId} stackId={stackId} />
+                {data.git ? (
+                  <PullAndRedeployAction stack={data} />
+                ) : (
+                  <DeployAction envId={envId} stackId={stackId} />
+                )}
                 <StackActions stack={data} />
               </div>
             )}

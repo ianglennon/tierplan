@@ -80,3 +80,8 @@ UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE
 -- name: ClearStackGitNextCheck :exec
 -- A stack whose polling was changed is scheduled afresh by the poller.
 UPDATE stack_git_state SET next_check_at = NULL WHERE stack_id = ?;
+
+-- name: SetStackGitSource :execrows
+-- The repository, ref, folder and compose files a stack follows, set from the source of the revision that was
+-- deployed (the applied settings, D-08).
+UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ?;

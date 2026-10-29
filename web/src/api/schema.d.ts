@@ -2440,6 +2440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull a git stack's newest commit into its draft
+         * @description Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).
+         */
+        post: operations["pullStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/git/updates": {
         parameters: {
             query?: never;
@@ -10140,6 +10160,31 @@ export interface components {
             /** @description True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer */
             checking: boolean;
         };
+        StackGitPullBody: {
+            /** @description The full ID of the commit the draft was refreshed from */
+            commit: string;
+            /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository */
+            deployedCommit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the pull: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the stack follows */
+            ref: string;
+            /**
+             * Format: int64
+             * @description How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with
+             */
+            touched: number;
+        };
+        StackGitPullInputBody: {
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since (a save, or another pull), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+        };
         StackGitSummary: {
             /** @description True when a commit that changes the folder is deployed automatically */
             autoDeploy: boolean;
@@ -17153,6 +17198,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackGitCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    pullStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitPullInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitPullBody"];
                 };
             };
             /** @description Error */

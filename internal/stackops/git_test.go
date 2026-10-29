@@ -410,3 +410,137 @@ func TestInlineRevisionUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// Refreshing the draft of a git stack from a newer commit (plan 09-19, GIT-04, D-17): the repository's files are
+// replaced, Bayplan's own files and the variables stay, and a draft that moved is not overwritten.
+
+func TestRefreshDraftKeepsOverlaysAndVars(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, draft, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A person adds an overlay file and a variable.
+	withOverlay := draft.Copy
+	withOverlay.Files = append(slices.Clone(withOverlay.Files), stacks.File{Path: "secrets/db.txt", Content: []byte("hunter2"), Secret: true, Origin: stacks.OriginOverlay})
+	withOverlay.Vars = append(slices.Clone(withOverlay.Vars), stacks.Var{Name: "EXTRA", Value: "x"})
+	saved, _, err := f.repo.SaveDraft(ctx, st.ID, draft.Version, "ada", withOverlay)
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	rev := gitRevision()
+	rev.Commit, rev.Tree = "fedcba9876543210fedcba9876543210fedcba98", "1111111111111111111111111111111111111111"
+	repoFiles := []stacks.File{repoFile("compose.yaml", "services: {web: {image: nginx}}\n"), repoFile("compose.prod.yaml", "services: {}\n")}
+	got, err := f.repo.RefreshDraftFromGit(ctx, st.ID, saved.Version, "bob", repoFiles, rev)
+	if err != nil {
+		t.Fatalf("RefreshDraftFromGit: %v", err)
+	}
+	if got.Version != saved.Version+1 {
+		t.Errorf("version = %d, want %d", got.Version, saved.Version+1)
+	}
+	read, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, file := range read.Copy.Files {
+		paths = append(paths, file.Path+":"+string(file.Origin))
+	}
+	// .env is gone (the commit does not have it); the overlay stays; the compose file is the new one.
+	want := []string{"compose.prod.yaml:repo", "compose.yaml:repo", "secrets/db.txt:overlay"}
+	if !slices.Equal(paths, want) {
+		t.Errorf("files = %v, want %v", paths, want)
+	}
+	for _, file := range read.Copy.Files {
+		if file.Path == "secrets/db.txt" && (string(file.Content) != "hunter2" || !file.Secret) {
+			t.Errorf("overlay = %q secret %v, want it kept and sealed", file.Content, file.Secret)
+		}
+		if file.Path == "compose.yaml" && string(file.Content) != "services: {web: {image: nginx}}\n" {
+			t.Errorf("compose.yaml = %q, want the new commit's", file.Content)
+		}
+	}
+	if len(read.Copy.Vars) != 2 {
+		t.Errorf("vars = %+v, want both kept", read.Copy.Vars)
+	}
+	if read.Git.Commit != rev.Commit || read.Git.Tree != rev.Tree || read.Version != saved.Version+1 || read.CreatedBy != "bob" {
+		t.Errorf("draft = %+v, want the new commit, tree, version and saver", read)
+	}
+
+	// The same commit again changes nothing.
+	again, err := f.repo.RefreshDraftFromGit(ctx, st.ID, read.Version, "bob", repoFiles, rev)
+	if err != nil || again.Version != read.Version {
+		t.Errorf("a refresh with nothing new = version %d, %v, want %d", again.Version, err, read.Version)
+	}
+
+	// A stale version is a conflict and the draft stays as it is.
+	var conflict *stackops.DraftConflictError
+	if _, err := f.repo.RefreshDraftFromGit(ctx, st.ID, saved.Version, "bob", nil, gitRevision()); !errors.As(err, &conflict) || conflict.Version != read.Version {
+		t.Errorf("refresh at a stale version = %v, want a draft conflict at version %d", err, read.Version)
+	}
+	after, _ := f.repo.Draft(ctx, st.ID)
+	if after.Version != read.Version || after.Git.Commit != rev.Commit {
+		t.Errorf("draft after a refused refresh = %+v, want it unchanged", after)
+	}
+}
+
+func TestRefreshDraftRepositoryFileWinsItsPath(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, draft, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	withOverlay := draft.Copy
+	withOverlay.Files = append(slices.Clone(withOverlay.Files), stacks.File{Path: "extra.env", Content: []byte("A=1"), Secret: true, Origin: stacks.OriginOverlay})
+	saved, _, err := f.repo.SaveDraft(ctx, st.ID, draft.Version, "ada", withOverlay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The new commit now holds extra.env itself.
+	repoFiles := []stacks.File{repoFile("compose.yaml", "services: {}\n"), repoFile("compose.prod.yaml", "services: {}\n"), repoFile("extra.env", "A=repo\n")}
+	if _, err := f.repo.RefreshDraftFromGit(ctx, st.ID, saved.Version, "ada", repoFiles, gitRevision()); err != nil {
+		t.Fatalf("RefreshDraftFromGit: %v", err)
+	}
+	read, _ := f.repo.Draft(ctx, st.ID)
+	n := 0
+	for _, file := range read.Copy.Files {
+		if file.Path == "extra.env" {
+			n++
+			if file.Origin != stacks.OriginRepo || string(file.Content) != "A=repo\n" {
+				t.Errorf("extra.env = %q origin %s, want the repository's", file.Content, file.Origin)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("extra.env held %d times, want once", n)
+	}
+}
+
+func TestSetAppliedSource(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, _, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := gitSource()
+	src.Ref, src.Folder, src.ComposeFiles = "release", "stacks/web2", []string{"docker-compose.yml"}
+	if err := f.repo.SetAppliedSource(ctx, st.ID, src); err != nil {
+		t.Fatalf("SetAppliedSource: %v", err)
+	}
+	g, err := f.repo.StackGit(ctx, st.ID)
+	if err != nil || g.Ref != "release" || g.Folder != "stacks/web2" || !slices.Equal(g.ComposeFiles, []string{"docker-compose.yml"}) {
+		t.Errorf("StackGit = %+v, %v, want the new source", g, err)
+	}
+	if err := f.repo.SetAppliedSource(ctx, "nope", src); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAppliedSource of an unknown stack = %v, want ErrNoGit", err)
+	}
+}

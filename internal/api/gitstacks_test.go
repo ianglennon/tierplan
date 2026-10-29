@@ -26,6 +26,7 @@ const gitWebCompose = "services:\n  web:\n    image: nginx:1.27\n    env_file: w
 
 type gitStackFix struct {
 	f     *envFix
+	e     envBody
 	env   string
 	admin credentialUser
 	srv   *gittest.HTTPServer
@@ -59,7 +60,7 @@ func newGitStackFixWith(t *testing.T, tune func(*envFix)) *gitStackFix {
 		"stacks/other/compose.yml": "services: {}\n",
 	}, "first")
 	srv := gittest.NewHTTPServer(t, repo, gittest.HTTPOptions{TLS: true})
-	g := &gitStackFix{f: f, env: e.ID, admin: admin, srv: srv, repo: repo, sha: sha}
+	g := &gitStackFix{f: f, e: e, env: e.ID, admin: admin, srv: srv, repo: repo, sha: sha}
 	body := gitJSON(map[string]any{"name": "acme", "url": srv.URL, "caPem": srv.CAPEM})
 	rec := f.credCall(t, admin, http.MethodPost, "/api/env/"+e.ID+"/git/repos", body)
 	if rec.Code != http.StatusCreated {

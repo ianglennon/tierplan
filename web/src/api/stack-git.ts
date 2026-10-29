@@ -10,6 +10,8 @@ import type { components } from "@/api/schema";
 import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } from "@/api/stacks";
 
 export type StackGit = components["schemas"]["StackGitSummary"];
+// What a pull did to the draft: the version to review and deploy, and the commit it holds.
+export type StackGitPull = components["schemas"]["StackGitPullBody"];
 // Why a git stack's sync is in error, or why it is behind with a note: the union the server's enum generates.
 export type StackGitReason = NonNullable<StackGit["reasonCode"]>;
 
@@ -174,6 +176,59 @@ export function useUpdateStackGitUpdates(envId: string, stackId: string) {
     retry: false,
     onSuccess: (data) => {
       queryClient.setQueryData(stackGitKey(envId, stackId), data);
+      invalidateStacks(queryClient, envId);
+    },
+  });
+}
+
+// StackGitPullError is a pull the server refused or that got no answer. The status is 0 when the server could not be
+// reached; the type is the problem type it named: draft_changed when the draft moved while pulling, or the code of the
+// git failure (unreachable, auth_refused, ref_missing, folder_missing ...).
+export class StackGitPullError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST git/pull failed (${status})`);
+    this.name = "StackGitPullError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// usePullStackGit fetches the newest commit of the ref a git stack follows into its draft (D-17). It reads the draft's
+// version straight from the server, not from the cache an open editor holds, so a draft another person saved a moment
+// ago is seen and not overwritten blind: if it moves between that read and the pull, the server answers draft_changed
+// and nothing is stored. A pull deploys nothing: the caller goes on to the Review. It is never retried. The stack, its
+// git summary and its lists are read again, whatever the answer.
+export function usePullStackGit(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackGitPull, StackGitPullError>({
+    mutationFn: async () => {
+      try {
+        const read = await api.GET("/api/env/{envId}/stacks/{stackId}/draft", {
+          params: { path: { envId, stackId } },
+        });
+        if (!read.data) {
+          const problem = readProblem(read.error, read.response);
+          throw new StackGitPullError(problem.status, problem.type);
+        }
+        const { data, error, response } = await api.POST(
+          "/api/env/{envId}/stacks/{stackId}/git/pull",
+          { params: { path: { envId, stackId } }, body: { draftVersion: read.data.version } },
+        );
+        if (!data) {
+          const problem = readProblem(error, response);
+          throw new StackGitPullError(problem.status, problem.type);
+        }
+        return data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof StackGitPullError ? e : new StackGitPullError(0);
+      }
+    },
+    retry: false,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
       invalidateStacks(queryClient, envId);
     },
   });

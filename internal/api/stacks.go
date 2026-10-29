@@ -148,6 +148,9 @@ type StacksDeps struct {
 	// address, and whether a sync check runs now. Nil leaves them empty.
 	GitConns *gitconn.Store
 	GitSync  *gitsync.Service
+	// GitDeployed, when set, is told that a revision of a stack ended good, so that a git stack's settings and sync state
+	// follow what was deployed (gitsync.Service.Deployed). It does nothing for a revision not made from a repository.
+	GitDeployed func(ctx context.Context, stackID string, rev stackops.Snapshot)
 	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
 	// router. Nil makes such a deploy refuse with environment_not_found.
 	Envs httpx.EnvResolver

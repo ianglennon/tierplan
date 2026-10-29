@@ -397,6 +397,138 @@ func (r Repo) SetPolling(ctx context.Context, stackID string, enabled bool, inte
 	return nil
 }
 
+// RefreshDraftFromGit replaces the files of a git stack's draft that came from the repository with those of a newer
+// commit, when the draft is still at version: the draft's repository files (origin repo) are dropped and repoFiles take
+// their place, a file of Bayplan's own (overlay, or one a person added) and the variables are kept, the compose files
+// are the source's, and the commit, tree and source the draft records are rev. A path both a kept file and a
+// repository file hold goes to the repository file, as an import does (D-09). The version of the draft goes up by one.
+// A stack with no draft (it was discarded) starts one from its last good revision, and only a caller at version 0 may,
+// as for a save. A draft that has moved is a *DraftConflictError. Nothing changes when the draft already holds exactly
+// this: it is returned as it is.
+func (r Repo) RefreshDraftFromGit(ctx context.Context, stackID string, version int64, actor string, repoFiles []stacks.File, rev GitRevision) (Snapshot, error) {
+	if len(rev.Source.ComposeFiles) == 0 {
+		return Snapshot{}, ErrNoComposeFiles
+	}
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	draft, err := r.readDraft(ctx, q, stackID)
+	hasDraft := err == nil
+	switch {
+	case errors.Is(err, ErrNoDraft):
+		if version != 0 {
+			return Snapshot{}, &DraftConflictError{}
+		}
+		if draft, err = r.fallback(ctx, q, stackID); err != nil {
+			return Snapshot{}, err
+		}
+	case err != nil:
+		return Snapshot{}, err
+	case draft.Version != version:
+		return Snapshot{}, &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
+	}
+
+	next := refreshedCopy(draft.Copy, repoFiles, rev.Source.ComposeFiles)
+	next.Files = stacks.MarkSecretFilesFor(next.Files, draft.Copy.Files, next.ComposeFiles)
+	rev.Source.ComposeFiles = nonNil(slices.Clone(rev.Source.ComposeFiles))
+	if hasDraft && sameContent(draft.Copy, next) && sameGitRevision(draft.Git, rev) {
+		return draft, nil
+	}
+	now := r.now()
+	out := Snapshot{
+		StackID: stackID, Kind: KindDraft, BaseSeq: draft.BaseSeq, Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now,
+		Git: rev, Copy: normalise(next), IsDraft: true,
+	}
+	if hasDraft {
+		n, err := q.UpdateDraftVersion(ctx, sqlc.UpdateDraftVersionParams{
+			CreatedBy: actor, CreatedAt: now.UnixNano(), ID: draft.ID, Version: version,
+		})
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("update draft: %w", err)
+		}
+		if n != 1 {
+			return Snapshot{}, &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
+		}
+		if err := q.DeleteSnapshotFiles(ctx, draft.ID); err != nil {
+			return Snapshot{}, fmt.Errorf("clear files: %w", err)
+		}
+		if err := q.DeleteSnapshotVars(ctx, draft.ID); err != nil {
+			return Snapshot{}, fmt.Errorf("clear variables: %w", err)
+		}
+		out.ID, out.Version = draft.ID, version+1
+	} else {
+		id, err := uuid.NewV7()
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("new snapshot id: %w", err)
+		}
+		if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+			ID: id.String(), StackID: stackID, Kind: KindDraft, BaseSeq: draft.BaseSeq, Version: firstSavedVersion,
+			Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: now.UnixNano(), Origin: OriginDeploy,
+		}); err != nil {
+			return Snapshot{}, fmt.Errorf("insert draft: %w", err)
+		}
+		out.ID, out.Version = id.String(), firstSavedVersion
+	}
+	if err := r.writeContent(ctx, q, out.ID, next); err != nil {
+		return Snapshot{}, err
+	}
+	if err := r.copyGit(ctx, q, out.ID, rev, ""); err != nil {
+		return Snapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Snapshot{}, fmt.Errorf("commit: %w", err)
+	}
+	return out, nil
+}
+
+// refreshedCopy is the working copy of a draft with its repository files replaced by repoFiles and the compose files
+// set. A file of the draft that is not from the repository stays unless a repository file holds its path.
+func refreshedCopy(current stacks.WorkingCopy, repoFiles []stacks.File, composeFiles []string) stacks.WorkingCopy {
+	out := stacks.WorkingCopy{Vars: slices.Clone(current.Vars), ComposeFiles: slices.Clone(composeFiles)}
+	taken := make(map[string]bool, len(repoFiles))
+	for _, f := range repoFiles {
+		f.Origin = stacks.OriginRepo
+		taken[f.Path] = true
+		out.Files = append(out.Files, f)
+	}
+	for _, f := range current.Files {
+		if f.Origin != stacks.OriginRepo && !taken[f.Path] {
+			out.Files = append(out.Files, f)
+		}
+	}
+	return out
+}
+
+func sameGitRevision(a, b GitRevision) bool {
+	return a.Commit == b.Commit && a.Tree == b.Tree && a.Source.RepoID == b.Source.RepoID && a.Source.RepoName == b.Source.RepoName &&
+		a.Source.RefKind == b.Source.RefKind && a.Source.Ref == b.Source.Ref && a.Source.Folder == b.Source.Folder &&
+		slices.Equal(a.Source.ComposeFiles, b.Source.ComposeFiles)
+}
+
+// SetAppliedSource makes the repository, ref, folder and compose files a git stack follows those of src: the settings
+// follow what was deployed (D-08). The sync state is not touched. A stack that is not from git is ErrNoGit.
+func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSource) error {
+	raw, err := json.Marshal(nonNil(src.ComposeFiles))
+	if err != nil {
+		return fmt.Errorf("encode the compose files: %w", err)
+	}
+	n, err := r.Store.Q.SetStackGitSource(ctx, sqlc.SetStackGitSourceParams{
+		RepoID: src.RepoID, RefKind: src.RefKind, Ref: src.Ref, Folder: src.Folder, ComposeFiles: string(raw),
+		UpdatedAt: r.now().UnixNano(), StackID: stackID,
+	})
+	if err != nil {
+		return fmt.Errorf("set the git source: %w", err)
+	}
+	if n == 0 {
+		return ErrNoGit
+	}
+	return nil
+}
+
 // ErrNoGit means the stack has no git settings: it is not a stack from a repository.
 var ErrNoGit = errors.New("stackops: the stack is not from a git repository")
 

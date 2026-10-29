@@ -177,6 +177,30 @@ type StackGitUpdatesInput struct {
 // problemPollInterval is the problem type of a polling interval that is not a whole number of minutes from 1 to 1440.
 const problemPollInterval = "poll_interval"
 
+// StackGitPullInput is the body of POST /api/env/{envId}/stacks/{stackId}/git/pull.
+type StackGitPullInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		DraftVersion int64 `json:"draftVersion" minimum:"0" doc:"The version of the draft you read. If the draft moved since (a save, or another pull), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded"`
+	}
+}
+
+// StackGitPullBody is what a pull did to the draft.
+type StackGitPullBody struct {
+	DraftVersion   int64  `json:"draftVersion" doc:"The version of the draft after the pull: review it and deploy it at this version"`
+	Commit         string `json:"commit" doc:"The full ID of the commit the draft was refreshed from"`
+	Ref            string `json:"ref" doc:"The branch, tag or commit ID the stack follows"`
+	DeployedCommit string `json:"deployedCommit" doc:"The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository"`
+	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with"`
+}
+
+// StackGitPullOutput wraps StackGitPullBody for huma.
+type StackGitPullOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackGitPullBody
+}
+
 // registerStackGit registers the routes that read a git stack's sync state and ask for a check.
 func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	httpx.Register(r, huma.Operation{
@@ -200,6 +224,19 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackPathInput) (*StackGitCheckOutput, error) {
 			return checkStackGit(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "pullStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/pull",
+		Summary: "Pull a git stack's newest commit into its draft",
+		Description: "Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. " +
+			"Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. " +
+			"A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). " +
+			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; " +
+			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitPullInput) (*StackGitPullOutput, error) {
+			return pullStackGit(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "updateStackGitUpdates", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/updates",
@@ -301,6 +338,56 @@ func checkStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackPathIn
 		}()
 	}
 	return &StackGitCheckOutput{CacheControl: "no-store", Body: StackGitCheckBody{Checking: true}}, nil
+}
+
+func pullStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitPullInput) (*StackGitPullOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if g.Sync == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	sg, err := repo.StackGit(ctx, st.ID)
+	if errors.Is(err, stackops.ErrNoGit) {
+		return nil, stackNotGit()
+	}
+	if err != nil {
+		return nil, stackInternal(d, "read the git settings", env.ID, err)
+	}
+	res, err := g.Sync.Pull(ctx, env.ID, st.ID, p.Name, in.Body.DraftVersion)
+	var conflict *stackops.DraftConflictError
+	if errors.As(err, &conflict) {
+		e := draftChanged(conflict)
+		if m, ok := e.(*huma.ErrorModel); ok {
+			m.Detail = "The draft changed while you were pulling. Reload it, then pull again."
+		}
+		return nil, e
+	}
+	if err != nil {
+		var known gitconn.Repo
+		if g.Conns != nil {
+			known, _ = g.Conns.GetRepo(ctx, sg.RepoID)
+		}
+		return nil, g.importProblem(known, gitx.RefKind(sg.RefKind), sg.Ref, sg.Folder, err)
+	}
+	if res.DraftVersion != in.Body.DraftVersion {
+		draft, err := repo.Draft(ctx, st.ID)
+		if err != nil {
+			return nil, stackInternal(d, "read the refreshed draft", env.ID, err)
+		}
+		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDraftSaved, st.ID, audit.ResultSuccess, "", map[string]string{
+			"stack": st.Name, "version": itoa(draft.Version), "files": itoa(int64(len(draft.Copy.Files))), "vars": itoa(int64(len(draft.Copy.Vars))),
+		})
+	}
+	return &StackGitPullOutput{CacheControl: "no-store", Body: StackGitPullBody{
+		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref, DeployedCommit: res.DeployedCommit, Touched: res.Touched,
+	}}, nil
 }
 
 // stackNotGit is the 409 for a git route asked about a stack that is not from a repository.

@@ -1036,6 +1036,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		if perr != nil {
 			d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", perr)
 		}
+		// A stack made from a repository now runs this revision's commit: its settings and sync state follow it (D-08).
+		if d.GitDeployed != nil && rev.Git.Commit != "" {
+			d.GitDeployed(wctx, st.ID, rev)
+		}
 	}
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)
@@ -1062,6 +1066,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 	if rev.RestoredFrom > 0 {
 		details["restoredFrom"] = itoa(rev.RestoredFrom)
+	}
+	// A revision made from a repository says which commit it ran.
+	if rev.Git.Commit != "" {
+		details["commit"] = rev.Git.Commit
 	}
 	// An automated deploy says what started it and whom it acted for, next to the system actor.
 	for k, v := range extra {

@@ -25,6 +25,21 @@
     "check": {
       "failed": "Couldn't start the check. Try again."
     },
+    "pull": {
+      "action": "Pull & redeploy…",
+      "pulling": "Pulling…",
+      "reviewUpdate": "Review update",
+      "failed": "Couldn't pull {{ref}}. {{reason}}",
+      "reason": {
+        "draftChanged": "The draft changed while you were pulling. Reload it and try again.",
+        "unreachable": "The repository can't be reached.",
+        "authRefused": "The repository refused the credential.",
+        "refMissing": "{{ref}} no longer exists.",
+        "folderMissing": "The stack's folder is no longer in the repository.",
+        "tooLarge": "The files are over the limits of a stack.",
+        "other": "Try again."
+      }
+    },
     "status": {
       "inSync": "In sync",
       "inSyncTip": "{{ref}} is at {{sha}}, but nothing in {{folder}} changed.",

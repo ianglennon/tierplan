@@ -7,12 +7,14 @@ import type { ReactNode } from "react";
 
 import { useCheckStackGit } from "@/api/stack-git";
 import type { StackDetail } from "@/api/stacks";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ShaLink } from "@/features/stack-git/sha-link";
 import { SyncStatus } from "@/features/stack-git/sync-status";
+import { usePullAndReview } from "@/features/stacks/stack-actions";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
@@ -101,6 +103,8 @@ export function GitStrip({ stack }: GitStripProps) {
     onError: () => toastError(t("stackGit.check.failed")),
   });
   const canSeeRepo = useNeeds("git.read", stack.envId);
+  const deploy = useNeeds("stacks.deploy", stack.envId);
+  const review = usePullAndReview(stack);
   if (!git) return stack.source === "git" ? <GitStripSkeleton /> : null;
 
   const checking = git.checking || check.running;
@@ -157,6 +161,19 @@ export function GitStrip({ stack }: GitStripProps) {
         </Item>
       </dl>
       <div className="flex flex-wrap items-center gap-2 max-md:w-full md:ms-auto md:self-center">
+        {git.status === "behind" && (deploy.allowed || deploy.reason) ? (
+          <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
+            <Button
+              type="button"
+              variant="outline"
+              className="max-md:h-11 max-md:flex-1"
+              aria-disabled={review.pending}
+              onClick={deploy.allowed ? () => void review.pull() : undefined}
+            >
+              {review.pending ? t("stackGit.pull.pulling") : t("stackGit.pull.reviewUpdate")}
+            </Button>
+          </NeedsTooltip>
+        ) : null}
         {fixed ? null : (
           <Button
             type="button"

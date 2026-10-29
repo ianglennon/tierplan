@@ -1263,6 +1263,31 @@ describe("StackList git stacks", () => {
     await waitFor(() => expect(checks).toEqual([`/api/env/${ENV}/stacks/web/git/check`]));
   });
 
+  it("reads Pull & redeploy… for a git stack in the place of Deploy…, and Review update only while it is behind", async () => {
+    stacks = {
+      items: [
+        stack({ id: "inline", name: "inline", state: "running" }),
+        gitStack("current", { status: "in_sync", behind: 0 }),
+        gitStack("late", { status: "behind", behind: 2 }),
+      ],
+    };
+    mount();
+    const expected: Record<string, { pull: boolean; deploy: boolean; review: boolean }> = {
+      inline: { pull: false, deploy: true, review: false },
+      current: { pull: true, deploy: false, review: false },
+      late: { pull: true, deploy: false, review: true },
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      const trigger = await screen.findByRole("button", { name: `Actions for ${name}` });
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+      await screen.findByRole("menuitem", { name: "Open stack" });
+      expect(!!screen.queryByRole("menuitem", { name: "Pull & redeploy…" })).toBe(want.pull);
+      expect(!!screen.queryByRole("menuitem", { name: "Deploy…" })).toBe(want.deploy);
+      expect(!!screen.queryByRole("menuitem", { name: "Review update" })).toBe(want.review);
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    }
+  });
+
   it("offers no Check now for an inline or an adopted stack, or for a fixed commit", async () => {
     stacks = {
       items: [
