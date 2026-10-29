@@ -14392,6 +14392,12 @@
             ],
             "type": "string"
           },
+          "autoDeployPausedRevision": {
+            "description": "For autoDeployPausedReason rollback: the number of the revision the stack was rolled back to. Left out otherwise",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
           "behind": {
             "description": "How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1",
             "format": "int64",

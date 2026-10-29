@@ -10354,6 +10354,11 @@ export interface components {
             autoDeployPausedReason?: "owner" | "rollback";
             /**
              * Format: int64
+             * @description For autoDeployPausedReason rollback: the number of the revision the stack was rolled back to. Left out otherwise
+             */
+            autoDeployPausedRevision?: number;
+            /**
+             * Format: int64
              * @description How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1
              */
             behind: number;

@@ -53,10 +53,11 @@ type StackGitSummary struct {
 	CheckedAt    string `json:"checkedAt,omitempty" format:"date-time" doc:"When the stack was last checked, RFC 3339 UTC; left out when it never was"`
 	Checking     bool   `json:"checking" doc:"True while a check of the stack runs now"`
 
-	AutoDeploy             bool                     `json:"autoDeploy" doc:"True when a commit that changes the folder is deployed automatically"`
-	AutoDeployPaused       bool                     `json:"autoDeployPaused" doc:"True when automatic deploys are paused: after a roll back, or because the owner lacks a permission"`
-	AutoDeployPausedReason string                   `json:"autoDeployPausedReason,omitempty" enum:"owner,rollback" doc:"Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused"`
-	AutoDeployOwner        *StackGitAutoDeployOwner `json:"autoDeployOwner,omitempty" doc:"The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record"`
+	AutoDeploy               bool                     `json:"autoDeploy" doc:"True when a commit that changes the folder is deployed automatically"`
+	AutoDeployPaused         bool                     `json:"autoDeployPaused" doc:"True when automatic deploys are paused: after a roll back, or because the owner lacks a permission"`
+	AutoDeployPausedReason   string                   `json:"autoDeployPausedReason,omitempty" enum:"owner,rollback" doc:"Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused"`
+	AutoDeployPausedRevision int64                    `json:"autoDeployPausedRevision,omitempty" minimum:"1" doc:"For autoDeployPausedReason rollback: the number of the revision the stack was rolled back to. Left out otherwise"`
+	AutoDeployOwner          *StackGitAutoDeployOwner `json:"autoDeployOwner,omitempty" doc:"The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record"`
 
 	PollEnabled bool `json:"pollEnabled" doc:"True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
 	PollMinutes int  `json:"pollMinutes" minimum:"1" maximum:"1440" doc:"How often the repository is checked, in minutes"`
@@ -98,6 +99,9 @@ func gitSummaryOf(sg stackops.StackGit, st stackops.GitState, repo gitconn.Repo,
 		Status: st.Status, ReasonCode: st.ReasonCode, ReasonDetail: st.ReasonDetail, Checking: checking,
 		AutoDeploy: sg.AutoDeploy, AutoDeployPaused: sg.AutoDeployPausedReason != "", AutoDeployPausedReason: sg.AutoDeployPausedReason,
 		PollEnabled: sg.PollEnabled, PollMinutes: sg.PollIntervalSeconds / 60,
+	}
+	if sg.AutoDeployPausedReason == stackops.PausedRollback {
+		out.AutoDeployPausedRevision = sg.AutoDeployPausedSeq
 	}
 	if out.Status == "" {
 		out.Status = stackops.GitStatusUnknown
