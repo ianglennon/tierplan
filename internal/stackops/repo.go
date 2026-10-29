@@ -573,6 +573,11 @@ func (r Repo) DiscardDraft(ctx context.Context, stackID string) (discarded bool,
 	if err != nil {
 		return false, 0, fmt.Errorf("delete draft: %w", err)
 	}
+	// A draft that pointed an inline or adopted stack at a repository (D-24) was all that held the git settings it would
+	// have had; without it the stack is as it was.
+	if _, err := q.DeletePendingStackGit(ctx, stackID); err != nil {
+		return false, 0, fmt.Errorf("drop the pending git source: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return false, 0, fmt.Errorf("commit: %w", err)
 	}

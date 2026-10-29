@@ -26,7 +26,17 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 	}
 	sg, err := s.repo.StackGit(ctx, stackID)
 	if errors.Is(err, stackops.ErrNoGit) {
-		return
+		// An inline or adopted stack whose convert draft just ended good becomes a git stack here (D-24): its history stays,
+		// and the sync state starts from this deploy like that of any new git stack.
+		done, ferr := s.repo.FinalizeConvert(ctx, stackID)
+		if ferr != nil {
+			s.log.Warn("could not make a converted stack a git stack after its deploy", "stack", stackID, "error", ferr)
+			return
+		}
+		if !done {
+			return
+		}
+		sg, err = s.repo.StackGit(ctx, stackID)
 	}
 	if err != nil {
 		s.log.Warn("could not read the git settings after a deploy", "stack", stackID, "error", err)

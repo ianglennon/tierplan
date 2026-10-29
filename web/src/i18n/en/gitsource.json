@@ -202,6 +202,39 @@
     "errors": {
       "createFailed": "Couldn't create the stack from that folder. Check the repository, ref, folder and files, then try again.",
       "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number."
+    },
+    "convert": {
+      "action": "Use a git repository…",
+      "breadcrumbCurrent": "Use a git repository",
+      "documentTitle": "Use a git repository",
+      "title": "Use a git repository for {{name}}",
+      "body": "The first sync goes through review and is recorded as a revision, so the history of {{name}} is kept. Your variables stay.",
+      "files": {
+        "title": "Files in {{name}} today",
+        "body": "The compose file is replaced by the repository's. Choose what happens to the other files.",
+        "secret": "Secret",
+        "choose": "What to do with {{path}}",
+        "drop": "Drop it",
+        "keep": "Keep as overlay file",
+        "clash": "{{path}} exists in the repository. Drop it or rename it first."
+      },
+      "footer": {
+        "note": "Nothing changes on {{env}} until you review and deploy.",
+        "submit": "Review and sync",
+        "pending": "Preparing…"
+      },
+      "errors": {
+        "conflict": "{{user}} changed {{name}} while you were choosing. Reload to see it.",
+        "conflictUnknown": "Someone changed {{name}} while you were choosing. Reload to see it.",
+        "reload": "Reload",
+        "alreadyGit": "{{name}} already uses a git repository.",
+        "back": "Back to the stack",
+        "loadFailed": "Couldn't read the stack. Check the connection and try again.",
+        "retry": "Try again",
+        "permission": "Only an Admin of {{env}} can use a git repository for a stack.",
+        "failed": "Couldn't read that folder. Check the repository, ref, folder and files, then try again.",
+        "generic": "Couldn't prepare the review. Try again."
+      }
     }
   }
 }

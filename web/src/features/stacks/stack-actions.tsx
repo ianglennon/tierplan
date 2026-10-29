@@ -59,7 +59,7 @@ export const canStart = (state: StackState) => state === "stopped";
 // Images can be updated where something runs to update: the states a stop acts on.
 export const canUpdateImages = canStop;
 
-type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state">;
+type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state" | "source">;
 
 interface StackActionsProps {
   stack: LifecycleStack;
@@ -224,6 +224,10 @@ export function StackActions({ stack }: StackActionsProps) {
 export function StackMoreMenu({ stack }: StackActionsProps) {
   const t = useT();
   const needs = useNeeds("stacks.delete", stack.envId);
+  const gitNeeds = useNeeds("git.manage", stack.envId);
+  const navigate = useNavigate();
+  // An inline or adopted stack can be pointed at a repository (D-24). Only an Admin of the environment is offered it.
+  const canConnect = gitNeeds.allowed && (stack.source === "inline" || stack.source === "adopted");
   const [removing, setRemoving] = useState(false);
   const operating = isOperating(stack.state);
   async function copy() {
@@ -248,6 +252,20 @@ export function StackMoreMenu({ stack }: StackActionsProps) {
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copy()}>
             {t("stackRemove.actions.copyName")}
           </DropdownMenuItem>
+          {canConnect ? (
+            <DropdownMenuItem
+              className="max-md:min-h-11"
+              disabled={operating}
+              onSelect={() =>
+                void navigate({
+                  to: "/env/$envId/stacks/$stackId/connect-git",
+                  params: { envId: stack.envId, stackId: stack.id },
+                })
+              }
+            >
+              {t("gitSource.convert.action")}
+            </DropdownMenuItem>
+          ) : null}
           {needs.allowed || needs.reason ? <DropdownMenuSeparator /> : null}
           {needs.allowed ? (
             <DropdownMenuItem

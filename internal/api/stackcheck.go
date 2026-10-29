@@ -139,7 +139,7 @@ func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackI
 	if err != nil {
 		return fail(err)
 	}
-	if st.Source.Kind == stacks.SourceGit {
+	if st.Source.Kind == stacks.SourceGit || saved.Git.Commit != "" {
 		// A stack from a repository is checked by its own rules, which need each file's origin and the ordered
 		// compose files; the browser holds neither, so they come from the saved draft (D-09, D-11).
 		wc.ComposeFiles = slices.Clone(saved.Copy.ComposeFiles)

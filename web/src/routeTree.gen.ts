@@ -98,6 +98,7 @@ import { Route as AppEnvEnvIdServicesServiceIdStatsRouteImport } from './routes/
 import { Route as AppEnvEnvIdServicesServiceIdTasksRouteImport } from './routes/_app/env/$envId/services_.$serviceId.tasks'
 import { Route as AppEnvEnvIdServicesServiceIdEditRouteImport } from './routes/_app/env/$envId/services_.$serviceId_.edit'
 import { Route as AppEnvEnvIdStacksStackIdIndexRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.index'
+import { Route as AppEnvEnvIdStacksStackIdConnectGitRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.connect-git'
 import { Route as AppEnvEnvIdStacksStackIdDriftRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.drift'
 import { Route as AppEnvEnvIdStacksStackIdEditorRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.editor'
 import { Route as AppEnvEnvIdStacksStackIdGitRouteImport } from './routes/_app/env/$envId/stacks_.$stackId.git'
@@ -608,6 +609,12 @@ const AppEnvEnvIdStacksStackIdIndexRoute =
     path: '/',
     getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
   } as any)
+const AppEnvEnvIdStacksStackIdConnectGitRoute =
+  AppEnvEnvIdStacksStackIdConnectGitRouteImport.update({
+    id: '/connect-git',
+    path: '/connect-git',
+    getParentRoute: () => AppEnvEnvIdStacksStackIdRoute,
+  } as any)
 const AppEnvEnvIdStacksStackIdDriftRoute =
   AppEnvEnvIdStacksStackIdDriftRouteImport.update({
     id: '/drift',
@@ -780,6 +787,7 @@ export interface FileRoutesByFullPath {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/connect-git': typeof AppEnvEnvIdStacksStackIdConnectGitRoute
   '/env/$envId/stacks/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/stacks/$stackId/git': typeof AppEnvEnvIdStacksStackIdGitRoute
@@ -871,6 +879,7 @@ export interface FileRoutesByTo {
   '/env/$envId/services/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/env/$envId/services/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/env/$envId/services/$serviceId/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/env/$envId/stacks/$stackId/connect-git': typeof AppEnvEnvIdStacksStackIdConnectGitRoute
   '/env/$envId/stacks/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/env/$envId/stacks/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/env/$envId/stacks/$stackId/git': typeof AppEnvEnvIdStacksStackIdGitRoute
@@ -978,6 +987,7 @@ export interface FileRoutesById {
   '/_app/env/$envId/services_/$serviceId/stats': typeof AppEnvEnvIdServicesServiceIdStatsRoute
   '/_app/env/$envId/services_/$serviceId/tasks': typeof AppEnvEnvIdServicesServiceIdTasksRoute
   '/_app/env/$envId/services_/$serviceId_/edit': typeof AppEnvEnvIdServicesServiceIdEditRoute
+  '/_app/env/$envId/stacks_/$stackId/connect-git': typeof AppEnvEnvIdStacksStackIdConnectGitRoute
   '/_app/env/$envId/stacks_/$stackId/drift': typeof AppEnvEnvIdStacksStackIdDriftRoute
   '/_app/env/$envId/stacks_/$stackId/editor': typeof AppEnvEnvIdStacksStackIdEditorRoute
   '/_app/env/$envId/stacks_/$stackId/git': typeof AppEnvEnvIdStacksStackIdGitRoute
@@ -1085,6 +1095,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/connect-git'
     | '/env/$envId/stacks/$stackId/drift'
     | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/stacks/$stackId/git'
@@ -1176,6 +1187,7 @@ export interface FileRouteTypes {
     | '/env/$envId/services/$serviceId/stats'
     | '/env/$envId/services/$serviceId/tasks'
     | '/env/$envId/services/$serviceId/edit'
+    | '/env/$envId/stacks/$stackId/connect-git'
     | '/env/$envId/stacks/$stackId/drift'
     | '/env/$envId/stacks/$stackId/editor'
     | '/env/$envId/stacks/$stackId/git'
@@ -1282,6 +1294,7 @@ export interface FileRouteTypes {
     | '/_app/env/$envId/services_/$serviceId/stats'
     | '/_app/env/$envId/services_/$serviceId/tasks'
     | '/_app/env/$envId/services_/$serviceId_/edit'
+    | '/_app/env/$envId/stacks_/$stackId/connect-git'
     | '/_app/env/$envId/stacks_/$stackId/drift'
     | '/_app/env/$envId/stacks_/$stackId/editor'
     | '/_app/env/$envId/stacks_/$stackId/git'
@@ -1944,6 +1957,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdStacksStackIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
     }
+    '/_app/env/$envId/stacks_/$stackId/connect-git': {
+      id: '/_app/env/$envId/stacks_/$stackId/connect-git'
+      path: '/connect-git'
+      fullPath: '/env/$envId/stacks/$stackId/connect-git'
+      preLoaderRoute: typeof AppEnvEnvIdStacksStackIdConnectGitRouteImport
+      parentRoute: typeof AppEnvEnvIdStacksStackIdRoute
+    }
     '/_app/env/$envId/stacks_/$stackId/drift': {
       id: '/_app/env/$envId/stacks_/$stackId/drift'
       path: '/drift'
@@ -2278,6 +2298,7 @@ const AppEnvEnvIdServicesServiceIdRouteWithChildren =
   )
 
 interface AppEnvEnvIdStacksStackIdRouteChildren {
+  AppEnvEnvIdStacksStackIdConnectGitRoute: typeof AppEnvEnvIdStacksStackIdConnectGitRoute
   AppEnvEnvIdStacksStackIdDriftRoute: typeof AppEnvEnvIdStacksStackIdDriftRoute
   AppEnvEnvIdStacksStackIdEditorRoute: typeof AppEnvEnvIdStacksStackIdEditorRoute
   AppEnvEnvIdStacksStackIdGitRoute: typeof AppEnvEnvIdStacksStackIdGitRoute
@@ -2291,6 +2312,8 @@ interface AppEnvEnvIdStacksStackIdRouteChildren {
 
 const AppEnvEnvIdStacksStackIdRouteChildren: AppEnvEnvIdStacksStackIdRouteChildren =
   {
+    AppEnvEnvIdStacksStackIdConnectGitRoute:
+      AppEnvEnvIdStacksStackIdConnectGitRoute,
     AppEnvEnvIdStacksStackIdDriftRoute: AppEnvEnvIdStacksStackIdDriftRoute,
     AppEnvEnvIdStacksStackIdEditorRoute: AppEnvEnvIdStacksStackIdEditorRoute,
     AppEnvEnvIdStacksStackIdGitRoute: AppEnvEnvIdStacksStackIdGitRoute,

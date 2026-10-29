@@ -14318,6 +14318,137 @@
         ],
         "type": "object"
       },
+      "StackGitConnectBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full ID of the commit the draft was made from, at the head of the ref",
+            "type": "string"
+          },
+          "draftVersion": {
+            "description": "The version of the draft after the change: review it and deploy it at this version",
+            "format": "int64",
+            "type": "integer"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the stack will follow",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draftVersion",
+          "commit",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "StackGitConnectFileBody": {
+        "additionalProperties": false,
+        "properties": {
+          "keep": {
+            "description": "True to keep the file as an overlay file (sealed, secret); false to drop it",
+            "type": "boolean"
+          },
+          "path": {
+            "description": "The path of a file of the stack's draft",
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "keep"
+        ],
+        "type": "object"
+      },
+      "StackGitConnectInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "composeFiles": {
+            "description": "The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "draftVersion": {
+            "description": "The version of the draft you read. If the draft moved since, the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "description": "What becomes of the files of the stack's draft: each one named is kept as an overlay file or dropped; one not named is dropped. 422 file_path_invalid for a path that is not a file of the draft, file_name_taken for one named twice, overlay_clash for a file to keep that the repository holds",
+            "items": {
+              "$ref": "#/components/schemas/StackGitConnectFileBody"
+            },
+            "maxItems": 50,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "overlays": {
+            "description": "New overlay files for paths the repository does not have, beside the files kept from the draft. Each is stored sealed as a secret file. 422 file_name_taken for a path named twice or also kept, file_path_invalid for a bad path, file_too_large over 1 MiB",
+            "items": {
+              "$ref": "#/components/schemas/GitStackOverlayBody"
+            },
+            "maxItems": 50,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ref": {
+            "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found",
+            "maxLength": 64,
+            "type": "string"
+          },
+          "vars": {
+            "description": "Values to set over the stack's variables, by name. A variable the stack holds that is not named stays; a secret variable sent as \u003chidden\u003e keeps its saved value",
+            "items": {
+              "$ref": "#/components/schemas/DraftVarBody"
+            },
+            "maxItems": 500,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "draftVersion",
+          "repoId",
+          "refKind",
+          "ref",
+          "composeFiles"
+        ],
+        "type": "object"
+      },
       "StackGitPullBody": {
         "additionalProperties": false,
         "properties": {
@@ -16019,6 +16150,10 @@
               "array",
               "null"
             ]
+          },
+          "converts": {
+            "description": "Left out unless true: true when the draft points an inline or adopted stack at a repository (D-24), so a good deploy of it replaces the stack's inline files and makes it a git stack. headCommit is then the draft's own commit",
+            "type": "boolean"
           },
           "deployedCommit": {
             "description": "The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository",
@@ -27634,6 +27769,78 @@
         "summary": "Check a stack's working copy",
         "tags": [
           "stacks"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/connect-git": {
+      "post": {
+        "description": "Reads the repository folder at the head of the ref into the stack's draft (D-24): the repository's files, the files of the draft that files says to keep (each becomes a sealed overlay file) and the stack's variables with vars set over them. The files not kept are dropped. Nothing is applied: the stack stays inline or adopted, with its revisions, until a deploy of the draft ends good, which makes it a git stack and keeps its history; discarding the draft leaves the stack exactly as it was. Review the draft and deploy it as any stack; the review says it replaces the inline files. A stack with a pending conversion can be pointed at another source, which replaces the first. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A stack that is already a git stack is 409 already_git. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 overlay_clash for a file to keep that the repository holds, file_path_invalid or file_name_taken for files, ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. 503 git_unavailable when this server has no git support. Audited as stack.pointed_at_git with the stack, the repository, the ref, the folder and the counts of files kept and dropped. Needs git.manage (Admin of the environment).",
+        "operationId": "connectStackGit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackGitConnectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitConnectBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Point an inline or adopted stack at a git repository, through review",
+        "tags": [
+          "stacks",
+          "git"
         ]
       }
     },

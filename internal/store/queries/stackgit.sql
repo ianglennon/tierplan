@@ -12,7 +12,7 @@ SELECT stack_id, repo_id, ref_kind, ref, folder, compose_files, poll_enabled, po
        auto_deploy_paused_reason, auto_deploy_paused_seq, webhook_flavour, webhook_placement, webhook_token_hash,
        webhook_secret_sealed, webhook_secret_last4, webhook_created_by, webhook_last_at, webhook_last_result,
        pending_convert, created_at, updated_at
-FROM stack_git WHERE stack_id = ?;
+FROM stack_git WHERE stack_id = ? AND pending_convert = 0;
 
 -- name: ListStackGitsByEnv :many
 SELECT g.stack_id, g.repo_id, g.ref_kind, g.ref, g.folder, g.compose_files, g.poll_enabled, g.poll_interval_s, g.auto_deploy,
@@ -20,11 +20,43 @@ SELECT g.stack_id, g.repo_id, g.ref_kind, g.ref, g.folder, g.compose_files, g.po
        g.webhook_secret_sealed, g.webhook_secret_last4, g.webhook_created_by, g.webhook_last_at, g.webhook_last_result,
        g.pending_convert, g.created_at, g.updated_at
 FROM stack_git g JOIN stacks s ON s.id = g.stack_id
-WHERE s.env_id = ? ORDER BY s.name;
+WHERE s.env_id = ? AND g.pending_convert = 0 ORDER BY s.name;
 
 -- name: InsertStackGitState :exec
 -- A new git stack has not been checked: status unknown until the first check.
 INSERT INTO stack_git_state (stack_id) VALUES (?);
+
+-- name: GetPendingStackGit :one
+-- The source an inline or adopted stack is to follow once the deploy of its convert draft ends good (D-24). The stack is not
+-- a git stack until then, so every other read of stack_git leaves this row out.
+SELECT stack_id, repo_id, ref_kind, ref, folder, compose_files, poll_enabled, poll_interval_s, auto_deploy,
+       auto_deploy_paused_reason, auto_deploy_paused_seq, webhook_flavour, webhook_placement, webhook_token_hash,
+       webhook_secret_sealed, webhook_secret_last4, webhook_created_by, webhook_last_at, webhook_last_result,
+       pending_convert, created_at, updated_at
+FROM stack_git WHERE stack_id = ? AND pending_convert = 1;
+
+-- name: InsertPendingStackGit :execrows
+-- Records the source a convert draft points at. Asking again for the same stack replaces the pending source; a stack that
+-- already has git settings of its own matches nothing (0 rows), and nothing changes.
+INSERT INTO stack_git (stack_id, repo_id, ref_kind, ref, folder, compose_files, pending_convert, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
+    repo_id = excluded.repo_id, ref_kind = excluded.ref_kind, ref = excluded.ref, folder = excluded.folder,
+    compose_files = excluded.compose_files, updated_at = excluded.updated_at
+WHERE stack_git.pending_convert = 1;
+
+-- name: FinalizeStackGitConvert :execrows
+-- The deploy of a convert draft ended good: the settings are the stack's own from now on (D-24).
+UPDATE stack_git SET pending_convert = 0, updated_at = ? WHERE stack_id = ? AND pending_convert = 1;
+
+-- name: DeletePendingStackGit :execrows
+-- The convert draft was discarded: the stack is as it was, with no git settings.
+DELETE FROM stack_git WHERE stack_id = ? AND pending_convert = 1;
+
+-- name: SetStackSource :execrows
+-- Where a stack's definition lives now (a converted stack becomes git, its source ref the repository's ID, as for a stack
+-- made from a folder).
+UPDATE stacks SET source_kind = ?, source_ref = ? WHERE id = ?;
 
 -- name: GetStackGitState :one
 SELECT stack_id, deployed_commit, deployed_tree, head_commit, head_tree, behind, status, reason_code, reason_detail,
@@ -66,7 +98,7 @@ SELECT g.stack_id, s.env_id, g.repo_id, g.ref_kind, g.ref, g.poll_interval_s,
 FROM stack_git g
 JOIN stacks s ON s.id = g.stack_id
 LEFT JOIN stack_git_state t ON t.stack_id = g.stack_id
-WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit'
+WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit' AND g.pending_convert = 0
 ORDER BY g.stack_id;
 
 -- name: SetStackGitNextCheck :exec

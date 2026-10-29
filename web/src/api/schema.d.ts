@@ -2252,6 +2252,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/connect-git": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Point an inline or adopted stack at a git repository, through review
+         * @description Reads the repository folder at the head of the ref into the stack's draft (D-24): the repository's files, the files of the draft that files says to keep (each becomes a sealed overlay file) and the stack's variables with vars set over them. The files not kept are dropped. Nothing is applied: the stack stays inline or adopted, with its revisions, until a deploy of the draft ends good, which makes it a git stack and keeps its history; discarding the draft leaves the stack exactly as it was. Review the draft and deploy it as any stack; the review says it replaces the inline files. A stack with a pending conversion can be pointed at another source, which replaces the first. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A stack that is already a git stack is 409 already_git. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 overlay_clash for a file to keep that the repository holds, file_path_invalid or file_name_taken for files, ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. 503 git_unavailable when this server has no git support. Audited as stack.pointed_at_git with the stack, the repository, the ref, the folder and the counts of files kept and dropped. Needs git.manage (Admin of the environment).
+         */
+        post: operations["connectStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/deploys": {
         parameters: {
             query?: never;
@@ -10335,6 +10355,49 @@ export interface components {
              */
             total: number;
         };
+        StackGitConnectBody: {
+            /** @description The full ID of the commit the draft was made from, at the head of the ref */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the change: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the stack will follow */
+            ref: string;
+        };
+        StackGitConnectFileBody: {
+            /** @description True to keep the file as an overlay file (sealed, secret); false to drop it */
+            keep: boolean;
+            /** @description The path of a file of the stack's draft */
+            path: string;
+        };
+        StackGitConnectInputBody: {
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since, the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+            /** @description What becomes of the files of the stack's draft: each one named is kept as an overlay file or dropped; one not named is dropped. 422 file_path_invalid for a path that is not a file of the draft, file_name_taken for one named twice, overlay_clash for a file to keep that the repository holds */
+            files?: components["schemas"]["StackGitConnectFileBody"][] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description New overlay files for paths the repository does not have, beside the files kept from the draft. Each is stored sealed as a secret file. 422 file_name_taken for a path named twice or also kept, file_path_invalid for a bad path, file_too_large over 1 MiB */
+            overlays?: components["schemas"]["GitStackOverlayBody"][] | null;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description Values to set over the stack's variables, by name. A variable the stack holds that is not named stays; a secret variable sent as <hidden> keeps its saved value */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
         StackGitPullBody: {
             /** @description The full ID of the commit the draft was refreshed from */
             commit: string;
@@ -11064,6 +11127,8 @@ export interface components {
             commit: string;
             /** @description The compose files of the draft's source, in merge order */
             composeFiles: string[] | null;
+            /** @description Left out unless true: true when the draft points an inline or adopted stack at a repository (D-24), so a good deploy of it replaces the stack's inline files and makes it a git stack. headCommit is then the draft's own commit */
+            converts?: boolean;
             /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository */
             deployedCommit: string;
             /** @description The folder of the repository the stack lives in; empty for the root */
@@ -17173,6 +17238,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    connectStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitConnectInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitConnectBody"];
                 };
             };
             /** @description Error */

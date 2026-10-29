@@ -27,6 +27,7 @@
     "titleSource": "Review the new source for {{name}}",
     "bodyGit": "Bayplan fetched {{ref}} just now and rendered {{folder}} at commit {{sha}}. This shows what would change on {{env}}.",
     "bodySource": "This deploys {{now}}, replacing {{old}}.",
+    "bodyConvert": "This deploys {{now}}, replacing the inline files.",
     "git": {
       "commit": "Commit",
       "onRef": "on {{ref}}",

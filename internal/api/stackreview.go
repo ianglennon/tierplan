@@ -157,6 +157,8 @@ type StackReviewGitBody struct {
 
 	ComposeFiles []string `json:"composeFiles" doc:"The compose files of the draft's source, in merge order"`
 
+	Converts bool `json:"converts,omitempty" doc:"Left out unless true: true when the draft points an inline or adopted stack at a repository (D-24), so a good deploy of it replaces the stack's inline files and makes it a git stack. headCommit is then the draft's own commit"`
+
 	Replaces *StackReviewGitSourceBody `json:"replaces,omitempty" doc:"Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit"`
 }
 
@@ -361,6 +363,13 @@ func reviewGitBody(ctx context.Context, d StacksDeps, repo stackops.Repo, draft 
 		}
 	} else if !errors.Is(err, stackops.ErrNoGit) {
 		return nil, err
+	}
+	// A draft that points a stack that is not from git at a repository is the first sync with it (D-24).
+	if _, pending, err := repo.PendingGit(ctx, draft.StackID); err != nil {
+		return nil, err
+	} else if pending {
+		out.Converts = true
+		out.HeadCommit = draft.Git.Commit
 	}
 	dep, deployed, err := repo.DeployedGit(ctx, draft.StackID)
 	if err != nil {

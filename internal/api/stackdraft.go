@@ -375,7 +375,9 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 	if err := stacks.CheckVars(wc.Vars); err != nil {
 		return nil, varRuleProblem(err)
 	}
-	if st.Source.Kind == stacks.SourceGit {
+	// A draft that points an inline or adopted stack at a repository (D-24) holds repository files too: it is edited by the
+	// rules of a git stack from the moment it is saved.
+	if st.Source.Kind == stacks.SourceGit || current.Git.Commit != "" {
 		wc.ComposeFiles = slices.Clone(in.Body.ComposeFiles)
 		if len(wc.ComposeFiles) == 0 {
 			wc.ComposeFiles = slices.Clone(current.Copy.ComposeFiles)

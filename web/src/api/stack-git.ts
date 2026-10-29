@@ -25,6 +25,26 @@ export interface StackGitSourceRequest {
   folder: string;
   composeFiles: string[];
 }
+// What pointing an inline or adopted stack at a repository did to its draft: the version to review and deploy, and the
+// commit it holds.
+export type StackGitConnected = components["schemas"]["StackGitConnectBody"];
+// One file of the stack as it is today: kept as an overlay file, or dropped.
+export interface StackGitConnectFile {
+  path: string;
+  keep: boolean;
+}
+// Where an inline or adopted stack is to follow a repository, what becomes of its files, and the values to set over its
+// variables, with the version of the draft the person read.
+export interface StackGitConnectRequest {
+  draftVersion: number;
+  repoId: string;
+  refKind: GitRefKind;
+  ref: string;
+  folder: string;
+  composeFiles: string[];
+  files: StackGitConnectFile[];
+  vars?: { name: string; value: string; secret: boolean }[];
+}
 // The commits that changed a git stack's folder between its deployed commit and a head, newest first.
 export type StackGitCommits = components["schemas"]["StackGitCommitsBody"];
 // Why a git stack's sync is in error, or why it is behind with a note: the union the server's enum generates.
@@ -307,6 +327,39 @@ export function useChangeStackGitSource(envId: string, stackId: string) {
       try {
         const { data, error, response } = await api.POST(
           "/api/env/{envId}/stacks/{stackId}/git/source",
+          { params: { path: { envId, stackId } }, body },
+        );
+        if (!data) {
+          const problem = readProblem(error, response);
+          throw new GitRequestError(problem.status, problem.type, problem.fields, "POST");
+        }
+        return data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof GitRequestError ? e : new GitRequestError(0, undefined, [], "POST");
+      }
+    },
+    retry: false,
+    gcTime: 0,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
+      invalidateStacks(queryClient, envId);
+    },
+  });
+}
+
+// useConnectStackGit writes the draft of an inline or adopted stack as its first sync with a repository (D-24): the
+// repository's files, the files chosen to be kept as overlay files and the stack's variables. Nothing is applied: the stack
+// becomes a git stack when a deploy of the draft ends good, and discarding the draft leaves it as it was. draftVersion is the
+// version the person read when the page opened, so a draft saved by someone else since is refused as draft_changed (savedBy
+// names who). It is never retried. The stack and its lists are read again, whatever the answer.
+export function useConnectStackGit(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackGitConnected, GitRequestError, StackGitConnectRequest>({
+    mutationFn: async (body) => {
+      try {
+        const { data, error, response } = await api.POST(
+          "/api/env/{envId}/stacks/{stackId}/connect-git",
           { params: { path: { envId, stackId } }, body },
         );
         if (!data) {

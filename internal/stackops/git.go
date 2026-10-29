@@ -535,6 +535,17 @@ func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at 
 // as for a save. A draft that has moved is a *DraftConflictError. Nothing changes when the draft already holds exactly
 // this: it is returned as it is.
 func (r Repo) RefreshDraftFromGit(ctx context.Context, stackID string, version int64, actor string, repoFiles []stacks.File, rev GitRevision) (Snapshot, error) {
+	return r.writeGitDraft(ctx, stackID, version, actor, rev, func(current stacks.WorkingCopy) stacks.WorkingCopy {
+		next := refreshedCopy(current, repoFiles, rev.Source.ComposeFiles)
+		next.Files = stacks.MarkSecretFilesFor(next.Files, current.Files, next.ComposeFiles)
+		return next
+	}, nil)
+}
+
+// writeGitDraft stores the draft of a stack as build makes it from the draft it replaces, with rev as the git revision it
+// records, when the draft is still at version (see RefreshDraftFromGit for the rules of the version and of a missing
+// draft). inTx, when set, runs in the same transaction after the version is known to hold, and its failure stores nothing.
+func (r Repo) writeGitDraft(ctx context.Context, stackID string, version int64, actor string, rev GitRevision, build func(current stacks.WorkingCopy) stacks.WorkingCopy, inTx func(ctx context.Context, q *sqlc.Queries) error) (Snapshot, error) {
 	if len(rev.Source.ComposeFiles) == 0 {
 		return Snapshot{}, ErrNoComposeFiles
 	}
@@ -560,11 +571,18 @@ func (r Repo) RefreshDraftFromGit(ctx context.Context, stackID string, version i
 	case draft.Version != version:
 		return Snapshot{}, &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
 	}
+	if inTx != nil {
+		if err := inTx(ctx, q); err != nil {
+			return Snapshot{}, err
+		}
+	}
 
-	next := refreshedCopy(draft.Copy, repoFiles, rev.Source.ComposeFiles)
-	next.Files = stacks.MarkSecretFilesFor(next.Files, draft.Copy.Files, next.ComposeFiles)
+	next := build(draft.Copy)
 	rev.Source.ComposeFiles = nonNil(slices.Clone(rev.Source.ComposeFiles))
 	if hasDraft && sameContent(draft.Copy, next) && sameGitRevision(draft.Git, rev) {
+		if err := tx.Commit(); err != nil {
+			return Snapshot{}, fmt.Errorf("commit: %w", err)
+		}
 		return draft, nil
 	}
 	now := r.now()
@@ -612,6 +630,95 @@ func (r Repo) RefreshDraftFromGit(ctx context.Context, stackID string, version i
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
 	}
 	return out, nil
+}
+
+// ErrAlreadyGit means the stack already has git settings of its own: it is a git stack, and only a git stack has them.
+var ErrAlreadyGit = errors.New("stackops: the stack is already from a git repository")
+
+// CreatePendingGitSource turns the draft of an inline or adopted stack into the first sync with a repository (D-24), when
+// the draft is still at version: the draft becomes wc, the files and variables the person chose to carry over together with
+// the repository's, and records rev as the commit, tree and source it was made from; the source is stored as the stack's
+// pending git settings. The stack is not a git stack yet and nothing about it changes on the environment: a good deploy of
+// this draft finishes the conversion (FinalizeConvert), and discarding the draft ends it (DropPendingConvert). Asking again
+// replaces the pending source. A stack that already has git settings is ErrAlreadyGit and nothing is stored; a draft that
+// has moved is a *DraftConflictError.
+func (r Repo) CreatePendingGitSource(ctx context.Context, stackID string, version int64, actor string, wc stacks.WorkingCopy, rev GitRevision) (Snapshot, error) {
+	raw, err := json.Marshal(nonNil(slices.Clone(rev.Source.ComposeFiles)))
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("encode the compose files: %w", err)
+	}
+	return r.writeGitDraft(ctx, stackID, version, actor, rev, func(stacks.WorkingCopy) stacks.WorkingCopy { return wc },
+		func(ctx context.Context, q *sqlc.Queries) error {
+			now := r.now().UnixNano()
+			n, err := q.InsertPendingStackGit(ctx, sqlc.InsertPendingStackGitParams{
+				StackID: stackID, RepoID: rev.Source.RepoID, RefKind: rev.Source.RefKind, Ref: rev.Source.Ref, Folder: rev.Source.Folder,
+				ComposeFiles: string(raw), CreatedAt: now, UpdatedAt: now,
+			})
+			if err != nil {
+				return fmt.Errorf("store the pending git source: %w", err)
+			}
+			if n == 0 {
+				return ErrAlreadyGit
+			}
+			return nil
+		})
+}
+
+// PendingGit reads the source a convert draft points at: the git settings of a stack that is not a git stack yet. It
+// reports false when the stack has no pending convert.
+func (r Repo) PendingGit(ctx context.Context, stackID string) (StackGit, bool, error) {
+	row, err := r.Store.RQ.GetPendingStackGit(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return StackGit{}, false, nil
+	}
+	if err != nil {
+		return StackGit{}, false, fmt.Errorf("read the pending git source: %w", err)
+	}
+	return stackGitOf(row), true, nil
+}
+
+// FinalizeConvert makes the pending git settings of a stack its own: the stack's source kind becomes git (its source ref
+// the repository's ID, as for a stack made from a folder) and its sync state starts at unknown, in one transaction. Its
+// revisions, drafts and variables are untouched, so its history is kept. It reports false, and changes nothing, when the
+// stack has no pending convert.
+func (r Repo) FinalizeConvert(ctx context.Context, stackID string) (bool, error) {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	row, err := q.GetPendingStackGit(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the pending git source: %w", err)
+	}
+	if _, err := q.FinalizeStackGitConvert(ctx, sqlc.FinalizeStackGitConvertParams{UpdatedAt: r.now().UnixNano(), StackID: stackID}); err != nil {
+		return false, fmt.Errorf("finish the conversion: %w", err)
+	}
+	if _, err := q.SetStackSource(ctx, sqlc.SetStackSourceParams{SourceKind: string(stacks.SourceGit), SourceRef: row.RepoID, ID: stackID}); err != nil {
+		return false, fmt.Errorf("set the stack's source: %w", err)
+	}
+	if err := q.InsertStackGitState(ctx, stackID); err != nil {
+		return false, fmt.Errorf("insert the git state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+	return true, nil
+}
+
+// DropPendingConvert forgets the pending git settings of a stack whose convert draft was discarded; the stack is as it was.
+// It reports false when there were none.
+func (r Repo) DropPendingConvert(ctx context.Context, stackID string) (bool, error) {
+	n, err := r.Store.Q.DeletePendingStackGit(ctx, stackID)
+	if err != nil {
+		return false, fmt.Errorf("drop the pending git source: %w", err)
+	}
+	return n > 0, nil
 }
 
 // refreshedCopy is the working copy of a draft with its repository files replaced by repoFiles and the compose files

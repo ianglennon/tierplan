@@ -278,6 +278,7 @@
       "stack": {
         "created": "Stack created",
         "created_from_git": "Stack created from git",
+        "pointed_at_git": "Stack pointed at a git repository",
         "draft_saved": "Stack draft saved",
         "draft_discarded": "Stack draft discarded",
         "deployed": "Stack deployed",

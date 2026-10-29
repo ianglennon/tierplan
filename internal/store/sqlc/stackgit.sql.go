@@ -51,12 +51,83 @@ func (q *Queries) CountStacksUsingRepo(ctx context.Context, repoID string) (int6
 	return count, err
 }
 
+const deletePendingStackGit = `-- name: DeletePendingStackGit :execrows
+DELETE FROM stack_git WHERE stack_id = ? AND pending_convert = 1
+`
+
+// The convert draft was discarded: the stack is as it was, with no git settings.
+func (q *Queries) DeletePendingStackGit(ctx context.Context, stackID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deletePendingStackGit, stackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finalizeStackGitConvert = `-- name: FinalizeStackGitConvert :execrows
+UPDATE stack_git SET pending_convert = 0, updated_at = ? WHERE stack_id = ? AND pending_convert = 1
+`
+
+type FinalizeStackGitConvertParams struct {
+	UpdatedAt int64
+	StackID   string
+}
+
+// The deploy of a convert draft ended good: the settings are the stack's own from now on (D-24).
+func (q *Queries) FinalizeStackGitConvert(ctx context.Context, arg FinalizeStackGitConvertParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeStackGitConvert, arg.UpdatedAt, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getPendingStackGit = `-- name: GetPendingStackGit :one
+SELECT stack_id, repo_id, ref_kind, ref, folder, compose_files, poll_enabled, poll_interval_s, auto_deploy,
+       auto_deploy_paused_reason, auto_deploy_paused_seq, webhook_flavour, webhook_placement, webhook_token_hash,
+       webhook_secret_sealed, webhook_secret_last4, webhook_created_by, webhook_last_at, webhook_last_result,
+       pending_convert, created_at, updated_at
+FROM stack_git WHERE stack_id = ? AND pending_convert = 1
+`
+
+// The source an inline or adopted stack is to follow once the deploy of its convert draft ends good (D-24). The stack is not
+// a git stack until then, so every other read of stack_git leaves this row out.
+func (q *Queries) GetPendingStackGit(ctx context.Context, stackID string) (StackGit, error) {
+	row := q.db.QueryRowContext(ctx, getPendingStackGit, stackID)
+	var i StackGit
+	err := row.Scan(
+		&i.StackID,
+		&i.RepoID,
+		&i.RefKind,
+		&i.Ref,
+		&i.Folder,
+		&i.ComposeFiles,
+		&i.PollEnabled,
+		&i.PollIntervalS,
+		&i.AutoDeploy,
+		&i.AutoDeployPausedReason,
+		&i.AutoDeployPausedSeq,
+		&i.WebhookFlavour,
+		&i.WebhookPlacement,
+		&i.WebhookTokenHash,
+		&i.WebhookSecretSealed,
+		&i.WebhookSecretLast4,
+		&i.WebhookCreatedBy,
+		&i.WebhookLastAt,
+		&i.WebhookLastResult,
+		&i.PendingConvert,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getStackGit = `-- name: GetStackGit :one
 SELECT stack_id, repo_id, ref_kind, ref, folder, compose_files, poll_enabled, poll_interval_s, auto_deploy,
        auto_deploy_paused_reason, auto_deploy_paused_seq, webhook_flavour, webhook_placement, webhook_token_hash,
        webhook_secret_sealed, webhook_secret_last4, webhook_created_by, webhook_last_at, webhook_last_result,
        pending_convert, created_at, updated_at
-FROM stack_git WHERE stack_id = ?
+FROM stack_git WHERE stack_id = ? AND pending_convert = 0
 `
 
 func (q *Queries) GetStackGit(ctx context.Context, stackID string) (StackGit, error) {
@@ -151,6 +222,45 @@ func (q *Queries) GetStackGitState(ctx context.Context, stackID string) (StackGi
 	return i, err
 }
 
+const insertPendingStackGit = `-- name: InsertPendingStackGit :execrows
+INSERT INTO stack_git (stack_id, repo_id, ref_kind, ref, folder, compose_files, pending_convert, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET
+    repo_id = excluded.repo_id, ref_kind = excluded.ref_kind, ref = excluded.ref, folder = excluded.folder,
+    compose_files = excluded.compose_files, updated_at = excluded.updated_at
+WHERE stack_git.pending_convert = 1
+`
+
+type InsertPendingStackGitParams struct {
+	StackID      string
+	RepoID       string
+	RefKind      string
+	Ref          string
+	Folder       string
+	ComposeFiles string
+	CreatedAt    int64
+	UpdatedAt    int64
+}
+
+// Records the source a convert draft points at. Asking again for the same stack replaces the pending source; a stack that
+// already has git settings of its own matches nothing (0 rows), and nothing changes.
+func (q *Queries) InsertPendingStackGit(ctx context.Context, arg InsertPendingStackGitParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPendingStackGit,
+		arg.StackID,
+		arg.RepoID,
+		arg.RefKind,
+		arg.Ref,
+		arg.Folder,
+		arg.ComposeFiles,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const insertStackGit = `-- name: InsertStackGit :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
    SPDX-FileCopyrightText: 2026 The Bayplan Authors */
@@ -202,7 +312,7 @@ SELECT g.stack_id, s.env_id, g.repo_id, g.ref_kind, g.ref, g.poll_interval_s,
 FROM stack_git g
 JOIN stacks s ON s.id = g.stack_id
 LEFT JOIN stack_git_state t ON t.stack_id = g.stack_id
-WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit'
+WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit' AND g.pending_convert = 0
 ORDER BY g.stack_id
 `
 
@@ -308,7 +418,7 @@ SELECT g.stack_id, g.repo_id, g.ref_kind, g.ref, g.folder, g.compose_files, g.po
        g.webhook_secret_sealed, g.webhook_secret_last4, g.webhook_created_by, g.webhook_last_at, g.webhook_last_result,
        g.pending_convert, g.created_at, g.updated_at
 FROM stack_git g JOIN stacks s ON s.id = g.stack_id
-WHERE s.env_id = ? ORDER BY s.name
+WHERE s.env_id = ? AND g.pending_convert = 0 ORDER BY s.name
 `
 
 func (q *Queries) ListStackGitsByEnv(ctx context.Context, envID string) ([]StackGit, error) {
@@ -584,6 +694,26 @@ type SetStackGitWebhookDeliveryParams struct {
 func (q *Queries) SetStackGitWebhookDelivery(ctx context.Context, arg SetStackGitWebhookDeliveryParams) error {
 	_, err := q.db.ExecContext(ctx, setStackGitWebhookDelivery, arg.WebhookLastAt, arg.WebhookLastResult, arg.StackID)
 	return err
+}
+
+const setStackSource = `-- name: SetStackSource :execrows
+UPDATE stacks SET source_kind = ?, source_ref = ? WHERE id = ?
+`
+
+type SetStackSourceParams struct {
+	SourceKind string
+	SourceRef  string
+	ID         string
+}
+
+// Where a stack's definition lives now (a converted stack becomes git, its source ref the repository's ID, as for a stack
+// made from a folder).
+func (q *Queries) SetStackSource(ctx context.Context, arg SetStackSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackSource, arg.SourceKind, arg.SourceRef, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const upsertStackGitState = `-- name: UpsertStackGitState :exec

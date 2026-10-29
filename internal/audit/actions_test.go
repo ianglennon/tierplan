@@ -379,9 +379,12 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // records the stack's name, the reason code, the fixed sentence for it and the short SHA of the head last seen
 // (plan 09-15, D-16). A change of a git stack's polling records the stack and the new and the previous values (plan
 // 09-18, D-14). A webhook that accepted a delivery records the stack's name and the git host's flavour; one that
-// rejected a request also the fixed reason, never the signature or any part of the address (plan 09-22, D-15).
+// rejected a request also the fixed reason, never the signature or any part of the address (plan 09-22, D-15). Pointing
+// an inline or adopted stack at a repository records the stack, the repository's name, the ref, the folder and how many
+// files were kept as overlay files and how many dropped, never a path or content (plan 09-30, D-24).
 var phase9DetailKeys = map[string][]string{
 	audit.ActionStackCreatedFromGit:  {"stack", "repository", "ref", "folder"},
+	audit.ActionStackPointedAtGit:    {"stack", "repository", "ref", "folder", "kept", "dropped"},
 	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
 	audit.ActionGitCredentialUpdated: {"name", "layer", "type", "username", "fingerprint", "changed"},
 	audit.ActionGitCredentialDeleted: {"name", "layer", "type", "username", "fingerprint"},
@@ -427,6 +430,7 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	}
 	for key, constant := range map[string]string{
 		"stack.created_from_git": audit.ActionStackCreatedFromGit,
+		"stack.pointed_at_git":   audit.ActionStackPointedAtGit,
 		"git.credential_created": audit.ActionGitCredentialCreated,
 		"git.credential_updated": audit.ActionGitCredentialUpdated,
 		"git.credential_deleted": audit.ActionGitCredentialDeleted,

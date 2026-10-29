@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
@@ -370,6 +371,42 @@ type StackGitSourceOutput struct {
 	Body         StackGitSourceBody
 }
 
+// StackGitConnectInput is the body of POST /api/env/{envId}/stacks/{stackId}/connect-git.
+type StackGitConnectInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		DraftVersion int64                     `json:"draftVersion" minimum:"0" doc:"The version of the draft you read. If the draft moved since, the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded"`
+		RepoID       string                    `json:"repoId" maxLength:"64" doc:"The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found"`
+		RefKind      string                    `json:"refKind" enum:"branch,tag,commit" doc:"What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters"`
+		Ref          string                    `json:"ref" maxLength:"2048" doc:"The branch, tag or commit. 422 ref_invalid for a name git would refuse"`
+		Folder       string                    `json:"folder,omitempty" maxLength:"4096" doc:"The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)"`
+		ComposeFiles []string                  `json:"composeFiles" minItems:"1" maxItems:"50" doc:"The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit"`
+		Files        []StackGitConnectFileBody `json:"files,omitempty" maxItems:"50" doc:"What becomes of the files of the stack's draft: each one named is kept as an overlay file or dropped; one not named is dropped. 422 file_path_invalid for a path that is not a file of the draft, file_name_taken for one named twice, overlay_clash for a file to keep that the repository holds"`
+		Vars         []DraftVarBody            `json:"vars,omitempty" maxItems:"500" doc:"Values to set over the stack's variables, by name. A variable the stack holds that is not named stays; a secret variable sent as <hidden> keeps its saved value"`
+		Overlays     []GitStackOverlayBody     `json:"overlays,omitempty" maxItems:"50" doc:"New overlay files for paths the repository does not have, beside the files kept from the draft. Each is stored sealed as a secret file. 422 file_name_taken for a path named twice or also kept, file_path_invalid for a bad path, file_too_large over 1 MiB"`
+	}
+}
+
+// StackGitConnectFileBody is the choice for one file of the stack as it is today.
+type StackGitConnectFileBody struct {
+	Path string `json:"path" maxLength:"1024" doc:"The path of a file of the stack's draft"`
+	Keep bool   `json:"keep" doc:"True to keep the file as an overlay file (sealed, secret); false to drop it"`
+}
+
+// StackGitConnectBody is what pointing a stack at a repository did to its draft.
+type StackGitConnectBody struct {
+	DraftVersion int64  `json:"draftVersion" doc:"The version of the draft after the change: review it and deploy it at this version"`
+	Commit       string `json:"commit" doc:"The full ID of the commit the draft was made from, at the head of the ref"`
+	Ref          string `json:"ref" doc:"The branch, tag or commit ID the stack will follow"`
+}
+
+// StackGitConnectOutput wraps StackGitConnectBody for huma.
+type StackGitConnectOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackGitConnectBody
+}
+
 // StackGitCommitsInput is the query of GET /api/env/{envId}/stacks/{stackId}/git/commits.
 type StackGitCommitsInput struct {
 	StackPathInput
@@ -513,6 +550,20 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitSourceInput) (*StackGitSourceOutput, error) {
 			return changeStackGitSource(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "connectStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/connect-git",
+		Summary: "Point an inline or adopted stack at a git repository, through review",
+		Description: "Reads the repository folder at the head of the ref into the stack's draft (D-24): the repository's files, the files of the draft that files says to keep (each becomes a sealed overlay file) and the stack's variables with vars set over them. " +
+			"The files not kept are dropped. Nothing is applied: the stack stays inline or adopted, with its revisions, until a deploy of the draft ends good, which makes it a git stack and keeps its history; discarding the draft leaves the stack exactly as it was. " +
+			"Review the draft and deploy it as any stack; the review says it replaces the inline files. A stack with a pending conversion can be pointed at another source, which replaces the first. " +
+			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A stack that is already a git stack is 409 already_git. The repository must be one of the environment's or the instance's (404 repository_not_found). " +
+			"422 overlay_clash for a file to keep that the repository holds, file_path_invalid or file_name_taken for files, ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. " +
+			"503 git_unavailable when this server has no git support. Audited as stack.pointed_at_git with the stack, the repository, the ref, the folder and the counts of files kept and dropped. Needs git.manage (Admin of the environment).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitConnectInput) (*StackGitConnectOutput, error) {
+			return connectStackGit(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStackGitCommits", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/git/commits",
@@ -1009,6 +1060,86 @@ func changeStackGitSource(ctx context.Context, d StacksDeps, g GitDeps, in *Stac
 	return &StackGitSourceOutput{CacheControl: "no-store", Body: StackGitSourceBody{
 		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref,
 	}}, nil
+}
+
+// problemAlreadyGit is the problem type of a convert asked about a stack that is a git stack already.
+const problemAlreadyGit = "already_git"
+
+// problemOverlayClash is the problem type of a file to keep that the repository holds.
+const problemOverlayClash = "overlay_clash"
+
+func connectStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitConnectInput) (*StackGitConnectOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if g.Sync == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	body := in.Body
+	vars, err := connectVars(body.Vars)
+	if err != nil {
+		return nil, err
+	}
+	// The layer rule: a repository of this environment or of the instance, else it is not found.
+	known, err := g.browseRepo(ctx, env.ID, body.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	kind := gitx.RefKind(body.RefKind)
+	files := make([]gitsync.FileChoice, len(body.Files))
+	for i, f := range body.Files {
+		files[i] = gitsync.FileChoice{Path: f.Path, Keep: f.Keep}
+	}
+	res, err := g.Sync.Convert(ctx, env.ID, st.ID, p.Name, gitsync.ConvertRequest{
+		SourceChange: gitsync.SourceChange{RepoID: known.ID, RefKind: kind, Ref: body.Ref, Folder: body.Folder, ComposeFiles: body.ComposeFiles},
+		Version:      body.DraftVersion, Files: files, Vars: vars, Overlays: overlayFiles(body.Overlays),
+	})
+	var conflict *stackops.DraftConflictError
+	var clash *gitsync.OverlayClashError
+	switch {
+	case errors.Is(err, stackops.ErrAlreadyGit):
+		return nil, httpx.Problem(http.StatusConflict, problemAlreadyGit, "This stack is already from a git repository.")
+	case errors.As(err, &conflict):
+		e := draftChanged(conflict)
+		if m, ok := e.(*huma.ErrorModel); ok {
+			m.Detail = "The stack changed while you were choosing. Reload it, then choose again."
+		}
+		return nil, e
+	case errors.As(err, &clash):
+		detail := clash.Path + " exists in the repository. Drop it or rename it first."
+		return nil, &huma.ErrorModel{
+			Type: problemOverlayClash, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+			Detail: detail, Errors: []*huma.ErrorDetail{{Location: "files", Message: clash.Path}},
+		}
+	case err != nil:
+		return nil, g.importProblem(known, kind, body.Ref, body.Folder, err)
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackPointedAtGit, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "repository": known.Name, "ref": res.Ref, "folder": strings.Trim(body.Folder, "/"),
+		"kept": itoa(int64(res.Kept)), "dropped": itoa(int64(res.Dropped)),
+	})
+	return &StackGitConnectOutput{CacheControl: "no-store", Body: StackGitConnectBody{
+		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref,
+	}}, nil
+}
+
+// connectVars turns the variables of a convert into the ones to set. A secret variable sent as <hidden> is the one the stack
+// already holds, so it is left out, and the rest are held to the rules of a save of a draft.
+func connectVars(in []DraftVarBody) ([]stacks.Var, error) {
+	set := make([]DraftVarBody, 0, len(in))
+	for _, v := range in {
+		if v.Secret && v.Value == stacks.Hidden {
+			continue
+		}
+		set = append(set, v)
+	}
+	return gitStackVars(set)
 }
 
 func listStackGitCommits(ctx context.Context, d StacksDeps, in *StackGitCommitsInput) (*StackGitCommitsOutput, error) {

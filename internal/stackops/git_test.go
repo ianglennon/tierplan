@@ -754,3 +754,145 @@ func TestSetGitEventIsStoredAndClearedBesideTheState(t *testing.T) {
 		t.Errorf("SetGitEvent of an unknown stack = %v, want sql.ErrNoRows", err)
 	}
 }
+
+// Pointing an inline stack at a repository (plan 09-30, GIT-02, D-24): the draft is rewritten and the source is held as
+// pending settings that no reader of git settings sees, until a deploy finishes the conversion or a discard ends it.
+
+func TestPendingGitSourceIsNotAGitStackUntilFinalized(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, draft, err := f.repo.CreateStack(ctx, f.envID, "legacy", stacks.TargetStandalone, "ada", stacks.WorkingCopy{
+		Files: []stacks.File{compose("services: {}\n"), {Path: "notes.txt", Content: []byte("n")}},
+		Vars:  []stacks.Var{{Name: "TAG", Value: "2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wc := stacks.WorkingCopy{
+		Files:        []stacks.File{repoFile("compose.yaml", "services: {web: {image: nginx}}\n"), {Path: "secrets/k", Content: []byte("sealed"), Secret: true, Origin: stacks.OriginOverlay}},
+		Vars:         draft.Copy.Vars,
+		ComposeFiles: []string{"compose.yaml"},
+	}
+	rev := gitRevision()
+	rev.Source.ComposeFiles = []string{"compose.yaml"}
+	saved, err := f.repo.CreatePendingGitSource(ctx, st.ID, draft.Version, "ada", wc, rev)
+	if err != nil {
+		t.Fatalf("CreatePendingGitSource: %v", err)
+	}
+	if saved.Version != draft.Version+1 || saved.Git.Commit != gitCommit {
+		t.Errorf("draft = version %d at %q, want version %d at %s", saved.Version, saved.Git.Commit, draft.Version+1, gitCommit)
+	}
+	read, err := f.repo.Draft(ctx, st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, file := range read.Copy.Files {
+		paths = append(paths, file.Path+":"+string(file.Origin))
+	}
+	if want := []string{"compose.yaml:repo", "secrets/k:overlay"}; !slices.Equal(paths, want) {
+		t.Errorf("files = %v, want %v: the inline files are replaced", paths, want)
+	}
+
+	// The stack is not a git stack yet: no reader of git settings sees the pending source, and it is not polled.
+	if _, err := f.repo.StackGit(ctx, st.ID); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("StackGit = %v, want ErrNoGit while the conversion is pending", err)
+	}
+	if _, err := f.repo.GitState(ctx, st.ID); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("GitState = %v, want ErrNoGit while the conversion is pending", err)
+	}
+	if all, err := f.repo.StackGitsOfEnv(ctx, f.envID); err != nil || len(all) != 0 {
+		t.Errorf("StackGitsOfEnv = %v, %v, want none", all, err)
+	}
+	if polled, err := f.repo.PolledStacks(ctx); err != nil || len(polled) != 0 {
+		t.Errorf("PolledStacks = %v, %v, want none", polled, err)
+	}
+	pending, ok, err := f.repo.PendingGit(ctx, st.ID)
+	if err != nil || !ok || !pending.PendingConvert || pending.RepoID != gitRepoID || pending.Ref != "main" || pending.Folder != "stacks/web" || !slices.Equal(pending.ComposeFiles, []string{"compose.yaml"}) {
+		t.Fatalf("PendingGit = %+v, %v, %v, want the source", pending, ok, err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline {
+		t.Errorf("stack = %+v, %v, want it inline until finalized", got, err)
+	}
+
+	// Asking again replaces the pending source.
+	other := rev
+	other.Source.Ref = "dev"
+	if _, err := f.repo.CreatePendingGitSource(ctx, st.ID, saved.Version, "ada", wc, other); err != nil {
+		t.Fatalf("second CreatePendingGitSource: %v", err)
+	}
+	if pending, _, _ := f.repo.PendingGit(ctx, st.ID); pending.Ref != "dev" {
+		t.Errorf("pending ref = %q, want dev", pending.Ref)
+	}
+
+	// Finalizing makes the stack a git stack, once.
+	if done, err := f.repo.FinalizeConvert(ctx, st.ID); err != nil || !done {
+		t.Fatalf("FinalizeConvert = %v, %v, want done", done, err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceGit || got.Source.Ref != gitRepoID {
+		t.Errorf("stack = %+v, %v, want git with the repository as its ref", got, err)
+	}
+	sg, err := f.repo.StackGit(ctx, st.ID)
+	if err != nil || sg.PendingConvert || sg.Ref != "dev" || !sg.PollEnabled {
+		t.Errorf("StackGit = %+v, %v, want the settings, polling and no pending flag", sg, err)
+	}
+	if state, err := f.repo.GitState(ctx, st.ID); err != nil || state.Status != stackops.GitStatusUnknown {
+		t.Errorf("GitState = %+v, %v, want unknown", state, err)
+	}
+	if _, ok, _ := f.repo.PendingGit(ctx, st.ID); ok {
+		t.Error("PendingGit after the conversion is finished, want none")
+	}
+	if done, err := f.repo.FinalizeConvert(ctx, st.ID); err != nil || done {
+		t.Errorf("a second FinalizeConvert = %v, %v, want nothing to do", done, err)
+	}
+	// A git stack cannot be pointed at a repository.
+	if _, err := f.repo.CreatePendingGitSource(ctx, st.ID, saved.Version+1, "ada", wc, rev); !errors.Is(err, stackops.ErrAlreadyGit) {
+		t.Errorf("CreatePendingGitSource on a git stack = %v, want ErrAlreadyGit", err)
+	}
+}
+
+func TestDiscardingAConvertDraftDropsThePendingSource(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, draft, err := f.repo.CreateStack(ctx, f.envID, "legacy", stacks.TargetStandalone, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("services: {}\n")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wc := stacks.WorkingCopy{Files: []stacks.File{repoFile("compose.yaml", "services: {}\n")}, ComposeFiles: []string{"compose.yaml"}}
+	rev := gitRevision()
+	rev.Source.ComposeFiles = []string{"compose.yaml"}
+	if _, err := f.repo.CreatePendingGitSource(ctx, st.ID, draft.Version, "ada", wc, rev); err != nil {
+		t.Fatal(err)
+	}
+	if discarded, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil || !discarded {
+		t.Fatalf("DiscardDraft = %v, %v", discarded, err)
+	}
+	if _, ok, err := f.repo.PendingGit(ctx, st.ID); err != nil || ok {
+		t.Errorf("PendingGit after a discard = %v, %v, want none", ok, err)
+	}
+	if dropped, err := f.repo.DropPendingConvert(ctx, st.ID); err != nil || dropped {
+		t.Errorf("DropPendingConvert with nothing pending = %v, %v, want false", dropped, err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline {
+		t.Errorf("stack = %+v, %v, want inline", got, err)
+	}
+	// No git settings are left behind, so a repository only the discarded conversion pointed at is free again.
+	var n int
+	if err := f.repo.Store.Read.QueryRow(`SELECT COUNT(*) FROM stack_git`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("stack_git rows = %d, %v, want none", n, err)
+	}
+
+	// A stale version stores neither a draft nor a pending source.
+	var conflict *stackops.DraftConflictError
+	if _, err := f.repo.CreatePendingGitSource(ctx, st.ID, 5, "ada", wc, rev); !errors.As(err, &conflict) {
+		t.Errorf("CreatePendingGitSource at a stale version = %v, want a draft conflict", err)
+	}
+	if _, ok, _ := f.repo.PendingGit(ctx, st.ID); ok {
+		t.Error("a refused conversion left a pending source")
+	}
+}

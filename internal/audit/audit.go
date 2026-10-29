@@ -181,6 +181,7 @@ const (
 	ActionConfigRotated              = "config.rotated"
 	ActionStackCreated               = "stack.created"
 	ActionStackCreatedFromGit        = "stack.created_from_git"
+	ActionStackPointedAtGit          = "stack.pointed_at_git"
 	ActionStackDraftSaved            = "stack.draft_saved"
 	ActionStackDraftDiscarded        = "stack.draft_discarded"
 	ActionStackDeployed              = "stack.deployed"
