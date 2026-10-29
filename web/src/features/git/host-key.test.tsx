@@ -338,6 +338,16 @@ describe("the host key confirm", () => {
     expect(line.closest("p")?.textContent).toContain("Trusted");
   });
 
+  it("says nothing of the stored key once the address is changed to another host (WR-E01)", async () => {
+    mountSheet(repo("stacks", { hostKey: savedKey }));
+    await screen.findByText("Edit stacks");
+    await screen.findByText(SAVED_FINGERPRINT.slice(0, 12));
+    type("Repository address", "git@other.example.com:acme/stacks.git");
+    expect(screen.queryByText(SAVED_FINGERPRINT.slice(0, 12))).toBeNull();
+    type("Repository address", repo("stacks", {}).url);
+    expect(screen.getByText(SAVED_FINGERPRINT.slice(0, 12))).toBeTruthy();
+  });
+
   it("shows nothing about a host key for an https address", async () => {
     addressResult = {
       ...trustedPass,
