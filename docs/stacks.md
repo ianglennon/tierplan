@@ -951,7 +951,9 @@ A stack newly created, or one restored from a backup, reads *unknown* until its 
 **Polling** is on by default, every 5 minutes, per stack (1 to 1,440 minutes; a fixed commit has nothing to check). Checks
 are spread out with a little random delay, a failing stack backs off up to an hour, stacks that share a repository share
 one listing of its refs, and at most four repositories are read at once, so a hundred stacks do not hit a git host at the
-same second. **Keep polling on even with a webhook**: it catches a push the webhook missed. **Check now** checks at once.
+same second. **Keep polling on even with a webhook**: it catches a push the webhook missed. **Check now** checks at once;
+anyone who can see the stack may press it, up to 12 times a minute, and only someone who can deploy makes it try a commit
+that auto-deploy held back once more.
 
 **A webhook** tells Bayplan about a push straight away. Each git stack can have one. In the stack's **Git** tab choose
 **Set up webhook**, pick the git host, and copy the address and the secret, which are **shown once**; a lost secret is
@@ -975,12 +977,14 @@ setting (see [Auto-deploy](#auto-deploy)). Several pushes in a burst cost one ch
 
 A request that names no webhook, one with a wrong signature and one for a paused webhook all get the same empty `404`,
 so the address cannot be probed. A delivery is limited to **60 a minute per client address and 10 a minute per webhook**
-(a burst of 10), and a body over **5 MiB** is refused; the body is only the input of the signature check. Behind a
+(a burst of 10; only a delivery whose signature verified spends it), and a body over **5 MiB** is refused; the body is only
+the input of the signature check, and it is read only for an address that names a webhook. Behind a
 reverse proxy the client address is the one the proxy reports, so set `BAYPLAN_TRUSTED_PROXIES` as described in
 [reverse-proxy.md](reverse-proxy.md); if the table of client addresses is ever full (65,536 addresses at once), new
 addresses are refused until it empties, and polling still catches the push. Accepted deliveries and rejected signatures
 are audited (`git.webhook_delivered`, `git.webhook_rejected`) without the address, the token or the signature, and the
-tab shows the last delivery.
+tab shows the last delivery. Rejected signatures are audited at most three at once and then one a minute per webhook, and
+they do not change the last delivery shown.
 
 A webhook acts on the authority of the **Admin who set it up**. If that person loses `git.manage` on the environment,
 requests to it do nothing and the tab says so until an Admin takes it over from the user's page, or removes it.
@@ -1034,7 +1038,9 @@ folder, and a roll back does not change the draft.
 ### Changing the source, converting and detaching
 
 - **Change source** (Git tab) edits the repository, ref, folder or compose files. It goes through review, so history is
-  kept. Needs the permission to deploy.
+  kept. Needs Admin of the environment, as pointing a stack at a repository does, because the new source is read into a
+  draft that everyone who can see the stack can open. It is audited as `git.source_changed` with the repository, ref,
+  folder, commit and the old values.
 - **Use a git repository…** points an **inline** or **adopted** stack at a repository. The first sync goes through review
   and is recorded as a revision. Existing variables are kept; the stack's own files are dropped unless you keep them as
   overlay files, and a path clash is a blocking error. Needs Admin.
@@ -1196,7 +1202,7 @@ changes, `settings.updated` (the old and the new limit and how many revisions we
 `git.credential_deleted`, `git.repo_created`, `git.repo_updated`, `git.repo_deleted`, `git.repo_tested`, `git.host_key_trusted`,
 `git.host_key_retrusted`, `git.sync_failed` (each new error of a stack's sync), `git.updates_changed`, `git.webhook_created`,
 `git.webhook_rotated`, `git.webhook_removed`, `git.webhook_delivered`, `git.webhook_rejected`, `git.autodeploy_enabled`,
-`git.autodeploy_disabled`, `git.autodeploy_paused`, `git.autodeployed` and `git.stack_detached`; none holds a token, a key,
+`git.autodeploy_disabled`, `git.autodeploy_paused`, `git.autodeployed`, `git.pulled`, `git.source_changed` and `git.stack_detached`; none holds a token, a key,
 a webhook secret or the webhook's address. See [access.md](access.md) for the audit log itself.
 
 ## Behaviour that is still open

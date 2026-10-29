@@ -164,6 +164,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.autodeployed",
   "git.autodeploy_paused",
   "git.stack_detached",
+  "git.pulled",
+  "git.source_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -365,7 +367,9 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     (key === "git.autodeploy_enabled" ||
       key === "git.autodeploy_disabled" ||
       key === "git.autodeploy_paused" ||
-      key === "git.stack_detached") &&
+      key === "git.stack_detached" ||
+      key === "git.pulled" ||
+      key === "git.source_changed") &&
     details?.stack
   ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -34,6 +35,9 @@ const (
 	hookIPPerMinute    = 60
 	hookTokenPerMinute = 10
 	hookLimiterIdle    = 10 * time.Minute
+	// hookRejectBurst is how many rejected signatures on one webhook are audited at once; after that one is audited a
+	// minute. The address is not a secret for some git hosts, so a rejection is not evidence that the owner did anything.
+	hookRejectBurst = 3
 )
 
 // maxHookUserAgent bounds the User-Agent kept in an audit row.
@@ -65,6 +69,9 @@ type gitHook struct {
 	GitHookDeps
 	ips    *auth.IPLimiter
 	tokens *auth.IPLimiter
+	// rejects samples the audit rows of rejected signatures per webhook. It never refuses a request: a rejection that is
+	// not audited answers exactly like one that is.
+	rejects *auth.IPLimiter
 }
 
 // RegisterGitHooks mounts the webhook receiver, POST /hooks/git/{token}, outside the policy: the request proves itself
@@ -78,6 +85,7 @@ func RegisterGitHooks(r *httpx.Router, d GitHookDeps) {
 		GitHookDeps: d,
 		ips:         auth.NewIPLimiter(time.Minute/hookIPPerMinute, hookIPPerMinute, hookLimiterIdle, d.Now),
 		tokens:      auth.NewIPLimiter(time.Minute/hookTokenPerMinute, hookTokenPerMinute, hookLimiterIdle, d.Now),
+		rejects:     auth.NewIPLimiter(time.Minute, hookRejectBurst, hookLimiterIdle, d.Now),
 	}
 	r.Exempt(http.MethodPost, gitHookPath, h.serve)
 }
@@ -110,17 +118,9 @@ func (h *gitHook) serve(w http.ResponseWriter, r *http.Request) {
 		answer(w, http.StatusRequestEntityTooLarge)
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
-	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			answer(w, http.StatusRequestEntityTooLarge)
-			return
-		}
-		answer(w, http.StatusBadRequest)
-		return
-	}
 
+	// The token is looked up before the body is read, so a request for an address that is no webhook never makes the
+	// server hold a body, and nothing below spends a webhook's budget before the sender has proved itself.
 	hash := gitsync.TokenHash(chi.URLParam(r, "token"))
 	hook, err := h.Repo.GitWebhookByToken(ctx, hash)
 	if errors.Is(err, stackops.ErrNoWebhook) {
@@ -132,14 +132,25 @@ func (h *gitHook) serve(w http.ResponseWriter, r *http.Request) {
 		answer(w, http.StatusInternalServerError)
 		return
 	}
-	if !h.tokens.Allow(hash) {
-		answer(w, http.StatusTooManyRequests)
+	// A body that cannot be read in full (too long without a length, or cut short) proves nothing, so it answers like
+	// every other refusal and leaves no trace.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxHookBody))
+	if err != nil {
+		answer(w, http.StatusNotFound)
 		return
 	}
 
 	if !gitsync.VerifyDelivery(gitsync.Flavour(hook.Flavour), gitsync.Placement(hook.Placement), hook.Secret, r.Header, body) {
-		h.record(ctx, r, hook, stackops.WebhookRejected, audit.ActionGitWebhookRejected, hookRejectSignature)
+		// Only the per-address limit bounds these; the audit rows are sampled and the webhook's own state is not touched,
+		// so a caller that holds only the address cannot hide a real delivery or use up the real host's budget.
+		if h.rejects.Allow(hash) {
+			h.audit(ctx, r, hook, audit.ActionGitWebhookRejected, hookRejectSignature)
+		}
 		answer(w, http.StatusNotFound)
+		return
+	}
+	if !h.tokens.Allow(hash) {
+		answer(w, http.StatusTooManyRequests)
 		return
 	}
 
@@ -153,19 +164,30 @@ func (h *gitHook) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.record(ctx, r, hook, stackops.WebhookAccepted, audit.ActionGitWebhookDelivered, "")
+	h.record(ctx, r, hook, stackops.WebhookAccepted, audit.ActionGitWebhookDelivered)
 	h.Sync.Trigger(hook.EnvID, hook.StackID, gitsync.TriggerWebhook)
 	answer(w, http.StatusAccepted)
 }
 
-// record stores the time and result of a delivery on the webhook and writes the audit row. Neither holds the address,
-// the token, the secret or the signature.
-func (h *gitHook) record(ctx context.Context, r *http.Request, hook stackops.GitWebhook, result, action, reason string) {
+// record stores the time and result of an accepted delivery on the webhook and writes the audit row. Neither holds the
+// address, the token, the secret or the signature.
+func (h *gitHook) record(ctx context.Context, r *http.Request, hook stackops.GitWebhook, result, action string) {
 	wctx, cancel := doneActionAuditContext(ctx)
 	defer cancel()
 	if err := h.Repo.RecordGitWebhookDelivery(wctx, hook.StackID, h.now(), result); err != nil {
 		h.Log.Error("could not record a webhook delivery", "stack", hook.StackID, "error", err)
 	}
+	h.auditIn(wctx, r, hook, action, "")
+}
+
+// audit writes the audit row of a delivery that is not recorded on the webhook.
+func (h *gitHook) audit(ctx context.Context, r *http.Request, hook stackops.GitWebhook, action, reason string) {
+	wctx, cancel := doneActionAuditContext(ctx)
+	defer cancel()
+	h.auditIn(wctx, r, hook, action, reason)
+}
+
+func (h *gitHook) auditIn(wctx context.Context, r *http.Request, hook stackops.GitWebhook, action, reason string) {
 	if h.Audit == nil {
 		return
 	}
@@ -177,12 +199,13 @@ func (h *gitHook) record(ctx context.Context, r *http.Request, hook stackops.Git
 	}
 	ua := r.UserAgent()
 	if len(ua) > maxHookUserAgent {
-		ua = ua[:maxHookUserAgent]
+		// Cut on a rune boundary: the User-Agent is the sender's, and a split character would store invalid UTF-8.
+		ua = strings.ToValidUTF8(ua[:maxHookUserAgent], "")
 	}
 	actor := rbac.System("system:webhook").AuditActor()
 	if err := h.Audit.Record(wctx, audit.Entry{
 		Actor: actor, Action: action, TargetType: stackTargetType, TargetID: hook.StackID, EnvID: hook.EnvID,
-		Result: entryResult, Reason: reason, IP: httpx.ClientIP(ctx), UserAgent: ua, Details: details,
+		Result: entryResult, Reason: reason, IP: httpx.ClientIP(wctx), UserAgent: ua, Details: details,
 	}); err != nil {
 		h.Log.Error("could not audit a webhook delivery", "stack", hook.StackID, "action", action, "error", err)
 	}

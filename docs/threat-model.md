@@ -301,13 +301,18 @@ separate, opt-in auto-deploy setting, judged on the owner's authority (below). T
   never verifies. (`TestVerifyGitHub`, `TestVerifyGitLab`, `TestVerifyGitea`, `TestVerifyGeneric`)
 - *No oracle.* An unknown token, a wrong signature and a paused webhook all answer the same empty `404` with nothing
   recorded for the unknown token. (`TestWebhookNoOracle`)
-- *Limits.* 60 requests a minute per client address and 10 a minute per webhook, a 5 MiB body cap, and a burst of pushes
-  collapses into one check and one trailing check. (`TestWebhookLimits`, `TestWebhookCoalesces`)
+- *Limits.* 60 requests a minute per client address, a 5 MiB body cap (the body is read only for a token that names a
+  webhook), and 10 a minute per webhook that only a request whose signature verified spends, so someone who holds only
+  the address cannot use up the budget of the real sender. A burst of pushes collapses into one check and one trailing
+  check. (`TestWebhookLimits`, `TestWebhookRejectionsSpendNothing`, `TestWebhookCoalesces`)
 - *Nothing in the body is believed.* (`TestWebhookIgnoresPayload`)
 - *It runs on its owner's authority.* The webhook is registered to the Admin who set it up; if they no longer hold
   `git.manage`, requests do nothing until it is handed to another Admin. (`TestWebhookOwnerRecheck`)
 - *Audit without secrets.* A delivery and a rejected signature on a known webhook are audited with the stack and the host
   flavour, never the address, token, secret or signature. (`TestWebhookAuditAndLogs`) Paths are redacted in the server log.
+  A rejected signature is audited at most 3 times at once and then once a minute per webhook, and it does not change the
+  last delivery shown on the Git tab, so a caller with only the address can neither flood the log nor hide a real
+  delivery. (`TestWebhookRejectionsSpendNothing`)
 
 **A repository address makes the server open a connection, so it is fenced like a registry address (T-09-01).** Only
 `https://`, `ssh://` and `git@host:path` addresses are accepted; `http://`, `git://`, `file://`, a bare path, an option

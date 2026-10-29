@@ -45,6 +45,13 @@ type sourceReviewAnswer struct {
 	} `json:"git"`
 }
 
+// srcAdmin is the Admin of the environment, who alone may point a stack at another repository (WR-D06).
+func (g *gitStackFix) srcAdmin(t *testing.T) *roleCaller {
+	t.Helper()
+	g.srcOnce.Do(func() { g.srcAdminC = g.f.caller(t, g.e, "source-admin", "admin") })
+	return g.srcAdminC
+}
+
 func (c *roleCaller) changeSource(stackID string, version int64, mut func(map[string]any)) *httptest.ResponseRecorder {
 	c.t.Helper()
 	b := map[string]any{
@@ -100,7 +107,7 @@ func TestChangeSourceThroughReview(t *testing.T) {
 	dev := g.devBranch(t, deployed.Commit)
 
 	version := draftVersion(t, operator, stackID)
-	rec := g.sourceOf(operator, stackID, version, func(b map[string]any) { b["ref"] = "dev" })
+	rec := g.sourceOf(g.srcAdmin(t), stackID, version, func(b map[string]any) { b["ref"] = "dev" })
 	if rec.Code != http.StatusOK {
 		t.Fatalf("change source: %d %s", rec.Code, rec.Body)
 	}
@@ -156,15 +163,20 @@ func TestChangeSourceThroughReview(t *testing.T) {
 	if rv := operator.sourceReview(stackID); rv.Git == nil || rv.Git.Replaces != nil {
 		t.Errorf("review git after the deploy = %+v, want no replaced source", rv.Git)
 	}
-	// The change was audited as a draft save by the person who made it.
+	// The change was audited under its own action, with where the stack points now and where it pointed before.
 	var saved bool
-	for _, a := range g.f.stackAudits(t) {
-		if a.Action == audit.ActionStackDraftSaved && a.Details["version"] == itoaT(version+1) {
+	for _, a := range g.f.auditRowsOf(t, audit.ActionGitSourceChanged) {
+		if a.Action == audit.ActionGitSourceChanged && a.Details["version"] == itoaT(version+1) {
 			saved = true
+			d := a.Details
+			if d["repository"] != "acme" || d["ref_kind"] != "branch" || d["ref"] != "dev" || d["folder"] != "stacks/web" || d["commit"] != dev ||
+				d["repository_from"] != "acme" || d["ref_from"] != "main" || d["folder_from"] != "stacks/web" {
+				t.Errorf("git.source_changed details = %v, want the new and the old repository, ref and folder and the commit %s", d, dev)
+			}
 		}
 	}
 	if !saved {
-		t.Errorf("no stack.draft_saved audit row for version %d", version+1)
+		t.Errorf("no git.source_changed audit row for version %d", version+1)
 	}
 }
 
@@ -198,7 +210,7 @@ func TestChangeSourceKinds(t *testing.T) {
 		{"compose files in the other order", func(b map[string]any) { b["composeFiles"] = []string{"override.yaml", "compose.yaml"} }, want{"branch", "main", "stacks/web", []string{"override.yaml", "compose.yaml"}, second, "files"}},
 	}
 	for _, s := range steps {
-		rec := g.sourceOf(operator, stackID, draftVersion(t, operator, stackID), s.mut)
+		rec := g.sourceOf(g.srcAdmin(t), stackID, draftVersion(t, operator, stackID), s.mut)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", s.name, rec.Code, rec.Body)
 		}
@@ -218,7 +230,7 @@ func TestChangeSourceKinds(t *testing.T) {
 	}
 
 	// Asking for the source the stack follows is no change of source.
-	if rec := g.sourceOf(operator, stackID, draftVersion(t, operator, stackID), nil); rec.Code != http.StatusOK {
+	if rec := g.sourceOf(g.srcAdmin(t), stackID, draftVersion(t, operator, stackID), nil); rec.Code != http.StatusOK {
 		t.Fatalf("back to the applied source: %d %s", rec.Code, rec.Body)
 	}
 	if rv := operator.sourceReview(stackID); rv.Git == nil || rv.Git.Replaces != nil {
@@ -237,7 +249,7 @@ func TestChangeSourceLayer(t *testing.T) {
 
 	version := draftVersion(t, operator, stackID)
 	for name, id := range map[string]string{"another environment's repository": foreign, "a repository that is not there": "nope"} {
-		rec := operator.changeSource(stackID, version, func(b map[string]any) { b["repoId"] = id })
+		rec := g.srcAdmin(t).changeSource(stackID, version, func(b map[string]any) { b["repoId"] = id })
 		if rec.Code != http.StatusNotFound || problemType(t, rec) != "repository_not_found" {
 			t.Errorf("%s: %d %s, want 404 repository_not_found", name, rec.Code, rec.Body)
 		}
@@ -247,7 +259,7 @@ func TestChangeSourceLayer(t *testing.T) {
 	}
 
 	// An instance repository is usable here, and the review names it.
-	rec := operator.changeSource(stackID, version, func(b map[string]any) { b["repoId"] = instance })
+	rec := g.srcAdmin(t).changeSource(stackID, version, func(b map[string]any) { b["repoId"] = instance })
 	if rec.Code != http.StatusOK {
 		t.Fatalf("instance repository: %d %s", rec.Code, rec.Body)
 	}
@@ -275,6 +287,10 @@ func TestChangeSourceRefusals(t *testing.T) {
 	if rec := g.sourceOf(viewer, stackID, version, nil); rec.Code != http.StatusForbidden {
 		t.Errorf("a Viewer: %d %s, want 403", rec.Code, rec.Body)
 	}
+	// Choosing the repository a stack reads is as sensitive as connecting one, so it takes the Admin's git.manage.
+	if rec := g.sourceOf(operator, stackID, version, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("an Operator: %d %s, want 403", rec.Code, rec.Body)
+	}
 	cases := []struct {
 		name   string
 		mut    func(map[string]any)
@@ -289,7 +305,7 @@ func TestChangeSourceRefusals(t *testing.T) {
 		{"a compose path outside the folder", func(b map[string]any) { b["composeFiles"] = []string{"../other/compose.yml"} }, http.StatusUnprocessableEntity, "compose_path_invalid"},
 	}
 	for _, c := range cases {
-		rec := g.sourceOf(operator, stackID, version, c.mut)
+		rec := g.sourceOf(g.srcAdmin(t), stackID, version, c.mut)
 		if rec.Code != c.status || problemType(t, rec) != c.typ {
 			t.Errorf("%s: %d %s, want %d %s", c.name, rec.Code, rec.Body, c.status, c.typ)
 		}
@@ -300,7 +316,7 @@ func TestChangeSourceRefusals(t *testing.T) {
 
 	// A stack that is not from a repository.
 	inline := newStack(t, g.f.caller(t, g.e, "envadmin-1", "admin"), "inline")
-	if rec := g.sourceOf(operator, inline.ID, 1, nil); rec.Code != http.StatusConflict || problemType(t, rec) != "stack_not_git" {
+	if rec := g.sourceOf(g.srcAdmin(t), inline.ID, 1, nil); rec.Code != http.StatusConflict || problemType(t, rec) != "stack_not_git" {
 		t.Errorf("an inline stack: %d %s, want 409 stack_not_git", rec.Code, rec.Body)
 	}
 }
@@ -316,11 +332,11 @@ func TestChangeSourceConflict(t *testing.T) {
 	version := draftVersion(t, operator, stackID)
 
 	// Somebody else saves the draft first.
-	other := g.f.caller(t, g.e, "operator-2", "operator")
+	other := g.f.caller(t, g.e, "admin-2", "admin")
 	if rec := g.sourceOf(other, stackID, version, func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
 		t.Fatalf("first change: %d %s", rec.Code, rec.Body)
 	}
-	rec := g.sourceOf(operator, stackID, version, func(b map[string]any) { b["refKind"], b["ref"] = "tag", "v-none" })
+	rec := g.sourceOf(g.srcAdmin(t), stackID, version, func(b map[string]any) { b["refKind"], b["ref"] = "tag", "v-none" })
 	if rec.Code != http.StatusConflict || problemType(t, rec) != "draft_changed" {
 		t.Fatalf("a change at a stale version: %d %s, want 409 draft_changed", rec.Code, rec.Body)
 	}
@@ -341,7 +357,7 @@ func TestChangeSourceDiscard(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.devBranch(t, deployed.Commit)
-	if rec := g.sourceOf(operator, stackID, draftVersion(t, operator, stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
+	if rec := g.sourceOf(g.srcAdmin(t), stackID, draftVersion(t, operator, stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
 		t.Fatalf("change source: %d %s", rec.Code, rec.Body)
 	}
 	if rv := operator.sourceReview(stackID); rv.Git == nil || rv.Git.Replaces == nil {
@@ -361,7 +377,7 @@ func TestChangeSourceDiscard(t *testing.T) {
 	}
 
 	// Pull & redeploy during a pending source pulls the applied source, and the pending source is gone.
-	if rec := g.sourceOf(operator, stackID, draftVersion(t, operator, stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
+	if rec := g.sourceOf(g.srcAdmin(t), stackID, draftVersion(t, operator, stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
 		t.Fatalf("change source again: %d %s", rec.Code, rec.Body)
 	}
 	head := g.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": gitCompose("1.28")}, "newer web on main")
@@ -388,7 +404,7 @@ func TestChangeSourceBlocksAutoDeploy(t *testing.T) {
 	a.repo.Branch(t, "dev", dev)
 	a.repo.Branch(t, "main", first)
 
-	if rec := a.sourceOf(operator, a.stackID, draftVersion(t, operator, a.stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
+	if rec := a.sourceOf(a.srcAdmin(t), a.stackID, draftVersion(t, operator, a.stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
 		t.Fatalf("change source: %d %s", rec.Code, rec.Body)
 	}
 	head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx on main")

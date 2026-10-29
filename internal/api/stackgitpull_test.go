@@ -95,6 +95,12 @@ func TestPullReviewDeployInSync(t *testing.T) {
 	if pulled.Commit != head || pulled.Ref != "main" || pulled.DeployedCommit != deployed.Commit || pulled.Touched != 1 || pulled.DraftVersion != version+1 {
 		t.Fatalf("pull = %+v, want the head %s, 1 commit that touched the folder, version %d", pulled, head, version+1)
 	}
+	// The pull is audited under its own action, with the repository, ref, folder and the commit it read.
+	if rows := g.f.auditRowsOf(t, audit.ActionGitPulled); len(rows) != 1 || rows[0].TargetID != stackID ||
+		rows[0].Details["repository"] != "acme" || rows[0].Details["ref"] != "main" || rows[0].Details["folder"] != "stacks/web" ||
+		rows[0].Details["commit"] != head || rows[0].Details["version"] != itoaT(version+1) {
+		t.Errorf("git.pulled rows = %+v, want one naming acme, main, stacks/web, the commit %s and draft version %d", rows, head, version+1)
+	}
 	// A pull deploys nothing: no revision, no engine write.
 	if revs, _, err := repo.ListRevisions(ctx, stackID); err != nil || len(revs) != len(revsBefore) {
 		t.Errorf("revisions = %d, %v, want the %d there were", len(revs), err, len(revsBefore))

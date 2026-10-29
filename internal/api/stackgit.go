@@ -506,6 +506,7 @@ const (
 
 // registerStackGit registers the routes that read a git stack's sync state and ask for a check.
 func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
+	limiter := &checkLimiter{perMinute: stackChecksPerMinute}
 	httpx.Register(r, huma.Operation{
 		OperationID: "getStackGit", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/git",
 		Summary: "Where a git stack stands against its repository",
@@ -522,12 +523,13 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		OperationID: "checkStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/check",
 		Summary: "Check a git stack against its repository now",
 		Description: "Starts a check and answers 202 at once: it fetches the tracked ref and compares the hash of the stack's folder at the head with the deployed revision's, then stores the head, the count of commits behind, the status and the time. " +
-			"It deploys nothing and makes no draft and no revision itself; a stack with auto-deploy on that it finds behind is then deployed (see the auto-deploy route), and Check now tries a commit that auto-deploy held back once more. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline, so asking again and again costs one fetch. " +
+			"It deploys nothing and makes no draft and no revision itself; a stack with auto-deploy on that it finds behind is then deployed (see the auto-deploy route), and Check now tries a commit that auto-deploy held back once more. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline. At most 12 checks a minute per user: 429 rate_limited. " +
+			"A check by someone who can't deploy (a Viewer) never gives a commit that auto-deploy held back another try; only a check by someone who can (an Operator) does. " +
 			"Read the answer from the stack's git route or its list entry, whose checking is true until the check ends. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusAccepted,
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackPathInput) (*StackGitCheckOutput, error) {
-			return checkStackGit(ctx, s, g, in)
+			return checkStackGit(ctx, s, g, limiter, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "pullStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/pull",
@@ -536,7 +538,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 			"Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. " +
 			"A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). " +
 			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; " +
-			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.pulled with the stack, the repository, the ref, the folder and the commit. Needs stacks.deploy (Operator).",
 		Tags: []string{"stacks", "git"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitPullInput) (*StackGitPullOutput, error) {
@@ -551,9 +553,9 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 			"Review the draft and deploy it as any stack; discarding the draft, or a pull, drops the pending source. A stack with auto-deploy on does not deploy while a pending source waits. " +
 			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. The repository must be one of the environment's or the instance's (404 repository_not_found). " +
 			"422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. " +
-			"A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+			"A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.source_changed with the stack, the new repository, ref, folder and commit and the ones replaced. Needs git.manage (Admin of the environment), as creating a stack from a repository or pointing one at it does: the new source's files are read into a draft that every Viewer can open.",
 		Tags: []string{"stacks", "git"},
-	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitSourceInput) (*StackGitSourceOutput, error) {
 			return changeStackGitSource(ctx, s, g, in)
 		})
@@ -976,9 +978,25 @@ func gitSummaryAnswer(ctx context.Context, d StacksDeps, g GitDeps, stackID, env
 	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
 }
 
-func checkStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackPathInput) (*StackGitCheckOutput, error) {
+// stackChecksPerMinute is how many checks of git stacks one user may start in a minute. A check fetches with the
+// repository's credential, and the route needs only stacks.read, so the limit is what keeps one account from driving the
+// git server (WR-D03).
+const stackChecksPerMinute = 12
+
+func checkStackGit(ctx context.Context, d StacksDeps, g GitDeps, lim *checkLimiter, in *StackPathInput) (*StackGitCheckOutput, error) {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
 	if g.Sync == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	now := time.Now
+	if g.Now != nil {
+		now = g.Now
+	}
+	if !lim.allow(string(p.Type)+":"+p.ID, now()) {
+		return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many checks. Wait a moment and try again.")
 	}
 	st, err := d.repo().Stack(ctx, in.EnvID, in.StackID)
 	if err != nil {
@@ -989,10 +1007,15 @@ func checkStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackPathIn
 	} else if err != nil {
 		return nil, stackInternal(d, "read the git settings", in.EnvID, err)
 	}
+	// Only someone who can deploy gives a commit that auto-deploy held back another try; a Viewer's check just looks.
+	trigger := gitsync.TriggerCheck
+	if g.Checker != nil && g.Checker.Check(ctx, p, rbac.Require(rbac.PermStacksDeploy), st.EnvID).Allowed {
+		trigger = gitsync.TriggerManual
+	}
 	// A request while a check runs joins it and starts nothing, so a reader cannot pile up fetches (T-09-44).
 	if !g.Sync.InFlight(st.ID) {
 		go func() {
-			out, err := g.Sync.Check(context.WithoutCancel(ctx), st.EnvID, st.ID, gitsync.TriggerManual)
+			out, err := g.Sync.Check(context.WithoutCancel(ctx), st.EnvID, st.ID, trigger)
 			if err != nil {
 				d.Log.Error("a sync check of a git stack failed", "stack", st.ID, "error", err)
 			}
@@ -1040,15 +1063,16 @@ func pullStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitPull
 		}
 		return nil, g.importProblem(known, gitx.RefKind(sg.RefKind), sg.Ref, sg.Folder, err)
 	}
-	if res.DraftVersion != in.Body.DraftVersion {
-		draft, err := repo.Draft(ctx, st.ID)
-		if err != nil {
-			return nil, stackInternal(d, "read the refreshed draft", env.ID, err)
+	// The pull read the repository whether or not the draft changed, so it is audited either way.
+	var repoName string
+	if g.Conns != nil {
+		if r, err := g.Conns.GetRepo(ctx, sg.RepoID); err == nil {
+			repoName = r.Name
 		}
-		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDraftSaved, st.ID, audit.ResultSuccess, "", map[string]string{
-			"stack": st.Name, "version": itoa(draft.Version), "files": itoa(int64(len(draft.Copy.Files))), "vars": itoa(int64(len(draft.Copy.Vars))),
-		})
 	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitPulled, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "repository": repoName, "ref": res.Ref, "folder": sg.Folder, "commit": res.Commit.SHA, "version": itoa(res.DraftVersion),
+	})
 	return &StackGitPullOutput{CacheControl: "no-store", Body: StackGitPullBody{
 		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref, DeployedCommit: res.DeployedCommit, Touched: res.Touched,
 	}}, nil
@@ -1067,7 +1091,8 @@ func changeStackGitSource(ctx context.Context, d StacksDeps, g GitDeps, in *Stac
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
-	if _, err := repo.StackGit(ctx, st.ID); errors.Is(err, stackops.ErrNoGit) {
+	before, err := repo.StackGit(ctx, st.ID)
+	if errors.Is(err, stackops.ErrNoGit) {
 		return nil, stackNotGit()
 	} else if err != nil {
 		return nil, stackInternal(d, "read the git settings", env.ID, err)
@@ -1093,15 +1118,18 @@ func changeStackGitSource(ctx context.Context, d StacksDeps, g GitDeps, in *Stac
 	if err != nil {
 		return nil, g.importProblem(known, kind, body.Ref, body.Folder, err)
 	}
-	if res.DraftVersion != body.DraftVersion {
-		draft, err := repo.Draft(ctx, st.ID)
-		if err != nil {
-			return nil, stackInternal(d, "read the changed draft", env.ID, err)
-		}
-		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDraftSaved, st.ID, audit.ResultSuccess, "", map[string]string{
-			"stack": st.Name, "version": itoa(draft.Version), "files": itoa(int64(len(draft.Copy.Files))), "vars": itoa(int64(len(draft.Copy.Vars))),
-		})
+	// Where the stack pointed before is named too, so the log shows a stack being re-pointed and from what.
+	details := map[string]string{
+		"stack": st.Name, "repository": known.Name, "ref_kind": string(kind), "ref": res.Ref, "folder": strings.Trim(body.Folder, "/"),
+		"commit": res.Commit.SHA, "version": itoa(res.DraftVersion),
+		"ref_kind_from": before.RefKind, "ref_from": before.Ref, "folder_from": before.Folder,
 	}
+	if g.Conns != nil {
+		if r, err := g.Conns.GetRepo(ctx, before.RepoID); err == nil {
+			details["repository_from"] = r.Name
+		}
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitSourceChanged, st.ID, audit.ResultSuccess, "", details)
 	return &StackGitSourceOutput{CacheControl: "no-store", Body: StackGitSourceBody{
 		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref,
 	}}, nil

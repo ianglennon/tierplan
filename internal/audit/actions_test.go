@@ -407,6 +407,9 @@ var phase9DetailKeys = map[string][]string{
 	audit.ActionGitAutoDeployed:       {"stack", "commit", "trigger", "owner"},
 	audit.ActionGitAutoDeployPaused:   {"stack", "reason", "revision"},
 	audit.ActionGitStackDetached:      {"stack", "revision", "commit"},
+	audit.ActionGitPulled:             {"stack", "repository", "ref", "folder", "commit", "version"},
+	audit.ActionGitSourceChanged: {"stack", "repository", "ref_kind", "ref", "folder", "commit", "version",
+		"repository_from", "ref_kind_from", "ref_from", "folder_from"},
 }
 
 func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -454,6 +457,8 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"git.autodeployed":        audit.ActionGitAutoDeployed,
 		"git.autodeploy_paused":   audit.ActionGitAutoDeployPaused,
 		"git.stack_detached":      audit.ActionGitStackDetached,
+		"git.pulled":              audit.ActionGitPulled,
+		"git.source_changed":      audit.ActionGitSourceChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

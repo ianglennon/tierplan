@@ -45,7 +45,7 @@ type removeStore struct {
 	stopped map[string]bool
 }
 
-func (s *removeStore) DeleteStack(_ context.Context, id string) error {
+func (s *removeStore) DeleteStackWithAutomations(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.deleted = append(s.deleted, id)

@@ -238,7 +238,11 @@
         "autodeploy_paused": "Paused auto-deploy after a roll back",
         "autodeploy_paused_named": "Paused auto-deploy of {{name}} after a roll back",
         "stack_detached": "Detached a stack from git",
-        "stack_detached_named": "Detached stack {{name}} from git"
+        "stack_detached_named": "Detached stack {{name}} from git",
+        "pulled": "Pulled a git stack's newest commit into its draft",
+        "pulled_named": "Pulled the newest commit of {{name}} into its draft",
+        "source_changed": "Changed what a git stack follows",
+        "source_changed_named": "Changed what {{name}} follows in git"
       },
       "logs": {
         "viewed": "Container logs viewed",

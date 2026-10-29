@@ -33,7 +33,10 @@ const (
 
 // What started a check.
 const (
-	TriggerManual  = "manual"
+	TriggerManual = "manual"
+	// TriggerCheck is a person's plain "check now". Unlike TriggerManual it does not give a commit that auto-deploy held
+	// back another try: that is for someone who may deploy (the Operator), not for the lowest role.
+	TriggerCheck   = "check"
 	TriggerPoll    = "poll"
 	TriggerWebhook = "webhook"
 )
@@ -76,7 +79,7 @@ func (s *Service) Check(ctx context.Context, envID, stackID, trigger string) (Ou
 
 // CheckOptions are the choices of CheckWith.
 type CheckOptions struct {
-	// Trigger is what started the check (TriggerManual, TriggerPoll, TriggerWebhook).
+	// Trigger is what started the check (TriggerManual, TriggerCheck, TriggerPoll, TriggerWebhook).
 	Trigger string
 	// RemoteHead is the commit the repository advertises for the ref the stack follows, when the caller already asked
 	// for it (the poller does, once for all the stacks of one repository). A stack that was last seen at that very
