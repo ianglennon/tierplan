@@ -414,6 +414,65 @@ describe("the operation lock", () => {
   });
 });
 
+describe("the Git strip", () => {
+  const git = {
+    repoId: "r1",
+    repoName: "stacks repo",
+    repoHost: "github.com",
+    repoPath: "acme/stacks",
+    refKind: "branch",
+    ref: "main",
+    folder: "",
+    deployedSha: "0123456789abcdef0123456789abcdef01234567",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    behind: 0,
+    behindCapped: false,
+    status: "in_sync",
+    checkedAt: "2026-10-28T10:00:00Z",
+    checking: false,
+    autoDeploy: false,
+    autoDeployPaused: false,
+  };
+
+  beforeEach(() => {
+    detail = { ...detail, source: "git", state: "running", git };
+  });
+
+  it("is under the header and above the tabs of a git stack, and its Git badge names the repository and the ref", async () => {
+    mount();
+    const strip = await screen.findByRole("region", { name: "Git sync" });
+    const heading = screen.getByRole("heading", { name: "tracer", level: 2 });
+    const tabs = screen.getByRole("tablist");
+    expect(heading.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(strip.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const badge = screen
+      .getAllByText("Git")
+      .find((el) => el.getAttribute("data-variant") === "outline");
+    expect(badge).toBeTruthy();
+    badge?.focus();
+    fireEvent.pointerMove(badge as HTMLElement);
+    fireEvent.mouseEnter(badge as HTMLElement);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("stacks repo · main");
+  });
+
+  it("is not on the Review and the console, where the flow caption is", async () => {
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+    cleanup();
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+  });
+
+  it("is not on the page of a stack made in Bayplan", async () => {
+    detail = { ...detail, source: "inline", git: undefined };
+    mount();
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+  });
+});
+
 describe("the unmanaged variant", () => {
   function mountUnmanaged() {
     render(

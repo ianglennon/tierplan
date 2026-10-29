@@ -1,0 +1,70 @@
+{
+  "stackGit": {
+    "sourceTip": "{{repo}} · {{ref}}",
+    "kind": {
+      "branch": "branch",
+      "tag": "tag",
+      "commit": "commit"
+    },
+    "sha": {
+      "open": "Open commit {{sha}} on {{host}} (opens in a new tab)"
+    },
+    "strip": {
+      "label": "Git sync",
+      "source": "Source",
+      "deployed": "Deployed",
+      "status": "Status",
+      "checked": "Checked",
+      "notDeployed": "Not deployed yet",
+      "never": "Never",
+      "repoUnknown": "Repository",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "settings": "Git settings"
+    },
+    "check": {
+      "failed": "Couldn't start the check. Try again."
+    },
+    "status": {
+      "inSync": "In sync",
+      "inSyncTip": "{{ref}} is at {{sha}}, but nothing in {{folder}} changed.",
+      "rootFolder": "the repository root",
+      "behind_one": "Behind by {{count}} commit",
+      "behind_other": "Behind by {{count}} commits",
+      "behindCapped_other": "Behind by {{count}}+ commits",
+      "behindTip_one": "{{count}} commit changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "behindTip_other": "{{count}} commits changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "behindTipCapped_other": "At least {{count}} commits changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "error": "Error",
+      "checking": "Checking…",
+      "fixed": "Fixed commit",
+      "unknown": "Not compared yet",
+      "sourceChanged": "Source changed",
+      "sourceChangedNote": "The repository, ref or folder is not the one that is deployed."
+    },
+    "reason": {
+      "fetchFailed": "Bayplan couldn't fetch the repository.",
+      "fetchFailedWhy": "Bayplan couldn't fetch the repository: {{reason}}.",
+      "hostKeyChanged": "The host key for {{host}} has changed.",
+      "hostKeyChangedNoHost": "The host key of the repository's server has changed.",
+      "hostKeyUntrusted": "Host key not trusted yet. Confirm the key for {{host}}.",
+      "hostKeyUntrustedNoHost": "Host key not trusted yet. Confirm the key of the repository's server.",
+      "refGone": "{{ref}} no longer exists.",
+      "refGoneNoRef": "The branch or tag no longer exists.",
+      "folderGone": "{{folder}} no longer exists at {{ref}}.",
+      "folderGoneNoFolder": "The stack's folder no longer exists in the repository.",
+      "checksFailed": "Commit {{sha}} didn't pass the checks: {{problem}}.",
+      "checksFailedNoProblem": "Commit {{sha}} didn't pass the checks.",
+      "checksFailedNoSha": "The new commit didn't pass the checks: {{problem}}.",
+      "checksFailedNoShaNoProblem": "The new commit didn't pass the checks.",
+      "autoDeployFailed": "The automatic deploy of {{sha}} failed: {{reason}}.",
+      "autoDeployFailedNoReason": "The automatic deploy of {{sha}} failed.",
+      "autoDeployFailedNoSha": "The automatic deploy failed: {{reason}}.",
+      "autoDeployFailedNoShaNoReason": "The automatic deploy failed.",
+      "autoDeployBlocked": "Commit {{sha}} is waiting: {{problem}}. Nothing was deployed.",
+      "autoDeployBlockedNoProblem": "Commit {{sha}} is waiting. Nothing was deployed.",
+      "autoDeployBlockedNoSha": "The new commit is waiting: {{problem}}. Nothing was deployed.",
+      "autoDeployBlockedNoShaNoProblem": "The new commit is waiting. Nothing was deployed."
+    }
+  }
+}

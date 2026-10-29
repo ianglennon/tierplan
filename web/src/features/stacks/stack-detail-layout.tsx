@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { GitSourceBadge, GitStrip } from "@/features/stack-git/git-strip";
 import {
   NotAdoptableNote,
   OrphanIdNote,
@@ -346,7 +347,11 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
                   failedService={data.lastOperation?.failedService}
                 />
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
-                <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+                {data.git ? (
+                  <GitSourceBadge stack={data} />
+                ) : (
+                  <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+                )}
                 {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
               </div>
               <p className="text-sm text-muted-foreground">
@@ -372,6 +377,9 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {/* The Git strip of a stack from a repository: under the header and above the alerts, on every tab. The Review
+          and the console routes show the flow caption instead and do not repeat it. */}
+      {data && !flow ? <GitStrip stack={data} /> : null}
       {/* The alerts, in the order of UI-SPEC "Stack page": an operation under way, the last deploy that
           stopped, another operation holding the environment, a stack that is stopped, a draft that waits.
           The console is the operation's own page, so it does not warn about itself, and a stack that
