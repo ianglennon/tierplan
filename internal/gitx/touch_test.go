@@ -199,3 +199,36 @@ func TestCommitsTouchingNotAncestorAndCap(t *testing.T) {
 		t.Errorf("after a force-push = %+v, %v, want not an ancestor with nothing counted", gone, err)
 	}
 }
+
+// A feature branch that forked before the deployed commit and was merged after it: the commits behind the deployed
+// commit are not between it and the head, and are not counted (WR-A04).
+func TestCommitsTouchingLeavesOutTheHistoryBehindTheBaseAcrossAMerge(t *testing.T) {
+	t.Parallel()
+	repo := gittest.NewRepo(t)
+	root := repo.Commit(t, map[string]string{"a/compose.yaml": "services: {}\n"}, "root")
+	repo.Commit(t, map[string]string{"a/old.env": "OLD=1\n"}, "older, on main")
+	feature := repo.Fork(t, root, "feature", map[string]string{"a/feature.env": "F=1\n"}, "feature")
+	base := repo.Commit(t, map[string]string{"a/compose.yaml": "services: {a: {image: x}}\n"}, "deployed")
+	head := repo.Merge(t, "feature", "merge feature")
+
+	dir := t.TempDir()
+	f := &browseFixture{
+		repo: repo, srv: gittest.NewHTTPServer(t, repo, gittest.HTTPOptions{TLS: true}), sha: head, root: dir,
+		g: gitx.NewGoGit(gitx.Options{Root: dir}), m: gitx.MirrorID(uuid.NewString()),
+	}
+	if _, err := f.g.FetchRef(context.Background(), f.m, f.remote(), gitx.RefBranch, "main"); err != nil {
+		t.Fatalf("FetchRef: %v", err)
+	}
+
+	got, err := f.g.CommitsTouching(context.Background(), f.m, head, base, "a", 0)
+	if err != nil || got.Capped || got.NotAncestor {
+		t.Fatalf("CommitsTouching = %+v, %v", got, err)
+	}
+	want := []string{feature, head}
+	gotSHAs := shas(got.Commits)
+	slices.Sort(gotSHAs)
+	slices.Sort(want)
+	if got.Count != 2 || !slices.Equal(gotSHAs, want) {
+		t.Errorf("commits = %v (count %d), want only the feature commit and the merge: %v", gotSHAs, got.Count, want)
+	}
+}

@@ -4,9 +4,9 @@
 package gitx
 
 import (
+	"container/heap"
 	"context"
 	"errors"
-	"io"
 	"slices"
 	"strings"
 	"time"
@@ -84,11 +84,11 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 	if err != nil {
 		return Touch{}, &Error{Code: CodeCommitMissing}
 	}
-	baseHash := plumbing.NewHash(base)
-	if _, err := repo.CommitObject(baseHash); err != nil {
+	baseCommit, err := repo.CommitObject(plumbing.NewHash(base))
+	if err != nil {
 		return Touch{NotAncestor: true}, nil
 	}
-	if baseHash == headCommit.Hash {
+	if baseCommit.Hash == headCommit.Hash {
 		return Touch{}, nil
 	}
 	dir = strings.Trim(dir, "/")
@@ -96,28 +96,12 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 
 	var out Touch
 	var touched []TouchCommit
-	reached := false
-	visited := 0
-	it := object.NewCommitPreorderIter(headCommit, nil, []plumbing.Hash{baseHash})
-	defer it.Close()
-	for {
-		if err := ctx.Err(); err != nil {
-			return Touch{}, Classify(err, "")
-		}
-		c, err := it.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return Touch{}, &Error{Code: CodeCommitMissing}
-		}
-		if visited++; visited > limit {
-			out.Capped = true
-			break
-		}
-		if slices.Contains(c.ParentHashes, baseHash) {
-			reached = true
-		}
+	walk, err := walkRange(ctx, headCommit, baseCommit, limit)
+	if err != nil {
+		return Touch{}, err
+	}
+	out.Capped = walk.capped
+	for _, c := range walk.commits {
 		changed, err := changesFolder(c, folderOf)
 		if err != nil {
 			return Touch{}, &Error{Code: CodeCommitMissing}
@@ -128,7 +112,7 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 			})
 		}
 	}
-	if !reached && !out.Capped {
+	if !walk.reached && !out.Capped {
 		return Touch{NotAncestor: true}, nil
 	}
 	slices.SortFunc(touched, func(a, b TouchCommit) int {
@@ -141,6 +125,134 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 	out.Commits = touched
 	if len(out.Commits) > MaxTouchCommits {
 		out.Commits = out.Commits[:MaxTouchCommits]
+	}
+	return out, nil
+}
+
+// walkSlop is how many commits are still looked at once every commit left to walk is known to be reachable from the
+// base: the times of commits made on different machines disagree a little, and the walk goes by time.
+const walkSlop = 5
+
+// rangeWalk is what walkRange found.
+type rangeWalk struct {
+	// commits are the commits reachable from the head and not from the base, in no particular order.
+	commits []*object.Commit
+	// reached says the base is an ancestor of the head.
+	reached bool
+	// capped says the walk stopped at its limit.
+	capped bool
+}
+
+// commitQueue is the commits still to look at, the newest first (ties by hash, so that a walk is the same every time).
+type commitQueue []*object.Commit
+
+func (q commitQueue) Len() int { return len(q) }
+func (q commitQueue) Less(i, j int) bool {
+	if c := q[i].Committer.When.Compare(q[j].Committer.When); c != 0 {
+		return c > 0
+	}
+	return q[i].Hash.String() < q[j].Hash.String()
+}
+func (q commitQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
+func (q *commitQueue) Push(x any)   { *q = append(*q, x.(*object.Commit)) }
+func (q *commitQueue) Pop() any {
+	old := *q
+	c := old[len(old)-1]
+	*q = old[:len(old)-1]
+	return c
+}
+
+// walkRange finds the commits reachable from head and not from base (git rev-list base..head). The two histories are
+// walked together, newest first, and the walk ends once every commit left to look at is reachable from the base, so
+// the base's whole history is not read. Handing the base alone to a history walk as the commit to leave out would
+// leave the commits behind it in, and a merge of a branch that forked before the base brings those back (WR-A04). At
+// most limit commits not known to be reachable from the base are walked (capped when there are more), and the work on
+// the base's side is bounded too: the commits between a deployed commit and a head are few, a history is not.
+func walkRange(ctx context.Context, head, base *object.Commit, limit int) (rangeWalk, error) {
+	var out rangeWalk
+	behindBase := map[plumbing.Hash]bool{base.Hash: true}
+	looked := map[plumbing.Hash]*object.Commit{}
+	queued := map[plumbing.Hash]bool{head.Hash: true, base.Hash: true}
+	q := &commitQueue{head, base}
+	heap.Init(q)
+
+	// markBehind says that h, and the commits below it that were looked at already, are reachable from the base.
+	markBehind := func(h plumbing.Hash) {
+		stack := []plumbing.Hash{h}
+		for len(stack) > 0 {
+			x := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if behindBase[x] {
+				continue
+			}
+			behindBase[x] = true
+			if c, ok := looked[x]; ok {
+				stack = append(stack, c.ParentHashes...)
+			}
+		}
+	}
+	allBehind := func() bool {
+		for _, c := range *q {
+			if !behindBase[c.Hash] {
+				return false
+			}
+		}
+		return true
+	}
+
+	var walked []*object.Commit
+	slop := walkSlop
+	steps := 0
+	for q.Len() > 0 {
+		if err := ctx.Err(); err != nil {
+			return rangeWalk{}, Classify(err, "")
+		}
+		if allBehind() {
+			if slop--; slop < 0 {
+				break
+			}
+		} else {
+			slop = walkSlop
+		}
+		if steps++; steps > 4*limit+walkSlop {
+			out.capped = true
+			break
+		}
+		c, ok := heap.Pop(q).(*object.Commit)
+		if !ok {
+			break
+		}
+		looked[c.Hash] = c
+		if behindBase[c.Hash] {
+			for _, p := range c.ParentHashes {
+				markBehind(p)
+			}
+		} else {
+			if len(walked) >= limit {
+				out.capped = true
+				break
+			}
+			walked = append(walked, c)
+			if slices.Contains(c.ParentHashes, base.Hash) {
+				out.reached = true
+			}
+		}
+		for i, p := range c.ParentHashes {
+			if queued[p] {
+				continue
+			}
+			queued[p] = true
+			pc, err := c.Parent(i)
+			if err != nil {
+				return rangeWalk{}, &Error{Code: CodeCommitMissing}
+			}
+			heap.Push(q, pc)
+		}
+	}
+	for _, c := range walked {
+		if !behindBase[c.Hash] {
+			out.commits = append(out.commits, c)
+		}
 	}
 	return out, nil
 }
