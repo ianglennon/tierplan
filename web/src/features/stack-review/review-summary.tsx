@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
-import type { StackReviewSummary } from "@/api/stacks";
+import { GitCommitHorizontal } from "lucide-react";
+
+import type { StackReview, StackReviewSummary } from "@/api/stacks";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -12,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { shortSha } from "@/features/stack-git/sha-link";
 import { useT } from "@/i18n/use-t";
 
 // The rows of the table, in the order the UI-SPEC lists them.
@@ -24,17 +27,20 @@ const HASHED = new Set<(typeof ROWS)[number]>(["secrets", "configs"]);
 interface ReviewSummaryProps {
   // The server's counts; absent while the review is on its way, when the rows are skeletons.
   summary?: StackReviewSummary;
+  // For the review of a git stack: the commit the draft holds and how far it is from the deployed one.
+  git?: StackReview["git"];
 }
 
 // ReviewSummary is the Summary card of the review: counts only, a native table with a caption,
 // one row for each kind of thing a stack holds and a last row for the images. Zero counts read
 // 0, never blank (UI-SPEC "Shared state and overflow rules").
-export function ReviewSummary({ summary }: ReviewSummaryProps) {
+export function ReviewSummary({ summary, git }: ReviewSummaryProps) {
   const t = useT();
   return (
     <SettingsCard title={t("stackReview.summary.title")}>
       {summary ? (
         <>
+          {git ? <CommitLine git={git} /> : null}
           <Table>
             <caption className="sr-only">{t("stackReview.summary.caption")}</caption>
             <TableHeader>
@@ -104,5 +110,37 @@ export function ReviewSummary({ summary }: ReviewSummaryProps) {
         </div>
       )}
     </SettingsCard>
+  );
+}
+
+// CommitLine is the Summary's line for a git stack (UI-SPEC "Review additions"): the commit the deploy would run and the
+// ref it was read from, and, when a commit is deployed from the same source, how many commits changed the folder since.
+// The count is left out when nothing is deployed from a repository yet, and when the source changed, since the two
+// commits are then of different folders.
+function CommitLine({ git }: { git: NonNullable<StackReview["git"]> }) {
+  const t = useT();
+  const ref = git.refKind === "commit" ? shortSha(git.ref) : git.ref;
+  const compared = git.deployedCommit !== "" && !git.sourceChanged;
+  return (
+    <p
+      data-testid="review-commit-line"
+      className="flex flex-wrap items-baseline gap-x-1.5 text-sm text-muted-foreground"
+    >
+      <GitCommitHorizontal aria-hidden="true" className="size-4 shrink-0 self-center" />
+      <span>{t("stackReview.git.commit")}</span>{" "}
+      <code className="font-mono text-foreground">{shortSha(git.commit)}</code>{" "}
+      <span className="break-all">{t("stackReview.git.onRef", { ref })}</span>
+      {compared ? (
+        <>
+          {" "}
+          <span>
+            {t("stackReview.git.touched", {
+              count: git.touched,
+              sha: shortSha(git.deployedCommit),
+            })}
+          </span>
+        </>
+      ) : null}
+    </p>
   );
 }

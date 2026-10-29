@@ -171,7 +171,7 @@ describe("the review of a git stack", () => {
     ) as HTMLElement;
     const line = await screen.findByTestId("review-commit-line");
     expect(line.textContent).toBe(
-      "Commit fedcba9 on main3 commits changed this folder since 0123456.",
+      "Commit fedcba9 on main 3 commits changed this folder since 0123456.",
     );
     expect(within(line).getByText("fedcba9").tagName).toBe("CODE");
     expect(card).toBeTruthy();

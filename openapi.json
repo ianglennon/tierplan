@@ -15415,6 +15415,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "git": {
+            "$ref": "#/components/schemas/StackReviewGitBody",
+            "description": "Left out unless set: set for a review of the draft of a stack made from a git repository, and says which commit the draft holds and how far it is from the deployed one"
+          },
           "images": {
             "description": "One row for each service with an image, by name",
             "items": {
@@ -15540,6 +15544,61 @@
           "added",
           "changed",
           "removed"
+        ],
+        "type": "object"
+      },
+      "StackReviewGitBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full ID of the commit the draft's repository files are from",
+            "type": "string"
+          },
+          "deployedCommit": {
+            "description": "The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository",
+            "type": "string"
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in; empty for the root",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the draft follows",
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoName": {
+            "description": "The repository's name when the draft was made from it",
+            "type": "string"
+          },
+          "sourceChanged": {
+            "description": "True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable",
+            "type": "boolean"
+          },
+          "touched": {
+            "description": "How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commit",
+          "ref",
+          "refKind",
+          "folder",
+          "repoName",
+          "deployedCommit",
+          "touched",
+          "sourceChanged"
         ],
         "type": "object"
       },

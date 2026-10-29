@@ -139,7 +139,7 @@ describe("Pull & redeploy…", () => {
     mount(<PullAndRedeployAction stack={stack(git())} />);
     fireEvent.click(await screen.findByRole("button", { name: "Pull & redeploy…" }));
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    expect(toasts.error.mock.calls[0][0]).toBe(
+    expect(toasts.error.mock.calls[0]?.[0]).toBe(
       "Couldn't pull main. The draft changed while you were pulling. Reload it and try again.",
     );
     expect(screen.getByTestId("where").textContent).toBe("/");
@@ -153,7 +153,7 @@ describe("Pull & redeploy…", () => {
     mount(<PullAndRedeployAction stack={stack(git())} />);
     fireEvent.click(await screen.findByRole("button", { name: "Pull & redeploy…" }));
     await waitFor(() => expect(toasts.error).toHaveBeenCalledTimes(1));
-    expect(toasts.error.mock.calls[0][0]).toBe(
+    expect(toasts.error.mock.calls[0]?.[0]).toBe(
       "Couldn't pull main. The repository can't be reached.",
     );
   });

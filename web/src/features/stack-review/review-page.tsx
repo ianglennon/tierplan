@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { shortSha } from "@/features/stack-git/sha-link";
 import { BlockingList } from "@/features/stack-review/blocking-list";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
@@ -230,6 +231,10 @@ export function ReviewPage({
   // restore redeploys is the deployed one, which the review names.
   const exact = rollback || restore;
   const seq = restore ? data?.revision : revision;
+  // The review of the draft of a git stack says which commit it deploys (D-17). The title waits for nothing: the stack
+  // knows it is from git; the body and the commit line wait for the review, which names the commit.
+  const gitStack = mode === "deploy" && !!stack.data?.git;
+  const gitReview = mode === "deploy" ? data?.git : undefined;
 
   // Roll back stack sends the revision that was reviewed and the deployed revision the review was made against,
   // so the server refuses a stack that was deployed again since. Like a deploy, it is pending after the first
@@ -364,7 +369,9 @@ export function ReviewPage({
                 ? t("stackRollback.review.title", { name, seq: revision })
                 : update
                   ? t("stackReview.titleUpdate", { name })
-                  : t("stackReview.title", { name })}
+                  : gitStack
+                    ? t("stackReview.titleGit", { name })
+                    : t("stackReview.title", { name })}
           </h3>
         )}
         <p className="text-sm text-muted-foreground">
@@ -376,7 +383,14 @@ export function ReviewPage({
               ? t("stackRollback.review.body", { seq: revision })
               : update
                 ? t("stackReview.bodyUpdate")
-                : t("stackReview.body", { env: envName })}
+                : gitReview
+                  ? t("stackReview.bodyGit", {
+                      ref: gitReview.refKind === "commit" ? shortSha(gitReview.ref) : gitReview.ref,
+                      folder: gitReview.folder || t("stackGit.status.rootFolder"),
+                      sha: shortSha(gitReview.commit),
+                      env: envName,
+                    })
+                  : t("stackReview.body", { env: envName })}
         </p>
         {data || failed ? null : (
           <p role="status" className="text-sm text-muted-foreground">
@@ -447,7 +461,7 @@ export function ReviewPage({
               mode={rollback ? "rollback" : update ? "update" : "deploy"}
             />
           ) : null}
-          <ReviewSummary summary={data?.summary} />
+          <ReviewSummary summary={data?.summary} git={gitReview} />
           <ImagePinTable
             images={data ? (data.images ?? []) : undefined}
             mode={mode}

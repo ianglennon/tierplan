@@ -23,6 +23,14 @@
     "titleUpdate": "Review image updates for {{name}}",
     "body": "Check what will change on {{env}}, then deploy.",
     "bodyUpdate": "These services get a newly looked-up digest. Everything else keeps its running image.",
+    "titleGit": "Pull and redeploy {{name}}",
+    "bodyGit": "Bayplan fetched {{ref}} just now and rendered {{folder}} at commit {{sha}}. This shows what would change on {{env}}.",
+    "git": {
+      "commit": "Commit",
+      "onRef": "on {{ref}}",
+      "touched_one": "{{count}} commit changed this folder since {{sha}}.",
+      "touched_other": "{{count}} commits changed this folder since {{sha}}."
+    },
     "loading": "Checking the stack…",
     "lookingUp": "Looking up the digest…",
     "summary": {

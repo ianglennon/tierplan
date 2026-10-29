@@ -10709,6 +10709,8 @@ export interface components {
              * @description The version of the draft the review was made of: send it with the deploy
              */
             draftVersion: number;
+            /** @description Left out unless set: set for a review of the draft of a stack made from a git repository, and says which commit the draft holds and how far it is from the deployed one */
+            git?: components["schemas"]["StackReviewGitBody"];
             /** @description One row for each service with an image, by name */
             images: components["schemas"]["StackReviewImageBody"][] | null;
             /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
@@ -10753,6 +10755,30 @@ export interface components {
              * @description How many it would remove
              */
             removed: number;
+        };
+        StackReviewGitBody: {
+            /** @description The full ID of the commit the draft's repository files are from */
+            commit: string;
+            /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository */
+            deployedCommit: string;
+            /** @description The folder of the repository the stack lives in; empty for the root */
+            folder: string;
+            /** @description The branch, tag or commit ID the draft follows */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository's name when the draft was made from it */
+            repoName: string;
+            /** @description True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable */
+            sourceChanged: boolean;
+            /**
+             * Format: int64
+             * @description How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed
+             */
+            touched: number;
         };
         StackReviewImageBody: {
             /** @description The digest the service runs with now; empty for a new service */
