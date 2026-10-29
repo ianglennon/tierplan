@@ -800,7 +800,7 @@ func (r Repo) RotateWebhook(ctx context.Context, stackID string, w WebhookRotati
 		return "", "", ErrNoWebhook
 	}
 	sealed, last4 := "", w.TokenLast4
-	if !(row.WebhookFlavour == "generic" && row.WebhookPlacement == "path") { // the address is the secret only there
+	if row.WebhookFlavour != "generic" || row.WebhookPlacement != "path" { // the address is the secret only for that one
 		if sealed, err = r.Vault.Seal(vault.ContextGitWebhook+stackID, []byte(w.Secret)); err != nil {
 			return "", "", fmt.Errorf("seal the webhook secret: %w", err)
 		}

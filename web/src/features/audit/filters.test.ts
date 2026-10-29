@@ -182,7 +182,11 @@ describe("actionLabel", () => {
   });
 
   it("labels the creation, rotation and removal of a git webhook with the stack when the entry has it", () => {
-    for (const key of ["git.webhook_created", "git.webhook_rotated", "git.webhook_removed"] as const) {
+    for (const key of [
+      "git.webhook_created",
+      "git.webhook_rotated",
+      "git.webhook_removed",
+    ] as const) {
       expect(KNOWN_ACTIONS).toContain(key);
       expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
       expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
