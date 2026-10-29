@@ -261,3 +261,106 @@ export function stackGitCommitsQuery(envId: string, stackId: string, head: strin
     retry: false,
   });
 }
+
+// The webhook a git stack may have, as the git route summarises it: no secret and no routing token, only the
+// address with the token masked, the last four characters of the secret and the last delivery.
+export type StackGitWebhook = components["schemas"]["StackGitWebhookSummary"];
+export type StackGitWebhookFlavour = StackGitWebhook["flavour"];
+export type StackGitWebhookPlacement = StackGitWebhook["placement"];
+// What a create or a rotate answers once: the full address and the secret. It is read from the answer into component
+// state by the caller and is never kept by a query.
+export type StackGitWebhookSecret = components["schemas"]["StackGitWebhookBody"];
+
+// StackGitWebhookError is a create, rotate or remove of a webhook the server refused or that got no answer. The status
+// is 0 when the server could not be reached; the type is the problem type it named (webhook_exists, webhook_not_found,
+// webhook_placement, stack_not_git).
+export class StackGitWebhookError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(method: string, status: number, type?: string) {
+    super(`${method} git/webhook failed (${status})`);
+    this.name = "StackGitWebhookError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+export interface StackGitWebhookInput {
+  flavour: StackGitWebhookFlavour;
+  // Only for the generic flavour: path puts the secret in the address, header expects Authorization: Bearer.
+  placement?: "path" | "header";
+}
+
+// The options every webhook mutation shares. The answer of a create or a rotate holds the secret, so it must not
+// outlive the call: the mutation cache drops it as soon as nothing observes the mutation (gcTime 0), and the caller
+// resets the mutation once it has taken the answer. It is not retried either (P2 D-42). The git summary is read
+// again whatever the answer, which brings the masked rows.
+function useWebhookMutation<TData, TVariables>(
+  envId: string,
+  stackId: string,
+  run: (variables: TVariables) => Promise<TData>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation<TData, StackGitWebhookError, TVariables>({
+    mutationFn: async (variables) => {
+      try {
+        return await run(variables);
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof StackGitWebhookError ? e : new StackGitWebhookError("POST", 0);
+      }
+    },
+    retry: false,
+    gcTime: 0,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
+    },
+  });
+}
+
+// useCreateStackGitWebhook gives the stack its webhook (D-15). The answer is the address and the secret, once.
+export function useCreateStackGitWebhook(envId: string, stackId: string) {
+  return useWebhookMutation<StackGitWebhookSecret, StackGitWebhookInput>(
+    envId,
+    stackId,
+    async (body) => {
+      const { data, error, response } = await api.POST(
+        "/api/env/{envId}/stacks/{stackId}/git/webhook",
+        { params: { path: { envId, stackId } }, body },
+      );
+      if (!data) {
+        const problem = readProblem(error, response);
+        throw new StackGitWebhookError("POST", problem.status, problem.type);
+      }
+      return data;
+    },
+  );
+}
+
+// useRotateStackGitWebhook replaces the webhook's address and secret and answers the new ones, once.
+export function useRotateStackGitWebhook(envId: string, stackId: string) {
+  return useWebhookMutation<StackGitWebhookSecret, void>(envId, stackId, async () => {
+    const { data, error, response } = await api.POST(
+      "/api/env/{envId}/stacks/{stackId}/git/webhook/rotate",
+      { params: { path: { envId, stackId } } },
+    );
+    if (!data) {
+      const problem = readProblem(error, response);
+      throw new StackGitWebhookError("POST", problem.status, problem.type);
+    }
+    return data;
+  });
+}
+
+// useRemoveStackGitWebhook deletes the webhook; its address answers 404 from then on.
+export function useRemoveStackGitWebhook(envId: string, stackId: string) {
+  return useWebhookMutation<void, void>(envId, stackId, async () => {
+    const { error, response } = await api.DELETE("/api/env/{envId}/stacks/{stackId}/git/webhook", {
+      params: { path: { envId, stackId } },
+    });
+    if (!response.ok) {
+      const problem = readProblem(error, response);
+      throw new StackGitWebhookError("DELETE", problem.status, problem.type);
+    }
+  });
+}

@@ -142,6 +142,95 @@
       "checking": "Checking…",
       "lastChecked": "Last checked",
       "neverChecked": "Not checked yet"
+    },
+    "webhook": {
+      "title": "Webhook",
+      "body": "Lets your git host tell Bayplan the moment something is pushed.",
+      "none": "No webhook yet.",
+      "setUp": "Set up webhook",
+      "needsOnEnvironment": "{{need}} on {{name}}",
+      "host": {
+        "github": "GitHub",
+        "gitlab": "GitLab",
+        "gitea": "Gitea or Forgejo",
+        "generic": "Other (generic)"
+      },
+      "hostFallback": "your git host",
+      "setup": {
+        "title": "Set up a webhook",
+        "body": "Pick your git host. Bayplan creates a secret address for this stack.",
+        "host": "Git host",
+        "placement": "Where the secret goes",
+        "placementPath": "In the address",
+        "placementHeader": "In an Authorization header",
+        "cancel": "Cancel",
+        "create": "Create webhook",
+        "creating": "Creating…",
+        "exists": "This stack already has a webhook.",
+        "permission": "You need Admin on this environment to set up a webhook.",
+        "failed": "Couldn't create the webhook. Try again."
+      },
+      "created": "Created the webhook.",
+      "once": {
+        "title": "Copy the secret now",
+        "body": "Bayplan can't show it again. If you lose it, rotate the secret.",
+        "address": "Webhook address",
+        "secret": "Secret",
+        "secretLabel": "Webhook secret, shown once",
+        "copyAddress": "Copy address",
+        "copySecret": "Copy secret",
+        "copiedAddress": "Copied address",
+        "copiedSecret": "Copied secret",
+        "done": "Done"
+      },
+      "rows": {
+        "host": "Git host",
+        "address": "Address",
+        "copyAddress": "Copy address",
+        "copiedAddress": "Copied address",
+        "secret": "Secret",
+        "lastDelivery": "Last delivery",
+        "accepted": "Accepted {{when}}",
+        "rejected": "Rejected, bad signature {{when}}",
+        "never": "Never",
+        "paused": "Paused",
+        "pausedNote": "{{owner}} set this webhook up and no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it.",
+        "pausedNoteNoOwner": "The person who set this webhook up no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it."
+      },
+      "rotateAction": "Rotate secret…",
+      "removeAction": "Remove webhook…",
+      "note": "A webhook only tells Bayplan to check the repository. Bayplan ignores what the request says and fetches {{ref}} itself.",
+      "help": {
+        "trigger": "How to add it",
+        "github": "In the repository open Settings, then Webhooks, then Add webhook. Payload URL: the address above. Content type: application/json. Secret: the secret above. Events: just the push event.",
+        "gitlab": "In the project open Settings, then Webhooks. URL: the address above. Secret token: the secret above. Trigger: push events.",
+        "gitea": "In the repository open Settings, then Webhooks, then Add webhook, then Gitea or Forgejo. Target URL: the address above. Secret: the secret above. Trigger: push events.",
+        "generic": "Send a POST request to the address whenever the repository changes.",
+        "genericHeader": "Send the secret as an Authorization: Bearer header."
+      },
+      "rotate": {
+        "title": "Rotate the webhook secret?",
+        "body": "The old secret stops working at once. Update the webhook in {{host}} with the new one.",
+        "cancel": "Keep current secret",
+        "confirm": "Rotate secret",
+        "pending": "Rotating…",
+        "done": "Rotated the webhook secret.",
+        "gone": "The webhook is already gone.",
+        "permission": "You need Admin on this environment to rotate the secret.",
+        "failed": "Couldn't rotate the secret. Try again."
+      },
+      "remove": {
+        "title": "Remove the webhook?",
+        "body": "Pushes no longer reach {{name}} straight away. Polling still checks every {{minutes}} minutes. Remove the webhook in your git host too.",
+        "bodyNoPolling": "Pushes no longer reach {{name}} straight away, and polling is off, so Bayplan only sees changes when you check. Remove the webhook in your git host too.",
+        "cancel": "Keep webhook",
+        "confirm": "Remove webhook",
+        "pending": "Removing…",
+        "done": "Removed the webhook.",
+        "gone": "The webhook is already gone.",
+        "permission": "You need Admin on this environment to remove the webhook.",
+        "failed": "Couldn't remove the webhook. Try again."
+      }
     }
   }
 }

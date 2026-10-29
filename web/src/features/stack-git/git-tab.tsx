@@ -9,6 +9,7 @@ import { stackQuery } from "@/api/stacks";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { UpdatesCard, UpdatesSkeleton } from "@/features/stack-git/updates-card";
+import { WebhookCard } from "@/features/stack-git/webhook-card";
 import { useT } from "@/i18n/use-t";
 
 interface GitTabProps {
@@ -17,7 +18,7 @@ interface GitTabProps {
 }
 
 // GitTab is the Git tab of a git stack (UI-SPEC "Git tab"): one column of cards, each saved on its own, in the order
-// Source, Updates, Webhook, Deploying and Advanced, 32px apart and no wider than 1152px. The Updates card is here; the
+// Source, Updates, Webhook, Deploying and Advanced, 32px apart and no wider than 1152px. The Updates and Webhook cards are here; the
 // others join as the plans that build them land, and a card that is not built renders nothing. A stack that is not
 // from a repository has no Git tab: its address leads to the Overview.
 export function GitTab({ envId, stackId }: GitTabProps) {
@@ -53,7 +54,10 @@ export function GitTab({ envId, stackId }: GitTabProps) {
   return (
     <div className="flex max-w-6xl flex-col gap-8">
       {git.data ? (
-        <UpdatesCard envId={envId} stackId={stackId} git={git.data} />
+        <>
+          <UpdatesCard envId={envId} stackId={stackId} git={git.data} />
+          <WebhookCard envId={envId} stackId={stackId} git={git.data} />
+        </>
       ) : (
         <UpdatesSkeleton />
       )}
