@@ -51,12 +51,14 @@ describe("useCheckStackGit", () => {
   it("reads the bell again when the check is accepted and when it has ended (IN-E07)", async () => {
     const { result } = renderHook(() => useCheckStackGit("e1", "s1"), { wrapper });
     act(() => result.current.check());
-    await waitFor(() => expect(result.current.running).toBe(true));
-    await waitFor(() => expect(result.current.running).toBe(false));
-    const bells = invalidated.filter(
-      (k) => JSON.stringify(k) === JSON.stringify([...ENV_WARNINGS_KEY]),
-    );
+    // The check may start and end between two looks, so the test waits for where it ends, not for it to be running.
+    const bells = () =>
+      invalidated.filter((k) => JSON.stringify(k) === JSON.stringify([...ENV_WARNINGS_KEY])).length;
     // Once as the request settled, and once more when the stack's summary said the check was over.
-    expect(bells.length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => {
+      expect(bells()).toBeGreaterThanOrEqual(2);
+      expect(result.current.running).toBe(false);
+    });
+    expect(fetch).toHaveBeenCalled();
   });
 });
