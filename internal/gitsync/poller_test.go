@@ -450,10 +450,10 @@ func TestPollerRestartSpread(t *testing.T) {
 
 	// None of the stacks has been scheduled (the server just started): the poller spreads their first check over the
 	// first interval instead of making them all at once.
-	f.start(t, gitsync.PollerDeps{Rand: seq(0.1, 0.4, 0.7, 0.9)})
-	f.pc.Tick(t, time.Second) // round 1 is over; round 2 finds nothing due
-	f.pc.Tick(t, time.Second)
-	for i, frac := range []float64{0.1, 0.4, 0.7, 0.9} {
+	f.start(t, gitsync.PollerDeps{Rand: seq(0.2, 0.4, 0.7, 0.9)})
+	f.pc.Tick(t, 15*time.Second) // round 1 is over; round 2 finds nothing due
+	f.pc.Tick(t, 15*time.Second) // round 2 is over
+	for i, frac := range []float64{0.2, 0.4, 0.7, 0.9} {
 		s := f.stateOf(t, ids[i])
 		want := start.Add(time.Duration(frac * float64(5*time.Minute)))
 		if s.NextCheckAt == nil || !s.NextCheckAt.Equal(want) {
