@@ -141,6 +141,27 @@
       "retry": "Retry",
       "addOverlay": "Add overlay file"
     },
+    "vars": {
+      "title": "Variables",
+      "body": "Values come from this table first, then from the repository's .env, then from the compose file's defaults.",
+      "first": "Choose a compose file first.",
+      "waiting": "The variables appear once the files are checked.",
+      "empty": {
+        "title": "No variables",
+        "body": "The compose file doesn't use any ${VARIABLES}."
+      },
+      "source": {
+        "table": "From the table",
+        "repo-env": "From the repo's .env",
+        "default": "From the compose file's default",
+        "unset": "Not set"
+      },
+      "committedTip": "Committed in the repository. Hidden here because the name looks like a secret.",
+      "secretLike": "{{name}} looks like a secret and is committed in the repository's .env. Set a secret variable here to override it.",
+      "setSecret": "Set secret value",
+      "required_one": "{{count}} required variable has no value. Review won't deploy until you set it.",
+      "required_other": "{{count}} required variables have no value. Review won't deploy until you set them."
+    },
     "footer": {
       "note": "Checks the repository every 5 minutes and waits for your review. Change this under Git settings.",
       "cancel": "Cancel",

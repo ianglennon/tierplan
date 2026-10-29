@@ -24,6 +24,11 @@ import { CheckSummary, useGitSourceCheck } from "@/features/git-source/check-sum
 import { ComposeFileList } from "@/features/git-source/compose-file-list";
 import { FolderBrowser } from "@/features/git-source/folder-browser";
 import { RepoCard } from "@/features/git-source/repo-card";
+import {
+  RequiredVariablesLine,
+  type TableVar,
+  VariablesPreview,
+} from "@/features/git-source/variables-preview";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
 import { hasPermission, useDocumentTitle, useMe } from "@/hooks/use-me";
@@ -89,6 +94,9 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
   const [files, setFiles] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // The values typed for the stack's variables. They live in this component's state alone: they go
+  // to the check and to the create, are never shown back, and go with the page.
+  const [table, setTable] = useState<TableVar[]>([]);
 
   const list = repos.data ?? [];
   const repo = list.find((r) => r.id === repoId);
@@ -108,6 +116,8 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
     enabled: repo !== undefined && refChosen,
   });
   const commit = resolved.data?.commit;
+  // A variable with no value is not sent: a blank would hide the repository's .env value.
+  const sentVars = useMemo(() => table.filter((v) => v.value !== ""), [table]);
   const request = useMemo(
     () =>
       ready && repo && folder !== null
@@ -119,9 +129,10 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
             folder,
             composeFiles: files,
             ...(commit && FULL_COMMIT.test(commit) ? { commit } : {}),
+            ...(sentVars.length > 0 ? { vars: sentVars } : {}),
           }
         : null,
-    [ready, repo, name, kind, gitRef, folder, files, commit],
+    [ready, repo, name, kind, gitRef, folder, files, commit, sentVars],
   );
   const check = useGitSourceCheck(envId, request);
 
@@ -165,9 +176,18 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
     if (!ready || create.isPending || folder === null) return;
     setRefusal(null);
     create.mutate(
-      { name, repoId, refKind: kind, ref: gitRef, folder, composeFiles: files },
+      {
+        name,
+        repoId,
+        refKind: kind,
+        ref: gitRef,
+        folder,
+        composeFiles: files,
+        ...(sentVars.length > 0 ? { vars: sentVars } : {}),
+      },
       {
         onSuccess: (made) => {
+          setTable([]);
           toastSuccess(t("stacks.create.success", { name }));
           void navigate({
             to: "/env/$envId/stacks/$stackId",
@@ -274,6 +294,16 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
             </p>
           )}
         </SettingsCard>
+
+        <VariablesPreview
+          vars={check.check?.vars ?? null}
+          value={table}
+          onChange={setTable}
+          enabled={files.length > 0}
+          checking={check.checking}
+        />
+
+        <RequiredVariablesLine vars={check.check?.vars ?? null} />
       </div>
 
       <EditorFooter>

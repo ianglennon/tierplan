@@ -224,7 +224,7 @@ describe("VariablesPreview", () => {
   it("says there are no variables when the compose files use none", () => {
     mount({ vars: [] });
     expect(screen.getByText("No variables")).toBeTruthy();
-    expect(screen.getByText("The compose file doesn't use any ${VARIABLES}.")).toBeTruthy();
+    expect(screen.getByText(/The compose file doesn't use any \$\{VARIABLES\}\./)).toBeTruthy();
     expect(screen.queryByRole("table")).toBeNull();
   });
 

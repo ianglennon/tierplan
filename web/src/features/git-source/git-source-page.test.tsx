@@ -210,6 +210,110 @@ describe("GitSourcePage", () => {
     expect(await screen.findByText("Found 1 service:")).toBeTruthy();
   });
 
+  describe("variables", () => {
+    const withVars = () => {
+      world.check = () =>
+        Response.json(
+          checkOf({
+            services: ["web"],
+            vars: [
+              {
+                name: "DB_PASSWORD",
+                value: "<hidden>",
+                default: "",
+                hasDefault: false,
+                places: [{ file: "compose.yaml", line: 5 }],
+                required: false,
+                secret: false,
+                secretLike: true,
+                source: "repo-env",
+                unused: false,
+              },
+              {
+                name: "WEB_PORT",
+                value: "",
+                default: "",
+                hasDefault: false,
+                places: [{ file: "compose.yaml", line: 8 }],
+                required: true,
+                secret: false,
+                secretLike: false,
+                source: "unset",
+                unused: false,
+              },
+            ],
+          }),
+        );
+    };
+
+    it("waits for a compose file, then lists the variables the check found", async () => {
+      withVars();
+      mount();
+      expect(await screen.findByText("Choose a compose file first.")).toBeTruthy();
+      await chooseWebFolder();
+      expect(await screen.findByTestId("git-variable-row-WEB_PORT")).toBeTruthy();
+      expect(screen.getByTestId("git-variable-row-DB_PASSWORD")).toBeTruthy();
+    });
+
+    it("says how many required variables have no value, and still lets the stack be created", async () => {
+      withVars();
+      mount();
+      await chooseWebFolder();
+      expect(
+        await screen.findByText(
+          "1 required variable has no value. Review won't deploy until you set it.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled"),
+      ).toBeNull();
+    });
+
+    it("sends the typed values with the next check and with the create, and a secret one as a secret", async () => {
+      withVars();
+      const router = mount();
+      await chooseWebFolder();
+      fireEvent.change(await screen.findByLabelText("Value of WEB_PORT"), {
+        target: { value: "8080" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Set secret value" }));
+      const secret = screen.getByLabelText("Value of DB_PASSWORD") as HTMLInputElement;
+      expect(document.activeElement).toBe(secret);
+      fireEvent.change(secret, { target: { value: "hunter2" } });
+
+      await waitFor(() => {
+        const last = checks().at(-1)?.body;
+        expect(last?.vars).toEqual([
+          { name: "WEB_PORT", value: "8080", secret: false },
+          { name: "DB_PASSWORD", value: "hunter2", secret: true },
+        ]);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/stacks/stack-9"));
+      expect(posts()[0]?.body?.vars).toEqual([
+        { name: "WEB_PORT", value: "8080", secret: false },
+        { name: "DB_PASSWORD", value: "hunter2", secret: true },
+      ]);
+    });
+
+    it("keeps typed values out of storage and the address", async () => {
+      withVars();
+      mount();
+      await chooseWebFolder();
+      fireEvent.change(await screen.findByLabelText("Value of WEB_PORT"), {
+        target: { value: "8080" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Set secret value" }));
+      fireEvent.change(screen.getByLabelText("Value of DB_PASSWORD"), {
+        target: { value: "hunter2" },
+      });
+      expect(localStorage.length).toBe(0);
+      expect(sessionStorage.length).toBe(0);
+      expect(window.location.href).not.toContain("hunter2");
+      expect(document.body.textContent).not.toContain("hunter2");
+    });
+  });
+
   it("names the stack and the environment", async () => {
     mount("shop");
     expect(await screen.findByRole("heading", { name: "Create shop from git" })).toBeTruthy();
