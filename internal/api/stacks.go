@@ -228,7 +228,9 @@ type StackItem struct {
 	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
-	HasDraft       bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
+	// LastDeployedTrigger says the newest successful deploy was an automatic one.
+	LastDeployedTrigger string `json:"lastDeployedTrigger,omitempty" enum:"poll,webhook" doc:"Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person"`
+	HasDraft            bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
 	// ServicesRunning and ServicesTotal are the engine's own count of the stack's services, read from the
 	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
 	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
@@ -540,7 +542,7 @@ func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops
 		item.ServicesRunning, item.ServicesTotal = &running, &total
 	}
 	if hasLast {
-		item.LastDeployedAt, item.LastDeployedBy = rfc3339(last.EndedAt), last.StartedBy
+		item.LastDeployedAt, item.LastDeployedBy, item.LastDeployedTrigger = rfc3339(last.EndedAt), last.StartedBy, last.Trigger
 	}
 	return item, in.Services
 }

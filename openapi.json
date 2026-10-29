@@ -13505,6 +13505,14 @@
             "description": "Who started it; empty when there is none",
             "type": "string"
           },
+          "lastDeployedTrigger": {
+            "description": "Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person",
+            "enum": [
+              "poll",
+              "webhook"
+            ],
+            "type": "string"
+          },
           "lastOperation": {
             "$ref": "#/components/schemas/StackOperationBody",
             "description": "Left out for a stack that has had no operation: the newest one, which the state is read from"
@@ -14763,6 +14771,14 @@
           },
           "lastDeployedBy": {
             "description": "Who started it; empty when there is none",
+            "type": "string"
+          },
+          "lastDeployedTrigger": {
+            "description": "Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person",
+            "enum": [
+              "poll",
+              "webhook"
+            ],
             "type": "string"
           },
           "managed": {

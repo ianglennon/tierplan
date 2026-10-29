@@ -26,6 +26,7 @@
     "services": "{{running, number}}/{{total, number}}",
     "missing": "—",
     "lastDeployedBy": "by {{user}}",
+    "lastDeployedAuto": "auto-deploy",
     "never": "Never",
     "group": {
       "count_one": "{{count, number}} stack",
@@ -113,7 +114,8 @@
     },
     "git": {
       "lastDeployed": "{{sha}} · by {{user}}",
-      "checkNow": "Check now"
+      "checkNow": "Check now",
+      "lastDeployedAuto": "{{sha}} · auto-deploy"
     }
   }
 }

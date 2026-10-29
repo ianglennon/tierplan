@@ -216,6 +216,18 @@ WHERE d.env_id = ? AND d.state = 'done' AND d.kind IN ('deploy', 'update', 'roll
               WHERE d2.stack_id = d.stack_id AND d2.state = 'done' AND d2.kind IN ('deploy', 'update', 'rollback')
               ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
 
+-- name: LatestDoneStackDeployTriggersByEnv :many
+-- What started the revision behind each stack's "last deployed" (the same operation as LatestDoneStackDeploysByEnv),
+-- for the stacks whose newest successful operation was an automatic deploy: poll or webhook. A deploy a person pressed
+-- has no row.
+SELECT d.stack_id, r.sync_trigger
+FROM stack_deploys d
+JOIN stack_snapshots r ON r.stack_id = d.stack_id AND r.kind = 'revision' AND r.seq = d.revision_seq
+WHERE d.env_id = ? AND d.state = 'done' AND d.kind IN ('deploy', 'update', 'rollback') AND r.sync_trigger != ''
+  AND d.id = (SELECT d2.id FROM stack_deploys d2
+              WHERE d2.stack_id = d.stack_id AND d2.state = 'done' AND d2.kind IN ('deploy', 'update', 'rollback')
+              ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
+
 -- name: ListDraftsByEnv :many
 -- The draft of each stack of an environment, for the list (its version and when it was saved).
 SELECT dr.stack_id, dr.version, dr.created_by, dr.created_at FROM stack_snapshots dr

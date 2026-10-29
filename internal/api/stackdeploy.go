@@ -535,7 +535,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
+	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
@@ -644,7 +644,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
+	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
@@ -1376,6 +1376,18 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+// revisionCreator is who a revision is recorded as made for. A person is themselves; an automatic deploy acts as a system
+// principal on behalf of the person whose authority it runs on, and History shows the revision as an Auto-deploy "for"
+// that person, so the system principal's own name would say nothing.
+func revisionCreator(ctx context.Context, repo stackops.Repo, p *rbac.Principal) string {
+	if p.OnBehalfOf != "" {
+		if name := clipName(ownerName(ctx, &repo, p.OnBehalfOf)); name != "" {
+			return name
+		}
+	}
+	return p.Name
 }
 
 // clipName cleans a user's name for a job's meta: no control characters, at most 64 characters.

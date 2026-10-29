@@ -426,26 +426,7 @@ export function stackColumns(
       header: t("stackLists.columns.lastDeployed"),
       className: "w-40 min-w-40",
       sortKey: "lastDeployed",
-      cell: (s) =>
-        isUnmanaged(s) ? (
-          <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
-        ) : s.lastDeployedAt ? (
-          <span className="flex flex-col leading-tight">
-            <RelativeTime value={s.lastDeployedAt} />
-            {s.lastDeployedBy ? (
-              <span className="text-xs text-muted-foreground max-md:hidden">
-                {s.git?.deployedSha
-                  ? t("stackLists.git.lastDeployed", {
-                      sha: shortSha(s.git.deployedSha),
-                      user: s.lastDeployedBy,
-                    })
-                  : t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
-              </span>
-            ) : null}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{t("stackLists.never")}</span>
-        ),
+      cell: (s) => <LastDeployedCell stack={s} />,
     },
     {
       id: "actions",
@@ -468,7 +449,33 @@ export function stackColumns(
   return columns;
 }
 
-// LastDeployedCell is not built yet.
-export function LastDeployedCell(_props: { stack: StackItem }) {
-  return null;
+// LastDeployedCell is the Last deployed cell of the stack lists: when, and under it in the muted label who started it. A
+// git stack reads "{short sha} · by {user}", and a deploy that no person started (an automatic one, from the server's
+// lastDeployedTrigger) reads "{short sha} · auto-deploy" and never the name of the system actor (T-09-82).
+export function LastDeployedCell({ stack: s }: { stack: StackItem }) {
+  const t = useT();
+  if (isUnmanaged(s)) {
+    return <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>;
+  }
+  if (!s.lastDeployedAt) {
+    return <span className="text-muted-foreground">{t("stackLists.never")}</span>;
+  }
+  const sha = s.git?.deployedSha ? shortSha(s.git.deployedSha) : "";
+  const auto = !!s.lastDeployedTrigger;
+  return (
+    <span className="flex flex-col leading-tight">
+      <RelativeTime value={s.lastDeployedAt} />
+      {auto || s.lastDeployedBy ? (
+        <span className="text-xs text-muted-foreground max-md:hidden">
+          {auto
+            ? sha
+              ? t("stackLists.git.lastDeployedAuto", { sha })
+              : t("stackLists.lastDeployedAuto")
+            : sha
+              ? t("stackLists.git.lastDeployed", { sha, user: s.lastDeployedBy })
+              : t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
+        </span>
+      ) : null}
+    </span>
+  );
 }

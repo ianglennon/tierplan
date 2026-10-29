@@ -20,7 +20,14 @@
       },
       "deployed": "Deployed",
       "open": "Open revision #{{seq}}",
-      "rowMenu": "Actions for revision #{{seq}}"
+      "rowMenu": "Actions for revision #{{seq}}",
+      "auto": {
+        "label": "Auto-deploy",
+        "for": "for {{user}}",
+        "tipPoll": "Started by a poll check on behalf of {{user}}.",
+        "tipWebhook": "Started by a webhook on behalf of {{user}}.",
+        "tipUnknown": "Started by a poll check or a webhook."
+      }
     },
     "kind": {
       "deploy": "Deploy",

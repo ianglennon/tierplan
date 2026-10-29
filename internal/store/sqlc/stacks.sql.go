@@ -599,6 +599,47 @@ func (q *Queries) LatestDeployLikeStackDeploysByEnv(ctx context.Context, envID s
 	return items, nil
 }
 
+const latestDoneStackDeployTriggersByEnv = `-- name: LatestDoneStackDeployTriggersByEnv :many
+SELECT d.stack_id, r.sync_trigger
+FROM stack_deploys d
+JOIN stack_snapshots r ON r.stack_id = d.stack_id AND r.kind = 'revision' AND r.seq = d.revision_seq
+WHERE d.env_id = ? AND d.state = 'done' AND d.kind IN ('deploy', 'update', 'rollback') AND r.sync_trigger != ''
+  AND d.id = (SELECT d2.id FROM stack_deploys d2
+              WHERE d2.stack_id = d.stack_id AND d2.state = 'done' AND d2.kind IN ('deploy', 'update', 'rollback')
+              ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1)
+`
+
+type LatestDoneStackDeployTriggersByEnvRow struct {
+	StackID     string
+	SyncTrigger string
+}
+
+// What started the revision behind each stack's "last deployed" (the same operation as LatestDoneStackDeploysByEnv),
+// for the stacks whose newest successful operation was an automatic deploy: poll or webhook. A deploy a person pressed
+// has no row.
+func (q *Queries) LatestDoneStackDeployTriggersByEnv(ctx context.Context, envID string) ([]LatestDoneStackDeployTriggersByEnvRow, error) {
+	rows, err := q.db.QueryContext(ctx, latestDoneStackDeployTriggersByEnv, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LatestDoneStackDeployTriggersByEnvRow
+	for rows.Next() {
+		var i LatestDoneStackDeployTriggersByEnvRow
+		if err := rows.Scan(&i.StackID, &i.SyncTrigger); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const latestDoneStackDeploysByEnv = `-- name: LatestDoneStackDeploysByEnv :many
 SELECT d.id, d.stack_id, d.env_id, d.kind, d.state, d.revision_seq, d.job_id, d.started_by, d.started_at, d.ended_at, d.failed_service, d.code
 FROM stack_deploys d

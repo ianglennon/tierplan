@@ -9972,6 +9972,11 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /**
+             * @description Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person
+             * @enum {string}
+             */
+            lastDeployedTrigger?: "poll" | "webhook";
             /** @description Left out for a stack that has had no operation: the newest one, which the state is read from */
             lastOperation?: components["schemas"]["StackOperationBody"];
             /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
@@ -10526,6 +10531,11 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /**
+             * @description Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person
+             * @enum {string}
+             */
+            lastDeployedTrigger?: "poll" | "webhook";
             /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
             managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */

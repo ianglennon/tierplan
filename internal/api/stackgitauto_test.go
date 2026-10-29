@@ -317,6 +317,22 @@ func TestStackJobBodyAutoDeploy(t *testing.T) {
 	if body.Trigger != "poll" || body.Commit != head[:7] || body.OnBehalfOf == "" {
 		t.Errorf("job body = %+v, want a poll of %s for the Operator", body, head[:7])
 	}
+	// The lists read "auto-deploy" under Last deployed, from the revision behind it.
+	var detail struct {
+		LastDeployedTrigger string `json:"lastDeployedTrigger"`
+	}
+	rec = a.f.credCall(t, a.admin, http.MethodGet, "/api/env/"+a.env+"/stacks/"+a.stackID, "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &detail) != nil || detail.LastDeployedTrigger != "poll" {
+		t.Errorf("stack detail: %d %s, want lastDeployedTrigger poll", rec.Code, rec.Body)
+	}
+	// History shows the revision as an Auto-deploy for that same person, so it is recorded as made for them.
+	var madeFor string
+	if err := a.f.st.Read.QueryRow(`SELECT created_by FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = 2`, a.stackID).Scan(&madeFor); err != nil {
+		t.Fatal(err)
+	}
+	if madeFor != body.OnBehalfOf {
+		t.Errorf("revision #2 created by %q, want %q (the person the automatic deploy ran for)", madeFor, body.OnBehalfOf)
+	}
 	var list struct {
 		Jobs []struct {
 			ID      string `json:"id"`

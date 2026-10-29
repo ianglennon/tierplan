@@ -25,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { AutoDeployPausedAlert } from "@/features/stack-git/auto-deploy-paused-alert";
 import { GitStrip } from "@/features/stack-git/git-strip";
 import { GitSourceBadge } from "@/features/stack-git/sync-badges";
 import { SyncErrorAlert } from "@/features/stack-git/sync-error-alert";
@@ -418,7 +419,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
           and the console routes show the flow caption instead and do not repeat it. */}
       {data && !flow ? <GitStrip stack={data} /> : null}
       {/* The alerts, in the order of UI-SPEC "Stack page": an operation under way, the last deploy that
-          stopped, another operation holding the environment, a stack that is stopped, a git stack that cannot sync, a draft that waits.
+          stopped, another operation holding the environment, a stack that is stopped, a git stack that cannot sync, auto-deploy that is paused, a draft that waits.
           The console is the operation's own page, so it does not warn about itself, and a stack that
           is being deployed or removed is not also called stopped. */}
       {data && flow !== "deploy" ? <DeployBanner stack={data} /> : null}
@@ -430,6 +431,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
         <StoppedAlertWithStart stack={data} />
       ) : null}
       {data && !flow ? <SyncErrorAlert stack={data} /> : null}
+      {data && !flow ? <AutoDeployPausedAlert stack={data} /> : null}
       {data && !flow && !editing ? <DraftBanner stack={data} envName={envName} /> : null}
       {flow ? (
         <FlowCaption step={flow} />

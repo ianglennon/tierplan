@@ -130,6 +130,9 @@ type DeployRow struct {
 	JobID, StartedBy                string
 	StartedAt, EndedAt              time.Time
 	FailedService, Code             string
+	// Trigger is SyncPoll or SyncWebhook when an automatic deploy made the operation's revision. It is filled only by
+	// LastDeployed, and is empty for any operation a person started.
+	Trigger string
 }
 
 func stackOf(row sqlc.Stack) Stack {
@@ -1137,6 +1140,16 @@ func (r Repo) LastDeployed(ctx context.Context, envID string) (map[string]Deploy
 	out := make(map[string]DeployRow, len(rows))
 	for _, row := range rows {
 		out[row.StackID] = deployOf(sqlc.StackDeploy(row))
+	}
+	triggers, err := r.Store.RQ.LatestDoneStackDeployTriggersByEnv(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("list deploy triggers: %w", err)
+	}
+	for _, tr := range triggers {
+		if d, ok := out[tr.StackID]; ok {
+			d.Trigger = tr.SyncTrigger
+			out[tr.StackID] = d
+		}
 	}
 	return out, nil
 }

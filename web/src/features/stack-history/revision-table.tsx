@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { ImageChangeSummary } from "@/features/stack-history/image-change-summary";
 import { type HistoryRepo, RevisionCommit } from "@/features/stack-history/revision-commit";
@@ -104,6 +105,44 @@ function RowActions({
   );
 }
 
+// WhoCell is who started a revision's deploy: a person, or "Auto-deploy" for the person whose authority an automatic deploy
+// ran on (UI-SPEC "History additions", T-09-82). The server records that person as the revision's creator and says what
+// started it in syncTrigger; the Tooltip names the trigger. Names are text.
+function WhoCell({ item }: { item: StackRevision }) {
+  const t = useT();
+  if (!item.syncTrigger) {
+    return item.createdBy ? (
+      <TruncatedText>{item.createdBy}</TruncatedText>
+    ) : (
+      <span>{t("stackHistory.missing")}</span>
+    );
+  }
+  const user = item.createdBy;
+  const tip = !user
+    ? t("stackHistory.table.auto.tipUnknown")
+    : t(
+        item.syncTrigger === "webhook"
+          ? "stackHistory.table.auto.tipWebhook"
+          : "stackHistory.table.auto.tipPoll",
+        { user },
+      );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex flex-col leading-tight">
+          <span>{t("stackHistory.table.auto.label")}</span>
+          {user ? (
+            <span className="max-w-64 truncate text-xs text-muted-foreground">
+              {t("stackHistory.table.auto.for", { user })}
+            </span>
+          ) : null}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm break-words">{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 // RevisionTable lists the revisions of a stack, newest first. It is a native table with a caption, and the
 // revision number is the link that selects a revision: it sets rev with replace, so selecting does not add
 // a history entry per click. The selected row is marked with aria-current.
@@ -169,11 +208,7 @@ export function RevisionTable({
                 <RevisionResultCell item={item} />
               </TableCell>
               <TableCell>
-                {item.createdBy ? (
-                  <TruncatedText>{item.createdBy}</TruncatedText>
-                ) : (
-                  t("stackHistory.missing")
-                )}
+                <WhoCell item={item} />
               </TableCell>
               <TableCell>
                 <RelativeTime value={item.createdAt} />
