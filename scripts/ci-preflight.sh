@@ -5,9 +5,11 @@
 # The first step of every Docker-heavy CI job (D-23): prints the free space of the
 # workspace and of Docker's root directory, and `docker system df`, then fails with
 # the path and the free space named when either has less than BAYPLAN_CI_MIN_FREE_GB
-# (default 20) free. It then fails when git or git-http-backend is missing, because the git
-# fixture tests need them and a skipped test would pass the git code unchecked (Phase 9). Two runners share each VM's disk and Docker daemon, so a full
+# (default 20) free. Two runners share each VM's disk and Docker daemon, so a full
 # disk is reported here as a full disk and not as a confusing test failure later.
+#
+# It also fails when git or git-http-backend is missing, because the git fixture tests
+# need them and a skipped test would pass the git code unchecked (Phase 9).
 #
 # Docker's root directory is usually readable only by root, so the check measures
 # the nearest parent the runner user can stat; it is on the same filesystem.
