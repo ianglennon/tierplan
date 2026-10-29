@@ -312,6 +312,7 @@ export type GitStackCreateRequest = components["schemas"]["GitStackCreateRequest
 export type GitStackCreated = components["schemas"]["GitStackCreateBody"];
 export type GitStackCheckRequest = components["schemas"]["GitStackCheckRequest"];
 export type GitStackCheck = components["schemas"]["GitStackCheckBody"];
+export type GitStackVariable = components["schemas"]["GitStackVariableBody"];
 
 // The ["git", "env", envId, "repos"] query: the repositories a stack of this environment can use,
 // its own and the instance's. The From git page offers these and no other.
