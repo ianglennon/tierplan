@@ -15,6 +15,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBrowseReason } from "@/features/git-source/browse-reason";
+import { missingPathOf } from "@/features/git-source/problem-path";
 import { useT } from "@/i18n/use-t";
 
 // How long after the last change to the choices the files are checked (UI-SPEC "Lint and inline
@@ -176,7 +177,7 @@ export function CheckSummary({ state, repoName, onAddOverlay }: CheckSummaryProp
   const missing = check?.missing ?? [];
   const overlayFor = (p: StackProblem) => {
     if (!onAddOverlay || p.code !== "repo_file_missing") return undefined;
-    const path = missing.find((m) => p.message.startsWith(m));
+    const path = missingPathOf(p, missing);
     return path === undefined ? undefined : () => onAddOverlay(path);
   };
   const first = checking && !check;

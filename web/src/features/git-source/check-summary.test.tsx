@@ -307,6 +307,26 @@ describe("CheckSummary", () => {
     expect(onAdd).toHaveBeenCalledWith("secrets/db_pw.txt");
   });
 
+  it("offers the path a missing-file problem is about when another begins the same (WR-E02)", () => {
+    const onAdd = vi.fn();
+    renderSummary(
+      settled({
+        check: checkOf({
+          missing: [".env", ".env.prod"],
+          problems: [
+            problem({
+              code: "repo_file_missing",
+              message: ".env.prod isn't in the repository.",
+            }),
+          ],
+        }),
+      }),
+      onAdd,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add overlay file" }));
+    expect(onAdd).toHaveBeenCalledWith(".env.prod");
+  });
+
   it("draws a message with markup in it as text", () => {
     renderSummary(
       settled({

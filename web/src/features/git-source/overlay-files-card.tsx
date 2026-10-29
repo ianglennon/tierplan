@@ -7,6 +7,7 @@ import type { StackProblem } from "@/api/stacks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SettingsCard } from "@/features/environments/settings-card";
+import { clashOf } from "@/features/git-source/problem-path";
 import { useT } from "@/i18n/use-t";
 
 export interface OverlayFilesCardProps {
@@ -34,8 +35,6 @@ export function OverlayFilesCard({
 }: OverlayFilesCardProps) {
   const t = useT();
   if (missing.length === 0 && overlays.length === 0) return null;
-  const clashOf = (path: string) =>
-    problems.find((p) => p.code === "overlay_clash" && p.message.startsWith(path));
   return (
     <SettingsCard title={t("gitSource.overlay.title")}>
       <p className="text-sm text-muted-foreground">{t("gitSource.overlay.body")}</p>
@@ -44,7 +43,7 @@ export function OverlayFilesCard({
         className="flex flex-col divide-y rounded-lg border"
       >
         {overlays.map((path) => {
-          const clash = clashOf(path);
+          const clash = clashOf(problems, path);
           return (
             <li key={`overlay:${path}`} className="flex flex-col gap-1 px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
