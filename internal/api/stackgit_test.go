@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -42,6 +43,8 @@ type stackGitAnswer struct {
 	Checking     bool     `json:"checking"`
 	AutoDeploy   bool     `json:"autoDeploy"`
 	Paused       bool     `json:"autoDeployPaused"`
+	PollEnabled  bool     `json:"pollEnabled"`
+	PollMinutes  int      `json:"pollMinutes"`
 }
 
 // checkEnded is told by the server when a check a request started has ended.
@@ -376,5 +379,81 @@ func TestStackGitErrorState(t *testing.T) {
 	}
 	if back := g.readGit(t, g.admin, stackID); back.Status != "in_sync" || back.ReasonCode != "" || back.ReasonDetail != "" {
 		t.Errorf("git after the good check = %+v, want in_sync with no reason", back)
+	}
+}
+
+// putUpdates sets a stack's polling.
+func (g *gitStackFix) putUpdates(t *testing.T, u credentialUser, stackID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return g.f.credCall(t, u, http.MethodPut, g.gitRoute(stackID)+"/updates", body)
+}
+
+func TestStackGitUpdates(t *testing.T) {
+	t.Parallel()
+	g, stackID, _ := newStackGitFix(t)
+
+	if got := g.readGit(t, g.admin, stackID); !got.PollEnabled || got.PollMinutes != 5 {
+		t.Fatalf("polling before any change = on %v every %d minutes, want on every 5", got.PollEnabled, got.PollMinutes)
+	}
+
+	// The two ends are accepted and a number outside them, or not whole, is not (GIT-06 adjacency).
+	for _, minutes := range []string{"1", "1440"} {
+		rec := g.putUpdates(t, g.admin, stackID, `{"pollEnabled":true,"pollMinutes":`+minutes+`}`)
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s minutes: %d %s, want 200", minutes, rec.Code, rec.Body)
+		}
+	}
+	for _, minutes := range []string{"0", "1441", "2.5", "-3"} {
+		rec := g.putUpdates(t, g.admin, stackID, `{"pollEnabled":true,"pollMinutes":`+minutes+`}`)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "poll_interval" {
+			t.Errorf("%s minutes: %d %s, want 422 poll_interval", minutes, rec.Code, rec.Body)
+		}
+	}
+	if got := g.readGit(t, g.admin, stackID); !got.PollEnabled || got.PollMinutes != 1440 {
+		t.Errorf("polling after refused changes = on %v every %d minutes, want the last accepted: on every 1440", got.PollEnabled, got.PollMinutes)
+	}
+
+	// A change is stored, answered with the stack's git summary and audited with the old and the new values.
+	rec := g.putUpdates(t, g.admin, stackID, `{"pollEnabled":false,"pollMinutes":15}`)
+	var answer stackGitAnswer
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &answer) != nil || answer.PollEnabled || answer.PollMinutes != 15 || answer.RepoID != g.id {
+		t.Fatalf("change: %d %s, want 200 with polling off every 15 minutes", rec.Code, rec.Body)
+	}
+	if got := g.readGit(t, g.admin, stackID); got.PollEnabled || got.PollMinutes != 15 {
+		t.Errorf("polling after the change = on %v every %d minutes, want off every 15", got.PollEnabled, got.PollMinutes)
+	}
+	rows := g.f.auditRows(t, "git.updates_changed")
+	last := rows[len(rows)-1]
+	if last.TargetType != "stack" || last.TargetID != stackID || last.EnvID != g.env || last.Result != "success" {
+		t.Errorf("audit row = %+v, want the stack's success", last)
+	}
+	want := map[string]string{"stack": "web", "poll_enabled": "false", "poll_minutes": "15", "poll_enabled_from": "true", "poll_minutes_from": "1440"}
+	if !reflect.DeepEqual(last.Details, want) {
+		t.Errorf("audit details = %v, want %v", last.Details, want)
+	}
+	// The same values again change nothing and write nothing.
+	before := len(rows)
+	if rec := g.putUpdates(t, g.admin, stackID, `{"pollEnabled":false,"pollMinutes":15}`); rec.Code != http.StatusOK {
+		t.Errorf("the same values again: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if got := len(g.f.auditRows(t, "git.updates_changed")); got != before {
+		t.Errorf("%d audit rows after a change that changed nothing, want still %d", got, before)
+	}
+
+	// A Viewer may read but not change (stacks.deploy).
+	viewer := g.f.asRoleOn(t, "u-viewer", g.env, "viewer")
+	if rec := g.putUpdates(t, viewer, stackID, `{"pollEnabled":true,"pollMinutes":5}`); rec.Code != http.StatusForbidden {
+		t.Errorf("a Viewer: %d %s, want 403", rec.Code, rec.Body)
+	}
+	// A stack that is not from a repository.
+	plain := g.f.credCall(t, g.admin, http.MethodPost, "/api/env/"+g.env+"/stacks", `{"name":"plain"}`)
+	var made struct {
+		ID string `json:"id"`
+	}
+	if plain.Code != http.StatusCreated || json.Unmarshal(plain.Body.Bytes(), &made) != nil {
+		t.Fatalf("create a plain stack: %d %s", plain.Code, plain.Body)
+	}
+	if rec := g.putUpdates(t, g.admin, made.ID, `{"pollEnabled":true,"pollMinutes":5}`); rec.Code != http.StatusConflict || problemType(t, rec) != "stack_not_git" {
+		t.Errorf("a stack not from git: %d %s, want 409 stack_not_git", rec.Code, rec.Body)
 	}
 }
