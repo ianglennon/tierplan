@@ -27,6 +27,8 @@ const DEPLOYED = "0123456789abcdef0123456789abcdef01234567";
 // Values that must be found only inside the show-once panel.
 const SECRET = "s3cr3t-value-9f8e7d6c5b4a";
 const TOKEN_URL = "https://bayplan.example/hooks/git/tok-0123456789abcdefghij";
+const ROTATED_SECRET = "n3w-secret-value-1a2b3c4d5e6f";
+const ROTATED_URL = "https://bayplan.example/hooks/git/tok-zyxwvutsrqponmlkjihg";
 const MASKED = "https://bayplan.example/hooks/git/••••";
 
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
@@ -97,6 +99,11 @@ let role: "viewer" | "operator" | "admin";
 // What the create route answers, and the body it was sent.
 let createAnswer: () => Response;
 let creates: StackGitWebhookInput[];
+// What the rotate and remove routes answer, and how often each was called.
+let rotateAnswer: () => Response;
+let removeAnswer: () => Response;
+let rotates: number;
+let removes: number;
 let client: QueryClient;
 let writeText: ReturnType<typeof vi.fn>;
 
@@ -108,6 +115,13 @@ beforeEach(() => {
   git = makeGit();
   role = "admin";
   creates = [];
+  rotates = 0;
+  removes = 0;
+  rotateAnswer = () =>
+    Response.json(answerOf({ url: ROTATED_URL, secret: ROTATED_SECRET }), {
+      headers: { "Cache-Control": "no-store" },
+    });
+  removeAnswer = () => new Response(null, { status: 204 });
   createAnswer = () => Response.json(answerOf(), { headers: { "Cache-Control": "no-store" } });
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
@@ -136,6 +150,19 @@ beforeEach(() => {
             webhook: makeWebhook({ flavour: body.flavour, placement: body.placement }),
           };
         }
+        return res;
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/git/webhook/rotate` && req.method === "POST") {
+        rotates++;
+        const res = rotateAnswer();
+        if (res.ok && git.webhook) git = { ...git, webhook: { ...git.webhook, last4: "4d5e" } };
+        return res;
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/git/webhook` && req.method === "DELETE") {
+        removes++;
+        const res = removeAnswer();
+        if (res.ok) git = { ...git, webhook: undefined };
+        else if (res.status === 404) git = { ...git, webhook: undefined };
         return res;
       }
       if (path === `/api/env/${ENV}/stacks/s1/git`) return Response.json(git);
@@ -366,5 +393,298 @@ describe("WebhookCard set up", () => {
     fireEvent.click(setUp());
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(creates).toEqual([]);
+  });
+});
+
+// The card with a webhook that is set up, once the git settings have loaded.
+async function configured(over: Partial<StackGitWebhook> = {}) {
+  git = makeGit({ webhook: makeWebhook(over) });
+  mount();
+  const c = await card();
+  await within(c).findByLabelText("Address");
+  return c;
+}
+
+// A button of the card that an Admin may press, once the permissions are known.
+async function press(c: HTMLElement, name: string) {
+  await waitFor(() => {
+    const b = within(c).getByRole("button", { name }) as HTMLButtonElement;
+    expect(b.disabled).toBe(false);
+    expect(b.getAttribute("aria-disabled")).toBeNull();
+  });
+  fireEvent.click(within(c).getByRole("button", { name }));
+}
+
+describe("WebhookCard configured", () => {
+  it("shows the git host, the masked address, the masked secret and that nothing was delivered", async () => {
+    const c = await configured();
+    expect(within(c).getByText("GitHub")).toBeTruthy();
+    const address = within(c).getByLabelText("Address") as HTMLInputElement;
+    expect(address.value).toBe(MASKED);
+    expect(address.readOnly).toBe(true);
+    expect(within(c).getByText("\u2022\u2022\u2022\u20226c5b")).toBeTruthy();
+    expect(within(c).getByText("Last delivery")).toBeTruthy();
+    expect(within(c).getByText("Never")).toBeTruthy();
+    expect(within(c).getByRole("button", { name: "Rotate secret\u2026" })).toBeTruthy();
+    expect(within(c).getByRole("button", { name: "Remove webhook\u2026" })).toBeTruthy();
+    expect(within(c).queryByText("No webhook yet.")).toBeNull();
+    expect(
+      within(c).getByText(
+        "A webhook only tells Bayplan to check the repository. Bayplan ignores what the request says and fetches main itself.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says when the last delivery was accepted and when it was rejected", async () => {
+    const accepted = await configured({ lastAt: "2026-10-28T10:00:00Z", lastResult: "accepted" });
+    const when = within(accepted).getByRole("time");
+    expect(when.getAttribute("datetime")).toBe("2026-10-28T10:00:00Z");
+    expect(when.parentElement?.textContent).toMatch(/^Accepted /);
+    cleanup();
+    client.clear();
+    const rejected = await configured({ lastAt: "2026-10-28T11:00:00Z", lastResult: "rejected" });
+    expect(within(rejected).getByRole("time").parentElement?.textContent).toMatch(
+      /^Rejected, bad signature /,
+    );
+  });
+
+  it("copies the address without the secret", async () => {
+    const c = await configured();
+    fireEvent.click(within(c).getByRole("button", { name: "Copy address" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(MASKED));
+    expect(JSON.stringify(writeText.mock.calls)).not.toContain("tok-");
+    expect(await within(c).findByRole("button", { name: "Copied address" })).toBeTruthy();
+  });
+
+  it("lets a long address wrap and scroll inside its input group", async () => {
+    const long = `https://bayplan.example/${"a-very-long-path-".repeat(12)}hooks/git/\u2022\u2022\u2022\u2022`;
+    const c = await configured({ address: long });
+    const address = within(c).getByLabelText("Address") as HTMLInputElement;
+    expect(address.value).toBe(long);
+    expect(address.className).toContain("break-all");
+    expect(address.closest('[data-slot="input-group"]')).toBeTruthy();
+  });
+
+  it("opens How to add it closed and shows the steps of the git host", async () => {
+    const c = await configured({ flavour: "gitea" });
+    const trigger = within(c).getByRole("button", { name: "How to add it" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    expect(
+      await within(c).findByText(
+        /open Settings, then Webhooks, then Add webhook, then Gitea or Forgejo/,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says when the webhook is paused", async () => {
+    const c = await configured({ paused: true });
+    expect(
+      within(c).getByText(/Ada set this webhook up and no longer has the access it needs/),
+    ).toBeTruthy();
+  });
+
+  it("shows the webhook read-only to an Operator, with the reason on every action", async () => {
+    role = "operator";
+    const c = await configured();
+    for (const name of ["Rotate secret\u2026", "Remove webhook\u2026"]) {
+      await waitFor(() =>
+        expect(within(c).getByRole("button", { name }).getAttribute("aria-disabled")).toBe("true"),
+      );
+      fireEvent.click(within(c).getByRole("button", { name }));
+    }
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(rotates).toBe(0);
+    expect(removes).toBe(0);
+    await waitFor(() =>
+      expect(within(c).getAllByText("Needs Admin on Homelab").length).toBeGreaterThan(0),
+    );
+  });
+});
+
+describe("WebhookCard rotate", () => {
+  it("asks first, with focus on keeping the secret, and keeps it when asked to", async () => {
+    const c = await configured();
+    await press(c, "Rotate secret\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Rotate the webhook secret?" });
+    expect(
+      within(dialog).getByText(
+        "The old secret stops working at once. Update the webhook in GitHub with the new one.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole("button", { name: "Keep current secret" }),
+      ),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep current secret" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(rotates).toBe(0);
+  });
+
+  it("rotates and shows the new address and secret once", async () => {
+    const c = await configured();
+    await press(c, "Rotate secret\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Rotate the webhook secret?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate secret" }));
+    const panel = await within(c).findByRole("status", { name: "Copy the secret now" });
+    expect(rotates).toBe(1);
+    expect((within(panel).getByLabelText("Webhook address") as HTMLInputElement).value).toBe(
+      ROTATED_URL,
+    );
+    expect(
+      (within(panel).getByLabelText("Webhook secret, shown once") as HTMLInputElement).value,
+    ).toBe(ROTATED_SECRET);
+    expect(toasts.success).toHaveBeenCalledWith("Rotated the webhook secret.");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(client.getMutationCache().getAll()).toHaveLength(0));
+    expect(keptState()).not.toContain(ROTATED_SECRET);
+    expect(keptState()).not.toContain("tok-zyxwvutsrqponmlkjihg");
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Done" }));
+    expect(document.body.innerHTML).not.toContain(ROTATED_SECRET);
+    expect(document.activeElement).toBe(within(c).getByRole("heading", { name: "Webhook" }));
+    // The summary now reads the new last four characters.
+    expect(await within(c).findByText("\u2022\u2022\u2022\u20224d5e")).toBeTruthy();
+  });
+
+  it("shows no Secret row for a generic webhook whose secret is in the address", async () => {
+    rotateAnswer = () =>
+      Response.json(
+        answerOf({ flavour: "generic", placement: "path", url: ROTATED_URL, secret: "" }),
+      );
+    const c = await configured({ flavour: "generic", placement: "path" });
+    await press(c, "Rotate secret\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Rotate the webhook secret?" });
+    expect(
+      within(dialog).getByText(/Update the webhook in your git host with the new one/),
+    ).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate secret" }));
+    const panel = await within(c).findByRole("status", { name: "Copy the secret now" });
+    expect((within(panel).getByLabelText("Webhook address") as HTMLInputElement).value).toBe(
+      ROTATED_URL,
+    );
+    expect(within(panel).queryByLabelText("Webhook secret, shown once")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Copy secret" })).toBeNull();
+  });
+
+  it("keeps the dialog open with the reason when the server refuses", async () => {
+    rotateAnswer = () =>
+      Response.json(
+        { type: "internal", title: "Error", status: 500, detail: "x" },
+        { status: 500 },
+      );
+    const c = await configured();
+    await press(c, "Rotate secret\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Rotate the webhook secret?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate secret" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Couldn't rotate the secret. Try again.",
+    );
+    expect(within(c).queryByText("Copy the secret now")).toBeNull();
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("closes and says so when the webhook was already gone", async () => {
+    rotateAnswer = () =>
+      Response.json(
+        { type: "webhook_not_found", title: "Not Found", status: 404, detail: "x" },
+        { status: 404 },
+      );
+    const c = await configured();
+    git = makeGit();
+    await press(c, "Rotate secret\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Rotate the webhook secret?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate secret" }));
+    await waitFor(() => expect(toasts.info).toHaveBeenCalledWith("The webhook is already gone."));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(await within(c).findByText("No webhook yet.")).toBeTruthy();
+  });
+});
+
+describe("WebhookCard remove", () => {
+  it("asks first, with focus on keeping the webhook, and keeps it when asked to", async () => {
+    const c = await configured();
+    await press(c, "Remove webhook\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    expect(
+      within(dialog).getByText(
+        "Pushes no longer reach web straight away. Polling still checks every 5 minutes. Remove the webhook in your git host too.",
+      ),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(dialog).getByRole("button", { name: "Keep webhook" }),
+      ),
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep webhook" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(removes).toBe(0);
+    expect(within(c).getByLabelText("Address")).toBeTruthy();
+  });
+
+  it("removes the webhook and goes back to no webhook", async () => {
+    const c = await configured();
+    await press(c, "Remove webhook\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove webhook" }));
+    expect(await within(c).findByText("No webhook yet.")).toBeTruthy();
+    expect(removes).toBe(1);
+    expect(toasts.success).toHaveBeenCalledWith("Removed the webhook.");
+    expect(within(c).queryByLabelText("Address")).toBeNull();
+    expect(within(c).getByRole("button", { name: "Set up webhook" })).toBeTruthy();
+  });
+
+  it("says polling is off when it is", async () => {
+    git = makeGit({ pollEnabled: false, webhook: makeWebhook() });
+    mount();
+    const c = await card();
+    await within(c).findByLabelText("Address");
+    await press(c, "Remove webhook\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    expect(within(dialog).getByText(/polling is off/)).toBeTruthy();
+  });
+
+  it("drops a panel still on screen when the webhook is removed", async () => {
+    mount();
+    const c = await card();
+    const dialog = await openSetUp(c);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create webhook" }));
+    await within(c).findByText("Copy the secret now");
+    await press(c, "Remove webhook\u2026");
+    const confirm = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Remove webhook" }));
+    expect(await within(c).findByText("No webhook yet.")).toBeTruthy();
+    expect(document.body.innerHTML).not.toContain(SECRET);
+  });
+
+  it("keeps the dialog open with the reason when the server refuses", async () => {
+    removeAnswer = () =>
+      Response.json(
+        { type: "internal", title: "Error", status: 500, detail: "x" },
+        { status: 500 },
+      );
+    const c = await configured();
+    await press(c, "Remove webhook\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove webhook" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Couldn't remove the webhook. Try again.",
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("treats a webhook that is already gone as removed", async () => {
+    removeAnswer = () =>
+      Response.json(
+        { type: "webhook_not_found", title: "Not Found", status: 404, detail: "x" },
+        { status: 404 },
+      );
+    const c = await configured();
+    await press(c, "Remove webhook\u2026");
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove the webhook?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove webhook" }));
+    await waitFor(() => expect(toasts.info).toHaveBeenCalledWith("The webhook is already gone."));
+    expect(await within(c).findByText("No webhook yet.")).toBeTruthy();
   });
 });

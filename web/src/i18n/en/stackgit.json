@@ -193,7 +193,6 @@
         "accepted": "Accepted {{when}}",
         "rejected": "Rejected, bad signature {{when}}",
         "never": "Never",
-        "paused": "Paused",
         "pausedNote": "{{owner}} set this webhook up and no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it.",
         "pausedNoteNoOwner": "The person who set this webhook up no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it."
       },

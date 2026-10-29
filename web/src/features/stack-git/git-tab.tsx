@@ -56,7 +56,12 @@ export function GitTab({ envId, stackId }: GitTabProps) {
       {git.data ? (
         <>
           <UpdatesCard envId={envId} stackId={stackId} git={git.data} />
-          <WebhookCard envId={envId} stackId={stackId} git={git.data} />
+          <WebhookCard
+            envId={envId}
+            stackId={stackId}
+            stackName={stack.data?.name ?? ""}
+            git={git.data}
+          />
         </>
       ) : (
         <UpdatesSkeleton />

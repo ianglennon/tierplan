@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Info, Webhook } from "lucide-react";
+import { ChevronRight, CirclePause, Info, Webhook } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
@@ -20,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { SetUpWebhookDialog } from "@/features/stack-git/set-up-webhook-dialog";
 import { CopyValueRow, ShowOnceSecret } from "@/features/stack-git/show-once-secret";
+import { RemoveWebhookDialog, RotateSecretDialog } from "@/features/stack-git/webhook-dialogs";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -33,6 +34,7 @@ const SLOT = "\u0001";
 interface WebhookCardProps {
   envId: string;
   stackId: string;
+  stackName: string;
   git: StackGit;
 }
 
@@ -41,13 +43,15 @@ interface WebhookCardProps {
 // and its last delivery. Setting one up shows the address and the secret once, in a panel held in this component's
 // state only: it is cleared by Done, by leaving the stack and by unmounting, and it is in no query, no storage, no
 // toast and no address. Only an Admin of the environment manages the webhook; anyone who can read the stack sees it.
-export function WebhookCard({ envId, stackId, git }: WebhookCardProps) {
+export function WebhookCard({ envId, stackId, stackName, git }: WebhookCardProps) {
   const t = useT();
   const headingId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const needs = useNeeds("git.manage", envId);
   const environments = useQuery(environmentsQuery);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [rotateOpen, setRotateOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   // What the last create answered, held until Done. It is the only copy of the full address and the secret here.
   const [shown, setShown] = useState<StackGitWebhookSecret | null>(null);
   const webhook = git.webhook;
@@ -57,6 +61,8 @@ export function WebhookCard({ envId, stackId, git }: WebhookCardProps) {
   useEffect(() => {
     setShown(null);
     setSetupOpen(false);
+    setRotateOpen(false);
+    setRemoveOpen(false);
   }, [envId, stackId]);
 
   const canManage = needs.allowed;
@@ -87,6 +93,27 @@ export function WebhookCard({ envId, stackId, git }: WebhookCardProps) {
   );
 
   const flavour = webhook?.flavour ?? shown?.flavour;
+  const hostName = webhook
+    ? webhook.flavour === "generic"
+      ? t("stackGit.webhook.hostFallback")
+      : t(`stackGit.webhook.host.${webhook.flavour}`)
+    : "";
+
+  // A button of the configured card: plain for an Admin, with the reason for anyone else.
+  function action(label: string, onClick: () => void, className = "") {
+    const button = (
+      <Button
+        type="button"
+        variant="outline"
+        className={`${TOUCH_HEIGHT} ${className}`}
+        disabled={unknown}
+        onClick={onClick}
+      >
+        {label}
+      </Button>
+    );
+    return canManage || unknown ? button : <NeedsTooltip reason={reason}>{button}</NeedsTooltip>;
+  }
 
   return (
     <section aria-labelledby={headingId}>
@@ -107,7 +134,19 @@ export function WebhookCard({ envId, stackId, git }: WebhookCardProps) {
         </CardHeader>
         <CardContent className="flex min-w-0 flex-col gap-4">
           {shown ? <ShowOnceSecret id={`${headingId}-once`} secret={shown} onDone={done} /> : null}
-          {webhook ? <WebhookRows webhook={webhook} idPrefix={headingId} /> : null}
+          {webhook ? (
+            <>
+              <WebhookRows webhook={webhook} idPrefix={headingId} />
+              <div className="flex flex-wrap gap-2">
+                {action(t("stackGit.webhook.rotateAction"), () => setRotateOpen(true))}
+                {action(
+                  t("stackGit.webhook.removeAction"),
+                  () => setRemoveOpen(true),
+                  "text-destructive",
+                )}
+              </div>
+            </>
+          ) : null}
           {!webhook && !shown ? (
             <>
               <p className="text-sm text-muted-foreground">{t("stackGit.webhook.none")}</p>
@@ -132,6 +171,24 @@ export function WebhookCard({ envId, stackId, git }: WebhookCardProps) {
         open={setupOpen}
         onOpenChange={setSetupOpen}
         onCreated={setShown}
+      />
+      <RotateSecretDialog
+        envId={envId}
+        stackId={stackId}
+        host={hostName}
+        open={rotateOpen}
+        onOpenChange={setRotateOpen}
+        onRotated={setShown}
+      />
+      <RemoveWebhookDialog
+        envId={envId}
+        stackId={stackId}
+        stackName={stackName}
+        pollEnabled={git.pollEnabled}
+        pollMinutes={git.pollMinutes}
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+        onRemoved={() => setShown(null)}
       />
     </section>
   );
@@ -182,6 +239,19 @@ function WebhookRows({ webhook, idPrefix }: WebhookRowsProps) {
           )}
         </dd>
       </dl>
+      {webhook.paused ? (
+        <p className="flex items-start gap-2 text-sm text-muted-foreground">
+          <CirclePause
+            aria-hidden="true"
+            className="mt-0.5 size-4 shrink-0 text-status-warning-text"
+          />
+          <span>
+            {webhook.owner.name
+              ? t("stackGit.webhook.rows.pausedNote", { owner: webhook.owner.name })
+              : t("stackGit.webhook.rows.pausedNoteNoOwner")}
+          </span>
+        </p>
+      ) : null}
       <CopyValueRow
         id={`${idPrefix}-address`}
         label={t("stackGit.webhook.rows.address")}
