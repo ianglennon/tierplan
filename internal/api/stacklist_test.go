@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -34,6 +35,8 @@ type statusCountsAnswer struct {
 	Draft        int `json:"draft"`
 	DeployFailed int `json:"deployFailed"`
 	Drifted      int `json:"drifted"`
+	Behind       int `json:"behind"`
+	SyncError    int `json:"syncError"`
 }
 
 // stackListAnswer is the list of one environment's stacks.
@@ -1020,4 +1023,103 @@ func TestStackListDriftStatusAndCounts(t *testing.T) {
 	if d := driftOf(got, "moved"); d != nil || got.StatusCounts.Drifted != 0 {
 		t.Errorf("after a new deploy moved shows drift %+v, counts %+v, want none until it is checked again", d, got.StatusCounts)
 	}
+}
+
+// The sync status of git stacks is a chip of both lists (plan 09-17, GIT-03, GIT-09, UI-SPEC "Stack lists"): status=behind
+// lists the stacks whose folder moved on, status=sync-error those whose last check failed, and the counts say how many
+// of each, before the search and the filter.
+func TestStackListGitStatus(t *testing.T) {
+	t.Parallel()
+	g, stackID, ended := newStackGitFix(t)
+	listURL := "/api/env/" + g.env + "/stacks"
+	list := func(query string) stackListAnswer {
+		t.Helper()
+		rec := g.f.credCall(t, g.admin, http.MethodGet, listURL+query, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s%s: %d %s", listURL, query, rec.Code, rec.Body)
+		}
+		return answerOf[stackListAnswer](t, rec)
+	}
+	all := func(query string) allStacksAnswer {
+		t.Helper()
+		rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/stacks"+query, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /api/stacks%s: %d %s", query, rec.Code, rec.Body)
+		}
+		return answerOf[allStacksAnswer](t, rec)
+	}
+
+	// Never checked: in neither chip.
+	if got := list(""); got.StatusCounts.Behind != 0 || got.StatusCounts.SyncError != 0 {
+		t.Fatalf("before any check: counts %+v, want none behind and none in error", got.StatusCounts)
+	}
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeInSync {
+		t.Fatalf("first check = %s, want in_sync", out)
+	}
+	if got := list("?status=behind,sync-error"); len(got.Items) != 0 || got.StatusCounts.Behind != 0 || got.StatusCounts.SyncError != 0 {
+		t.Errorf("in sync: %d listed with counts %+v, want none", len(got.Items), got.StatusCounts)
+	}
+
+	// A commit to the folder: behind.
+	g.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=c\n"}, "change web")
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("check after a commit = %s, want behind", out)
+	}
+	got := list("?status=behind")
+	if len(got.Items) != 1 || got.Items[0].ID != stackID || got.Total != 1 || got.StatusCounts.Behind != 1 || got.StatusCounts.SyncError != 0 {
+		t.Errorf("status=behind: %+v with counts %+v, want the git stack alone, one behind and none in error", got.Items, got.StatusCounts)
+	}
+	if got := list("?status=sync-error"); len(got.Items) != 0 || got.StatusCounts.Behind != 1 {
+		t.Errorf("status=sync-error while behind: %d listed with counts %+v, want none listed and the count of behind unchanged", len(got.Items), got.StatusCounts)
+	}
+	// The counts are before the search, as every chip's are.
+	if got := list("?status=behind&q=nothing-by-this-name"); len(got.Items) != 0 || got.StatusCounts.Behind != 1 {
+		t.Errorf("status=behind&q=: %d listed with counts %+v, want none listed and the count unchanged", len(got.Items), got.StatusCounts)
+	}
+	if a := all("?status=behind"); a.Total != 1 || a.StatusCounts.Behind != 1 || a.StatusCounts.SyncError != 0 ||
+		len(a.Groups) != 1 || a.Groups[0].Counts.Behind != 1 {
+		t.Errorf("all stacks status=behind: total %d, counts %+v, groups %+v, want the one behind stack", a.Total, a.StatusCounts, a.Groups)
+	}
+
+	// The branch goes: the stack is in error, and the last good version keeps running. The check keeps what it last
+	// saw, so the stack is still one commit behind in the chips as well as in error.
+	g.repo.DeleteRef(t, "refs/heads/main")
+	if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeError {
+		t.Fatalf("check of a branch that is gone = %s, want error", out)
+	}
+	got = list("?status=sync-error")
+	if len(got.Items) != 1 || got.Items[0].ID != stackID || got.StatusCounts.SyncError != 1 || got.StatusCounts.Behind != 1 {
+		t.Errorf("status=sync-error: %+v with counts %+v, want the git stack alone, in error and still counted behind", got.Items, got.StatusCounts)
+	}
+	if got := list("?status=behind"); len(got.Items) != 1 {
+		t.Errorf("status=behind while in error after being behind: %d listed, want the stack", len(got.Items))
+	}
+	if a := all("?status=sync-error"); a.Total != 1 || a.StatusCounts.SyncError != 1 || len(a.Groups) != 1 || a.Groups[0].Counts.SyncError != 1 {
+		t.Errorf("all stacks status=sync-error: total %d, counts %+v, want the one stack in error", a.Total, a.StatusCounts)
+	}
+	// Both together list the stack once.
+	if got := list("?status=behind,sync-error"); len(got.Items) != 1 {
+		t.Errorf("status=behind,sync-error: %d listed, want the stack once", len(got.Items))
+	}
+
+	// The refusal of an unknown status names the new values.
+	rec := g.f.credCall(t, g.admin, http.MethodGet, listURL+"?status=nonsense", "")
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "sync-error") {
+		t.Errorf("status=nonsense = %d %s, want 422 naming sync-error", rec.Code, rec.Body)
+	}
+
+	// A stack that fails its first check was never seen behind: in error and not in the Behind chip.
+	t.Run("in error and never behind", func(t *testing.T) {
+		t.Parallel()
+		g, stackID, ended := newStackGitFix(t)
+		g.repo.DeleteRef(t, "refs/heads/main")
+		if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeError {
+			t.Fatalf("check of a branch that is gone = %s, want error", out)
+		}
+		rec := g.f.credCall(t, g.admin, http.MethodGet, "/api/env/"+g.env+"/stacks?status=behind", "")
+		got := answerOf[stackListAnswer](t, rec)
+		if len(got.Items) != 0 || got.StatusCounts.Behind != 0 || got.StatusCounts.SyncError != 1 {
+			t.Errorf("status=behind: %d listed with counts %+v, want none behind and one in error", len(got.Items), got.StatusCounts)
+		}
+	})
 }
