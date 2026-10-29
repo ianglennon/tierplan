@@ -143,6 +143,8 @@ function makeRouter() {
       page("/env/$envId"),
       page("/env/$envId/services"),
       page("/env/$envId/services/$serviceId"),
+      page("/env/$envId/stacks"),
+      page("/env/$envId/stacks/$stackId"),
       page("/settings/environments"),
       page("/settings/environments/$envId"),
     ]),
@@ -1311,6 +1313,111 @@ describe("HealthBell registry credential items", () => {
     renderWarnings();
     await openBell("Warnings, 1 item");
     expect(await screen.findByText("“<img src=x onerror=alert(1)>” has expired")).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+// Git sync items (plan 09-17, GIT-09, D-19, UI-SPEC "Bell"): one named item for a stack that cannot sync, one collapsed
+// item per environment for several.
+
+const gitSync = (
+  stackName: string,
+  extra: Record<string, unknown> = {},
+  envId = "e1",
+  envName = "Lab",
+) => ({
+  id: "git_sync_error",
+  severity: "error",
+  envId,
+  envName,
+  stackId: `stack-${stackName}`,
+  stackName,
+  reasonCode: "ref_gone",
+  reasonDetail: "The branch or tag no longer exists.",
+  since: "2026-10-28T14:05:00Z",
+  ...extra,
+});
+
+describe("HealthBell git sync items", () => {
+  beforeEach(() => {
+    me = READER;
+  });
+
+  it("names the stack, says why in the words of the reason and links to the stack", async () => {
+    envItems = [gitSync("web")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("web can't sync with its repository")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The branch or tag no longer exists. The last good version is still running.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/stack-web",
+    );
+  });
+
+  it("says a host key changed without naming a host it does not know", async () => {
+    envItems = [
+      gitSync("web", {
+        reasonCode: "host_key_changed",
+        reasonDetail: "The server's host key changed.",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(
+      await screen.findByText(
+        "The host key of the repository's server has changed. The last good version is still running.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("falls back to the server's sentence for a code this build has no words for", async () => {
+    envItems = [
+      gitSync("web", {
+        reasonCode: "from_a_newer_server",
+        reasonDetail: "Something new went wrong.",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(
+      await screen.findByText("Something new went wrong. The last good version is still running."),
+    ).toBeTruthy();
+  });
+
+  it("collapses several stacks of one environment into one item that opens the list in error", async () => {
+    envItems = [gitSync("web"), gitSync("api"), gitSync("db")];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("3 stacks can't sync with their repositories")).toBeTruthy();
+    expect(screen.queryByText(/web can't sync/)).toBeNull();
+    expect(screen.getByRole("link", { name: "Open stacks" }).getAttribute("href")).toBe(
+      "/env/e1/stacks?status=sync-error",
+    );
+  });
+
+  it("keeps the environments apart and lists each stack once", async () => {
+    envItems = [gitSync("web"), gitSync("api"), gitSync("db", {}, "e2", "Edge")];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("2 stacks can't sync with their repositories")).toBeTruthy();
+    expect(screen.getByText("db can't sync with its repository")).toBeTruthy();
+  });
+
+  it("draws a hostile stack name and reason as text", async () => {
+    envItems = [
+      gitSync("<b>web</b>", {
+        reasonCode: "checks_failed",
+        reasonDetail: "compose.yaml: <img src=x>",
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("<b>web</b> can't sync with its repository")).toBeTruthy();
+    expect(document.querySelector("b")).toBeNull();
     expect(document.querySelector("img")).toBeNull();
   });
 });

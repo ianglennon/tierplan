@@ -10,6 +10,8 @@ import { STACK_GIT_POLL_MAX_MS, STACK_GIT_POLL_MS, type StackGit } from "@/api/s
 import { type StackDetail, stackQuery } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GitStrip } from "@/features/stack-git/git-strip";
+import { SyncErrorAlert } from "@/features/stack-git/sync-error-alert";
+import { StackDetailsCard } from "@/features/stacks/stack-details-card";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -93,6 +95,9 @@ beforeEach(() => {
         onCheck?.();
         return Response.json({ checking: true }, { status: 202 });
       }
+      if (path === "/api/environments") {
+        return Response.json({ items: [{ id: ENV, name: "Prod", envType: "swarm" }] });
+      }
       if (path === `/api/env/${ENV}/stacks/s1`) {
         gets++;
         return Response.json(served);
@@ -110,9 +115,12 @@ afterEach(() => {
 });
 
 // Harness reads the stack as the page does and hands it to the strip.
-function Harness() {
+function Harness({ part = "strip" }: { part?: "strip" | "alert" | "details" }) {
   const { data } = useQuery(stackQuery(ENV, "s1"));
-  return data ? <GitStrip stack={data} /> : null;
+  if (!data) return null;
+  if (part === "alert") return <SyncErrorAlert stack={data} />;
+  if (part === "details") return <StackDetailsCard stack={data} />;
+  return <GitStrip stack={data} />;
 }
 
 async function mount(git: StackGit | undefined, over: Partial<StackDetail> = {}) {
@@ -391,5 +399,235 @@ describe("Check now", () => {
         (within(strip).getByRole("button", { name: "Check now" }) as HTMLButtonElement).disabled,
       ).toBe(false),
     );
+  });
+});
+
+// The part of the page a test looks at, mounted the way the page mounts it.
+async function mountPart(
+  part: "alert" | "details",
+  git: StackGit,
+  over: Partial<StackDetail> = {},
+) {
+  client.clear();
+  served = makeStack(git, over);
+  render(
+    <QueryClientProvider client={client}>
+      <TestRouter>
+        <TooltipProvider>
+          <Harness part={part} />
+        </TooltipProvider>
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("SyncErrorAlert", () => {
+  // One fixture per reason code of the generated union: its sentence, as the alert and the strip say it.
+  const cases: [NonNullable<StackGit["reasonCode"]>, Partial<StackGit>, string][] = [
+    [
+      "fetch_failed",
+      { reasonDetail: "The server refused the credential." },
+      "Bayplan couldn't fetch the repository: the server refused the credential.",
+    ],
+    ["host_key_changed", {}, "The host key for github.com has changed."],
+    ["host_key_untrusted", {}, "Host key not trusted yet. Confirm the key for github.com."],
+    ["ref_gone", {}, "main no longer exists."],
+    ["folder_gone", { folder: "apps/web" }, "apps/web no longer exists at main."],
+    [
+      "checks_failed",
+      { headSha: HEAD, reasonDetail: "compose.yaml: undefined variable DB_PASS" },
+      "Commit fedcba9 didn't pass the checks: compose.yaml: undefined variable DB_PASS.",
+    ],
+    [
+      "auto_deploy_failed",
+      { headSha: HEAD, reasonDetail: "The deploy timed out." },
+      "The automatic deploy of fedcba9 failed: The deploy timed out.",
+    ],
+    [
+      "auto_deploy_blocked",
+      { headSha: HEAD, reasonDetail: "compose.yaml has local edits that were not reviewed" },
+      "Commit fedcba9 is waiting: compose.yaml has local edits that were not reviewed. Nothing was deployed.",
+    ],
+  ];
+
+  it.each(cases)("says why for %s, in the alert and in the strip", async (code, over, sentence) => {
+    await mountPart("alert", makeGit({ status: "error", reasonCode: code, ...over }));
+    const alert = await screen.findByRole("status");
+    expect(within(alert).getByText("web can't sync with stacks repo")).toBeTruthy();
+    expect(
+      within(alert).getByText(`${sentence} The last good version, 0123456, is still running.`),
+    ).toBeTruthy();
+    cleanup();
+    const strip = await mount(makeGit({ status: "error", reasonCode: code, ...over }));
+    expect(within(status(strip)).getByText(sentence)).toBeTruthy();
+  });
+
+  it("covers every reason code the server can send but source_changed", () => {
+    // source_changed is a note on a stack that is behind, not an error, and has no sentence.
+    expect(cases.map(([code]) => code).sort()).toEqual(
+      [
+        "auto_deploy_blocked",
+        "auto_deploy_failed",
+        "checks_failed",
+        "fetch_failed",
+        "folder_gone",
+        "host_key_changed",
+        "host_key_untrusted",
+        "ref_gone",
+      ].sort(),
+    );
+  });
+
+  it("is a polite status with Check now and Open git settings, and no way to dismiss it", async () => {
+    await mountPart("alert", makeGit({ status: "error", reasonCode: "ref_gone" }));
+    const alert = await screen.findByRole("status");
+    expect(alert.getAttribute("aria-live")).toBe("polite");
+    expect(within(alert).getByRole("button", { name: "Check now" })).toBeTruthy();
+    expect(
+      within(alert).getByRole("link", { name: "Open git settings" }).getAttribute("href"),
+    ).toBe("/env/e1/stacks/s1/git");
+    expect(within(alert).getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("asks for a check from its Check now", async () => {
+    await mountPart("alert", makeGit({ status: "error", reasonCode: "ref_gone" }));
+    const alert = await screen.findByRole("status");
+    fireEvent.click(within(alert).getByRole("button", { name: "Check now" }));
+    await waitFor(() => expect(posts).toHaveLength(1));
+  });
+
+  it("leaves out the last good version when nothing was deployed from the repository", async () => {
+    await mountPart(
+      "alert",
+      makeGit({ status: "error", reasonCode: "ref_gone", deployedSha: "", headSha: "" }),
+    );
+    const alert = await screen.findByRole("status");
+    expect(within(alert).getByText("main no longer exists.")).toBeTruthy();
+    expect(alert.textContent).not.toContain("last good version");
+  });
+
+  it("names a repository it cannot read as the repository", async () => {
+    await mountPart("alert", makeGit({ status: "error", reasonCode: "ref_gone", repoName: "" }));
+    expect(await screen.findByText("web can't sync with its repository")).toBeTruthy();
+  });
+
+  it.each([
+    ["in sync", makeGit()],
+    ["behind", makeGit({ status: "behind", behind: 2, headSha: HEAD })],
+    [
+      "behind because its source changed",
+      makeGit({ status: "behind", behind: 1, reasonCode: "source_changed" }),
+    ],
+    ["not checked yet", makeGit({ status: "unknown", checkedAt: undefined })],
+  ])("is not shown for a stack that is %s", async (_name, git) => {
+    await mountPart("alert", git);
+    await waitFor(() => expect(gets).toBeGreaterThan(0));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("draws the reason of a hostile repository as text", async () => {
+    await mountPart(
+      "alert",
+      makeGit({
+        status: "error",
+        reasonCode: "checks_failed",
+        headSha: HEAD,
+        reasonDetail: "<script>alert(1)</script>",
+      }),
+    );
+    const alert = await screen.findByRole("status");
+    expect(alert.textContent).toContain("<script>alert(1)</script>");
+    expect(document.querySelector("script")).toBeNull();
+  });
+});
+
+describe("the Details rows of a git stack", () => {
+  const row = (label: string) => {
+    const dt = screen.getByText(label, { selector: "dt" });
+    return dt.nextElementSibling as HTMLElement;
+  };
+
+  it("replaces Source with the git rows", async () => {
+    await mountPart(
+      "details",
+      makeGit({
+        folder: "apps/web",
+        composeFiles: ["compose.yaml", "compose.prod.yaml"],
+        autoDeploy: true,
+        status: "behind",
+        behind: 2,
+        headSha: HEAD,
+      } as Partial<StackGit>),
+    );
+    await screen.findByText("Repository", { selector: "dt" });
+    expect(row("Source").textContent).toBe("Git");
+    expect(row("Repository").textContent).toBe("stacks repo");
+    expect(row("Ref").textContent).toBe("main branch");
+    expect(row("Ref").querySelector("code")?.textContent).toBe("main");
+    expect(row("Folder").textContent).toBe("apps/web");
+    expect(row("Compose files").textContent).toBe("compose.yamlcompose.prod.yaml");
+    expect(row("Auto-deploy").textContent).toBe("On");
+    expect(row("Checked").querySelector("time")?.getAttribute("datetime")).toBe(CHECKED);
+  });
+
+  it("reads Repository root for the root folder", async () => {
+    await mountPart(
+      "details",
+      makeGit({ folder: "", composeFiles: ["compose.yaml"] } as Partial<StackGit>),
+    );
+    await screen.findByText("Folder", { selector: "dt" });
+    expect(row("Folder").textContent).toBe("Repository root");
+  });
+
+  it("shows the deployed commit in full with Copy and a link on a known host", async () => {
+    await mountPart("details", makeGit());
+    await screen.findByText("Deployed commit", { selector: "dt" });
+    const cell = row("Deployed commit");
+    expect(cell.textContent).toContain(DEPLOYED);
+    expect(within(cell).getByRole("button", { name: /Copy/ })).toBeTruthy();
+    expect(
+      within(cell).getByRole("link", { name: /Open commit 0123456 on github.com/ }),
+    ).toBeTruthy();
+  });
+
+  it("shows the latest commit only while the stack is behind", async () => {
+    await mountPart("details", makeGit({ status: "behind", behind: 2, headSha: HEAD }));
+    await screen.findByText("Latest commit", { selector: "dt" });
+    expect(row("Latest commit").textContent).toContain("fedcba9");
+    cleanup();
+    await mountPart("details", makeGit());
+    await screen.findByText("Deployed commit", { selector: "dt" });
+    expect(screen.queryByText("Latest commit", { selector: "dt" })).toBeNull();
+  });
+
+  it("says when auto-deploy is off or paused, and when nothing is deployed or checked", async () => {
+    await mountPart(
+      "details",
+      makeGit({ deployedSha: "", headSha: "", status: "unknown", checkedAt: undefined }),
+    );
+    await screen.findByText("Auto-deploy", { selector: "dt" });
+    expect(row("Auto-deploy").textContent).toBe("Off. Waits for review.");
+    expect(row("Deployed commit").textContent).toBe("Not deployed yet");
+    expect(row("Checked").textContent).toBe("Never");
+    cleanup();
+    await mountPart("details", makeGit({ autoDeploy: true, autoDeployPaused: true }));
+    await screen.findByText("Auto-deploy", { selector: "dt" });
+    expect(row("Auto-deploy").textContent).toBe("Paused");
+  });
+
+  it("keeps the stack's own Source row for a stack that is not from git", async () => {
+    served = makeStack(undefined, { source: "inline" });
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <Harness part="details" />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Source", { selector: "dt" });
+    expect(row("Source").textContent).toBe("Inline");
+    expect(screen.queryByText("Repository", { selector: "dt" })).toBeNull();
   });
 });

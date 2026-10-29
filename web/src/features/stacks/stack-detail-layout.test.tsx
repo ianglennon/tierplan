@@ -455,6 +455,32 @@ describe("the Git strip", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe("stacks repo · main");
   });
 
+  it("shows the sync error alert after the stopped alert and before the draft banner, once, and not on the Review", async () => {
+    detail = {
+      ...detail,
+      stopped: true,
+      hasDraft: true,
+      draftSavedAt: "2026-10-19T10:00:00Z",
+      draftSavedBy: "ada",
+      git: { ...git, status: "error", reasonCode: "ref_gone" },
+    };
+    mount();
+    const title = await screen.findByText("tracer can't sync with stacks repo");
+    const stopped = document.querySelector('[data-slot="stopped-alert"]') as Element;
+    const draft = document.querySelector('[data-slot="draft-banner"]') as Element;
+    const follows = (a: Node, b: Node) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(stopped).toBeTruthy();
+    expect(draft).toBeTruthy();
+    expect(follows(stopped, title)).toBeTruthy();
+    expect(follows(title, draft)).toBeTruthy();
+    expect(screen.getAllByText("tracer can't sync with stacks repo")).toHaveLength(1);
+    cleanup();
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByText("tracer can't sync with stacks repo")).toBeNull();
+  });
+
   it("is not on the Review and the console, where the flow caption is", async () => {
     mount("review");
     await screen.findByRole("heading", { name: "tracer", level: 2 });

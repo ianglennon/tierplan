@@ -23,24 +23,25 @@ import (
 // saw, and every body of the stack says it.
 
 type stackGitAnswer struct {
-	RepoID       string `json:"repoId"`
-	RepoName     string `json:"repoName"`
-	RepoHost     string `json:"repoHost"`
-	RepoPath     string `json:"repoPath"`
-	RefKind      string `json:"refKind"`
-	Ref          string `json:"ref"`
-	Folder       string `json:"folder"`
-	DeployedSha  string `json:"deployedSha"`
-	HeadSha      string `json:"headSha"`
-	Behind       int    `json:"behind"`
-	BehindCapped bool   `json:"behindCapped"`
-	Status       string `json:"status"`
-	ReasonCode   string `json:"reasonCode"`
-	ReasonDetail string `json:"reasonDetail"`
-	CheckedAt    string `json:"checkedAt"`
-	Checking     bool   `json:"checking"`
-	AutoDeploy   bool   `json:"autoDeploy"`
-	Paused       bool   `json:"autoDeployPaused"`
+	RepoID       string   `json:"repoId"`
+	RepoName     string   `json:"repoName"`
+	RepoHost     string   `json:"repoHost"`
+	RepoPath     string   `json:"repoPath"`
+	RefKind      string   `json:"refKind"`
+	Ref          string   `json:"ref"`
+	Folder       string   `json:"folder"`
+	ComposeFiles []string `json:"composeFiles"`
+	DeployedSha  string   `json:"deployedSha"`
+	HeadSha      string   `json:"headSha"`
+	Behind       int      `json:"behind"`
+	BehindCapped bool     `json:"behindCapped"`
+	Status       string   `json:"status"`
+	ReasonCode   string   `json:"reasonCode"`
+	ReasonDetail string   `json:"reasonDetail"`
+	CheckedAt    string   `json:"checkedAt"`
+	Checking     bool     `json:"checking"`
+	AutoDeploy   bool     `json:"autoDeploy"`
+	Paused       bool     `json:"autoDeployPaused"`
 }
 
 // checkEnded is told by the server when a check a request started has ended.
@@ -121,6 +122,9 @@ func TestCheckNowAndSummary(t *testing.T) {
 	if before.Status != "unknown" || before.RepoID != g.id || before.RepoName != "acme" || before.RefKind != "branch" || before.Ref != "main" ||
 		before.Folder != "stacks/web" || before.CheckedAt != "" || before.Checking || before.AutoDeploy || before.Paused {
 		t.Errorf("before any check = %+v, want unknown with the settings", before)
+	}
+	if !slices.Equal(before.ComposeFiles, []string{"compose.yaml"}) {
+		t.Errorf("compose files = %v, want [compose.yaml] in the order the stack merges them", before.ComposeFiles)
 	}
 	if before.RepoHost == "" || strings.Contains(before.RepoPath, ".git") || strings.HasPrefix(before.RepoPath, "/") {
 		t.Errorf("repository address = host %q path %q, want a host and a path with no leading slash or .git", before.RepoHost, before.RepoPath)
