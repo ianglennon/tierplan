@@ -923,13 +923,20 @@ func sameGitRevision(a, b GitRevision) bool {
 }
 
 // SetAppliedSource makes the repository, ref, folder and compose files a git stack follows those of src: the settings
-// follow what was deployed (D-08). The sync state is not touched. A stack that is not from git is ErrNoGit.
+// follow what was deployed (D-08), and the stack's source ref is the repository it follows now. The sync state is not
+// touched. A stack that is not from git (a pending convert is not one) is ErrNoGit and nothing changes.
 func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSource) error {
 	raw, err := json.Marshal(nonNil(src.ComposeFiles))
 	if err != nil {
 		return fmt.Errorf("encode the compose files: %w", err)
 	}
-	n, err := r.Store.Q.SetStackGitSource(ctx, sqlc.SetStackGitSourceParams{
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	n, err := q.SetStackGitSource(ctx, sqlc.SetStackGitSourceParams{
 		RepoID: src.RepoID, RefKind: src.RefKind, Ref: src.Ref, Folder: src.Folder, ComposeFiles: string(raw),
 		UpdatedAt: r.now().UnixNano(), StackID: stackID,
 	})
@@ -938,6 +945,13 @@ func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSourc
 	}
 	if n == 0 {
 		return ErrNoGit
+	}
+	// stacks.source_ref is the repository's ID (as CreateGitStack and FinalizeConvert set it); the API returns it as sourceRef.
+	if _, err := q.SetStackSource(ctx, sqlc.SetStackSourceParams{SourceKind: string(stacks.SourceGit), SourceRef: src.RepoID, ID: stackID}); err != nil {
+		return fmt.Errorf("set the stack's source: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

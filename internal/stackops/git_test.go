@@ -547,6 +547,16 @@ func TestSetAppliedSource(t *testing.T) {
 	if err := f.repo.SetAppliedSource(ctx, "nope", src); !errors.Is(err, stackops.ErrNoGit) {
 		t.Errorf("SetAppliedSource of an unknown stack = %v, want ErrNoGit", err)
 	}
+
+	// Following another repository moves the stack's own source ref with it (WR-C02).
+	f.addGitRepo(t, "repo-2", "other")
+	src.RepoID = "repo-2"
+	if err := f.repo.SetAppliedSource(ctx, st.ID, src); err != nil {
+		t.Fatalf("SetAppliedSource to another repository: %v", err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceGit || got.Source.Ref != "repo-2" {
+		t.Errorf("stack = %+v, %v, want the new repository as its ref", got.Source, err)
+	}
 }
 
 // A git stack's draft may change its overlay files and variables and nothing that belongs to the repository (plan
@@ -816,6 +826,25 @@ func TestPendingGitSourceIsNotAGitStackUntilFinalized(t *testing.T) {
 	}
 	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline {
 		t.Errorf("stack = %+v, %v, want it inline until finalized", got, err)
+	}
+
+	// Nothing that writes the settings of a stack from a repository reaches a pending source (WR-C02).
+	moved := gitSource()
+	moved.Ref = "elsewhere"
+	if err := f.repo.SetAppliedSource(ctx, st.ID, moved); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAppliedSource on a pending source = %v, want ErrNoGit", err)
+	}
+	if err := f.repo.SetPolling(ctx, st.ID, false, stackops.MinPollInterval); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetPolling on a pending source = %v, want ErrNoGit", err)
+	}
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, true, "", 0, nil); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAutoDeploy on a pending source = %v, want ErrNoGit", err)
+	}
+	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline || got.Source.Ref != "" {
+		t.Errorf("stack = %+v, %v, want it inline with no source ref", got.Source, err)
+	}
+	if pending, ok, _ := f.repo.PendingGit(ctx, st.ID); !ok || pending.Ref != "main" || !pending.PollEnabled || pending.AutoDeploy {
+		t.Errorf("pending source = %+v, want it as it was made", pending)
 	}
 
 	// Asking again replaces the pending source.

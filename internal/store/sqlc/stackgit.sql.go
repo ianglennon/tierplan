@@ -23,7 +23,7 @@ func (q *Queries) ClearStackGitNextCheck(ctx context.Context, stackID string) er
 const clearStackGitWebhook = `-- name: ClearStackGitWebhook :execrows
 UPDATE stack_git SET webhook_flavour = '', webhook_placement = '', webhook_token_hash = '', webhook_secret_sealed = '',
        webhook_secret_last4 = '', webhook_created_by = '', webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ?
+WHERE stack_id = ? AND pending_convert = 0
 `
 
 type ClearStackGitWebhookParams struct {
@@ -187,7 +187,7 @@ func (q *Queries) GetStackGit(ctx context.Context, stackID string) (StackGit, er
 const getStackGitByTokenHash = `-- name: GetStackGitByTokenHash :one
 SELECT g.stack_id, s.env_id, s.name, g.webhook_flavour, g.webhook_placement, g.webhook_secret_sealed
 FROM stack_git g JOIN stacks s ON s.id = g.stack_id
-WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != ''
+WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != '' AND g.pending_convert = 0
 `
 
 type GetStackGitByTokenHashRow struct {
@@ -494,7 +494,7 @@ func (q *Queries) ListStackGitsByEnv(ctx context.Context, envID string) ([]Stack
 const rotateStackGitWebhook = `-- name: RotateStackGitWebhook :execrows
 UPDATE stack_git SET webhook_token_hash = ?, webhook_secret_sealed = ?, webhook_secret_last4 = ?,
        webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ? AND webhook_token_hash != ''
+WHERE stack_id = ? AND webhook_token_hash != '' AND pending_convert = 0
 `
 
 type RotateStackGitWebhookParams struct {
@@ -523,7 +523,7 @@ func (q *Queries) RotateStackGitWebhook(ctx context.Context, arg RotateStackGitW
 
 const setStackGitAutoDeploy = `-- name: SetStackGitAutoDeploy :execrows
 UPDATE stack_git SET auto_deploy = ?, auto_deploy_paused_reason = ?, auto_deploy_paused_seq = ?, updated_at = ?
-WHERE stack_id = ?
+WHERE stack_id = ? AND pending_convert = 0
 `
 
 type SetStackGitAutoDeployParams struct {
@@ -611,7 +611,7 @@ func (q *Queries) SetStackGitNextCheck(ctx context.Context, arg SetStackGitNextC
 }
 
 const setStackGitPolling = `-- name: SetStackGitPolling :execrows
-UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ?
+UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ? AND pending_convert = 0
 `
 
 type SetStackGitPollingParams struct {
@@ -636,7 +636,7 @@ func (q *Queries) SetStackGitPolling(ctx context.Context, arg SetStackGitPolling
 }
 
 const setStackGitSource = `-- name: SetStackGitSource :execrows
-UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ?
+UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ? AND pending_convert = 0
 `
 
 type SetStackGitSourceParams struct {
@@ -670,7 +670,7 @@ func (q *Queries) SetStackGitSource(ctx context.Context, arg SetStackGitSourcePa
 const setStackGitWebhook = `-- name: SetStackGitWebhook :execrows
 UPDATE stack_git SET webhook_flavour = ?, webhook_placement = ?, webhook_token_hash = ?, webhook_secret_sealed = ?,
        webhook_secret_last4 = ?, webhook_created_by = ?, webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
-WHERE stack_id = ?
+WHERE stack_id = ? AND pending_convert = 0
 `
 
 type SetStackGitWebhookParams struct {
@@ -705,7 +705,7 @@ func (q *Queries) SetStackGitWebhook(ctx context.Context, arg SetStackGitWebhook
 }
 
 const setStackGitWebhookDelivery = `-- name: SetStackGitWebhookDelivery :exec
-UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ?
+UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ? AND pending_convert = 0
 `
 
 type SetStackGitWebhookDeliveryParams struct {
