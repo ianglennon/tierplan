@@ -739,3 +739,26 @@ func TestMaskHistoryCommandKeepsOnlyTheKindOfInstruction(t *testing.T) {
 		}
 	}
 }
+
+func TestWebhookPathHidesTheRoutingToken(t *testing.T) {
+	t.Parallel()
+	const token = "k3Zq9dLw0aXr7Vt1mN5uBc2YhGfEoJsP4iDxQyWlRzA" //nolint:gosec // G101: a made-up routing token for the test
+	for name, tc := range map[string]struct{ in, want string }{
+		"the webhook address":           {"/hooks/git/" + token, "/hooks/git/[redacted]"},
+		"a trailing slash and a suffix": {"/hooks/git/" + token + "/extra/", "/hooks/git/[redacted]"},
+		"behind a base path":            {"/bayplan/hooks/git/" + token, "/bayplan/hooks/git/[redacted]"},
+		"no token":                      {"/hooks/git/", "/hooks/git/[redacted]"},
+		"another path":                  {"/api/env/e1/stacks", "/api/env/e1/stacks"},
+		"the empty path":                {"", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := redact.WebhookPath(tc.in)
+			if got != tc.want {
+				t.Errorf("WebhookPath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(got, token) {
+				t.Errorf("WebhookPath(%q) still holds the token", tc.in)
+			}
+		})
+	}
+}
