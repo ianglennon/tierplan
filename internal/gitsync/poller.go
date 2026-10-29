@@ -46,7 +46,8 @@ type PollerDeps struct {
 	// the jitter of each next check. Nil is math/rand/v2. A test passes its own, so that the spread is known.
 	Rand func() float64
 	// Checked, when set, is told what became of each stack the poller checked: the Outcome, or "failed". A test waits
-	// on it instead of on a length of time.
+	// on it instead of on a length of time. The last check of a read of a repository is told once the repository is
+	// free again, so that a test which moves the clock on after it finds the next round able to read it.
 	Checked func(stackID, outcome string)
 }
 
@@ -184,9 +185,10 @@ func (p *poller) round(ctx context.Context) {
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			defer func() { <-p.slots }()
-			defer p.end(g.repoID)
-			p.readRepo(ctx, g)
+			last := p.readRepo(ctx, g)
+			p.end(g.repoID)
+			<-p.slots
+			p.report(last)
 		}()
 	}
 }
@@ -207,12 +209,23 @@ func (p *poller) end(repoID string) {
 	p.mu.Unlock()
 }
 
-// readRepo checks the due stacks of one repository one after the other, with one listing of its refs between them.
-func (p *poller) readRepo(ctx context.Context, g *pollGroup) {
+// report tells the Checked seam what became of a stack, when there is one to tell.
+func (p *poller) report(c *polledCheck) {
+	if c != nil && p.d.Checked != nil {
+		p.d.Checked(c.stackID, c.outcome)
+	}
+}
+
+// polledCheck is what became of one stack the poller checked.
+type polledCheck struct{ stackID, outcome string }
+
+// readRepo checks the due stacks of one repository one after the other, with one listing of its refs between them. It
+// returns the last check it made without reporting it: the caller reports it once the repository is free.
+func (p *poller) readRepo(ctx context.Context, g *pollGroup) (last *polledCheck) {
 	list, listed := p.listRefs(ctx, g)
 	for _, ps := range g.stacks {
 		if ctx.Err() != nil {
-			return
+			return last
 		}
 		head := ""
 		if listed {
@@ -220,7 +233,7 @@ func (p *poller) readRepo(ctx context.Context, g *pollGroup) {
 		}
 		out, err := p.s.CheckWith(ctx, ps.EnvID, ps.StackID, CheckOptions{Trigger: TriggerPoll, RemoteHead: head})
 		if ctx.Err() != nil {
-			return
+			return last
 		}
 		result := string(out)
 		failures := ps.ConsecutiveFailures
@@ -247,15 +260,15 @@ func (p *poller) readRepo(ctx context.Context, g *pollGroup) {
 		if serr := p.s.repo.SetNextCheck(ctx, ps.StackID, next); serr != nil && ctx.Err() == nil && !errors.Is(serr, stackops.ErrNoGit) {
 			p.s.log.Warn("could not schedule the next check of a git stack", "stack", ps.StackID, "error", serr)
 		}
-		if p.d.Checked != nil {
-			p.d.Checked(ps.StackID, result)
-		}
+		p.report(last)
+		last = &polledCheck{ps.StackID, result}
 		if out == OutcomeError && !listed {
 			// The repository could not even be listed and a fetch failed too: it is down, and trying the other stacks
 			// of it now would only repeat the same failure. They stay due and are tried one by one on the next ticks.
-			return
+			return last
 		}
 	}
+	return last
 }
 
 // listRefs is the listing of a repository's refs: the one made less than the group's ttl ago, or a new one. listed is

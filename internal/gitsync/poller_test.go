@@ -83,6 +83,8 @@ type pollFixture struct {
 	*checkFixture
 	pc      *pollClock
 	checked chan polled
+	// afterChecked, when set, runs in the poller after each report, once the test has been told of it.
+	afterChecked func()
 }
 
 func newPollFixture(t *testing.T, wrap func(gitx.Client) gitx.Client) *pollFixture {
@@ -96,7 +98,12 @@ func newPollFixture(t *testing.T, wrap func(gitx.Client) gitx.Client) *pollFixtu
 func (f *pollFixture) start(t *testing.T, d gitsync.PollerDeps) {
 	t.Helper()
 	d.Clock = f.pc
-	d.Checked = func(stackID, outcome string) { f.checked <- polled{stackID, outcome} }
+	d.Checked = func(stackID, outcome string) {
+		f.checked <- polled{stackID, outcome}
+		if f.afterChecked != nil {
+			f.afterChecked()
+		}
+	}
 	if d.Rand == nil {
 		d.Rand = func() float64 { return 0 }
 	}
@@ -263,6 +270,28 @@ func TestPollerDedup(t *testing.T) {
 	}
 	if got := f.srv.Requests(); got != base+2 {
 		t.Errorf("the git server saw %d advertisement requests in two intervals, want 2", got-base)
+	}
+}
+
+// TestPollerReportsOnceFree: the poller reports the last check of a read once the repository is free again. A test
+// that moves the clock on as soon as it is told finds the next round able to read the repository, even when the
+// goroutine that made the read has not run on yet.
+func TestPollerReportsOnceFree(t *testing.T) {
+	t.Parallel()
+	f := newPollFixture(t, nil)
+	f.checkNow(t, f.stackID)
+	hold := make(chan struct{})
+	f.afterChecked = func() { <-hold }
+
+	f.start(t, gitsync.PollerDeps{})
+	f.pc.Tick(t, 15*time.Second)
+	f.awaitChecked(t, 1)
+	// The goroutine of the first read is held just after its report while the next round runs.
+	f.pc.Tick(t, 5*time.Minute)
+	testsupport.Await(t, "the second round to finish", f.pc.armed)
+	close(hold)
+	if got := f.awaitChecked(t, 1); got[0].outcome != string(gitsync.OutcomeInSync) {
+		t.Fatalf("the check of the second round = %+v, want in_sync", got)
 	}
 }
 
