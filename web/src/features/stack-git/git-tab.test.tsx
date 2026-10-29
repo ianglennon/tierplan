@@ -245,6 +245,25 @@ describe("GitTab Updates card", () => {
     expect(puts).toEqual([]);
   });
 
+  it("lets polling be turned off while the number is invalid, and keeps the stored minutes", async () => {
+    mount();
+    const c = await card();
+    type(c, "");
+    expect(within(c).getByRole("alert")).toBeTruthy();
+    fireEvent.click(toggle(c));
+    // The field is off, so its number is no longer judged.
+    expect(within(c).queryByRole("alert")).toBeNull();
+    expect((save(c) as HTMLButtonElement).disabled).toBe(false);
+    // Turning it back on brings the invalid number back and holds the save.
+    fireEvent.click(toggle(c));
+    expect(within(c).getByRole("alert")).toBeTruthy();
+    expect((save(c) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(toggle(c));
+    git = makeGit({ pollEnabled: false });
+    fireEvent.click(save(c));
+    await waitFor(() => expect(puts).toEqual([{ pollEnabled: false, pollMinutes: 5 }]));
+  });
+
   it("shows the server's refusal of the number like a typed one and sends nothing more", async () => {
     putAnswer = () =>
       Response.json(
