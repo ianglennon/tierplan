@@ -384,3 +384,113 @@ func TestAutoDeployEndToEndJobFailed(t *testing.T) {
 		t.Errorf("git = %+v, want in sync at %s", got, next)
 	}
 }
+
+// newDeployedAutoFix is a git stack of two services (web and db) that was really deployed, through the deploy route and
+// the fake engine, with the hooks of newAutoFix so a check started by the server can be waited for. The deployed commit
+// is the repository's second one.
+func newDeployedAutoFix(t *testing.T) *autoFix {
+	t.Helper()
+	a := &autoFix{ended: make(checkEnded, 8), triggered: make(chan bool, 8)}
+	g, _, stackID := deployedGitStackWith(t, func(f *envFix) {
+		f.gitOnCheck = a.ended.tell
+		f.gitTriggered = func(_ string, _ gitsync.Outcome, _ error, more bool) { a.triggered <- more }
+	})
+	a.gitStackFix, a.stackID = g, stackID
+	return a
+}
+
+// autoBellItem is an item of the bell about automatic deploys.
+type autoBellItem struct {
+	ID           string `json:"id"`
+	Severity     string `json:"severity"`
+	EnvID        string `json:"envId"`
+	StackID      string `json:"stackId"`
+	StackName    string `json:"stackName"`
+	ReasonCode   string `json:"reasonCode"`
+	ReasonDetail string `json:"reasonDetail"`
+	Commit       string `json:"commit"`
+	Count        int    `json:"count"`
+	Example      string `json:"example"`
+	Revision     int64  `json:"revision"`
+	Owner        string `json:"owner"`
+	Since        string `json:"since"`
+}
+
+// autoBell are the git_autodeploy_* items the bell shows a user.
+func (a *autoFix) autoBell(t *testing.T, u credentialUser) []autoBellItem {
+	t.Helper()
+	rec := a.f.credCall(t, u, http.MethodGet, "/api/environments/warnings", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("warnings: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Items []autoBellItem `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var out []autoBellItem
+	for _, it := range body.Items {
+		if strings.HasPrefix(it.ID, "git_autodeploy_") {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+func TestAutoDeployRevertedBellItem(t *testing.T) {
+	t.Parallel()
+	a := newDeployedAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	other := a.f.asRoleOn(t, "u-operator-2", a.env, "operator")
+	viewer := a.f.asRoleOn(t, "u-viewer", a.env, "viewer")
+	envAdmin := a.f.asRoleOn(t, "u-env-admin", a.env, "admin")
+	a.turnOn(t, operator)
+
+	// Somebody scales web outside Bayplan; the commit then changes the image of web and leaves its replicas alone.
+	a.f.editLiveService(t, a.e, "web", "web", scaleTo(5))
+	head := a.commitCompose(t, gitCompose("1.28"), "newer web")
+	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("check = %s, want behind", out)
+	}
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("job = %+v, want the deploy to go ahead and finish", job)
+	}
+	const line = "web replicas 5 → 1"
+
+	// The revision, the audit entry and the state all carry what was put back.
+	repo := a.stackRepo()
+	ctx := context.Background()
+	good, ok, err := repo.LatestGoodRevision(ctx, a.stackID)
+	if err != nil || !ok || good.Git.Commit != head || good.SyncTrigger != stackops.SyncPoll {
+		t.Fatalf("newest good revision = %+v, %v, %v; want an automatic one at %s", good, ok, err, head)
+	}
+	if lines, err := repo.RevertedDrift(ctx, a.stackID, good.Seq); err != nil || len(lines) != 1 || lines[0] != line {
+		t.Errorf("reverted drift of revision #%d = %q, %v; want %q", good.Seq, lines, err, line)
+	}
+	if rows := a.f.auditRowsOf(t, audit.ActionGitAutoDeployed); len(rows) != 1 || rows[0].Details["reverted"] != line || rows[0].Details["revertedCount"] != "1" {
+		t.Errorf("git.autodeployed rows = %+v, want the reverted line in the details", rows)
+	}
+	if s, err := repo.GitState(ctx, a.stackID); err != nil || s.EventKind != stackops.GitEventReverted {
+		t.Errorf("state = %+v, %v; want the %s event", s, err, stackops.GitEventReverted)
+	}
+
+	// The bell tells the owner and the environment's Admins, once, with the first change and where to open it.
+	for name, u := range map[string]credentialUser{"owner": operator, "environment admin": envAdmin, "instance admin": a.admin} {
+		items := a.autoBell(t, u)
+		if len(items) != 1 {
+			t.Errorf("%s: items = %+v, want one", name, items)
+			continue
+		}
+		it := items[0]
+		if it.ID != "git_autodeploy_reverted" || it.Severity != "warning" || it.EnvID != a.env || it.StackID != a.stackID || it.StackName != "web" ||
+			it.Count != 1 || it.Example != line || it.Revision != good.Seq || it.Since == "" {
+			t.Errorf("%s: item = %+v, want the reverted notice of web's revision #%d", name, it, good.Seq)
+		}
+	}
+	for name, u := range map[string]credentialUser{"another operator": other, "viewer": viewer} {
+		if items := a.autoBell(t, u); len(items) != 0 {
+			t.Errorf("%s was shown %+v, want nothing", name, items)
+		}
+	}
+}

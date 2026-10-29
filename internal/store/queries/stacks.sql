@@ -166,6 +166,10 @@ UPDATE stack_snapshots SET sync_trigger = ? WHERE id = ? AND kind = 'revision';
 -- The lines an automatic deploy put back to what the repository says, a JSON array of strings.
 UPDATE stack_snapshots SET reverted_drift = ? WHERE id = ? AND kind = 'revision';
 
+-- name: GetRevisionRevertedDrift :one
+-- The lines an automatic deploy put back on one revision of a stack, a JSON array of strings.
+SELECT reverted_drift FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
+
 -- name: SetSnapshotPlatforms :execrows
 -- The platforms each service of a revision was sent with, JSON by swarm service name.
 UPDATE stack_snapshots SET platforms = ? WHERE id = ? AND kind = 'revision';

@@ -366,3 +366,31 @@ func TestRevertsDriftListsAPlatformsChangeMadeOutside(t *testing.T) {
 		t.Fatalf("reverts = %q unavailable = %v, want a Placement.Platforms row for web: the deploy puts back what the revision recorded", revertRows(rv), rv.RevertsDriftUnavailable)
 	}
 }
+
+func TestRevertLinesReadAsOneLineEach(t *testing.T) {
+	t.Parallel()
+	got := stackops.RevertLines([]stackops.DriftRevert{
+		{Service: "web", Change: stackops.RevertChanged, Path: "Mode.Replicated.Replicas", Live: "5", Desired: "3"},
+		{Service: "web", Change: stackops.RevertChanged, Path: "TaskTemplate.ContainerSpec.Image", Live: "nginx:1.28", Desired: "nginx:1.27"},
+		{Service: "web", Change: stackops.RevertChanged, Path: "TaskTemplate.ContainerSpec.Env[DEBUG]", Live: "1"},
+		{Service: "web", Change: stackops.RevertChanged, Path: "Labels[com.example.tier]", Live: "x", Desired: "y"},
+		{Service: "web", Change: stackops.RevertChanged, Path: "TaskTemplate.Resources.Limits.NanoCPUs", Live: "1", Desired: "2"},
+		{Service: "db", Change: stackops.RevertCreated},
+		{Service: "old", Change: stackops.RevertRemoved},
+	})
+	want := []string{
+		"web replicas 5 → 3",
+		"web image nginx:1.28 → nginx:1.27",
+		"web Env DEBUG 1 → unset",
+		"web Labels com.example.tier x → y",
+		"web NanoCPUs 1 → 2",
+		"db created again",
+		"old removed",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("RevertLines =\n%q\nwant\n%q", got, want)
+	}
+	if got := stackops.RevertLines(nil); got == nil || len(got) != 0 {
+		t.Errorf("stackops.RevertLines(nil) = %#v, want an empty list that is not nil", got)
+	}
+}

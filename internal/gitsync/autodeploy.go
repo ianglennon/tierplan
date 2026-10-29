@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ianglennon/bayplan/internal/access"
@@ -26,6 +27,10 @@ type Deployer interface {
 	// DeployDraft deploys the draft at draftVersion for p. trigger is stackops.SyncPoll or stackops.SyncWebhook. A deploy
 	// that did not start is a *DeployRefusal.
 	DeployDraft(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64, trigger string) (DeployStarted, error)
+	// RevertedDrift says what deploying the draft at draftVersion would put back that was changed outside Bayplan,
+	// as one line each ("web replicas 5 → 3"): the P8 "Reverts drift" computation of the review, with the values the
+	// caller may not reveal withheld. It reads and changes nothing. An error means it could not be worked out.
+	RevertedDrift(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64) ([]string, error)
 }
 
 // DeployStarted is a deploy that has started: the job to follow and the revision it took from the draft.
@@ -179,6 +184,14 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 	// The pull took the newest head; if the ref moved on since the check, that is the commit this deploy is about.
 	head = pulled.Commit
 
+	// What the deploy sets back to the repository's word is worked out first, from what runs now, so it can be recorded
+	// with the revision the deploy takes. Auto-deploy goes ahead whatever it finds (D-23); a drift that can't be worked
+	// out is said so in the audit entry and never stops the deploy.
+	reverted, revertsErr := deployer.RevertedDrift(ctx, p, envID, stackID, pulled.DraftVersion)
+	if revertsErr != nil {
+		s.log.Warn("could not work out what an automatic deploy puts back", "stack", stackID, "error", revertsErr)
+	}
+
 	started, err := deployer.DeployDraft(ctx, p, envID, stackID, pulled.DraftVersion, syncTrigger)
 	if err != nil {
 		var ref *DeployRefusal
@@ -195,7 +208,10 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 		return
 	}
 
-	s.recordAutoDeployed(ctx, st, p, owned, head.SHA, syncTrigger)
+	s.recordAutoDeployed(ctx, st, p, owned, head.SHA, syncTrigger, reverted, revertsErr != nil)
+	if len(reverted) > 0 {
+		s.recordReverted(ctx, st, started.Seq, reverted)
+	}
 	if started.HostEscalating {
 		// The next recheck of the owner demands env Admin, so an Operator who was handed this does not run it.
 		if err := s.access.MarkNeedsEnvAdmin(ctx, KindGitAutoDeploy, stackID); err != nil {
@@ -205,20 +221,43 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 }
 
 // recordAutoDeployed audits a deploy Bayplan started by itself: the actor is the system principal that ran it, the
-// details name the stack, the commit, what started it and the owner it acted for (T-09-77).
-func (s *Service) recordAutoDeployed(ctx context.Context, st stackops.Stack, p *rbac.Principal, owned access.OwnedResource, commit, trigger string) {
+// details name the stack, the commit, what started it and the owner it acted for (T-09-77), and the lines it put back to
+// what the repository says (T-09-99): the audit entry lists them, or says they could not be worked out.
+func (s *Service) recordAutoDeployed(ctx context.Context, st stackops.Stack, p *rbac.Principal, owned access.OwnedResource, commit, trigger string, reverted []string, revertsUnknown bool) {
 	if s.audit == nil {
 		return
 	}
+	details := map[string]string{"stack": st.Name, "commit": commit, "trigger": trigger, "owner": owned.OwnerID}
+	switch {
+	case revertsUnknown:
+		details["reverted"] = "could not be worked out"
+	case len(reverted) > 0:
+		details["revertedCount"] = strconv.Itoa(len(reverted))
+		details["reverted"] = strings.Join(reverted, "; ")
+	}
 	err := s.audit.Record(ctx, audit.Entry{
 		Actor: p.AuditActor(), Action: audit.ActionGitAutoDeployed, TargetType: "stack", TargetID: st.ID, EnvID: st.EnvID,
-		Result: audit.ResultSuccess, Details: map[string]string{
-			"stack": st.Name, "commit": commit, "trigger": trigger, "owner": owned.OwnerID,
-		},
+		Result: audit.ResultSuccess, Details: details,
 	})
 	if err != nil {
 		s.log.Error("could not audit an automatic deploy", "stack", st.ID, "error", err)
 	}
+}
+
+// recordReverted keeps what an automatic deploy put back with the revision it made, and notes the event for the bell
+// (D-23). The event's detail is the revision's number, which the bell reads the lines from and which tells a later
+// deploy (Deployed) that the notice is about an older one. A failure is logged and never undoes the deploy.
+func (s *Service) recordReverted(ctx context.Context, st stackops.Stack, seq int64, lines []string) {
+	rev, err := s.repo.Revision(ctx, st.ID, seq)
+	if err != nil {
+		s.log.Warn("could not find the revision an automatic deploy made", "stack", st.ID, "revision", seq, "error", err)
+		return
+	}
+	if err := s.repo.SetRevertedDrift(ctx, rev.ID, lines); err != nil {
+		s.log.Warn("could not record what an automatic deploy put back", "stack", st.ID, "revision", seq, "error", err)
+		return
+	}
+	s.setEvent(ctx, st.ID, stackops.GitEventReverted, strconv.FormatInt(seq, 10))
 }
 
 // pauseForOwner records that a stack's automatic deploys are paused because their owner no longer holds what they need.

@@ -321,3 +321,40 @@ func TestGitSyncWarningsAreErrorsWithCappedText(t *testing.T) {
 		t.Errorf("reason detail has %d characters, want it cut to %d", n, maxWarnError)
 	}
 }
+
+func TestGitAutoDeployWarningsAreWarningsWithCappedText(t *testing.T) {
+	t.Parallel()
+	since := time.Date(2026, 10, 28, 8, 0, 0, 0, time.UTC)
+	got := GitAutoDeployWarnings(Environment{ID: "e1", Name: "prod"}, []GitAutoDeployNotice{
+		{Kind: WarnGitAutoDeploySkipped, StackID: "s1", StackName: "web", Since: since, Detail: strings.Repeat("d", 1000), Commit: "abc1234"},
+		{Kind: WarnGitAutoDeployReverted, StackID: "s1", StackName: "web", Since: since.Add(time.Hour), Count: 2, Example: "web replicas 5 → 3", Revision: 4},
+		{Kind: WarnGitAutoDeployPaused, StackID: "s2", StackName: "db", Since: since, Reason: "owner", Owner: strings.Repeat("o", 200)},
+	})
+	if len(got) != 3 {
+		t.Fatalf("warnings = %+v, want one for each notice", got)
+	}
+	if got[0].ID != WarnGitAutoDeployReverted {
+		t.Errorf("order = %s first, want the newest first", got[0].ID)
+	}
+	for _, w := range got {
+		if w.Severity != SeverityWarning || w.EnvID != "e1" || w.EnvName != "prod" {
+			t.Errorf("warning = %+v, want a warning of environment e1", w)
+		}
+		switch w.ID {
+		case WarnGitAutoDeployReverted:
+			if w.Count != 2 || w.Example != "web replicas 5 → 3" || w.Revision != 4 {
+				t.Errorf("reverted = %+v, want its count, example and revision", w)
+			}
+		case WarnGitAutoDeploySkipped:
+			if n := len([]rune(w.ReasonDetail)); n != maxWarnError || w.Commit != "abc1234" {
+				t.Errorf("skipped = %d characters of detail, commit %q; want the detail cut to %d", n, w.Commit, maxWarnError)
+			}
+		case WarnGitAutoDeployPaused:
+			if n := len([]rune(w.Owner)); n != maxNodeLen || w.ReasonCode != "owner" {
+				t.Errorf("paused = owner of %d characters, reason %q; want the owner cut to %d", n, w.ReasonCode, maxNodeLen)
+			}
+		default:
+			t.Errorf("unexpected warning %s", w.ID)
+		}
+	}
+}

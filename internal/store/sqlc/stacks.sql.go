@@ -193,6 +193,23 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 	return i, err
 }
 
+const getRevisionRevertedDrift = `-- name: GetRevisionRevertedDrift :one
+SELECT reverted_drift FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
+`
+
+type GetRevisionRevertedDriftParams struct {
+	StackID string
+	Seq     int64
+}
+
+// The lines an automatic deploy put back on one revision of a stack, a JSON array of strings.
+func (q *Queries) GetRevisionRevertedDrift(ctx context.Context, arg GetRevisionRevertedDriftParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getRevisionRevertedDrift, arg.StackID, arg.Seq)
+	var reverted_drift string
+	err := row.Scan(&reverted_drift)
+	return reverted_drift, err
+}
+
 const getSnapshotPinsAndRendered = `-- name: GetSnapshotPinsAndRendered :one
 SELECT rendered, pins FROM stack_snapshots WHERE id = ? AND kind = 'revision'
 `

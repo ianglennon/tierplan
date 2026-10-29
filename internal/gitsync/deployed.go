@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 )
@@ -61,7 +62,10 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 		s.log.Warn("could not store the git state after a deploy", "stack", stackID, "error", err)
 		return
 	}
-	if prev.EventKind == stackops.GitEventSkipped {
+	// A deploy ends the notice of a held back commit, and the notice of what an older automatic deploy put back (the
+	// event's detail is the number of the revision that did it, which this one may be).
+	if prev.EventKind == stackops.GitEventSkipped ||
+		(prev.EventKind == stackops.GitEventReverted && prev.EventDetail != strconv.FormatInt(rev.Seq, 10)) {
 		s.setEvent(ctx, stackID, "", "")
 	}
 }

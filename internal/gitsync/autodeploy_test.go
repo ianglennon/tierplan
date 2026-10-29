@@ -7,6 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +46,15 @@ type fakeDeployer struct {
 	escalating bool
 	// failed makes the deploy end failed, naming the service, instead of good.
 	failed string
+	// reverts are the lines a deploy would put back, and revertsErr makes working them out fail.
+	reverts    []string
+	revertsErr error
+}
+
+func (d *fakeDeployer) RevertedDrift(_ context.Context, _ *rbac.Principal, _, _ string, _ int64) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reverts, d.revertsErr
 }
 
 func (d *fakeDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envID, stackID string, version int64, trigger string) (gitsync.DeployStarted, error) {
@@ -645,5 +657,71 @@ func TestAutoDeployWebhookActor(t *testing.T) {
 	rows := a.auditRows(t, audit.ActionGitAutoDeployed)
 	if len(rows) != 1 || rows[0].ActorID != "system:webhook" || rows[0].Details["trigger"] != "webhook" {
 		t.Errorf("git.autodeployed rows = %+v, want one by system:webhook from a webhook", rows)
+	}
+}
+
+func TestAutoDeployRevertsDrift(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	a.dep.set(func(d *fakeDeployer) { d.reverts = []string{"web replicas 5 → 3", "web image nginx:1.28 → nginx:1.27"} })
+	head := a.changeWeb(t, "1")
+
+	// The repository wins: the deploy goes ahead although it puts things back.
+	if out := a.poll(t); out != gitsync.OutcomeBehind || a.dep.count() != 1 {
+		t.Fatalf("check = %s with %d deploys, want behind and one deploy", out, a.dep.count())
+	}
+	if s := a.state(t); s.Status != stackops.GitStatusInSync || s.DeployedCommit != head {
+		t.Fatalf("state = %+v, want in sync at %s", s, head)
+	}
+
+	// What it put back is on the revision it made.
+	rev := a.newestRevision(t)
+	lines, err := a.rr.RevertedDrift(context.Background(), a.stackID, rev.Seq)
+	if err != nil || !slices.Equal(lines, a.dep.reverts) {
+		t.Errorf("revision #%d reverted drift = %q, %v; want %q", rev.Seq, lines, err, a.dep.reverts)
+	}
+	// In the audit entry of the deploy.
+	rows := a.auditRows(t, audit.ActionGitAutoDeployed)
+	if len(rows) != 1 || rows[0].Details["revertedCount"] != "2" || rows[0].Details["reverted"] != "web replicas 5 → 3; web image nginx:1.28 → nginx:1.27" {
+		t.Errorf("git.autodeployed rows = %+v, want the reverted lines in the details", rows)
+	}
+	// And in the state's event, which names the revision for the bell.
+	s := a.state(t)
+	if s.EventKind != stackops.GitEventReverted || s.EventDetail != strconv.FormatInt(rev.Seq, 10) || s.EventAt == nil {
+		t.Errorf("state event = %q %q, want %s naming revision %d", s.EventKind, s.EventDetail, stackops.GitEventReverted, rev.Seq)
+	}
+
+	// The next deploy, which puts nothing back, ends the notice and records an empty list on its revision.
+	a.dep.set(func(d *fakeDeployer) { d.reverts = nil })
+	a.changeWeb(t, "2")
+	a.poll(t)
+	if s := a.state(t); s.EventKind != "" {
+		t.Errorf("state event after a deploy that put nothing back = %q, want none", s.EventKind)
+	}
+	next := a.newestRevision(t)
+	if lines, err := a.rr.RevertedDrift(context.Background(), a.stackID, next.Seq); err != nil || len(lines) != 0 {
+		t.Errorf("revision #%d reverted drift = %q, %v; want none", next.Seq, lines, err)
+	}
+	if rows := a.auditRows(t, audit.ActionGitAutoDeployed); len(rows) != 2 || rows[1].Details["reverted"] != "" {
+		t.Errorf("git.autodeployed rows = %+v, want the second to list nothing put back", rows)
+	}
+}
+
+func TestAutoDeployUnknownDriftStillDeploys(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	a.dep.set(func(d *fakeDeployer) { d.revertsErr = errors.New("the engine did not answer") })
+	head := a.changeWeb(t, "1")
+
+	if out := a.poll(t); out != gitsync.OutcomeBehind || a.dep.count() != 1 {
+		t.Fatalf("check = %s with %d deploys, want behind and one deploy", out, a.dep.count())
+	}
+	if s := a.state(t); s.Status != stackops.GitStatusInSync || s.DeployedCommit != head || s.EventKind != "" {
+		t.Errorf("state = %+v, want in sync at %s with no event", s, head)
+	}
+	// It does not pretend nothing was put back: the entry says it could not tell.
+	rows := a.auditRows(t, audit.ActionGitAutoDeployed)
+	if len(rows) != 1 || rows[0].Details["reverted"] != "could not be worked out" {
+		t.Errorf("git.autodeployed rows = %+v, want it to say the drift could not be worked out", rows)
 	}
 }

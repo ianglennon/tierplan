@@ -493,6 +493,20 @@ func (r Repo) SetRevertedDrift(ctx context.Context, snapshotID string, lines []s
 	return nil
 }
 
+// RevertedDrift reads the lines an automatic deploy put back to what the repository says on one revision of a stack:
+// none for a revision that put nothing back, and sql.ErrNoRows for one the stack does not have.
+func (r Repo) RevertedDrift(ctx context.Context, stackID string, seq int64) ([]string, error) {
+	raw, err := r.Store.RQ.GetRevisionRevertedDrift(ctx, sqlc.GetRevisionRevertedDriftParams{StackID: stackID, Seq: seq})
+	if err != nil {
+		return nil, fmt.Errorf("read the reverted drift: %w", err)
+	}
+	var lines []string
+	if err := json.Unmarshal([]byte(raw), &lines); err != nil {
+		return nil, fmt.Errorf("read the reverted drift of revision %d: %w", seq, err)
+	}
+	return nonNil(lines), nil
+}
+
 // SetGitEvent records the last thing an automatic deploy did that a person should hear about on the stack's sync
 // state; an empty kind clears it. A stack with no state row is left alone, and sql.ErrNoRows says so.
 func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at time.Time) error {

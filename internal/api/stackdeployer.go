@@ -87,6 +87,47 @@ func (s *StackDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envI
 	return DeployStarted{JobID: out.Body.JobID, Seq: out.Body.Revision, HostEscalating: escalating}, nil
 }
 
+// RevertedDrift says, as the lines an automatic deploy records, what deploying the draft of a stack on behalf of p would
+// put back that was changed outside Bayplan (D-23): the "Reverts drift" part of the review that the Review page shows, read
+// the same way (the engine as it runs now against the revision that is deployed and the draft), with the values of
+// settings that hold secrets withheld as for a caller who may not reveal them, since what is recorded is read by others
+// than the owner. A stack with no good revision has nothing to put back. It saves and starts nothing; an error is a
+// drift that could not be worked out, which never stops the deploy.
+func (s *StackDeployer) RevertedDrift(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64) ([]string, error) {
+	if p == nil {
+		return nil, errors.New("no principal")
+	}
+	repo := s.d.repo()
+	st, err := repo.Stack(ctx, envID, stackID)
+	if err != nil {
+		return nil, err
+	}
+	draft, err := repo.Draft(ctx, stackID)
+	if err != nil {
+		return nil, err
+	}
+	if draft.Version != draftVersion {
+		return nil, &DeployRefusal{Code: refusalDraftChanged, Detail: "The draft changed."}
+	}
+	good, ok, err := repo.LatestGoodRevision(ctx, stackID)
+	if err != nil || !ok {
+		return []string{}, err
+	}
+	rv, err := s.d.ops().Review(ctx, stackops.ReviewInput{
+		EnvID: envID, Stack: st, Copy: draft.Copy, DraftVersion: draft.Version, Pins: repo, Revisions: repo,
+		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Audit: s.d.Store,
+		Previous: &good.Copy, Deployed: &stackops.DeployedRevision{Seq: good.Seq, By: good.CreatedBy, At: good.CreatedAt},
+		BaseSeq: draft.BaseSeq,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rv.RevertsDriftUnavailable {
+		return nil, errors.New("the drift could not be computed")
+	}
+	return stackops.RevertLines(stackops.RedactReverts(rv.RevertsDrift, st.Target)), nil
+}
+
 // GitDeployer is the deployer as the git sync reads it (gitsync.Deployer): the same deploy with the types of that
 // package, which cannot import this one.
 func (s *StackDeployer) GitDeployer() gitsync.Deployer { return gitDeployer{s} }
@@ -104,6 +145,11 @@ func (g gitDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envID, 
 		return gitsync.DeployStarted{}, err
 	}
 	return gitsync.DeployStarted{JobID: started.JobID, Seq: started.Seq, HostEscalating: started.HostEscalating}, nil
+}
+
+// RevertedDrift implements gitsync.Deployer.
+func (g gitDeployer) RevertedDrift(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64) ([]string, error) {
+	return g.s.RevertedDrift(ctx, p, envID, stackID, draftVersion)
 }
 
 // environment resolves the environment the way the router does: one that is gone or disabled is refused.
