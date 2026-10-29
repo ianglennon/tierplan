@@ -226,6 +226,9 @@ const (
 	// revision (D-22). The actor is the person who rolled back; the entry names the stack, the reason (rollback) and the
 	// number of the revision restored.
 	ActionGitAutoDeployPaused = "git.autodeploy_paused"
+	// An Admin of the environment detached a git stack from its repository, so it is an inline stack again (D-25). The entry
+	// names the stack, the number of the revision whose files became the draft and its commit, never a path or content.
+	ActionGitStackDetached = "git.stack_detached"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

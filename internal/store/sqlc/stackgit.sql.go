@@ -64,6 +64,30 @@ func (q *Queries) DeletePendingStackGit(ctx context.Context, stackID string) (in
 	return result.RowsAffected()
 }
 
+const deleteStackGit = `-- name: DeleteStackGit :execrows
+DELETE FROM stack_git WHERE stack_id = ? AND pending_convert = 0
+`
+
+// Detach (D-25): the stack is no longer from a repository. Its webhook, polling and auto-deploy settings go with the row, so no
+// delivery is routed to it and the poller no longer lists it. A pending convert is not a git stack's row and stays.
+func (q *Queries) DeleteStackGit(ctx context.Context, stackID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteStackGit, stackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteStackGitState = `-- name: DeleteStackGitState :exec
+DELETE FROM stack_git_state WHERE stack_id = ?
+`
+
+// Detach (D-25): the derived answer of the last check goes with the git settings.
+func (q *Queries) DeleteStackGitState(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, deleteStackGitState, stackID)
+	return err
+}
+
 const finalizeStackGitConvert = `-- name: FinalizeStackGitConvert :execrows
 UPDATE stack_git SET pending_convert = 0, updated_at = ? WHERE stack_id = ? AND pending_convert = 1
 `

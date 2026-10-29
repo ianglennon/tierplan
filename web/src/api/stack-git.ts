@@ -8,7 +8,15 @@ import { api } from "@/api/client";
 import { type GitRefKind, GitRequestError } from "@/api/git";
 import { type Problem, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
-import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } from "@/api/stacks";
+import {
+  draftKey,
+  invalidateStacks,
+  isStackGone,
+  type StackDetail,
+  StacksLoadError,
+  stackKey,
+  stackQuery,
+} from "@/api/stacks";
 import { ENV_WARNINGS_KEY } from "@/api/warnings";
 
 export type StackGit = components["schemas"]["StackGitSummary"];
@@ -507,5 +515,60 @@ export function useRemoveStackGitWebhook(envId: string, stackId: string) {
       const problem = readProblem(error, response);
       throw new StackGitWebhookError("DELETE", problem.status, problem.type);
     }
+  });
+}
+
+// StackGitDetachError is a detach the server refused or that got no answer. The status is 0 when the server could not be
+// reached; the type is the problem type it named (stack_not_git when the stack is not from a repository any more).
+export class StackGitDetachError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST git/detach failed (${status})`);
+    this.name = "StackGitDetachError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useDetachStackGit turns a git stack back into an inline stack (D-25): the files of the deployed revision become its
+// draft, and Bayplan stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running
+// changes. It is never retried. Once the server has answered, the stack is an inline one: the page's copy says so at once
+// (the Git tab has nothing left to read, and leads to the Overview), the git summary is dropped rather than read again,
+// and the draft, the lists and the warnings are read again.
+export function useDetachStackGit(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, StackGitDetachError, void>({
+    mutationFn: async () => {
+      try {
+        const { error, response } = await api.POST("/api/env/{envId}/stacks/{stackId}/git/detach", {
+          params: { path: { envId, stackId } },
+        });
+        if (!response.ok) {
+          const problem = readProblem(error, response);
+          throw new StackGitDetachError(problem.status, problem.type);
+        }
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof StackGitDetachError ? e : new StackGitDetachError(0);
+      }
+    },
+    retry: false,
+    onSuccess: () => {
+      queryClient.setQueryData(stackKey(envId, stackId), (old: StackDetail | undefined) =>
+        old ? { ...old, source: "inline", git: undefined } : old,
+      );
+      queryClient.removeQueries({ queryKey: stackGitKey(envId, stackId) });
+      void queryClient.invalidateQueries({ queryKey: stackKey(envId, stackId), exact: true });
+      void queryClient.invalidateQueries({ queryKey: draftKey(envId, stackId) });
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
+    },
+    onError: (e) => {
+      // The stack is not a git stack (it was detached already, by someone else): read it again to say so.
+      if (e.type === "stack_not_git") {
+        void queryClient.invalidateQueries({ queryKey: stackKey(envId, stackId) });
+      }
+    },
   });
 }

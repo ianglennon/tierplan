@@ -28715,6 +28715,54 @@
         ]
       }
     },
+    "/api/env/{envId}/stacks/{stackId}/git/detach": {
+      "post": {
+        "description": "Turns the stack back into an inline stack you edit in Bayplan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. Bayplan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).",
+        "operationId": "detachStackGit",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Detach a git stack from its repository",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
     "/api/env/{envId}/stacks/{stackId}/git/pull": {
       "post": {
         "description": "Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",

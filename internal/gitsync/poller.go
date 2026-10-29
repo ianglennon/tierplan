@@ -5,6 +5,7 @@ package gitsync
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -141,7 +142,7 @@ func (p *poller) round(ctx context.Context) {
 		switch {
 		case ps.NextCheckAt == nil:
 			at := now.Add(time.Duration(p.d.Rand() * float64(ps.Interval)))
-			if err := p.s.repo.SetNextCheck(ctx, ps.StackID, at); err != nil && ctx.Err() == nil {
+			if err := p.s.repo.SetNextCheck(ctx, ps.StackID, at); err != nil && ctx.Err() == nil && !errors.Is(err, stackops.ErrNoGit) {
 				p.s.log.Error("could not schedule a git stack's first check", "stack", ps.StackID, "error", err)
 			}
 		case !ps.NextCheckAt.After(now):
@@ -243,7 +244,7 @@ func (p *poller) readRepo(ctx context.Context, g *pollGroup) {
 			failures = 0
 		}
 		next := p.d.Clock.Now().Add(p.delay(ps.Interval, failures))
-		if serr := p.s.repo.SetNextCheck(ctx, ps.StackID, next); serr != nil && ctx.Err() == nil {
+		if serr := p.s.repo.SetNextCheck(ctx, ps.StackID, next); serr != nil && ctx.Err() == nil && !errors.Is(serr, stackops.ErrNoGit) {
 			p.s.log.Warn("could not schedule the next check of a git stack", "stack", ps.StackID, "error", serr)
 		}
 		if p.d.Checked != nil {

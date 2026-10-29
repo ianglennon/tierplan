@@ -53,6 +53,15 @@ UPDATE stack_git SET pending_convert = 0, updated_at = ? WHERE stack_id = ? AND 
 -- The convert draft was discarded: the stack is as it was, with no git settings.
 DELETE FROM stack_git WHERE stack_id = ? AND pending_convert = 1;
 
+-- name: DeleteStackGit :execrows
+-- Detach (D-25): the stack is no longer from a repository. Its webhook, polling and auto-deploy settings go with the row, so no
+-- delivery is routed to it and the poller no longer lists it. A pending convert is not a git stack's row and stays.
+DELETE FROM stack_git WHERE stack_id = ? AND pending_convert = 0;
+
+-- name: DeleteStackGitState :exec
+-- Detach (D-25): the derived answer of the last check goes with the git settings.
+DELETE FROM stack_git_state WHERE stack_id = ?;
+
 -- name: SetStackSource :execrows
 -- Where a stack's definition lives now (a converted stack becomes git, its source ref the repository's ID, as for a stack
 -- made from a folder).

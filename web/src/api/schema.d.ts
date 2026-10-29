@@ -2500,6 +2500,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Detach a git stack from its repository
+         * @description Turns the stack back into an inline stack you edit in Bayplan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. Bayplan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).
+         */
+        post: operations["detachStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/git/pull": {
         parameters: {
             query?: never;
@@ -17760,6 +17780,38 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["StackGitCommitsBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    detachStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

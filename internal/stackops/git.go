@@ -302,14 +302,41 @@ func (r Repo) GitStates(ctx context.Context, envID string) (map[string]GitState,
 // WriteGitState stores the answer of a check of a git stack: all of its columns, and the row itself if a restore left
 // none. A write that only moves the time of the check (the same answer as the one stored, looked at again) changes
 // the one column. Only gitsync's state writer calls it, so that what is new in an answer is judged in one place.
+//
+// A stack that has stopped being a git stack since the check began (it was detached, D-25) is ErrNoGit and nothing is
+// written: the check of a repository the stack no longer follows must not leave a state row behind.
 func (r Repo) WriteGitState(ctx context.Context, s GitState) error {
-	if err := r.Store.Q.UpsertStackGitState(ctx, sqlc.UpsertStackGitStateParams{
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	if err := r.requireGit(ctx, q, s.StackID); err != nil {
+		return err
+	}
+	if err := q.UpsertStackGitState(ctx, sqlc.UpsertStackGitStateParams{
 		StackID: s.StackID, DeployedCommit: s.DeployedCommit, DeployedTree: s.DeployedTree, HeadCommit: s.HeadCommit,
 		HeadTree: s.HeadTree, Behind: int64(s.Behind), Status: s.Status, ReasonCode: s.ReasonCode, ReasonDetail: s.ReasonDetail,
 		CheckedAt: nullUnixNano(s.CheckedAt), ErrorSince: nullUnixNano(s.ErrorSince), ConsecutiveFailures: int64(s.ConsecutiveFailures),
 		PendingCommit: s.PendingCommit, NextCheckAt: nullUnixNano(s.NextCheckAt),
 	}); err != nil {
 		return fmt.Errorf("write the git state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// requireGit is ErrNoGit unless the stack has git settings of its own (not a pending convert), read through q so a write
+// transaction sees its own changes.
+func (r Repo) requireGit(ctx context.Context, q *sqlc.Queries, stackID string) error {
+	if _, err := q.GetStackGit(ctx, stackID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNoGit
+		}
+		return fmt.Errorf("read the git settings: %w", err)
 	}
 	return nil
 }
@@ -378,10 +405,23 @@ func (r Repo) PolledStacks(ctx context.Context) ([]PolledStack, error) {
 	return out, nil
 }
 
-// SetNextCheck records when the poller looks at the stack next. It touches no other column of the stack's state.
+// SetNextCheck records when the poller looks at the stack next. It touches no other column of the stack's state. A stack
+// that is not a git stack (it was detached while the poller held it) is ErrNoGit and nothing is written.
 func (r Repo) SetNextCheck(ctx context.Context, stackID string, at time.Time) error {
-	if err := r.Store.Q.SetStackGitNextCheck(ctx, sqlc.SetStackGitNextCheckParams{StackID: stackID, NextCheckAt: nullUnixNano(&at)}); err != nil {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	if err := r.requireGit(ctx, q, stackID); err != nil {
+		return err
+	}
+	if err := q.SetStackGitNextCheck(ctx, sqlc.SetStackGitNextCheckParams{StackID: stackID, NextCheckAt: nullUnixNano(&at)}); err != nil {
 		return fmt.Errorf("schedule the next git check: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }
@@ -539,7 +579,10 @@ func (r Repo) RefreshDraftFromGit(ctx context.Context, stackID string, version i
 		next := refreshedCopy(current, repoFiles, rev.Source.ComposeFiles)
 		next.Files = stacks.MarkSecretFilesFor(next.Files, current.Files, next.ComposeFiles)
 		return next
-	}, nil)
+	}, func(ctx context.Context, q *sqlc.Queries) error {
+		// A stack detached since the repository was read (D-25) takes no repository files into its draft.
+		return r.requireGit(ctx, q, stackID)
+	})
 }
 
 // writeGitDraft stores the draft of a stack as build makes it from the draft it replaces, with rev as the git revision it
@@ -719,6 +762,105 @@ func (r Repo) DropPendingConvert(ctx context.Context, stackID string) (bool, err
 		return false, fmt.Errorf("drop the pending git source: %w", err)
 	}
 	return n > 0, nil
+}
+
+// Detach turns a git stack back into an inline stack you edit in Bayplan (D-25), in one transaction: the files of rev (the
+// revision that is deployed) become the stack's draft as inline files, the variables and the ordered compose file list are
+// kept, the stack's source kind is inline, and its git settings (polling, webhook, auto-deploy) and sync state are deleted,
+// so the poller no longer lists it and no webhook address is routed to it. inTx runs in the same transaction, so the
+// owned automations of the stack are forgotten with the settings or not at all.
+//
+// Nothing that runs changes and no revision is made: the history keeps every revision, and the revisions made from the
+// repository keep what they were made from. A draft the stack already had is replaced (its version goes up by one, so an
+// editor holding the old one is told it moved); a stack with none gets a new one. A file that was an overlay file is a
+// secret inline file, so its content stays sealed. A stack that is not a git stack is ErrNoGit and nothing changes.
+func (r Repo) Detach(ctx context.Context, stackID string, rev Snapshot, actor string, inTx func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error) error {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	if err := r.requireGit(ctx, q, stackID); err != nil {
+		return err
+	}
+
+	wc := stacks.WorkingCopy{Vars: slices.Clone(rev.Copy.Vars), ComposeFiles: slices.Clone(rev.Copy.ComposeFiles), Files: slices.Clone(rev.Copy.Files)}
+	for i := range wc.Files {
+		if wc.Files[i].Origin == stacks.OriginOverlay {
+			wc.Files[i].Secret = true
+		}
+		wc.Files[i].Origin = stacks.OriginInline
+	}
+
+	var id string
+	draft, err := r.readDraft(ctx, q, stackID)
+	switch {
+	case errors.Is(err, ErrNoDraft):
+		u, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("new snapshot id: %w", err)
+		}
+		id = u.String()
+		if err := q.InsertSnapshot(ctx, sqlc.InsertSnapshotParams{
+			ID: id, StackID: stackID, Kind: KindDraft, BaseSeq: rev.Seq, Version: 1,
+			Outcome: OutcomePending, Pins: "{}", CreatedBy: actor, CreatedAt: r.now().UnixNano(), Origin: OriginDeploy,
+		}); err != nil {
+			return fmt.Errorf("insert draft: %w", err)
+		}
+	case err != nil:
+		return err
+	default:
+		id = draft.ID
+		n, err := q.UpdateDraftVersion(ctx, sqlc.UpdateDraftVersionParams{CreatedBy: actor, CreatedAt: r.now().UnixNano(), ID: draft.ID, Version: draft.Version})
+		if err != nil {
+			return fmt.Errorf("update draft: %w", err)
+		}
+		if n != 1 {
+			return &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
+		}
+		if err := q.DeleteSnapshotFiles(ctx, id); err != nil {
+			return fmt.Errorf("clear files: %w", err)
+		}
+		if err := q.DeleteSnapshotVars(ctx, id); err != nil {
+			return fmt.Errorf("clear variables: %w", err)
+		}
+		// The draft is now the deployed revision's files, so it is based on that revision.
+		if rev.Seq > 0 {
+			if _, err := q.SetDraftBaseSeq(ctx, sqlc.SetDraftBaseSeqParams{BaseSeq: rev.Seq, StackID: stackID}); err != nil {
+				return fmt.Errorf("rebase draft: %w", err)
+			}
+		}
+		// The draft no longer records a commit: the editor's rules for a git stack key on that (D-11).
+		if _, err := q.SetSnapshotGit(ctx, sqlc.SetSnapshotGitParams{GitSource: "{}", ID: id}); err != nil {
+			return fmt.Errorf("clear the git revision: %w", err)
+		}
+	}
+	if err := r.writeContent(ctx, q, id, wc); err != nil {
+		return err
+	}
+	if n, err := q.DeleteStackGit(ctx, stackID); err != nil {
+		return fmt.Errorf("delete the git settings: %w", err)
+	} else if n != 1 {
+		return ErrNoGit
+	}
+	if err := q.DeleteStackGitState(ctx, stackID); err != nil {
+		return fmt.Errorf("delete the git state: %w", err)
+	}
+	if n, err := q.SetStackSource(ctx, sqlc.SetStackSourceParams{SourceKind: string(stacks.SourceInline), SourceRef: "", ID: stackID}); err != nil {
+		return fmt.Errorf("set the stack's source: %w", err)
+	} else if n != 1 {
+		return ErrStackNotFound
+	}
+	if inTx != nil {
+		if err := inTx(ctx, tx, q); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // refreshedCopy is the working copy of a draft with its repository files replaced by repoFiles and the compose files

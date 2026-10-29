@@ -288,6 +288,23 @@
       "permission": "You don't have permission to change the source.",
       "other": "Try again.",
       "draftFailed": "Couldn't read the draft. Check the connection and try again."
+    },
+    "detach": {
+      "advanced": "Advanced",
+      "title": "Detach from git",
+      "body": "Turn {{name}} back into an inline stack you edit in Bayplan. The files now deployed become an editable draft. Bayplan stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running changes.",
+      "action": "Detach from git…",
+      "done": "Detached {{name}} from git.",
+      "permission": "You don't have permission to detach this stack.",
+      "failed": "Couldn't detach the stack. Check the connection and try again.",
+      "dialog": {
+        "title": "Detach {{name}} from git?",
+        "body": "Revision #{{revision}} (commit {{sha}}) is copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "bodyNoRevision": "The files of the stack are copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "cancel": "Keep tracking git",
+        "confirm": "Detach from git",
+        "pending": "Detaching…"
+      }
     }
   }
 }

@@ -201,6 +201,7 @@ describe("actionLabel", () => {
       "git.autodeploy_enabled",
       "git.autodeploy_disabled",
       "git.autodeploy_paused",
+      "git.stack_detached",
     ] as const) {
       expect(KNOWN_ACTIONS).toContain(key);
       expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);

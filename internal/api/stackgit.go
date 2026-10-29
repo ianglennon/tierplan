@@ -491,6 +491,12 @@ type StackGitWebhookRemoveInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 }
 
+// StackGitDetachInput is the input of POST /api/env/{envId}/stacks/{stackId}/git/detach.
+type StackGitDetachInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
 // The problem types of the webhook routes.
 const (
 	problemWebhookPlacement = "webhook_placement"
@@ -627,6 +633,18 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitWebhookRotateInput) (*StackGitWebhookOutput, error) {
 			return rotateStackGitWebhook(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "detachStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/detach",
+		Summary: "Detach a git stack from its repository",
+		Description: "Turns the stack back into an inline stack you edit in Bayplan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. " +
+			"Bayplan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. " +
+			"The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. " +
+			"Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).",
+		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitDetachInput) (*struct{}, error) {
+			return nil, detachStackGit(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "removeStackGitWebhook", Method: http.MethodDelete, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
@@ -838,6 +856,33 @@ func rotateStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *Sta
 	return &StackGitWebhookOutput{CacheControl: "no-store", Body: StackGitWebhookBody{
 		URL: g.webhookAddress(ctx, in.host, token), Secret: shown, Flavour: flavour, Placement: placement,
 	}}, nil
+}
+
+// detachStackGit turns a git stack back into an inline one (D-25).
+func detachStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitDetachInput) error {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return huma.Error500InternalServerError("internal error")
+	}
+	if g.Sync == nil {
+		return httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return stackLookupProblem(d, env.ID, err)
+	}
+	res, err := g.Sync.Detach(ctx, env.ID, st.ID, p.Name)
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return stackNotGit()
+	case err != nil:
+		return stackInternal(d, "detach the stack from git", env.ID, err)
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitStackDetached, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "revision": itoa(res.Revision), "commit": res.Commit,
+	})
+	return nil
 }
 
 func removeStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitWebhookRemoveInput) error {
