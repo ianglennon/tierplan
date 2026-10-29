@@ -31,6 +31,8 @@ export interface StackStatusCounts {
   draft: number;
   deployFailed: number;
   drifted: number;
+  behind: number;
+  syncError: number;
 }
 
 // How many stacks the Show group counts, as the server answers them: before the search, the chips and the
@@ -47,6 +49,8 @@ const COUNT_KEY: Record<StackStatusValue, keyof StackStatusCounts> = {
   draft: "draft",
   deploy_failed: "deployFailed",
   drifted: "drifted",
+  behind: "behind",
+  "sync-error": "syncError",
 };
 
 interface StackFilterBarProps {

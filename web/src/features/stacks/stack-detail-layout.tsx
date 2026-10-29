@@ -25,7 +25,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
-import { GitSourceBadge, GitStrip } from "@/features/stack-git/git-strip";
+import { GitStrip } from "@/features/stack-git/git-strip";
+import { GitSourceBadge } from "@/features/stack-git/sync-badges";
 import {
   NotAdoptableNote,
   OrphanIdNote,
@@ -348,7 +349,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
                 />
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
                 {data.git ? (
-                  <GitSourceBadge stack={data} />
+                  <GitSourceBadge git={data.git} />
                 ) : (
                   <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
                 )}

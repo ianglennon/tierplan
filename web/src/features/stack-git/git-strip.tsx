@@ -8,7 +8,6 @@ import type { ReactNode } from "react";
 import { useCheckStackGit } from "@/api/stack-git";
 import type { StackDetail } from "@/api/stacks";
 import { RelativeTime } from "@/components/relative-time";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -193,21 +192,5 @@ export function GitSettingsLink({ envId, stackId }: { envId: string; stackId: st
         {t("stackGit.strip.settings")}
       </Link>
     </Button>
-  );
-}
-
-// The outline "Git" badge of the header, with the repository and the ref in its Tooltip.
-export function GitSourceBadge({ stack }: { stack: Pick<StackDetail, "git"> }) {
-  const t = useT();
-  const git = stack.git;
-  const badge = <Badge variant="outline">{t("stacks.source.git")}</Badge>;
-  if (!git) return badge;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent className="max-w-sm break-words">
-        {t("stackGit.sourceTip", { repo: git.repoName, ref: git.ref })}
-      </TooltipContent>
-    </Tooltip>
   );
 }

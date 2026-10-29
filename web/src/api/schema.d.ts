@@ -2177,7 +2177,7 @@ export interface paths {
         };
         /**
          * The stacks of an environment: those Bayplan manages and those it found
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
@@ -3948,7 +3948,7 @@ export interface paths {
         };
         /**
          * The stacks of every environment the caller may read them on, managed or found
-         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -10980,6 +10980,11 @@ export interface components {
         StackStatusCountsBody: {
             /**
              * Format: int64
+             * @description Git stacks whose repository folder has commits that are not deployed, as the last check that could be made saw it; a stack whose later check failed is counted here too while the commits it last saw are still not deployed
+             */
+            behind: number;
+            /**
+             * Format: int64
              * @description Stacks with some but not all of their services running
              */
             degraded: number;
@@ -11003,6 +11008,11 @@ export interface components {
              * @description Stacks a person stopped
              */
             stopped: number;
+            /**
+             * Format: int64
+             * @description Git stacks whose last sync check could not be made
+             */
+            syncError: number;
         };
         StackTasksCardBody: {
             /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
@@ -16527,7 +16537,7 @@ export interface operations {
             query?: {
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
@@ -20166,7 +20176,7 @@ export interface operations {
                 env?: string;
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;

@@ -1109,8 +1109,7 @@ func TestStackListGitStatus(t *testing.T) {
 	}
 
 	// A stack that fails its first check was never seen behind: in error and not in the Behind chip.
-	t.Run("in error and never behind", func(t *testing.T) {
-		t.Parallel()
+	{
 		g, stackID, ended := newStackGitFix(t)
 		g.repo.DeleteRef(t, "refs/heads/main")
 		if out := g.checkNow(t, g.admin, stackID, ended); out != gitsync.OutcomeError {
@@ -1121,5 +1120,5 @@ func TestStackListGitStatus(t *testing.T) {
 		if len(got.Items) != 0 || got.StatusCounts.Behind != 0 || got.StatusCounts.SyncError != 1 {
 			t.Errorf("status=behind: %d listed with counts %+v, want none behind and one in error", len(got.Items), got.StatusCounts)
 		}
-	})
+	}
 }

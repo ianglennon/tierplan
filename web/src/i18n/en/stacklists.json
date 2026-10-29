@@ -68,7 +68,9 @@
       "draft": "Draft",
       "deploy_failed": "Deploy failed",
       "drifted": "Drifted",
-      "chip": "{{label}} {{count, number}}"
+      "chip": "{{label}} {{count, number}}",
+      "behind": "Behind",
+      "sync-error": "Sync error"
     },
     "clearFilters": "Clear filters",
     "emptySearch": {
@@ -108,6 +110,10 @@
         "clashHint": "Pick another name, or adopt the existing stack.",
         "openClash": "Open {{name}}"
       }
+    },
+    "git": {
+      "lastDeployed": "{{sha}} · by {{user}}",
+      "checkNow": "Check now"
     }
   }
 }

@@ -4,7 +4,7 @@
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
 import { useState } from "react";
-
+import { useCheckStackGit } from "@/api/stack-git";
 import type { StackItem } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
+import { shortSha } from "@/features/stack-git/sha-link";
+import { BehindBadge, GitSourceBadge, SyncErrorBadge } from "@/features/stack-git/sync-badges";
 import { DriftBadge } from "@/features/stacks/drift-badge";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
 import { canStart, canStop, canUpdateImages, useStackStart } from "@/features/stacks/stack-actions";
@@ -29,6 +31,7 @@ import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { toastError } from "@/lib/toast";
 
 // A stack of a list with the environment it is on: the env list fills its own, the All stacks list
 // each group's.
@@ -70,6 +73,22 @@ interface RowActionsProps {
   onOpenChange?: (open: boolean) => void;
   // True while an operation is under way on the stack: the menu is off.
   disabled?: boolean;
+}
+
+// CheckNowItem is Check now in the menu of a git stack (UI-SPEC "Stack lists"): it asks the server to fetch the ref and
+// compare it with what is deployed, and the row's badges follow the answer. It is its own component so that only a
+// menu that is open, and only for a stack that follows a branch or a tag, reads the stack. Anyone who can read the stack
+// may ask, as on the stack's page; a fixed commit has nothing to check.
+function CheckNowItem({ row }: { row: StackRow }) {
+  const t = useT();
+  const { check, running } = useCheckStackGit(row.envId, row.id, {
+    onError: () => toastError(t("stackGit.check.failed")),
+  });
+  return (
+    <DropdownMenuItem className="max-md:min-h-11" disabled={running} onSelect={() => check()}>
+      {t("stackLists.git.checkNow")}
+    </DropdownMenuItem>
+  );
 }
 
 // RowActions is the row menu of the stack lists: Open stack for everyone, Deploy… (which opens the
@@ -141,6 +160,7 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
               {t("stackUpdate.actions.update")}
             </DropdownMenuItem>
           </NeedsTooltip>
+          {row.git && row.git.refKind !== "commit" ? <CheckNowItem row={row} /> : null}
           {stoppable || canStart(row.state) ? (
             <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
               <DropdownMenuItem
@@ -291,7 +311,7 @@ export function stackColumns(
         isUnmanaged(s) ? (
           <UnmanagedName row={s} />
         ) : (
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 md:flex-nowrap">
             <Link
               to="/env/$envId/stacks/$stackId"
               params={{ envId: s.envId, stackId: s.id }}
@@ -301,6 +321,8 @@ export function stackColumns(
             </Link>
             {s.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
             <DriftBadge drift={s.drift} />
+            <BehindBadge git={s.git} />
+            <SyncErrorBadge git={s.git} />
           </span>
         ),
     },
@@ -364,6 +386,8 @@ export function stackColumns(
           ) : (
             <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
           )
+        ) : s.source === "git" ? (
+          <GitSourceBadge git={s.git} />
         ) : isManagedSource(s.source) ? (
           <Badge variant="outline">{t(`stacks.source.${s.source}`)}</Badge>
         ) : (
@@ -383,7 +407,12 @@ export function stackColumns(
             <RelativeTime value={s.lastDeployedAt} />
             {s.lastDeployedBy ? (
               <span className="text-xs text-muted-foreground max-md:hidden">
-                {t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
+                {s.git?.deployedSha
+                  ? t("stackLists.git.lastDeployed", {
+                      sha: shortSha(s.git.deployedSha),
+                      user: s.lastDeployedBy,
+                    })
+                  : t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
               </span>
             ) : null}
           </span>

@@ -65,6 +65,17 @@
       "autoDeployBlockedNoProblem": "Commit {{sha}} is waiting. Nothing was deployed.",
       "autoDeployBlockedNoSha": "The new commit is waiting: {{problem}}. Nothing was deployed.",
       "autoDeployBlockedNoShaNoProblem": "The new commit is waiting. Nothing was deployed."
+    },
+    "badge": {
+      "behind": "Behind {{n}}",
+      "behindCapped": "Behind {{n}}+",
+      "behindNoCount": "Behind",
+      "behindTip_one": "{{count}} commit changed this stack's folder since it was deployed. Review update.",
+      "behindTip_other": "{{count}} commits changed this stack's folder since it was deployed. Review update.",
+      "behindTipCapped_other": "At least {{count}} commits changed this stack's folder since it was deployed. Review update.",
+      "behindSourceTip": "The repository, ref or folder is not the one that is deployed. Review update.",
+      "syncError": "Sync error",
+      "errorTip": "The last check of the repository failed."
     }
   }
 }
