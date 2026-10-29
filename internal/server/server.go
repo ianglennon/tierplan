@@ -103,6 +103,9 @@ type Server struct {
 	monitor  *envs.Monitor
 	// drift checks the stacks of the monitored environments for drift in the background.
 	drift *stackops.DriftMonitor
+	// gitSync checks the git stacks; its checks and automatic deploys run apart from the poller and are ended and
+	// waited for by Close before the jobs and the database close.
+	gitSync *gitsync.Service
 	// snapshots caches the resource lists per environment for a few seconds.
 	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
@@ -899,6 +902,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		envs:       envSvc,
 		monitor:    monitor,
 		drift:      driftMonitor,
+		gitSync:    gitDeps.Sync,
 		snapshots:  snapshots,
 		hub:        hub,
 		clusters:   clusters,
@@ -942,6 +946,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		srv.shutdownGitSync()
 		driftMonitor.Stop()
 		jobHub.Close()
 		statsHub.Close()
@@ -1033,12 +1038,33 @@ func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
 // Agents creates agent environments and enrols agents.
 func (s *Server) Agents() *agents.Service { return s.agents }
 
+// gitSyncGrace is how long Close waits for the checks of git stacks to end once they are told to. A fetch that is
+// cancelled ends within a moment; the wait only runs out for a call that does not look at its context.
+const gitSyncGrace = 15 * time.Second
+
+// shutdownGitSync ends the detached git checks and waits for them for gitSyncGrace; a wait that runs out is logged
+// and Close goes on.
+func (s *Server) shutdownGitSync() {
+	if s.gitSync == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitSyncGrace)
+	defer cancel()
+	if err := s.gitSync.Shutdown(ctx); err != nil {
+		s.log.Warn("a git check was still running when the server closed", "error", err)
+	}
+}
+
 // Close stops background work, including the events streams and the
 // environment monitors, and releases the database. Run calls it on exit; it is
 // safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	// The checks of git stacks, and the automatic deploys that follow them, run apart from the poller (and a webhook
+	// starts them too). They are ended and waited for before the jobs and the database close, so none writes to either
+	// afterwards.
+	s.shutdownGitSync()
 	// Before the database closes: a check in flight reads it.
 	s.drift.Stop()
 	// Before the database closes, so the end of each shell is still audited.

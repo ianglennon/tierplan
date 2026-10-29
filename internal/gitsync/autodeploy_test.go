@@ -47,13 +47,18 @@ type fakeDeployer struct {
 	// failed makes the deploy end failed, naming the service, instead of good.
 	failed string
 	// reverts are the lines a deploy would put back, and revertsErr makes working them out fail.
-	reverts    []string
-	revertsErr error
+	reverts []string
+	// whileWorkingOut, when set, runs while a deploy's drift is worked out: after the pull, before the deploy starts.
+	whileWorkingOut func()
+	revertsErr      error
 }
 
 func (d *fakeDeployer) RevertedDrift(_ context.Context, _ *rbac.Principal, _, _ string, _ int64) ([]string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.whileWorkingOut != nil {
+		d.whileWorkingOut()
+	}
 	return d.reverts, d.revertsErr
 }
 
@@ -663,7 +668,9 @@ func TestAutoDeployWebhookActor(t *testing.T) {
 func TestAutoDeployRevertsDrift(t *testing.T) {
 	t.Parallel()
 	a := newAutoFixture(t, "operator")
-	a.dep.set(func(d *fakeDeployer) { d.reverts = []string{"web replicas 5 → 3", "web image nginx:1.28 → nginx:1.27"} })
+	a.dep.set(func(d *fakeDeployer) {
+		d.reverts = []string{"web replicas 5 → 3", "web image nginx:1.28 → nginx:1.27"}
+	})
 	head := a.changeWeb(t, "1")
 
 	// The repository wins: the deploy goes ahead although it puts things back.

@@ -44,10 +44,16 @@ func ReasonCodes() []ReasonCode {
 	}
 }
 
-// autoDeployReason says whether a reason is one an automatic deploy leaves: the repository was read, and a commit waits
-// for a person or failed to deploy.
-func autoDeployReason(c ReasonCode) bool {
-	return c == ReasonAutoDeployBlocked || c == ReasonAutoDeployFailed
+// repositoryAnswered says whether a reason is one the repository caused by answering: it was read, and what it holds
+// waits for a person (a commit an automatic deploy held back or failed to deploy, a head that fails the checks, a
+// branch, tag or folder that is gone). A person pushes the fix, so these are polled at the stack's interval and not
+// backed off like an outage.
+func repositoryAnswered(c ReasonCode) bool {
+	switch c {
+	case ReasonAutoDeployBlocked, ReasonAutoDeployFailed, ReasonChecksFailed, ReasonRefGone, ReasonFolderGone:
+		return true
+	}
+	return false
 }
 
 // reasonOf maps a failed git call to a reason code. Nothing of the error's text is kept: only the code it maps to

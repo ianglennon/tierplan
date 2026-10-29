@@ -491,6 +491,46 @@ func (q *Queries) ListStackGitsByEnv(ctx context.Context, envID string) ([]Stack
 	return items, nil
 }
 
+const pauseStackGitAutoDeployOwner = `-- name: PauseStackGitAutoDeployOwner :execrows
+UPDATE stack_git SET auto_deploy_paused_reason = 'owner', auto_deploy_paused_seq = 0, updated_at = ?
+WHERE stack_id = ? AND auto_deploy = 1 AND auto_deploy_paused_reason = ''
+`
+
+type PauseStackGitAutoDeployOwnerParams struct {
+	UpdatedAt int64
+	StackID   string
+}
+
+// Pauses a running auto-deploy for the owner's permission. A stack that was turned off or paused meanwhile (a roll back
+// turns it off) matches nothing and is left as it is.
+func (q *Queries) PauseStackGitAutoDeployOwner(ctx context.Context, arg PauseStackGitAutoDeployOwnerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pauseStackGitAutoDeployOwner, arg.UpdatedAt, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resumeStackGitAutoDeployOwner = `-- name: ResumeStackGitAutoDeployOwner :execrows
+UPDATE stack_git SET auto_deploy_paused_reason = '', auto_deploy_paused_seq = 0, updated_at = ?
+WHERE stack_id = ? AND auto_deploy = 1 AND auto_deploy_paused_reason = 'owner'
+`
+
+type ResumeStackGitAutoDeployOwnerParams struct {
+	UpdatedAt int64
+	StackID   string
+}
+
+// Lifts the pause for the owner's permission, and only that pause: a stack whose auto-deploy was turned off or paused for
+// a roll back since the caller looked matches nothing, so a stale resume cannot undo a person's or a roll back's change.
+func (q *Queries) ResumeStackGitAutoDeployOwner(ctx context.Context, arg ResumeStackGitAutoDeployOwnerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resumeStackGitAutoDeployOwner, arg.UpdatedAt, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const rotateStackGitWebhook = `-- name: RotateStackGitWebhook :execrows
 UPDATE stack_git SET webhook_token_hash = ?, webhook_secret_sealed = ?, webhook_secret_last4 = ?,
        webhook_last_at = NULL, webhook_last_result = '', updated_at = ?

@@ -7,11 +7,43 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/stackops"
 )
+
+// stateLock is the lock of one stack's sync state, counted so that the entry goes when nobody holds or wants it.
+type stateLock struct {
+	mu    sync.Mutex
+	users int
+}
+
+// lockState takes the stack's sync-state lock and returns what releases it. Every writer of the state (a check, a pull,
+// a deploy's hooks, an automatic deploy holding a commit back) holds it from the moment it reads the state to the moment
+// it writes, so a writer that reads after another has written sees that write and builds on it, and an answer made from
+// an older reading can no longer replace a newer one (review WR-B03). Nothing is held across a network call, and a
+// holder never takes another lock of this kind: the lock is not re-entrant.
+func (s *Service) lockState(stackID string) (unlock func()) {
+	s.mu.Lock()
+	l := s.stateLocks[stackID]
+	if l == nil {
+		l = &stateLock{}
+		s.stateLocks[stackID] = l
+	}
+	l.users++
+	s.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		if l.users--; l.users == 0 {
+			delete(s.stateLocks, stackID)
+		}
+		s.mu.Unlock()
+	}
+}
 
 // writeState stores the answer of a check. It is the one place stack_git_state is written, so that what is new in an
 // answer is judged in one place (D-16). st is the stack the state belongs to and actor who the answer is for.

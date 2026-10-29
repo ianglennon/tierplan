@@ -52,6 +52,7 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 		}
 	}
 
+	defer s.lockState(stackID)()
 	prev, err := s.repo.GitState(ctx, stackID)
 	if err != nil {
 		s.log.Warn("could not read the git state after a deploy", "stack", stackID, "error", err)
@@ -102,6 +103,7 @@ func (s *Service) DeployFailed(ctx context.Context, st stackops.Stack, rev stack
 	if rev.Git.Commit == "" || rev.SyncTrigger == "" {
 		return
 	}
+	defer s.lockState(st.ID)()
 	prev, err := s.repo.GitState(ctx, st.ID)
 	if err != nil {
 		s.log.Warn("could not read the git state after a failed deploy", "stack", st.ID, "error", err)
