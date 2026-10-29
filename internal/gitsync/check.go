@@ -5,6 +5,7 @@ package gitsync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -68,6 +69,22 @@ type checkCall struct {
 // Callers that ask for the same stack while a check runs share it. The check is not tied to the first caller's context
 // (a caller that gives up leaves it running for the others), and a caller that gives up returns its context's error.
 func (s *Service) Check(ctx context.Context, envID, stackID, trigger string) (Outcome, error) {
+	return s.CheckWith(ctx, envID, stackID, CheckOptions{Trigger: trigger})
+}
+
+// CheckOptions are the choices of CheckWith.
+type CheckOptions struct {
+	// Trigger is what started the check (TriggerManual, TriggerPoll, TriggerWebhook).
+	Trigger string
+	// RemoteHead is the commit the repository advertises for the ref the stack follows, when the caller already asked
+	// for it (the poller does, once for all the stacks of one repository). A stack that was last seen at that very
+	// commit, and is not in error, is not fetched again: only the time of the check changes. Empty means look.
+	RemoteHead string
+}
+
+// CheckWith is Check with options. Callers that join a check already in flight share it, with the options of the
+// caller that started it.
+func (s *Service) CheckWith(ctx context.Context, envID, stackID string, o CheckOptions) (Outcome, error) {
 	s.mu.Lock()
 	c, joined := s.checking[stackID]
 	if joined {
@@ -82,7 +99,7 @@ func (s *Service) Check(ctx context.Context, envID, stackID, trigger string) (Ou
 		s.joined(stackID, waiting)
 	}
 	if !joined {
-		go s.runCheck(context.WithoutCancel(ctx), envID, stackID, trigger, c)
+		go s.runCheck(context.WithoutCancel(ctx), envID, stackID, o, c)
 	}
 	select {
 	case <-ctx.Done():
@@ -100,10 +117,10 @@ func (s *Service) InFlight(stackID string) bool {
 	return ok
 }
 
-func (s *Service) runCheck(ctx context.Context, envID, stackID, trigger string, c *checkCall) {
+func (s *Service) runCheck(ctx context.Context, envID, stackID string, o CheckOptions, c *checkCall) {
 	ctx, cancel := context.WithTimeout(ctx, checkDeadline)
 	defer cancel()
-	res, err := s.check(ctx, envID, stackID, trigger)
+	res, err := s.check(ctx, envID, stackID, o)
 	s.mu.Lock()
 	delete(s.checking, stackID)
 	c.res, c.err = res, err
@@ -111,7 +128,7 @@ func (s *Service) runCheck(ctx context.Context, envID, stackID, trigger string, 
 	close(c.done)
 }
 
-func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome, error) {
+func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptions) (Outcome, error) {
 	st, err := s.repo.Stack(ctx, envID, stackID)
 	if err != nil {
 		return "", err
@@ -137,6 +154,9 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 	}
 	if gitx.RefKind(sg.RefKind) == gitx.RefCommit {
 		return s.checkFixed(ctx, st, sg, prev, next, dep, deployed)
+	}
+	if out, ok, err := s.checkCheaply(ctx, o, sg, prev, next, dep, deployed); ok || err != nil {
+		return out, err
 	}
 	repo, err := s.conns.GetRepo(ctx, sg.RepoID)
 	if err != nil {
@@ -202,6 +222,34 @@ func (s *Service) check(ctx context.Context, envID, stackID, _ string) (Outcome,
 		return "", err
 	}
 	return out, nil
+}
+
+// checkCheaply is the check of a stack whose repository was already asked and still advertises the commit the stack
+// was last seen at: nothing can have changed in the repository, so nothing is fetched and only the time of the check
+// is written (RESEARCH Pitfall 4). It applies only when the stored answer is still the answer to the question: the
+// stack is not in error (an error is looked at again for real), the deployed revision and the stack's source are what
+// the answer was made with, and the answer carries no note. ok is false when the check has to be made in full.
+func (s *Service) checkCheaply(ctx context.Context, o CheckOptions, sg stackops.StackGit, prev, next stackops.GitState, dep stackops.GitRevision, deployed bool) (Outcome, bool, error) {
+	if o.RemoteHead == "" || prev.CheckedAt == nil || prev.HeadCommit != o.RemoteHead || prev.Status == stackops.GitStatusError || prev.ReasonCode != "" {
+		return "", false, nil
+	}
+	if next.DeployedCommit != prev.DeployedCommit || next.DeployedTree != prev.DeployedTree || (deployed && sourceChanged(sg, dep)) {
+		return "", false, nil
+	}
+	err := s.repo.TouchGitChecked(ctx, prev.StackID, *next.CheckedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	switch prev.Status {
+	case stackops.GitStatusInSync:
+		return OutcomeInSync, true, nil
+	case stackops.GitStatusBehind:
+		return OutcomeBehind, true, nil
+	}
+	return OutcomeSkipped, true, nil
 }
 
 // fail records a check that could not be made: the state goes to error with the reason, keeping the last answer about

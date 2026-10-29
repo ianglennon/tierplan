@@ -315,6 +315,47 @@ func (r Repo) DeployedGit(ctx context.Context, stackID string) (GitRevision, boo
 	return rev, true, nil
 }
 
+// PolledStack is a git stack the background poller looks at: polling is on and it follows a branch or a tag.
+type PolledStack struct {
+	StackID, EnvID, RepoID string
+	// RefKind and Ref are what the stack follows; the poller compares the repository's advertised head with the last one seen.
+	RefKind, Ref string
+	// Interval is how often the stack is checked.
+	Interval time.Duration
+	// NextCheckAt is when the poller looks next; nil for a stack the poller has not scheduled yet (new, or restored
+	// from a backup).
+	NextCheckAt *time.Time
+	// CheckedAt is when a check last looked at the stack; nil if it never did.
+	CheckedAt *time.Time
+	// ConsecutiveFailures is the run of failed checks, 0 when the last one was good.
+	ConsecutiveFailures int
+}
+
+// PolledStacks lists the git stacks to poll, by stack ID: polling on, and not a fixed commit (which cannot move, D-12).
+func (r Repo) PolledStacks(ctx context.Context) ([]PolledStack, error) {
+	rows, err := r.Store.RQ.ListPolledStackGits(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list the polled git stacks: %w", err)
+	}
+	out := make([]PolledStack, len(rows))
+	for i, row := range rows {
+		out[i] = PolledStack{
+			StackID: row.StackID, EnvID: row.EnvID, RepoID: row.RepoID, RefKind: row.RefKind, Ref: row.Ref,
+			Interval: time.Duration(row.PollIntervalS) * time.Second, NextCheckAt: unixNanoPtr(row.NextCheckAt),
+			CheckedAt: unixNanoPtr(row.CheckedAt), ConsecutiveFailures: int(row.ConsecutiveFailures.Int64),
+		}
+	}
+	return out, nil
+}
+
+// SetNextCheck records when the poller looks at the stack next. It touches no other column of the stack's state.
+func (r Repo) SetNextCheck(ctx context.Context, stackID string, at time.Time) error {
+	if err := r.Store.Q.SetStackGitNextCheck(ctx, sqlc.SetStackGitNextCheckParams{StackID: stackID, NextCheckAt: nullUnixNano(&at)}); err != nil {
+		return fmt.Errorf("schedule the next git check: %w", err)
+	}
+	return nil
+}
+
 // ErrNoGit means the stack has no git settings: it is not a stack from a repository.
 var ErrNoGit = errors.New("stackops: the stack is not from a git repository")
 

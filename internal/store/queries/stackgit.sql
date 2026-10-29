@@ -56,3 +56,19 @@ ON CONFLICT (stack_id) DO UPDATE SET
 -- name: SetStackGitChecked :execrows
 -- A check that found nothing new: only the time it looked changes.
 UPDATE stack_git_state SET checked_at = ? WHERE stack_id = ?;
+
+-- name: ListPolledStackGits :many
+-- The git stacks the background poller looks at (D-14): polling on, and following a branch or a tag (a fixed commit
+-- cannot move). The state row is optional: a restore leaves none, and such a stack has not been scheduled yet.
+SELECT g.stack_id, s.env_id, g.repo_id, g.ref_kind, g.ref, g.poll_interval_s,
+       t.next_check_at, t.checked_at, t.consecutive_failures
+FROM stack_git g
+JOIN stacks s ON s.id = g.stack_id
+LEFT JOIN stack_git_state t ON t.stack_id = g.stack_id
+WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit'
+ORDER BY g.stack_id;
+
+-- name: SetStackGitNextCheck :exec
+-- When the poller looks at the stack next. The row is made if a restore left none.
+INSERT INTO stack_git_state (stack_id, next_check_at) VALUES (?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET next_check_at = excluded.next_check_at;

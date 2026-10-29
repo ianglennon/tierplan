@@ -918,6 +918,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
+	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
+	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The drift check starts before the environments do, so it hears of each of them.
 	driftMonitor.Start(bg)
 	// Monitoring resumes for the environments an admin already added. The

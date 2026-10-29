@@ -132,6 +132,63 @@ func (q *Queries) InsertStackGitState(ctx context.Context, stackID string) error
 	return err
 }
 
+const listPolledStackGits = `-- name: ListPolledStackGits :many
+SELECT g.stack_id, s.env_id, g.repo_id, g.ref_kind, g.ref, g.poll_interval_s,
+       t.next_check_at, t.checked_at, t.consecutive_failures
+FROM stack_git g
+JOIN stacks s ON s.id = g.stack_id
+LEFT JOIN stack_git_state t ON t.stack_id = g.stack_id
+WHERE g.poll_enabled = 1 AND g.ref_kind != 'commit'
+ORDER BY g.stack_id
+`
+
+type ListPolledStackGitsRow struct {
+	StackID             string
+	EnvID               string
+	RepoID              string
+	RefKind             string
+	Ref                 string
+	PollIntervalS       int64
+	NextCheckAt         sql.NullInt64
+	CheckedAt           sql.NullInt64
+	ConsecutiveFailures sql.NullInt64
+}
+
+// The git stacks the background poller looks at (D-14): polling on, and following a branch or a tag (a fixed commit
+// cannot move). The state row is optional: a restore leaves none, and such a stack has not been scheduled yet.
+func (q *Queries) ListPolledStackGits(ctx context.Context) ([]ListPolledStackGitsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPolledStackGits)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPolledStackGitsRow
+	for rows.Next() {
+		var i ListPolledStackGitsRow
+		if err := rows.Scan(
+			&i.StackID,
+			&i.EnvID,
+			&i.RepoID,
+			&i.RefKind,
+			&i.Ref,
+			&i.PollIntervalS,
+			&i.NextCheckAt,
+			&i.CheckedAt,
+			&i.ConsecutiveFailures,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStackGitStatesByEnv = `-- name: ListStackGitStatesByEnv :many
 SELECT t.stack_id, t.deployed_commit, t.deployed_tree, t.head_commit, t.head_tree, t.behind, t.status, t.reason_code,
        t.reason_detail, t.checked_at, t.error_since, t.consecutive_failures, t.pending_commit, t.next_check_at
@@ -248,6 +305,22 @@ func (q *Queries) SetStackGitChecked(ctx context.Context, arg SetStackGitChecked
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setStackGitNextCheck = `-- name: SetStackGitNextCheck :exec
+INSERT INTO stack_git_state (stack_id, next_check_at) VALUES (?, ?)
+ON CONFLICT (stack_id) DO UPDATE SET next_check_at = excluded.next_check_at
+`
+
+type SetStackGitNextCheckParams struct {
+	StackID     string
+	NextCheckAt sql.NullInt64
+}
+
+// When the poller looks at the stack next. The row is made if a restore left none.
+func (q *Queries) SetStackGitNextCheck(ctx context.Context, arg SetStackGitNextCheckParams) error {
+	_, err := q.db.ExecContext(ctx, setStackGitNextCheck, arg.StackID, arg.NextCheckAt)
+	return err
 }
 
 const upsertStackGitState = `-- name: UpsertStackGitState :exec
