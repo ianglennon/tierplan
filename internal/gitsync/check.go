@@ -92,8 +92,14 @@ func (s *Service) CheckWith(ctx context.Context, envID, stackID string, o CheckO
 	if joined {
 		c.waiters++
 	} else {
+		if s.closing {
+			s.mu.Unlock()
+			return "", ErrShuttingDown
+		}
 		c = &checkCall{done: make(chan struct{}), waiters: 1}
 		s.checking[stackID] = c
+		// The check outlives its caller, so Shutdown waits for it (WR-B01).
+		s.work.Add(1)
 	}
 	waiting := c.waiters
 	s.mu.Unlock()
@@ -120,8 +126,11 @@ func (s *Service) InFlight(stackID string) bool {
 }
 
 func (s *Service) runCheck(ctx context.Context, envID, stackID string, o CheckOptions, c *checkCall) {
+	defer s.work.Done()
 	ctx, cancel := context.WithTimeout(ctx, checkDeadline)
 	defer cancel()
+	// The check is detached from its caller but not from the service: Shutdown ends it.
+	defer context.AfterFunc(s.life, cancel)()
 	res, err := s.check(ctx, envID, stackID, o)
 	if err == nil {
 		// A stack with auto-deploy on that was found behind is deployed before the check reads as over, so a caller that

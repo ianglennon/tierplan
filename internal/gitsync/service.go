@@ -7,6 +7,8 @@
 package gitsync
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -71,11 +73,52 @@ type Service struct {
 	triggers map[string]*triggerRun
 	// stateLocks holds the sync-state locks that are held or waited for (lockState).
 	stateLocks map[string]*stateLock
+	// life ends when Shutdown begins: the checks that run detached from their callers end with it, and no new work
+	// starts once closing is set (guarded by mu). work counts the detached checks and triggers Shutdown waits for.
+	life     context.Context
+	stopLife context.CancelFunc
+	closing  bool
+	work     sync.WaitGroup
+}
+
+// ErrShuttingDown is the answer to a check asked for after Shutdown began.
+var ErrShuttingDown = errors.New("gitsync: shutting down")
+
+// Shutdown ends the work that runs apart from the callers that asked for it: the checks that CheckWith and Trigger
+// start on a context of their own (those of the poller and of webhook deliveries among them), and the automatic deploys
+// that follow them. No new check or trigger starts from now on. The running ones are told to stop, an automatic deploy
+// that is already starting its deploy finishes that step, and Shutdown waits until all of them have returned or ctx
+// ends, whichever is first (the error is then ctx's). The server calls it after the poller has stopped and before the
+// database and the jobs close, so nothing writes to either afterwards.
+func (s *Service) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.stopLife()
+	done := make(chan struct{})
+	go func() {
+		s.work.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// shuttingDown says whether Shutdown has begun.
+func (s *Service) shuttingDown() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
 }
 
 // New returns a Service.
 func New(d Deps) *Service {
 	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, access: d.Access, deployer: d.Deployer, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}, stateLocks: map[string]*stateLock{}}
+	s.life, s.stopLife = context.WithCancel(context.Background())
 	if s.mirrors = d.Mirrors; s.mirrors == nil {
 		s.mirrors, _ = d.Git.(gitx.Mirrors)
 	}

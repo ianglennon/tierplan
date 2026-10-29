@@ -65,8 +65,9 @@ type PollerDeps struct {
 //   - a stack the poller has not scheduled yet (new, or after a restart) first checks at a random moment of its first
 //     interval, so a restart does not bring every check at once.
 //
-// Stacks due together are checked in the order of their next check time, then stack ID. RunPoller waits for the checks
-// it started before it returns.
+// Stacks due together are checked in the order of their next check time, then stack ID. RunPoller waits for the reads of
+// repositories it started before it returns. The checks those reads asked for run apart from the poller, as every
+// check does, and may outlive it by a moment; Shutdown ends and waits for them (WR-B01).
 func (s *Service) RunPoller(ctx context.Context, d PollerDeps) {
 	if d.Clock == nil {
 		d.Clock = stackops.RealClock()

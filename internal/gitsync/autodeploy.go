@@ -218,6 +218,14 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 		s.log.Debug("an automatic deploy stopped: auto-deploy was turned off or paused meanwhile", "stack", stackID)
 		return
 	}
+	// A server that is shutting down starts no deploy: the check that found the stack behind is cancelled, and the draft
+	// it pulled waits for the next round. A deploy that starts now is let finish its start and its records, on a context
+	// of its own, since Shutdown waits for it (WR-B01).
+	if s.shuttingDown() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), checkDeadline)
+	defer cancel()
 
 	started, err := deployer.DeployDraft(ctx, p, envID, stackID, pulled.DraftVersion, syncTrigger)
 	if err != nil {
