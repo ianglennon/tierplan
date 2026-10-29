@@ -185,10 +185,11 @@ func (p *poller) round(ctx context.Context) {
 		p.wg.Add(1)
 		go func() {
 			defer p.wg.Done()
-			last := p.readRepo(ctx, g)
-			p.end(g.repoID)
-			<-p.slots
-			p.report(last)
+			var last *polledCheck
+			defer func() { p.report(last) }()
+			defer func() { <-p.slots }()
+			defer p.end(g.repoID)
+			last = p.readRepo(ctx, g)
 		}()
 	}
 }
