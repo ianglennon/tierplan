@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/stacks"
 )
 
 // Pulling a git stack and deploying what was pulled (plan 09-19, GIT-04, D-17, D-21): a pull refreshes the draft and
@@ -277,5 +279,149 @@ func TestGitChangePinsOnlyChangedImages(t *testing.T) {
 	}
 	if !strings.HasSuffix(pins["web_db"], "@"+dbDigest) || !strings.HasSuffix(pins["web_web"], "@"+dockertest.FakeDigestOf("docker.io/library/nginx:1.28")) {
 		t.Errorf("revision pins = %v, want db kept and web looked up", pins)
+	}
+}
+
+// saveVarOnDraft saves a variable over the draft at version, with the files as they are, and answers the response.
+func saveVarOnDraft(t *testing.T, c *roleCaller, stackID string, version int64, name string) *httptest.ResponseRecorder {
+	t.Helper()
+	read := c.do(http.MethodGet, "stacks/"+stackID+"/draft", "")
+	if read.Code != http.StatusOK {
+		t.Fatalf("GET draft: %d %s", read.Code, read.Body)
+	}
+	var cur struct {
+		Files []map[string]any `json:"files"`
+	}
+	if err := json.Unmarshal(read.Body.Bytes(), &cur); err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"version": version, "files": cur.Files, "vars": []map[string]any{{"name": name, "value": "1", "secret": false}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.saveDraft(stackID, string(body))
+}
+
+func TestPullDraftRace(t *testing.T) {
+	t.Parallel()
+	g, operator, stackID := deployedGitStack(t)
+	repo := g.stackRepo()
+	g.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=2\n"}, "env")
+
+	// A variable save and a pull both read version v. The save wins: the pull is refused as draft_changed, nothing of
+	// the save is lost, and the draft is not the commit's.
+	v := draftVersion(t, operator, stackID)
+	if rec := saveVarOnDraft(t, operator, stackID, v, "EXTRA"); rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	rec := operator.pullGit(stackID, v)
+	if rec.Code != http.StatusConflict || problemOf(t, rec).Type != "draft_changed" {
+		t.Fatalf("pull at a stale version = %d %s, want 409 draft_changed", rec.Code, rec.Body)
+	}
+	draft, err := repo.Draft(context.Background(), stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Version != v+1 || !slices.ContainsFunc(draft.Copy.Vars, func(x stacks.Var) bool { return x.Name == "EXTRA" }) {
+		t.Errorf("draft = version %d vars %+v, want the save kept", draft.Version, draft.Copy.Vars)
+	}
+
+	// The pull wins: the save, at the version it read, is refused and the pulled files are not overwritten.
+	v = draft.Version
+	if rec := operator.pullGit(stackID, v); rec.Code != http.StatusOK {
+		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
+	}
+	rec = saveVarOnDraft(t, operator, stackID, v, "LATE")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("save at a stale version after a pull = %d %s, want 409", rec.Code, rec.Body)
+	}
+	after, err := repo.Draft(context.Background(), stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != v+1 || slices.ContainsFunc(after.Copy.Vars, func(x stacks.Var) bool { return x.Name == "LATE" }) ||
+		!slices.ContainsFunc(after.Copy.Vars, func(x stacks.Var) bool { return x.Name == "EXTRA" }) {
+		t.Errorf("draft = version %d vars %+v, want the pull's version with the variable the first save made", after.Version, after.Copy.Vars)
+	}
+	if !slices.ContainsFunc(after.Copy.Files, func(f stacks.File) bool { return f.Path == "web.env" && string(f.Content) == "A=2\n" }) {
+		t.Errorf("files = %+v, want web.env from the pulled commit", after.Copy.Files)
+	}
+}
+
+func TestPullFixedCommit(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFixWith(t, nil)
+	rec := g.create(t, g.admin, g.body(func(b map[string]any) { b["refKind"], b["ref"] = "commit", g.sha }))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	made := answerOf[gitStackAnswer](t, rec)
+	operator := g.f.caller(t, g.e, "operator-1", "operator")
+
+	// The repository moves on; the stack follows one commit and a pull imports that commit again.
+	g.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=moved\n"}, "moved")
+	rec = operator.pullGit(made.StackID, made.DraftVersion)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pull: %d %s", rec.Code, rec.Body)
+	}
+	pulled := answerOf[pullAnswer](t, rec)
+	if pulled.Commit != g.sha || pulled.Ref != g.sha {
+		t.Errorf("pull = %+v, want the pinned commit %s", pulled, g.sha)
+	}
+	draft, err := g.stackRepo().Draft(context.Background(), made.StackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(draft.Copy.Files, func(f stacks.File) bool { return f.Path == "web.env" && string(f.Content) == "A=b\n" }) {
+		t.Errorf("files = %+v, want web.env as it was at the pinned commit", draft.Copy.Files)
+	}
+}
+
+func TestPullFetchFails(t *testing.T) {
+	t.Parallel()
+	g, operator, stackID := deployedGitStack(t)
+	repo := g.stackRepo()
+	v := draftVersion(t, operator, stackID)
+	g.srv.Close()
+
+	rec := operator.pullGit(stackID, v)
+	if rec.Code != http.StatusUnprocessableEntity || problemOf(t, rec).Type != "unreachable" {
+		t.Fatalf("pull with the git host down = %d %s, want 422 unreachable", rec.Code, rec.Body)
+	}
+	draft, err := repo.Draft(context.Background(), stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Version != v {
+		t.Errorf("draft version = %d, want %d: a failed fetch leaves the draft as it was", draft.Version, v)
+	}
+}
+
+func TestPullPermissions(t *testing.T) {
+	t.Parallel()
+	g, operator, stackID := deployedGitStack(t)
+	viewer := g.f.caller(t, g.e, "viewer-1", "viewer")
+	v := draftVersion(t, operator, stackID)
+
+	if rec := viewer.pullGit(stackID, v); rec.Code != http.StatusForbidden {
+		t.Errorf("a Viewer's pull = %d %s, want 403", rec.Code, rec.Body)
+	}
+	if got, _ := g.stackRepo().Draft(context.Background(), stackID); got.Version != v {
+		t.Errorf("draft version = %d after a refused pull, want %d", got.Version, v)
+	}
+	if rec := operator.pullGit(stackID, v); rec.Code != http.StatusOK {
+		t.Errorf("an Operator's pull = %d %s, want 200 (P3 D-04)", rec.Code, rec.Body)
+	}
+
+	// A stack that is not from a repository, and one that is not there.
+	admin := g.f.caller(t, g.e, "envadmin-1", "admin")
+	plain := newStack(t, admin, "plain")
+	if rec := admin.pullGit(plain.ID, 1); rec.Code != http.StatusConflict || problemOf(t, rec).Type != "stack_not_git" {
+		t.Errorf("pull of a stack that is not from git = %d %s, want 409 stack_not_git", rec.Code, rec.Body)
+	}
+	if rec := operator.pullGit("does-not-exist", 1); rec.Code != http.StatusNotFound {
+		t.Errorf("pull of an unknown stack = %d %s, want 404", rec.Code, rec.Body)
 	}
 }
