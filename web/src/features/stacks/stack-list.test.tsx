@@ -1234,7 +1234,7 @@ describe("StackList git stacks", () => {
     const link = screen.getByRole("link", { name: long });
     const cell = link.closest("td") as HTMLElement;
     const children = Array.from(cell.querySelectorAll("span, a"));
-    const nameAt = children.findIndex((c) => c === link);
+    const nameAt = children.indexOf(link);
     const badgeAt = children.findIndex((c) => c.textContent === "Behind 1");
     expect(nameAt).toBeGreaterThanOrEqual(0);
     expect(badgeAt).toBeGreaterThan(nameAt);
