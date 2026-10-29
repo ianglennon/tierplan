@@ -57,6 +57,7 @@
     "detail": {
       "heading": "Revision",
       "rollbackOf": "Roll back of",
+      "rollbackPauses": "Rolling back pauses auto-deploy.",
       "deployed": "This is the deployed revision.",
       "failed": {
         "title": "Revision #{{seq}} failed",

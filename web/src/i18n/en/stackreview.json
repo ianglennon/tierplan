@@ -51,7 +51,8 @@
         "body": "This deploy uses {{sha}}, the commit you reviewed. {{ref}} is now at {{newSha}}.",
         "review": "Review {{newSha}}",
         "pulling": "Pulling…"
-      }
+      },
+      "rollbackNote": "Auto-deploy will pause after this roll back, so the repository head isn't deployed over it. Turn it back on when the repository is fixed."
     },
     "loading": "Checking the stack…",
     "lookingUp": "Looking up the digest…",

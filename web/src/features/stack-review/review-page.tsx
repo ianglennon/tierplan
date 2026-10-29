@@ -468,6 +468,12 @@ export function ReviewPage({
               <AlertDescription>{t("stackRollback.review.draftNotice")}</AlertDescription>
             </Alert>
           ) : null}
+          {rollback && stack.data?.git?.autoDeploy ? (
+            <Alert role="status" data-slot="rollback-pauses-auto-deploy">
+              <Info aria-hidden="true" />
+              <AlertDescription>{t("stackReview.git.rollbackNote")}</AlertDescription>
+            </Alert>
+          ) : null}
           <BlockingList problems={problems} envId={envId} stackId={stackId} />
           <WarningsList problems={problems} envId={envId} stackId={stackId} />
           {firstDeploy ? (

@@ -262,6 +262,13 @@
         "body": "{{user}} set it up and no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
         "bodyNoUser": "The person who set it up no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
         "openSettings": "Open git settings"
+      },
+      "rollbackAlert": {
+        "title": "Auto-deploy paused after rollback to #{{n}}",
+        "titleNoRevision": "Auto-deploy paused after a roll back",
+        "body": "{{name}} now waits for review. The repository head, {{sha}}, shows as pending.",
+        "bodyNoHead": "{{name}} now waits for review.",
+        "turnOn": "Turn on auto-deploy…"
       }
     }
   }

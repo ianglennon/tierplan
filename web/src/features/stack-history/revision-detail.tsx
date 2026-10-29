@@ -162,6 +162,11 @@ export function RevisionDetail({
               {needs.allowed && stack?.draftSavedAt ? (
                 <p className="text-xs text-muted-foreground">{t("stackRollback.draftNote")}</p>
               ) : null}
+              {stack?.git?.autoDeploy ? (
+                <p className="text-xs text-muted-foreground">
+                  {t("stackHistory.detail.rollbackPauses")}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </header>
