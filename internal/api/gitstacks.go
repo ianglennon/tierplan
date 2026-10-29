@@ -29,6 +29,7 @@ const (
 	problemComposeFilesMissing = "compose_files_required"
 	problemComposePathInvalid  = "compose_path_invalid"
 	problemComposeFileMissing  = "compose_file_missing"
+	problemCommitMoved         = "commit_moved"
 )
 
 // GitStackCreateRequest is the body of the create-from-repository route.
@@ -37,6 +38,7 @@ type GitStackCreateRequest struct {
 	RepoID       string                `json:"repoId" maxLength:"64" doc:"The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found"`
 	RefKind      string                `json:"refKind" enum:"branch,tag,commit" doc:"What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters"`
 	Ref          string                `json:"ref" maxLength:"2048" doc:"The branch, tag or commit. 422 ref_invalid for a name git would refuse"`
+	Commit       string                `json:"commit,omitempty" pattern:"^[0-9a-f]{40}$" patternDescription:"a full 40-hex commit ID" doc:"The commit.sha the check answered for this ref. When it is given, the stack is created only if the ref still resolves to this commit, so what the person reviewed is what is created; otherwise 409 commit_moved and nothing is created. When it is empty, the head of the ref at the time of the request is used"`
 	Folder       string                `json:"folder,omitempty" maxLength:"4096" doc:"The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)"`
 	ComposeFiles []string              `json:"composeFiles" minItems:"1" maxItems:"50" doc:"The compose files, relative to the folder, in merge order: a key of a later file wins over the same key of an earlier one. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit"`
 	Vars         []DraftVarBody        `json:"vars,omitempty" maxItems:"500" doc:"The stack's variables. A value here beats the same name in the folder's .env"`
@@ -161,7 +163,8 @@ func RegisterGitStacks(r *httpx.Router, s StacksDeps, g GitDeps) {
 			"The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. " +
 			"The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). " +
 			"422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; " +
-			"422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. Needs stacks.create (Admin).",
+			"422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. " +
+			"When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).",
 		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackSaveBody,
 	}, rbac.Requirement{Perm: rbac.PermStacksCreate, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *GitStackCreateInput) (*GitStackCreateOutput, error) {
@@ -205,6 +208,10 @@ func createGitStack(ctx context.Context, d StacksDeps, g GitDeps, in *GitStackCr
 	})
 	if err != nil {
 		return nil, g.importProblem(repo, kind, body.Ref, body.Folder, err)
+	}
+	// The commit the person checked is the one to create from: a ref that has moved since is refused, not followed.
+	if body.Commit != "" && imp.Commit.SHA != body.Commit {
+		return nil, httpx.Problem(http.StatusConflict, problemCommitMoved, "The branch or tag has moved since it was checked. Check it again.")
 	}
 
 	st, snap, err := d.repo().CreateGitStack(ctx, stackops.CreateGitStackInput{
