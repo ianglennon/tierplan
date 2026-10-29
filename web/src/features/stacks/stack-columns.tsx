@@ -4,7 +4,7 @@
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
 import { useState } from "react";
-import { useCheckStackGit } from "@/api/stack-git";
+import { type StackGitCheck, useCheckStackGit } from "@/api/stack-git";
 import type { StackItem } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -82,17 +82,15 @@ interface RowActionsProps {
 }
 
 // CheckNowItem is Check now in the menu of a git stack (UI-SPEC "Stack lists"): it asks the server to fetch the ref and
-// compare it with what is deployed, and the row's badges follow the answer. It is its own component so that only a
-// menu that is open, and only for a stack that follows a branch or a tag, reads the stack. Anyone who can read the stack
-// may ask, as on the stack's page; a fixed commit has nothing to check.
-function CheckNowItem({ row }: { row: StackRow }) {
+// compare it with what is deployed, and the row's badges follow the answer. The check itself runs in RowActions, which
+// stays mounted when the menu closes: the menu content is unmounted with the click, and a check held here would stop
+// being waited for before the server had answered. Anyone who can read the stack may ask, as on the stack's page; a
+// fixed commit has nothing to check.
+function CheckNowItem({ check, running }: StackGitCheck) {
   const t = useT();
-  const { check, running } = useCheckStackGit(row.envId, row.id, {
-    onError: () => toastError(t("stackGit.check.failed")),
-  });
   return (
     <DropdownMenuItem className="max-md:min-h-11" disabled={running} onSelect={() => check()}>
-      {t("stackLists.git.checkNow")}
+      {running ? t("stackGit.strip.checking") : t("stackLists.git.checkNow")}
     </DropdownMenuItem>
   );
 }
@@ -117,6 +115,11 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", row.envId);
   const { start } = useStackStart(row);
+  // The check of a stack from a repository is held here and not in the menu: it goes on, and reads the lists again when
+  // it ends, after the menu has closed.
+  const sourceCheck = useCheckStackGit(row.envId, row.id, {
+    onError: () => toastError(t("stackGit.check.failed")),
+  });
   const remove = useNeeds("stacks.delete", row.envId);
   const [stopping, setStopping] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -187,7 +190,7 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
               {t("stackUpdate.actions.update")}
             </DropdownMenuItem>
           </NeedsTooltip>
-          {row.git && row.git.refKind !== "commit" ? <CheckNowItem row={row} /> : null}
+          {row.git && row.git.refKind !== "commit" ? <CheckNowItem {...sourceCheck} /> : null}
           {stoppable || canStart(row.state) ? (
             <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
               <DropdownMenuItem

@@ -7,6 +7,14 @@
 # new head. The spec runs it with `docker compose exec`.
 set -eu
 mode="${1:?usage: commit-change <mode>}"
+# The mode goes into a sed replacement and a commit message: only a plain word is taken, so a "/" or an "&" cannot
+# rewrite the compose file.
+case "$mode" in
+  *[!A-Za-z0-9._-]*)
+    echo "commit-change: the mode may hold letters, digits, '.', '_' and '-' only: $mode" >&2
+    exit 2
+    ;;
+esac
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=/work
 export GIT_AUTHOR_NAME="Bayplan E2E" GIT_AUTHOR_EMAIL=e2e@bayplan.invalid
 export GIT_COMMITTER_NAME="Bayplan E2E" GIT_COMMITTER_EMAIL=e2e@bayplan.invalid

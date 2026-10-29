@@ -163,15 +163,22 @@ export function useCheckStackGit(
     answers > startCount.current &&
     stack.data?.git?.checking !== true;
 
+  // The check has ended, or has been waited for long enough: the lists are read again, for their badges follow what the
+  // check found and the answer to the click came before it.
   useEffect(() => {
-    if (settled) setPolling(false);
-  }, [settled]);
+    if (!settled) return;
+    setPolling(false);
+    invalidateStacks(queryClient, envId);
+  }, [settled, queryClient, envId]);
 
   useEffect(() => {
     if (!polling) return;
-    const timer = setTimeout(() => setPolling(false), STACK_GIT_POLL_MAX_MS);
+    const timer = setTimeout(() => {
+      setPolling(false);
+      invalidateStacks(queryClient, envId);
+    }, STACK_GIT_POLL_MAX_MS);
     return () => clearTimeout(timer);
-  }, [polling]);
+  }, [polling, queryClient, envId]);
 
   return {
     check: () => {

@@ -344,7 +344,7 @@ absolute path or `..` is refused, and a symlink inside it is read as the file it
 that a stack needs is a blocking problem, so a pointer file is never deployed as if it were the content. `include` and
 `extends` are blocked, so a repository cannot pull in a second file from elsewhere. The stack limits apply (50 files, 1 MiB
 each, 8 MiB in all) and the folder walk gives up at 100,000 entries. (`TestReadFolderSymlinks`, `TestReadFolderLimits`,
-`TestGitLintLFSPointer`, `TestSubmoduleProblem`, `TestSymlinkOutsideProblem`, `TestMirrorIDThatIsNotAUUIDIsRefused`) A mirror's
+`TestGitLintLFSPointer`, `TestSubmoduleProblem`, `TestSymlinkOutsideProblem`, `TestAMirrorIDThatIsNotAUUIDIsRefused`) A mirror's
 directory is named by a repository's UUID, never by anything typed. Commit subjects and author names shown in the interface
 are cut to 200 characters and rendered as text.
 

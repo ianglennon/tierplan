@@ -135,8 +135,10 @@ function UpdatesForm({ envId, stackId, git }: UpdatesCardProps) {
   const [refused, setRefused] = useState(false);
 
   const parsed = parseMinutes(minutes);
-  const invalid = parsed === null || refused;
-  const dirty = parsed !== null && (enabled !== git.pollEnabled || parsed !== git.pollMinutes);
+  // The number matters only while polling is on: with it off the field is disabled, so a number that does not parse
+  // must not hold back turning polling off, and the stack keeps the minutes it had.
+  const invalid = enabled && (parsed === null || refused);
+  const dirty = enabled !== git.pollEnabled || (parsed !== null && parsed !== git.pollMinutes);
   const canChange = needs.allowed;
   // Permissions not known yet: the button is off, with no reason to give.
   const unknown = !needs.allowed && !needs.reason;
@@ -148,10 +150,10 @@ function UpdatesForm({ envId, stackId, git }: UpdatesCardProps) {
 
   function save(event: React.FormEvent) {
     event.preventDefault();
-    if (!canChange || saving || parsed === null || !dirty) return;
+    if (!canChange || saving || invalid || !dirty) return;
     setRefused(false);
     update.mutate(
-      { pollEnabled: enabled, pollMinutes: parsed },
+      { pollEnabled: enabled, pollMinutes: parsed ?? git.pollMinutes },
       {
         onSuccess: () => toastSuccess(t("stackGit.updates.saved")),
         onError: (e) => {
@@ -170,7 +172,7 @@ function UpdatesForm({ envId, stackId, git }: UpdatesCardProps) {
       type="submit"
       variant="outline"
       className={TOUCH_HEIGHT}
-      disabled={unknown || (canChange && (!dirty || saving))}
+      disabled={unknown || (canChange && (!dirty || invalid || saving))}
     >
       {saving ? (
         <>

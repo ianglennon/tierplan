@@ -91,6 +91,8 @@ let pulls: number;
 // The job the console reads.
 let jobExtra: Record<string, unknown>;
 let client: QueryClient;
+// Whether the environments list answers: when it does not, the environment has no name to show.
+let environmentsFail: boolean;
 
 beforeEach(() => {
   git = makeGit();
@@ -101,6 +103,7 @@ beforeEach(() => {
   putStatus = 200;
   pulls = 0;
   jobExtra = {};
+  environmentsFail = false;
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
   setCsrfToken(null);
   toasts.success.mockReset();
@@ -118,6 +121,7 @@ beforeEach(() => {
         );
       }
       if (path === "/api/environments") {
+        if (environmentsFail) return Response.json({}, { status: 500 });
         return Response.json({ items: [{ id: ENV, name: "Homelab" }] });
       }
       if (path === "/api/stack-jobs") return Response.json({ jobs: stackJobs });
@@ -230,6 +234,15 @@ describe("the Deploying card", () => {
       ),
     ).toBeTruthy();
     expect(within(c).queryByText("Runs as")).toBeNull();
+  });
+
+  it("names the environment's ID in the consent when its name could not be read", async () => {
+    environmentsFail = true;
+    mountTab();
+    const c = await card();
+    fireEvent.click(await autoSwitch(c));
+    const dialog = await screen.findByRole("alertdialog", { name: "Turn on auto-deploy?" });
+    expect(dialog.textContent).toContain("If you lose permission to deploy on e1, auto-deploy");
   });
 
   it("opens the confirm and leaves the switch reading the saved state until it succeeds", async () => {

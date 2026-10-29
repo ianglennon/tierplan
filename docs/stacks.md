@@ -860,7 +860,8 @@ Git connections come in two objects, in two layers:
 Each object lives either on the **instance** (managed by instance administrators, usable in every environment) or on
 **one environment** (managed by that environment's Admins, usable only there). A repository of an environment may use a
 credential of its own environment or an instance credential. An instance repository can use only an instance credential.
-The pages are **Git** in the environment's sidebar, and the instance-wide one for administrators.
+There is one **Git** page: the **Git** item in the sidebar's global group, shown to anyone who may read git settings in
+some environment. It lists the instance's repositories and credentials and those of the environments you can read.
 
 The address must be `https://host/path`, `ssh://git@host/path` or `git@host:path`. Anything else is refused before a
 connection is made: **`http://`** (it would send a token in clear text; use `https` or `ssh`), `git://`, `file://` and
@@ -938,10 +939,11 @@ Bayplan compares the stack folder at the head of the ref with the deployed one. 
   the stack behind and starts nothing, so a monorepo with a folder per stack does not redeploy every stack on every
   commit.
 - **Behind (N)**: N commits changed the stack's folder since the deployed commit (it says *at least N* when the count is
-  capped at 2,000 commits). **Review update** opens the review.
+  capped at 2,000 commits). **Review update** opens the review. A stack whose source was changed and is waiting for
+  review also reads *Behind*, with a note saying so.
 - **Error** with a reason: the repository could not be reached or refused the credential, the host key changed or is
   not trusted, the branch or tag is gone, the folder is gone, the new commit fails the checks (a missing variable, a
-  blocked setting), the source differs from the deployed one, or an automatic deploy was held back or failed. The last
+  blocked setting), or an automatic deploy was held back or failed. The last
   good version keeps running. The status clears on the next success. Each new error is audited and appears on the bell.
 
 A stack newly created, or one restored from a backup, reads *unknown* until its first check.
@@ -1025,7 +1027,7 @@ acted for, the commit and what started it.
 
 [Rolling back](#rolling-back-to-a-revision) restores a stored revision exactly, including its files and variables; it
 needs neither the repository nor its mirror. A roll back **pauses auto-deploy**, so the repository's head is not deployed
-straight back over the version you chose: the Git tab shows *Auto-deploy paused after rollback to #N*, and the head shows
+straight back over the version you chose: an alert under the stack's header, on every tab, says *Auto-deploy paused after rollback to #N*, and the head shows
 as pending. Turn auto-deploy on again when the repository is fixed. The stack keeps following the same repository, ref and
 folder, and a roll back does not change the draft.
 
