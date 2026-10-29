@@ -110,7 +110,7 @@ export function useStackStart(stack: Pick<StackDetail, "id" | "envId" | "name">)
 
 // The words for why a pull did not happen, by the problem type the server named. The server decides; this only says
 // what it means (a git failure's code is the type).
-function pullReason(
+export function pullReason(
   t: (key: string, options?: Record<string, unknown>) => string,
   e: unknown,
   ref: string,

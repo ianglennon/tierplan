@@ -152,6 +152,7 @@ type StackReviewGitBody struct {
 	DeployedCommit string `json:"deployedCommit" doc:"The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository"`
 	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed"`
 	SourceChanged  bool   `json:"sourceChanged" doc:"True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable"`
+	HeadCommit     string `json:"headCommit" doc:"The full ID of the commit the ref pointed at when the stack was last checked or pulled; empty when it never was. When it is not commit, the branch moved on after the draft was made: a deploy still deploys commit"`
 }
 
 // StackReviewBody is what a deploy of the saved draft would do.
@@ -329,6 +330,12 @@ func reviewGitBody(ctx context.Context, d StacksDeps, repo stackops.Repo, draft 
 	src := draft.Git.Source
 	out := &StackReviewGitBody{
 		Commit: draft.Git.Commit, Ref: src.Ref, RefKind: src.RefKind, Folder: src.Folder, RepoName: src.RepoName,
+	}
+	// A stack that follows nothing any more has no head to compare with.
+	if state, err := repo.GitState(ctx, draft.StackID); err == nil {
+		out.HeadCommit = state.HeadCommit
+	} else if !errors.Is(err, stackops.ErrNoGit) {
+		return nil, err
 	}
 	dep, deployed, err := repo.DeployedGit(ctx, draft.StackID)
 	if err != nil {

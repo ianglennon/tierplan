@@ -10809,6 +10809,8 @@ export interface components {
             deployedCommit: string;
             /** @description The folder of the repository the stack lives in; empty for the root */
             folder: string;
+            /** @description The full ID of the commit the ref pointed at when the stack was last checked or pulled; empty when it never was. When it is not commit, the branch moved on after the draft was made: a deploy still deploys commit */
+            headCommit: string;
             /** @description The branch, tag or commit ID the draft follows */
             ref: string;
             /**

@@ -28,6 +28,8 @@ interface ImagePinTableProps {
   mode?: ReviewMode;
   // The revision a roll back restores.
   revision?: number;
+  // The review is of a git stack's draft: the card says which images are looked up again (D-21).
+  git?: boolean;
 }
 
 // Missing values read as a dash, never blank.
@@ -129,10 +131,13 @@ function NoteCell({ row, mode }: { row: StackReviewImage; mode: ReviewMode }) {
 // ImagePinTable is the Images card of the review (D-15, D-18): every service has a row with the
 // image as written, the digest it will run with and a note. Image references and notes are
 // Docker's and the registry's text, drawn as text, and long references wrap.
-export function ImagePinTable({ images, mode = "deploy", revision }: ImagePinTableProps) {
+export function ImagePinTable({ images, mode = "deploy", revision, git }: ImagePinTableProps) {
   const t = useT();
   return (
     <SettingsCard title={t("stackReview.images.title")}>
+      {git ? (
+        <p className="text-sm text-muted-foreground">{t("stackReview.images.gitNote")}</p>
+      ) : null}
       {images ? (
         <Table>
           <TableHeader>

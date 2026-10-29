@@ -44,6 +44,23 @@ let reviewReads: number;
 
 const counts = (added = 0, changed = 0, removed = 0) => ({ added, changed, removed });
 
+const specOf = (replicas: number) => ({
+  Name: "s1_web",
+  Mode: { Replicated: { Replicas: replicas } },
+  TaskTemplate: { ContainerSpec: { Image: "nginx:1.27" } },
+});
+
+// One service changed, so there is something to deploy.
+const changedWeb = {
+  name: "s1_web",
+  short: "web",
+  change: "changed",
+  current: specOf(2),
+  next: specOf(3),
+  hiddenChanges: [],
+  settings: 1,
+};
+
 function reviewBody() {
   return {
     draftVersion: 7,
@@ -54,9 +71,9 @@ function reviewBody() {
     objects: [],
     pins: { s1_web: `nginx:1.27@${D1}` },
     problems: [],
-    services: [],
+    services: [changedWeb],
     summary: {
-      services: counts(),
+      services: counts(0, 1, 0),
       networks: counts(),
       volumes: counts(),
       secrets: counts(),
@@ -179,6 +196,7 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks/${STACK}/git/pull`) {
         // The pull refreshes the draft to the newest commit, which is then what the review shows.
         git = gitBody({ commit: NEWER, headCommit: NEWER });
+        stackHead = NEWER;
         return Response.json({
           draftVersion: 8,
           commit: NEWER,
@@ -408,6 +426,8 @@ describe("the Images card of a git review", () => {
 
 describe("the moved-head note of a git review", () => {
   it("says the branch moved on after the review, and offers to review the new commit", async () => {
+    // The stack's page has no head of its own; the review knows the one the last check recorded.
+    stackHead = "";
     git = gitBody({ headCommit: NEWER });
     mount();
     expect(await screen.findByText("main has moved on")).toBeTruthy();
@@ -460,6 +480,7 @@ describe("the moved-head note of a git review", () => {
   });
 
   it("still deploys the commit that was reviewed", async () => {
+    stackHead = NEWER;
     git = gitBody({ headCommit: NEWER });
     mount();
     await screen.findByText("main has moved on");

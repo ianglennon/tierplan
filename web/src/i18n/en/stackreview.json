@@ -45,6 +45,12 @@
         "capped": "Bayplan counted {{total}} commits and stopped there; there may be more.",
         "unavailable": "Bayplan can't list the commits, so only the changes are shown.",
         "loading": "Reading the commits…"
+      },
+      "moved": {
+        "title": "{{ref}} has moved on",
+        "body": "This deploy uses {{sha}}, the commit you reviewed. {{ref}} is now at {{newSha}}.",
+        "review": "Review {{newSha}}",
+        "pulling": "Pulling…"
       }
     },
     "loading": "Checking the stack…",
@@ -81,7 +87,8 @@
       "asWritten": "Pinned in the compose file",
       "local": "Not from a registry. Pinned to the local image ID.",
       "unreachable": "Can't reach the registry",
-      "unresolved": "Can't look up this image"
+      "unresolved": "Can't look up this image",
+      "gitNote": "Only images whose reference changed in the repository are looked up again. The others keep the digest they run."
     },
     "footer": {
       "back": "Back to editing",

@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleX, Info } from "lucide-react";
 import { useId, useState } from "react";
-
 import { useRestoreStack } from "@/api/stack-drift";
+import { usePullStackGit } from "@/api/stack-git";
 import { useRollbackToRevision } from "@/api/stack-history";
 import {
   type DeployRequestError,
@@ -31,14 +31,16 @@ import { BlockingList } from "@/features/stack-review/blocking-list";
 import { CommitsCard } from "@/features/stack-review/commits-card";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
+import { MovedHeadNote } from "@/features/stack-review/moved-head-note";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
 import { RevertsDriftSection } from "@/features/stack-review/reverts-drift-section";
 import { ReviewSummary } from "@/features/stack-review/review-summary";
 import { ServiceDiffList } from "@/features/stack-review/service-diff-list";
 import { WarningsList } from "@/features/stack-review/warnings-list";
 import { YamlDiff } from "@/features/stack-review/yaml-diff";
+import { pullReason } from "@/features/stacks/stack-actions";
 import { useT } from "@/i18n/use-t";
-import { toastInfo } from "@/lib/toast";
+import { toastError, toastInfo } from "@/lib/toast";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -236,6 +238,31 @@ export function ReviewPage({
   // knows it is from git; the body and the commit line wait for the review, which names the commit.
   const gitStack = mode === "deploy" && !!stack.data?.git;
   const gitReview = mode === "deploy" ? data?.git : undefined;
+  const pull$ = usePullStackGit(envId, stackId);
+  // The commit the ref points at now, when it is not the one reviewed (D-17). A review is never read again by itself, so
+  // it knows the head as it was when it was made; the stack's page is read again every 30 seconds and may know a newer
+  // one. Either moving away from the reviewed commit is worth saying, and a person who presses Review gets the truth
+  // from a new pull. A fixed commit does not move.
+  const stackHead = stack.data?.git?.headSha ?? "";
+  const reviewedHead = gitReview?.headCommit ?? "";
+  const movedOn =
+    gitReview && gitReview.refKind !== "commit"
+      ? [stackHead, reviewedHead].find((h) => h !== "" && h !== gitReview.commit) || ""
+      : "";
+
+  // Review the new commit: pull it into the draft again, then read the review again. The draft version, the pins and
+  // the commit line all come from the new review; a failed pull changes nothing and the old review stands.
+  async function reviewMovedHead() {
+    if (pull$.isPending) return;
+    try {
+      await pull$.mutateAsync();
+    } catch (e) {
+      const ref = gitReview?.ref ?? "";
+      toastError(t("stackGit.pull.failed", { ref, reason: pullReason(t, e, ref) }));
+      return;
+    }
+    void review.refetch();
+  }
 
   // Roll back stack sends the revision that was reviewed and the deployed revision the review was made against,
   // so the server refuses a stack that was deployed again since. Like a deploy, it is pending after the first
@@ -419,6 +446,15 @@ export function ReviewPage({
         </Alert>
       ) : (
         <>
+          {gitReview && movedOn ? (
+            <MovedHeadNote
+              refName={gitReview.ref}
+              reviewed={gitReview.commit}
+              latest={movedOn}
+              onReview={() => void reviewMovedHead()}
+              pending={pull$.isPending || review.isFetching}
+            />
+          ) : null}
           {data?.concurrent ? (
             <ConcurrentDeployPanel
               concurrent={data.concurrent}
@@ -477,6 +513,7 @@ export function ReviewPage({
             images={data ? (data.images ?? []) : undefined}
             mode={mode}
             revision={seq}
+            git={!!gitReview}
           />
           {unchanged ? (
             <Empty className="border">
