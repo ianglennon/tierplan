@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
@@ -330,5 +331,69 @@ func TestWebhookAuditAndLogs(t *testing.T) {
 		if strings.Contains(rec.Body.String(), secret) {
 			t.Errorf("the git summary holds %s", what)
 		}
+	}
+}
+
+// TestWebhookRejectionsSpendNothing: a caller who holds only a webhook's address cannot use up the budget the real git
+// host delivers with, flood the audit log or overwrite the delivery state shown on the Git tab (WR-D01). Rejections are
+// bounded by the per-address limit, their audit rows are sampled, and they answer like an unknown token even when sampled
+// out (no 429 oracle).
+func TestWebhookRejectionsSpendNothing(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	wh := h.makeWebhook(t, "github", "")
+	body := `{}`
+	bad := githubSig("not the secret", body)
+	unknown := h.deliverFrom(t, "198.51.100.1", strings.Repeat("E", 43), body, bad)
+
+	// 40 rejections from 40 addresses: more than the 10 a minute a delivery is allowed.
+	for i := 0; i < 40; i++ {
+		rec := h.deliverFrom(t, fmt.Sprintf("203.0.113.%d", i+1), wh.token(), body, bad)
+		if rec.Code != unknown.Code || rec.Body.Len() != unknown.Body.Len() || rec.Header().Get("Cache-Control") != unknown.Header().Get("Cache-Control") {
+			t.Fatalf("rejection %d: %d %q, want what an unknown token gets: %d %q", i, rec.Code, rec.Body, unknown.Code, unknown.Body)
+		}
+	}
+	if n := len(h.f.auditRowsOf(t, audit.ActionGitWebhookRejected)); n != 3 {
+		t.Errorf("%d rejected-delivery rows after 40 rejections in a minute, want the sample of 3", n)
+	}
+	var recorded int
+	if err := h.f.st.Read.QueryRow(`SELECT count(*) FROM stack_git WHERE webhook_last_at IS NOT NULL`).Scan(&recorded); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 0 {
+		t.Error("a rejected request overwrote the webhook's last delivery")
+	}
+	// The real delivery still gets its full budget of 10 a minute.
+	good := githubSig(wh.Secret, body)
+	for i := 1; i <= 10; i++ {
+		if rec := h.deliver(t, wh.token(), body, good); rec.Code != http.StatusAccepted {
+			t.Fatalf("real delivery %d after the flood: %d, want 202", i, rec.Code)
+		}
+	}
+	h.awaitChecks(t)
+}
+
+// TestWebhookUserAgentCutOnARuneBoundary: the sender's User-Agent is kept in the audit row at 200 bytes without splitting
+// a character (IN-D01).
+func TestWebhookUserAgentCutOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	wh := h.makeWebhook(t, "github", "")
+	body := `{}`
+	hdr := githubSig("not the secret", body)
+	hdr["User-Agent"] = strings.Repeat("a", 199) + "é€" // the 2-byte é straddles byte 200
+	if rec := h.deliver(t, wh.token(), body, hdr); rec.Code != http.StatusNotFound {
+		t.Fatalf("rejected delivery: %d", rec.Code)
+	}
+	rows := h.f.auditRowsOf(t, audit.ActionGitWebhookRejected)
+	if len(rows) != 1 {
+		t.Fatalf("%d rejected rows, want 1", len(rows))
+	}
+	var ua string
+	if err := h.f.st.Read.QueryRow(`SELECT COALESCE(user_agent, '') FROM audit_log WHERE action = ?`, audit.ActionGitWebhookRejected).Scan(&ua); err != nil {
+		t.Fatal(err)
+	}
+	if ua != strings.Repeat("a", 199) || !utf8.ValidString(ua) {
+		t.Errorf("user agent = %q (%d bytes), want 199 letters and no split character", ua, len(ua))
 	}
 }

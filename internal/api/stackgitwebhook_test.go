@@ -675,8 +675,9 @@ func TestWebhookSummaryHasNoSecret(t *testing.T) {
 	if rec := h.deliver(t, wh.token(), body, githubSig("not the secret", body)); rec.Code != http.StatusNotFound {
 		t.Fatalf("bad signature: %d", rec.Code)
 	}
-	if _, got := h.readWebhook(t, h.admin); got == nil || got.LastResult != "rejected" || got.LastAt == "" {
-		t.Errorf("after a bad signature = %+v, want rejected with a time", got)
+	// A signature that does not match proves nothing about the webhook, so it leaves the last delivery as it was (WR-D01).
+	if _, got := h.readWebhook(t, h.admin); got == nil || got.LastResult != "" || got.LastAt != "" {
+		t.Errorf("after a bad signature = %+v, want no delivery recorded", got)
 	}
 	if rec := h.deliver(t, wh.token(), body, githubSig(wh.Secret, body)); rec.Code != http.StatusAccepted {
 		t.Fatalf("delivery: %d", rec.Code)
