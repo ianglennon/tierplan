@@ -28,6 +28,26 @@ func (q *Queries) DeleteOwnedResource(ctx context.Context, arg DeleteOwnedResour
 	return result.RowsAffected()
 }
 
+const deleteOwnedResourcesOfStack = `-- name: DeleteOwnedResourcesOfStack :execrows
+DELETE FROM owned_resources WHERE resource_id = ?1 AND kind IN (?2, ?3)
+`
+
+type DeleteOwnedResourcesOfStackParams struct {
+	ResourceID string
+	KindA      string
+	KindB      string
+}
+
+// Forgets the automations of a stack that was removed (its webhook and its auto-deploy), in the same transaction as the
+// removal, so no row is left for a resource that is gone. The two kinds are passed in because the names live in gitsync.
+func (q *Queries) DeleteOwnedResourcesOfStack(ctx context.Context, arg DeleteOwnedResourcesOfStackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteOwnedResourcesOfStack, arg.ResourceID, arg.KindA, arg.KindB)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getOwnedDetail = `-- name: GetOwnedDetail :one
 SELECT o.kind, o.resource_id, o.env_id, o.name, o.owner_id, o.state, o.needs_env_admin,
        COALESCE(e.name, '') AS env_name

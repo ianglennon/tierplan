@@ -16,6 +16,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/jobs"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
 // ModeRemove is the Mode of a removal job and the kind of its row in stack_deploys.
@@ -268,13 +269,49 @@ func (d Deps) Preview(ctx context.Context, envID string, st Stack, decl Declared
 // RemoveStore is the stored side of a removal: the stack's definition, which a removal deletes unless the person
 // keeps it, and its record of being stopped, which a kept definition no longer has. Repo is the one implementation.
 type RemoveStore interface {
-	// DeleteStack deletes the stack with its drafts, revisions, files, variables and operations.
-	DeleteStack(ctx context.Context, stackID string) error
+	// DeleteStackWithAutomations deletes the stack with its drafts, revisions, files, variables and operations, and
+	// forgets the automations that run for it (its webhook and its auto-deploy), in one transaction.
+	DeleteStackWithAutomations(ctx context.Context, stackID string) error
 	// SetStopped records that the stack is stopped (true) or not (false).
 	SetStopped(ctx context.Context, stackID string, stopped bool) error
 }
 
 var _ RemoveStore = Repo{}
+
+// The kinds of the automations a git stack can own (internal/gitsync KindGitWebhook and KindGitAutoDeploy; a test keeps
+// them equal). They are rows of owned_resources, which has no foreign key to stacks, so a removal forgets them itself.
+const (
+	ownedKindGitWebhook    = "git_webhook"
+	ownedKindGitAutoDeploy = "git_autodeploy"
+)
+
+// DeleteStackWithAutomations deletes the stack and the owned_resources rows of its webhook and auto-deploy in one
+// transaction, so a removed stack leaves no automation behind for its owner to see, be paused over or hand over. A stack
+// that is not there is ErrStackNotFound and changes nothing, so a second removal does nothing.
+func (r Repo) DeleteStackWithAutomations(ctx context.Context, stackID string) error {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	n, err := q.DeleteStack(ctx, stackID)
+	if err != nil {
+		return fmt.Errorf("delete stack: %w", err)
+	}
+	if n != 1 {
+		return ErrStackNotFound
+	}
+	if _, err := q.DeleteOwnedResourcesOfStack(ctx, sqlc.DeleteOwnedResourcesOfStackParams{
+		ResourceID: stackID, KindA: ownedKindGitWebhook, KindB: ownedKindGitAutoDeploy,
+	}); err != nil {
+		return fmt.Errorf("forget the stack's automations: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
 
 // RemoveInput is a stack to remove: the environment, the node of a standalone host, the stack, the volumes the
 // person ticked (and only those are ever removed), whether the definition stays, who asks and the store.
@@ -1030,7 +1067,7 @@ func (x *removal) conclude(ctx context.Context) {
 		x.fail(ItemDefinition, CodeDefinitionFailed, "", errors.New("stackops: no store to delete the definition from"), nil)
 		return
 	}
-	if err := in.Store.DeleteStack(wctx, in.Stack.ID); err != nil {
+	if err := in.Store.DeleteStackWithAutomations(wctx, in.Stack.ID); err != nil {
 		d.log().Error("could not delete a removed stack's definition", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		x.fail(ItemDefinition, CodeDefinitionFailed, "", nil, nil)
 		return
