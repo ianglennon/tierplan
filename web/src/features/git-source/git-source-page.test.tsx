@@ -314,6 +314,119 @@ describe("GitSourcePage", () => {
     });
   });
 
+  describe("overlay files", () => {
+    const PATH = "secrets/db_pw.txt";
+    // The check lists the file as missing until an overlay file is named for it.
+    const withMissingFile = () => {
+      world.check = (body) => {
+        const named = ((body.overlayPaths as string[] | undefined) ?? []).includes(PATH);
+        return Response.json(
+          checkOf({
+            services: ["web"],
+            missing: named ? [] : [PATH],
+            problems: named
+              ? []
+              : [
+                  {
+                    severity: "error",
+                    code: "repo_file_missing",
+                    message: `${PATH} isn't in the repository.`,
+                    file: "compose.yaml",
+                    line: 7,
+                    col: 1,
+                    endLine: 7,
+                    endCol: 2,
+                  },
+                ],
+          }),
+        );
+      };
+    };
+
+    it("has no Overlay files card when nothing refers to a missing path", async () => {
+      mount();
+      await chooseWebFolder();
+      await screen.findByText("Found 1 service:");
+      expect(screen.queryByRole("heading", { name: "Overlay files" })).toBeNull();
+    });
+
+    it("asks for the contents of a missing file, checks again with the path only, and creates with the contents", async () => {
+      withMissingFile();
+      const router = mount();
+      await chooseWebFolder();
+      const card = (await screen.findByRole("heading", { name: "Overlay files" })).closest(
+        "section",
+      ) as HTMLElement;
+      expect(within(card).getByText("Missing")).toBeTruthy();
+
+      fireEvent.click(within(card).getByRole("button", { name: /Add contents/ }));
+      const dialog = await screen.findByRole("dialog", { name: "Add an overlay file" });
+      expect((within(dialog).getByLabelText("Path") as HTMLInputElement).value).toBe(PATH);
+      fireEvent.change(within(dialog).getByLabelText("Contents"), {
+        target: { value: "hunter2" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add overlay file" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      // The next check names the path and nothing of the contents.
+      await waitFor(() => expect(checks().at(-1)?.body?.overlayPaths).toEqual([PATH]));
+      expect(JSON.stringify(checks().map((c) => c.body))).not.toContain("hunter2");
+      await waitFor(() => expect(within(card).queryByText("Missing")).toBeNull());
+      expect(within(card).getByText("Added")).toBeTruthy();
+      expect(document.body.textContent).not.toContain("hunter2");
+
+      fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/stacks/stack-9"));
+      expect(posts()[0]?.body?.overlays).toEqual([{ path: PATH, content: "hunter2" }]);
+      expect(localStorage.length).toBe(0);
+      expect(sessionStorage.length).toBe(0);
+    });
+
+    it("offers Add overlay file on the missing-file problem of the summary", async () => {
+      withMissingFile();
+      mount();
+      await chooseWebFolder();
+      const groups = await screen.findByRole("group", { name: /Fix these in the repository/ });
+      fireEvent.click(within(groups).getByRole("button", { name: "Add overlay file" }));
+      const dialog = await screen.findByRole("dialog", { name: "Add an overlay file" });
+      expect((within(dialog).getByLabelText("Path") as HTMLInputElement).value).toBe(PATH);
+    });
+
+    it("refuses an overlay file for a path the stack folder already holds", async () => {
+      withMissingFile();
+      mount();
+      await chooseWebFolder();
+      fireEvent.click(await screen.findByRole("button", { name: /Add contents/ }));
+      const dialog = await screen.findByRole("dialog", { name: "Add an overlay file" });
+      fireEvent.change(within(dialog).getByLabelText("Path"), { target: { value: ".env" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Add overlay file" }));
+      expect(
+        within(dialog).getByText(
+          ".env exists in the repository. Overlay files can only fill paths it doesn't have.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+
+    it("lets go of the contents when the dialog is cancelled", async () => {
+      withMissingFile();
+      mount();
+      await chooseWebFolder();
+      fireEvent.click(await screen.findByRole("button", { name: /Add contents/ }));
+      let dialog = await screen.findByRole("dialog", { name: "Add an overlay file" });
+      fireEvent.change(within(dialog).getByLabelText("Contents"), {
+        target: { value: "hunter2" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(document.body.textContent).not.toContain("hunter2");
+      fireEvent.click(screen.getByRole("button", { name: /Add contents/ }));
+      dialog = await screen.findByRole("dialog", { name: "Add an overlay file" });
+      expect((within(dialog).getByLabelText("Contents") as HTMLTextAreaElement).value).toBe("");
+      expect(checks().every((c) => c.body?.overlayPaths === undefined)).toBe(true);
+    });
+  });
+
   it("names the stack and the environment", async () => {
     mount("shop");
     expect(await screen.findByRole("heading", { name: "Create shop from git" })).toBeTruthy();
