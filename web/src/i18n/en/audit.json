@@ -222,7 +222,13 @@
         "webhook_delivered": "Git webhook delivered a push",
         "webhook_delivered_named": "Webhook for {{name}} delivered a push",
         "webhook_rejected": "Git webhook rejected a request",
-        "webhook_rejected_named": "Webhook for {{name}} rejected a request"
+        "webhook_rejected_named": "Webhook for {{name}} rejected a request",
+        "webhook_created": "Created a git webhook",
+        "webhook_created_named": "Created a webhook for {{name}}",
+        "webhook_rotated": "Rotated a git webhook",
+        "webhook_rotated_named": "Rotated the webhook of {{name}}",
+        "webhook_removed": "Removed a git webhook",
+        "webhook_removed_named": "Removed the webhook of {{name}}"
       },
       "logs": {
         "viewed": "Container logs viewed",

@@ -58,6 +58,27 @@ type StackGitSummary struct {
 
 	PollEnabled bool `json:"pollEnabled" doc:"True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
 	PollMinutes int  `json:"pollMinutes" minimum:"1" maximum:"1440" doc:"How often the repository is checked, in minutes"`
+
+	Webhook *StackGitWebhookSummary `json:"webhook,omitempty" doc:"The stack's webhook; left out when it has none, and on the stack list and detail, which don't carry it. Only this route and the polling route answer it. It never holds the secret or the routing token"`
+}
+
+// StackGitWebhookSummary is a stack's webhook as it can be read after it was made: the secret and the routing token were
+// shown once, when it was created or rotated, and cannot be read again (D-15; UI-SPEC default 9).
+type StackGitWebhookSummary struct {
+	Flavour    string               `json:"flavour" enum:"github,gitlab,gitea,generic" doc:"The git host the webhook is for"`
+	Placement  string               `json:"placement" enum:"path,header" doc:"Where the secret goes: path (in the address) or header"`
+	Address    string               `json:"address" doc:"The address the git host calls with its routing token masked: {publicURL}/hooks/git/••••. The token is kept only as a hash, so the full address was shown once, when the webhook was created or rotated"`
+	Last4      string               `json:"last4" doc:"The last four characters of the secret (of the token, for a webhook whose address is the secret)"`
+	LastAt     string               `json:"lastAt,omitempty" format:"date-time" doc:"When the webhook last saw a request that named it, RFC 3339 UTC; left out when it never did"`
+	LastResult string               `json:"lastResult,omitempty" enum:"accepted,rejected" doc:"What became of that request: accepted, or rejected for a signature that did not match; left out when there was none"`
+	Owner      StackGitWebhookOwner `json:"owner" doc:"The person whose authority the webhook acts on"`
+	Paused     bool                 `json:"paused" doc:"True when the webhook does nothing: its owner no longer holds the permission that made it, is disabled or deleted. Every request to it is a 404 until it is handed to an Admin of the environment"`
+}
+
+// StackGitWebhookOwner names the owner of a webhook.
+type StackGitWebhookOwner struct {
+	ID   string `json:"id" doc:"The user's ID; empty when the webhook has no owner on record"`
+	Name string `json:"name" doc:"The user's display name, else the username; empty when the user is gone"`
 }
 
 // gitSummaryOf builds the summary of a stack from its settings, the state of its last check and its repository. A zero
@@ -135,20 +156,70 @@ func (d StacksDeps) gitSummary(ctx context.Context, sg stackops.StackGit, st sta
 
 // gitSummaryOfStack is the summary of one stack, nil for a stack that is not from git.
 func (d StacksDeps) gitSummaryOfStack(ctx context.Context, stackID string) (*StackGitSummary, error) {
+	sum, _, err := d.gitSummaryAndSettings(ctx, stackID)
+	return sum, err
+}
+
+// gitSummaryAndSettings is gitSummaryOfStack with the stack's git settings it was made from, which hold the webhook.
+func (d StacksDeps) gitSummaryAndSettings(ctx context.Context, stackID string) (*StackGitSummary, stackops.StackGit, error) {
 	repo := d.repo()
 	sg, err := repo.StackGit(ctx, stackID)
 	if errors.Is(err, stackops.ErrNoGit) {
-		return nil, nil
+		return nil, stackops.StackGit{}, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, stackops.StackGit{}, err
 	}
 	st, err := repo.GitState(ctx, stackID)
 	if err != nil {
+		return nil, stackops.StackGit{}, err
+	}
+	return d.gitSummary(ctx, sg, st, map[string]gitconn.Repo{}), sg, nil
+}
+
+// webhookSummary is the webhook of a git stack as it can be read: nothing for a stack with none. The routing token is
+// kept only as a hash, so the address shows it masked, and the secret never leaves; the last four characters stay. An
+// owner that the access service cannot find (a restore that did not carry the record) reads as a paused webhook, since
+// a delivery to it is a 404.
+func (g GitDeps) webhookSummary(ctx context.Context, sg stackops.StackGit, host string) (*StackGitWebhookSummary, error) {
+	if sg.WebhookTokenHash == "" {
+		return nil, nil
+	}
+	out := &StackGitWebhookSummary{
+		Flavour: sg.WebhookFlavour, Placement: sg.WebhookPlacement, Address: g.webhookAddress(ctx, host, webhookMask),
+		Last4: sg.WebhookSecretLast4, LastResult: sg.WebhookLastResult,
+	}
+	if sg.WebhookLastAt != nil {
+		out.LastAt = rfc3339(*sg.WebhookLastAt)
+	}
+	if g.Access == nil {
+		return out, nil
+	}
+	owned, err := g.Access.GetOwned(ctx, gitsync.KindGitWebhook, sg.StackID)
+	switch {
+	case errors.Is(err, access.ErrOwnedNotFound):
+		out.Paused = true
+		return out, nil
+	case err != nil:
 		return nil, err
 	}
-	return d.gitSummary(ctx, sg, st, map[string]gitconn.Repo{}), nil
+	out.Paused = owned.State != access.OwnedActive
+	out.Owner.ID = owned.OwnerID
+	switch u, err := g.Access.Store.RQ.GetUserByID(ctx, owned.OwnerID); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, err
+	case u.DeletedAt.Valid:
+	case u.DisplayName != "":
+		out.Owner.Name = u.DisplayName
+	default:
+		out.Owner.Name = u.Username
+	}
+	return out, nil
 }
+
+// webhookMask stands in for the routing token in an address that is shown again.
+const webhookMask = "\u2022\u2022\u2022\u2022"
 
 // StackGitOutput wraps StackGitSummary for huma.
 type StackGitOutput struct {
@@ -175,6 +246,25 @@ type StackGitUpdatesInput struct {
 		PollEnabled bool    `json:"pollEnabled" doc:"True to check the repository on a schedule"`
 		PollMinutes float64 `json:"pollMinutes" doc:"How often to check, in whole minutes from 1 to 1440. Anything else, including a fraction, is 422 poll_interval"`
 	}
+	host string
+}
+
+// Resolve reads the host the request came to, for the masked webhook address of a server that has no public URL set.
+func (in *StackGitUpdatesInput) Resolve(ctx huma.Context) []error {
+	in.host = ctx.Host()
+	return nil
+}
+
+// StackGitReadInput is the request of GET /api/env/{envId}/stacks/{stackId}/git.
+type StackGitReadInput struct {
+	StackPathInput
+	host string
+}
+
+// Resolve reads the host the request came to, for the masked webhook address of a server that has no public URL set.
+func (in *StackGitReadInput) Resolve(ctx huma.Context) []error {
+	in.host = ctx.Host()
+	return nil
 }
 
 // problemPollInterval is the problem type of a polling interval that is not a whole number of minutes from 1 to 1440.
@@ -263,10 +353,30 @@ type StackGitWebhookOutput struct {
 	Body         StackGitWebhookBody
 }
 
-// problemWebhookPlacement and problemWebhookExists are the problem types of the create-webhook route.
+// StackGitWebhookRotateInput is the request of POST /api/env/{envId}/stacks/{stackId}/git/webhook/rotate.
+type StackGitWebhookRotateInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	host      string
+}
+
+// Resolve reads the host the request came to, for the address of a server that has no public URL set.
+func (in *StackGitWebhookRotateInput) Resolve(ctx huma.Context) []error {
+	in.host = ctx.Host()
+	return nil
+}
+
+// StackGitWebhookRemoveInput is the request of DELETE /api/env/{envId}/stacks/{stackId}/git/webhook.
+type StackGitWebhookRemoveInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// The problem types of the webhook routes.
 const (
 	problemWebhookPlacement = "webhook_placement"
 	problemWebhookExists    = "webhook_exists"
+	problemWebhookNotFound  = "webhook_not_found"
 )
 
 // registerStackGit registers the routes that read a git stack's sync state and ask for a check.
@@ -276,11 +386,12 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		Summary: "Where a git stack stands against its repository",
 		Description: "The stack's git settings (repository with its name, host and path, ref, folder, auto-deploy) and the answer of its last check: the commit that is deployed, the head the check saw, how many commits that changed the stack's folder it is behind, " +
 			"its status (unknown, in_sync, behind or error) with the reason of an error, when it was checked, and whether a check runs now. Nothing is read from the repository: this answers from what the last check stored. " +
+			"A webhook, when the stack has one, comes with its git host, placement, address with the routing token masked, the last four characters of its secret, its last delivery, its owner and whether it is paused: the secret and the token are shown once, when the webhook is made, and are never answered again. " +
 			"A stack that is not from a repository is 409 stack_not_git; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks", "git"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
-		func(ctx context.Context, in *StackPathInput) (*StackGitOutput, error) {
-			return getStackGit(ctx, s, in)
+		func(ctx context.Context, in *StackGitReadInput) (*StackGitOutput, error) {
+			return getStackGit(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/check",
@@ -328,7 +439,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		Tags: []string{"stacks", "git"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitUpdatesInput) (*StackGitOutput, error) {
-			return updateStackGitUpdates(ctx, s, in)
+			return updateStackGitUpdates(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "createStackGitWebhook", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
@@ -342,9 +453,32 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		func(ctx context.Context, in *StackGitWebhookInput) (*StackGitWebhookOutput, error) {
 			return createStackGitWebhook(ctx, s, g, in)
 		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "rotateStackGitWebhook", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook/rotate",
+		Summary: "Replace a git stack's webhook address and secret",
+		Description: "Makes a new routing token and a new secret for the stack's webhook and stores them in place of the old ones in one step, then answers the new address and secret once, with Cache-Control no-store. " +
+			"The old address answers 404 at once, like an address that was never a webhook, and the new one works: update the git host with it. The webhook keeps its git host, its placement and its owner, and counts as having had no delivery. " +
+			"For a generic webhook with the secret in the address, the address is the secret and secret is empty. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. " +
+			"Audited as git.webhook_rotated, which holds neither the address, the token nor the secret. Needs git.manage (Admin of the environment).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitWebhookRotateInput) (*StackGitWebhookOutput, error) {
+			return rotateStackGitWebhook(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "removeStackGitWebhook", Method: http.MethodDelete, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
+		Summary: "Remove a git stack's webhook",
+		Description: "Deletes the webhook's token and secret, so its address answers 404 from now on, and forgets the automation that acted on its owner's authority. Polling is not touched. " +
+			"A new webhook can be set up afterwards. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. " +
+			"Audited as git.webhook_removed. Needs git.manage (Admin of the environment).",
+		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitWebhookRemoveInput) (*struct{}, error) {
+			return nil, removeStackGitWebhook(ctx, s, g, in)
+		})
 }
 
-func updateStackGitUpdates(ctx context.Context, d StacksDeps, in *StackGitUpdatesInput) (*StackGitOutput, error) {
+func updateStackGitUpdates(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitUpdatesInput) (*StackGitOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
@@ -376,14 +510,7 @@ func updateStackGitUpdates(ctx context.Context, d StacksDeps, in *StackGitUpdate
 			"poll_enabled_from": strconv.FormatBool(sg.PollEnabled), "poll_minutes_from": strconv.Itoa(was),
 		})
 	}
-	sum, err := d.gitSummaryOfStack(ctx, st.ID)
-	if err != nil {
-		return nil, stackInternal(d, "read the git state", env.ID, err)
-	}
-	if sum == nil {
-		return nil, stackNotGit()
-	}
-	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
+	return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
 }
 
 func createStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitWebhookInput) (*StackGitWebhookOutput, error) {
@@ -436,9 +563,88 @@ func createStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *Sta
 	case err != nil:
 		return nil, stackInternal(d, "create the webhook", env.ID, err)
 	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitWebhookCreated, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "flavour": string(flavour), "placement": string(placement),
+	})
 	return &StackGitWebhookOutput{CacheControl: "no-store", Body: StackGitWebhookBody{
 		URL: g.webhookAddress(ctx, in.host, token), Secret: shown, Flavour: string(flavour), Placement: string(placement),
 	}}, nil
+}
+
+func rotateStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitWebhookRotateInput) (*StackGitWebhookOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	token, secret := gitsync.NewWebhookSecrets()
+	flavour, placement, err := repo.RotateWebhook(ctx, st.ID, stackops.WebhookRotation{
+		TokenHash: gitsync.TokenHash(token), Secret: secret, SecretLast4: lastFour(secret), TokenLast4: lastFour(token),
+	})
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return nil, stackNotGit()
+	case errors.Is(err, stackops.ErrNoWebhook):
+		return nil, webhookNotFound()
+	case err != nil:
+		return nil, stackInternal(d, "rotate the webhook", env.ID, err)
+	}
+	shown := secret
+	if gitsync.Flavour(flavour) == gitsync.FlavourGeneric && gitsync.Placement(placement) == gitsync.PlacementPath {
+		shown = "" // the token in the address is the secret
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitWebhookRotated, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "flavour": flavour, "placement": placement,
+	})
+	return &StackGitWebhookOutput{CacheControl: "no-store", Body: StackGitWebhookBody{
+		URL: g.webhookAddress(ctx, in.host, token), Secret: shown, Flavour: flavour, Placement: placement,
+	}}, nil
+}
+
+func removeStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitWebhookRemoveInput) error {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return huma.Error500InternalServerError("internal error")
+	}
+	if g.Access == nil {
+		return httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return stackLookupProblem(d, env.ID, err)
+	}
+	sg, err := repo.StackGit(ctx, st.ID)
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return stackNotGit()
+	case err != nil:
+		return stackInternal(d, "read the git settings", env.ID, err)
+	}
+	err = repo.RemoveGitWebhook(ctx, st.ID, func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error {
+		return g.Access.DeregisterOwnedTx(ctx, tx, q, gitsync.KindGitWebhook, st.ID)
+	})
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return stackNotGit()
+	case errors.Is(err, stackops.ErrNoWebhook):
+		return webhookNotFound()
+	case err != nil:
+		return stackInternal(d, "remove the webhook", env.ID, err)
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitWebhookRemoved, st.ID, audit.ResultSuccess, "", map[string]string{
+		"stack": st.Name, "flavour": sg.WebhookFlavour, "placement": sg.WebhookPlacement,
+	})
+	return nil
+}
+
+// webhookNotFound is the answer to a rotate or remove of a stack that has no webhook.
+func webhookNotFound() error {
+	return httpx.Problem(http.StatusNotFound, problemWebhookNotFound, "This stack has no webhook.")
 }
 
 // webhookAddress is the address a git host calls: the public URL if one is set, else the origin the request came to.
@@ -464,17 +670,25 @@ func lastFour(s string) string {
 // maxPollMinutes is the longest polling interval: a day.
 const maxPollMinutes = 1440
 
-func getStackGit(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackGitOutput, error) {
+func getStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitReadInput) (*StackGitOutput, error) {
 	st, err := d.repo().Stack(ctx, in.EnvID, in.StackID)
 	if err != nil {
 		return nil, stackLookupProblem(d, in.EnvID, err)
 	}
-	sum, err := d.gitSummaryOfStack(ctx, st.ID)
+	return gitSummaryAnswer(ctx, d, g, st.ID, in.EnvID, in.host)
+}
+
+// gitSummaryAnswer is the git summary of a stack with its webhook, as the routes that answer it give it.
+func gitSummaryAnswer(ctx context.Context, d StacksDeps, g GitDeps, stackID, envID, host string) (*StackGitOutput, error) {
+	sum, sg, err := d.gitSummaryAndSettings(ctx, stackID)
 	if err != nil {
-		return nil, stackInternal(d, "read the git state", in.EnvID, err)
+		return nil, stackInternal(d, "read the git state", envID, err)
 	}
 	if sum == nil {
 		return nil, stackNotGit()
+	}
+	if sum.Webhook, err = g.webhookSummary(ctx, sg, host); err != nil {
+		return nil, stackInternal(d, "read the webhook", envID, err)
 	}
 	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
 }

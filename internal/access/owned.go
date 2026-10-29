@@ -131,6 +131,17 @@ func (s *Service) RegisterOwnedTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queri
 	return nil
 }
 
+// DeregisterOwnedTx forgets an automation, in the caller's write transaction (q is bound to tx): the resource it ran for
+// was removed, so nothing is left to pause or hand over. One that is not recorded is not an error, so removing the
+// resource twice, or removing one that never had an owner, does the same.
+func (s *Service) DeregisterOwnedTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, kind, resourceID string) error {
+	_ = tx // the write goes through q, which the caller bound to tx
+	if _, err := q.DeleteOwnedResource(ctx, sqlc.DeleteOwnedResourceParams{Kind: kind, ResourceID: resourceID}); err != nil {
+		return fmt.Errorf("access: forget owned %s %s: %w", kind, resourceID, err)
+	}
+	return nil
+}
+
 // RecheckOwnedTx re-evaluates every automation the given owners hold, inside
 // the caller's write transaction, and returns how many changed state. Callers
 // run it in the transaction that disables or deletes a user, or changes a

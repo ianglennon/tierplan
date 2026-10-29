@@ -2409,7 +2409,7 @@ export interface paths {
         };
         /**
          * Where a git stack stands against its repository
-         * @description The stack's git settings (repository with its name, host and path, ref, folder, auto-deploy) and the answer of its last check: the commit that is deployed, the head the check saw, how many commits that changed the stack's folder it is behind, its status (unknown, in_sync, behind or error) with the reason of an error, when it was checked, and whether a check runs now. Nothing is read from the repository: this answers from what the last check stored. A stack that is not from a repository is 409 stack_not_git; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         * @description The stack's git settings (repository with its name, host and path, ref, folder, auto-deploy) and the answer of its last check: the commit that is deployed, the head the check saw, how many commits that changed the stack's folder it is behind, its status (unknown, in_sync, behind or error) with the reason of an error, when it was checked, and whether a check runs now. Nothing is read from the repository: this answers from what the last check stored. A webhook, when the stack has one, comes with its git host, placement, address with the routing token masked, the last four characters of its secret, its last delivery, its owner and whether it is paused: the secret and the token are shown once, when the webhook is made, and are never answered again. A stack that is not from a repository is 409 stack_not_git; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
          */
         get: operations["getStackGit"];
         put?: never;
@@ -2514,6 +2514,30 @@ export interface paths {
          * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, it never deploys, and it names no ref or commit. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
          */
         post: operations["createStackGitWebhook"];
+        /**
+         * Remove a git stack's webhook
+         * @description Deletes the webhook's token and secret, so its address answers 404 from now on, and forgets the automation that acted on its owner's authority. Polling is not touched. A new webhook can be set up afterwards. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. Audited as git.webhook_removed. Needs git.manage (Admin of the environment).
+         */
+        delete: operations["removeStackGitWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/webhook/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace a git stack's webhook address and secret
+         * @description Makes a new routing token and a new secret for the stack's webhook and stores them in place of the old ones in one step, then answers the new address and secret once, with Cache-Control no-store. The old address answers 404 at once, like an address that was never a webhook, and the new one works: update the git host with it. The webhook keeps its git host, its placement and its owner, and counts as having had no delivery. For a generic webhook with the secret in the address, the address is the secret and secret is empty. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. Audited as git.webhook_rotated, which holds neither the address, the token nor the secret. Needs git.manage (Admin of the environment).
+         */
+        post: operations["rotateStackGitWebhook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10331,6 +10355,8 @@ export interface components {
              * @enum {string}
              */
             status: "unknown" | "in_sync" | "behind" | "error";
+            /** @description The stack's webhook; left out when it has none, and on the stack list and detail, which don't carry it. Only this route and the polling route answer it. It never holds the secret or the routing token */
+            webhook?: components["schemas"]["StackGitWebhookSummary"];
         };
         StackGitUpdatesInputBody: {
             /** @description True to check the repository on a schedule */
@@ -10368,6 +10394,42 @@ export interface components {
              * @enum {string}
              */
             placement?: "path" | "header";
+        };
+        StackGitWebhookOwner: {
+            /** @description The user's ID; empty when the webhook has no owner on record */
+            id: string;
+            /** @description The user's display name, else the username; empty when the user is gone */
+            name: string;
+        };
+        StackGitWebhookSummary: {
+            /** @description The address the git host calls with its routing token masked: {publicURL}/hooks/git/••••. The token is kept only as a hash, so the full address was shown once, when the webhook was created or rotated */
+            address: string;
+            /**
+             * @description The git host the webhook is for
+             * @enum {string}
+             */
+            flavour: "github" | "gitlab" | "gitea" | "generic";
+            /** @description The last four characters of the secret (of the token, for a webhook whose address is the secret) */
+            last4: string;
+            /**
+             * Format: date-time
+             * @description When the webhook last saw a request that named it, RFC 3339 UTC; left out when it never did
+             */
+            lastAt?: string;
+            /**
+             * @description What became of that request: accepted, or rejected for a signature that did not match; left out when there was none
+             * @enum {string}
+             */
+            lastResult?: "accepted" | "rejected";
+            /** @description The person whose authority the webhook acts on */
+            owner: components["schemas"]["StackGitWebhookOwner"];
+            /** @description True when the webhook does nothing: its owner no longer holds the permission that made it, is disabled or deleted. Every request to it is a 404 until it is handed to an Admin of the environment */
+            paused: boolean;
+            /**
+             * @description Where the secret goes: path (in the address) or header
+             * @enum {string}
+             */
+            placement: "path" | "header";
         };
         StackHistoryPreviewBody: {
             /**
@@ -17518,6 +17580,73 @@ export interface operations {
         responses: {
             /** @description Created */
             201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitWebhookBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeStackGitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateStackGitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
                 headers: {
                     "Cache-Control"?: string;
                     [name: string]: unknown;

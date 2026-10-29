@@ -94,6 +94,13 @@ UPDATE stack_git SET webhook_flavour = ?, webhook_placement = ?, webhook_token_h
        webhook_secret_last4 = ?, webhook_created_by = ?, webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
 WHERE stack_id = ?;
 
+-- name: RotateStackGitWebhook :execrows
+-- Replaces a webhook's routing token hash and sealed secret at once (D-15), keeping its git host, placement and maker. The
+-- new webhook has had no delivery. A stack with no webhook matches nothing.
+UPDATE stack_git SET webhook_token_hash = ?, webhook_secret_sealed = ?, webhook_secret_last4 = ?,
+       webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ? AND webhook_token_hash != '';
+
 -- name: ClearStackGitWebhook :execrows
 -- Removes a git stack's webhook: every webhook column back to its default.
 UPDATE stack_git SET webhook_flavour = '', webhook_placement = '', webhook_token_hash = '', webhook_secret_sealed = '',

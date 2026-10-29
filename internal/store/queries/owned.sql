@@ -59,3 +59,8 @@ ORDER BY username;
 -- Hands an automation to another owner. Only the access service calls it, after
 -- checking the new owner could run it (D-14).
 UPDATE owned_resources SET owner_id = ?, updated_at = ? WHERE kind = ? AND resource_id = ?;
+
+-- name: DeleteOwnedResource :execrows
+-- Forgets an automation whose resource is gone or was switched off by a person: removing a stack's webhook deregisters
+-- it in the same transaction. Only the access service calls it.
+DELETE FROM owned_resources WHERE kind = ? AND resource_id = ?;

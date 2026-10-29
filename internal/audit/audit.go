@@ -209,6 +209,11 @@ const (
 	// secret or the signature.
 	ActionGitWebhookDelivered = "git.webhook_delivered"
 	ActionGitWebhookRejected  = "git.webhook_rejected"
+	// A person gave a git stack a webhook, replaced its token and secret, or removed it (D-15). The entry names the stack
+	// and the git host, never the address, the token or the secret.
+	ActionGitWebhookCreated = "git.webhook_created"
+	ActionGitWebhookRotated = "git.webhook_rotated"
+	ActionGitWebhookRemoved = "git.webhook_removed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

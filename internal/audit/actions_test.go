@@ -395,6 +395,9 @@ var phase9DetailKeys = map[string][]string{
 	audit.ActionGitUpdatesChanged:    {"stack", "poll_enabled", "poll_minutes", "poll_enabled_from", "poll_minutes_from"},
 	audit.ActionGitWebhookDelivered:  {"stack", "flavour"},
 	audit.ActionGitWebhookRejected:   {"stack", "flavour", "reason"},
+	audit.ActionGitWebhookCreated:    {"stack", "flavour", "placement"},
+	audit.ActionGitWebhookRotated:    {"stack", "flavour", "placement"},
+	audit.ActionGitWebhookRemoved:    {"stack", "flavour", "placement"},
 }
 
 func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -432,6 +435,9 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"git.updates_changed":    audit.ActionGitUpdatesChanged,
 		"git.webhook_delivered":  audit.ActionGitWebhookDelivered,
 		"git.webhook_rejected":   audit.ActionGitWebhookRejected,
+		"git.webhook_created":    audit.ActionGitWebhookCreated,
+		"git.webhook_rotated":    audit.ActionGitWebhookRotated,
+		"git.webhook_removed":    audit.ActionGitWebhookRemoved,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

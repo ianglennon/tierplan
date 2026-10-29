@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/stackops"
 )
@@ -297,5 +298,172 @@ func TestCreateStackGitWebhookOfAStackThatIsNotGit(t *testing.T) {
 	rec = h.f.credCall(t, h.admin, http.MethodPost, "/api/env/"+h.env+"/stacks/no-such-stack/git/webhook", `{"flavour":"github"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("webhook of a missing stack: %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
+// rotateWebhook rotates the stack's webhook as u.
+func (h *hookFix) rotateWebhook(t *testing.T, u credentialUser) (*httptest.ResponseRecorder, webhookAnswer) {
+	t.Helper()
+	rec := h.f.credCall(t, u, http.MethodPost, h.webhookRoute()+"/rotate", "")
+	var got webhookAnswer
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body, err)
+		}
+	}
+	return rec, got
+}
+
+// auditAndLogDump is every audit row and every log line the server wrote, as one string to look for secrets in.
+func (h *hookFix) auditAndLogDump(t *testing.T) string {
+	t.Helper()
+	rows, err := h.f.st.Read.Query(`SELECT action || ' ' || target_id || ' ' || COALESCE(reason, '') || ' ' || COALESCE(details, '') || ' ' || COALESCE(user_agent, '') FROM audit_log`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var dump strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		dump.WriteString(line + "\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	dump.WriteString(h.f.logs.String())
+	return dump.String()
+}
+
+// TestWebhookRotate is the tracer: a leaked address is replaced in one step, the new address and secret are shown once,
+// the old address is a 404 like an address that never existed, and the new one makes the stack check its repository
+// (D-15, T-09-97).
+func TestWebhookRotate(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	old := h.makeWebhook(t, "github", "")
+	body := `{"ref":"refs/heads/main"}`
+	if rec := h.deliver(t, old.token(), body, githubSig(old.Secret, body)); rec.Code != http.StatusAccepted {
+		t.Fatalf("delivery to the first address: %d, want 202", rec.Code)
+	}
+	h.awaitChecks(t)
+
+	rec, fresh := h.rotateWebhook(t, h.admin)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rec.Code, rec.Body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", cc)
+	}
+	if fresh.Flavour != "github" || fresh.Placement != "header" || len(fresh.token()) != 43 || len(fresh.Secret) != 43 || !strings.HasPrefix(fresh.URL, "http://example.com/hooks/git/") {
+		t.Errorf("answer = %+v, want a new address and a new secret for the same github webhook", fresh)
+	}
+	if fresh.token() == old.token() || fresh.Secret == old.Secret {
+		t.Error("the token or the secret did not change")
+	}
+
+	// The old address, even signed with the old secret, is the same empty 404 as an address that never existed.
+	unknown := h.deliver(t, strings.Repeat("Z", 43), body, githubSig(old.Secret, body))
+	oldAddress := h.deliver(t, old.token(), body, githubSig(old.Secret, body))
+	if oldAddress.Code != http.StatusNotFound || oldAddress.Body.Len() != 0 || unknown.Code != http.StatusNotFound {
+		t.Fatalf("old address: %d %q, want 404 and no body", oldAddress.Code, oldAddress.Body)
+	}
+	for _, hdr := range []string{"Cache-Control", "Content-Type", "Content-Length"} {
+		if a, b := oldAddress.Header().Get(hdr), unknown.Header().Get(hdr); a != b {
+			t.Errorf("old address: %s = %q, an unknown token's is %q", hdr, a, b)
+		}
+	}
+	// The new address with the old secret does not pass either.
+	if rec := h.deliver(t, fresh.token(), body, githubSig(old.Secret, body)); rec.Code != http.StatusNotFound {
+		t.Errorf("new address, old secret: %d, want 404", rec.Code)
+	}
+
+	// The new address with the new secret triggers a check that sees a push.
+	head := h.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=after the rotation\n"}, "push after the rotation")
+	if rec := h.deliver(t, fresh.token(), body, githubSig(fresh.Secret, body)); rec.Code != http.StatusAccepted {
+		t.Fatalf("new address, new secret: %d %s, want 202", rec.Code, rec.Body)
+	}
+	h.awaitChecks(t)
+	if got := h.readGit(t, h.admin, h.stackID); got.Status != "behind" || got.HeadSha != head {
+		t.Errorf("after the new delivery = %+v, want behind at %s", got, head)
+	}
+
+	// Only the SHA-256 of the new token is stored, the new secret is sealed, and the old ones are gone.
+	var hash, sealed, last4 string
+	if err := h.f.st.Read.QueryRow(`SELECT webhook_token_hash, webhook_secret_sealed, webhook_secret_last4 FROM stack_git WHERE stack_id = ?`, h.stackID).Scan(&hash, &sealed, &last4); err != nil {
+		t.Fatal(err)
+	}
+	if hash != gitsync.TokenHash(fresh.token()) || sealed == "" || strings.Contains(sealed, fresh.Secret) || last4 != fresh.Secret[len(fresh.Secret)-4:] {
+		t.Errorf("stored = hash %q, sealed %q, last4 %q, want the new token's hash, a sealed secret and the new last four", hash, sealed, last4)
+	}
+
+	// One audit entry, naming the stack and the git host, with none of the secrets in it, in the log or in a log line.
+	rotated := h.f.auditRowsOf(t, audit.ActionGitWebhookRotated)
+	if len(rotated) != 1 {
+		t.Fatalf("git.webhook_rotated rows = %d, want 1", len(rotated))
+	}
+	if r := rotated[0]; r.TargetType != "stack" || r.TargetID != h.stackID || r.EnvID != h.env || r.Result != "success" || r.Details["stack"] != "web" || r.Details["flavour"] != "github" {
+		t.Errorf("audit row = %+v, want the stack, its environment, its name and the git host", r)
+	}
+	dump := h.auditAndLogDump(t)
+	for what, secret := range map[string]string{
+		"the new token": fresh.token(), "the new secret": fresh.Secret, "the new address": fresh.URL,
+		"the old token": old.token(), "the old secret": old.Secret, "the old address": old.URL,
+	} {
+		if strings.Contains(dump, secret) {
+			t.Errorf("the audit log or the logs hold %s", what)
+		}
+	}
+}
+
+// TestWebhookRotateKeepsTheShape: a generic webhook with the secret in the address has no separate secret before or
+// after a rotation; one with a bearer header has one.
+func TestWebhookRotateKeepsTheShape(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		placement   string
+		secretShown bool
+	}{
+		"generic in the address": {"path", false},
+		"generic bearer header":  {"header", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newOpenHookFix(t)
+			old := h.makeWebhook(t, "generic", tc.placement)
+			rec, fresh := h.rotateWebhook(t, h.admin)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("rotate: %d %s", rec.Code, rec.Body)
+			}
+			if fresh.Flavour != "generic" || fresh.Placement != tc.placement || (fresh.Secret != "") != tc.secretShown {
+				t.Fatalf("answer = %+v, want a generic %s webhook with the secret shown = %v", fresh, tc.placement, tc.secretShown)
+			}
+			var sealed, last4 string
+			if err := h.f.st.Read.QueryRow(`SELECT webhook_secret_sealed, webhook_secret_last4 FROM stack_git WHERE stack_id = ?`, h.stackID).Scan(&sealed, &last4); err != nil {
+				t.Fatal(err)
+			}
+			wantLast4 := fresh.token()[len(fresh.token())-4:]
+			if tc.secretShown {
+				wantLast4 = fresh.Secret[len(fresh.Secret)-4:]
+			}
+			if (sealed != "") != tc.secretShown || last4 != wantLast4 {
+				t.Errorf("stored = sealed %v, last4 %q, want sealed %v and last4 %q", sealed != "", last4, tc.secretShown, wantLast4)
+			}
+			headers := map[string]string(nil)
+			oldHeaders := map[string]string(nil)
+			if tc.secretShown {
+				headers = map[string]string{"Authorization": "Bearer " + fresh.Secret}
+				oldHeaders = map[string]string{"Authorization": "Bearer " + old.Secret}
+			}
+			if rec := h.deliver(t, old.token(), "{}", oldHeaders); rec.Code != http.StatusNotFound {
+				t.Errorf("old address: %d, want 404", rec.Code)
+			}
+			if rec := h.deliver(t, fresh.token(), "{}", headers); rec.Code != http.StatusAccepted {
+				t.Errorf("new address: %d, want 202", rec.Code)
+			}
+			h.awaitChecks(t)
+		})
 	}
 }

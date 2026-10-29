@@ -9,6 +9,25 @@ import (
 	"context"
 )
 
+const deleteOwnedResource = `-- name: DeleteOwnedResource :execrows
+DELETE FROM owned_resources WHERE kind = ? AND resource_id = ?
+`
+
+type DeleteOwnedResourceParams struct {
+	Kind       string
+	ResourceID string
+}
+
+// Forgets an automation whose resource is gone or was switched off by a person: removing a stack's webhook deregisters
+// it in the same transaction. Only the access service calls it.
+func (q *Queries) DeleteOwnedResource(ctx context.Context, arg DeleteOwnedResourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteOwnedResource, arg.Kind, arg.ResourceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getOwnedDetail = `-- name: GetOwnedDetail :one
 SELECT o.kind, o.resource_id, o.env_id, o.name, o.owner_id, o.state, o.needs_env_admin,
        COALESCE(e.name, '') AS env_name

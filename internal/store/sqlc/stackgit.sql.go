@@ -350,6 +350,36 @@ func (q *Queries) ListStackGitsByEnv(ctx context.Context, envID string) ([]Stack
 	return items, nil
 }
 
+const rotateStackGitWebhook = `-- name: RotateStackGitWebhook :execrows
+UPDATE stack_git SET webhook_token_hash = ?, webhook_secret_sealed = ?, webhook_secret_last4 = ?,
+       webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ? AND webhook_token_hash != ''
+`
+
+type RotateStackGitWebhookParams struct {
+	WebhookTokenHash    string
+	WebhookSecretSealed string
+	WebhookSecretLast4  string
+	UpdatedAt           int64
+	StackID             string
+}
+
+// Replaces a webhook's routing token hash and sealed secret at once (D-15), keeping its git host, placement and maker. The
+// new webhook has had no delivery. A stack with no webhook matches nothing.
+func (q *Queries) RotateStackGitWebhook(ctx context.Context, arg RotateStackGitWebhookParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rotateStackGitWebhook,
+		arg.WebhookTokenHash,
+		arg.WebhookSecretSealed,
+		arg.WebhookSecretLast4,
+		arg.UpdatedAt,
+		arg.StackID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setStackGitChecked = `-- name: SetStackGitChecked :execrows
 UPDATE stack_git_state SET checked_at = ? WHERE stack_id = ?
 `

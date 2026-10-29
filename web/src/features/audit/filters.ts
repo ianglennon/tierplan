@@ -155,6 +155,9 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.updates_changed",
   "git.webhook_delivered",
   "git.webhook_rejected",
+  "git.webhook_created",
+  "git.webhook_rotated",
+  "git.webhook_removed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -336,6 +339,14 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   }
   if (key === "git.webhook_rejected" && details?.stack) {
     return t("audit.actions.git.webhook_rejected_named", { name: details.stack });
+  }
+  if (
+    (key === "git.webhook_created" ||
+      key === "git.webhook_rotated" ||
+      key === "git.webhook_removed") &&
+    details?.stack
+  ) {
+    return t(`audit.actions.${key}_named`, { name: details.stack });
   }
   // A git connection change names the credential or repository it was about.
   if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {
