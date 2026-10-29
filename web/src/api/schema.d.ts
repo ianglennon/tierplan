@@ -2451,7 +2451,7 @@ export interface paths {
         put?: never;
         /**
          * Check a git stack against its repository now
-         * @description Starts a check and answers 202 at once: it fetches the tracked ref and compares the hash of the stack's folder at the head with the deployed revision's, then stores the head, the count of commits behind, the status and the time. It deploys nothing and makes no draft and no revision. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline, so asking again and again costs one fetch. Read the answer from the stack's git route or its list entry, whose checking is true until the check ends. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Needs stacks.read (Viewer).
+         * @description Starts a check and answers 202 at once: it fetches the tracked ref and compares the hash of the stack's folder at the head with the deployed revision's, then stores the head, the count of commits behind, the status and the time. It deploys nothing and makes no draft and no revision itself; a stack with auto-deploy on that it finds behind is then deployed (see the auto-deploy route), and Check now tries a commit that auto-deploy held back once more. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline, so asking again and again costs one fetch. Read the answer from the stack's git route or its list entry, whose checking is true until the check ends. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Needs stacks.read (Viewer).
          */
         post: operations["checkStackGit"];
         delete?: never;
@@ -2510,7 +2510,7 @@ export interface paths {
         get?: never;
         /**
          * Turn a git stack's polling on or off and set how often it is checked
-         * @description Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll only records the new head and how far behind the stack is; it deploys nothing. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         * @description Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll records the new head and how far behind the stack is, and deploys nothing unless the stack has auto-deploy on. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
          */
         put: operations["updateStackGitUpdates"];
         post?: never;

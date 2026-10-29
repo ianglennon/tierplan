@@ -585,3 +585,37 @@ func TestPollerNeverDeploys(t *testing.T) {
 		t.Errorf("draft = v%d %+v, was v%d %+v: a poll must not change it", after.Version, after.Git, draft.Version, draft.Git)
 	}
 }
+
+// A commit an automatic deploy holds back is waiting for a person, not failing to be read: the repository answered, so
+// the stack is polled at its interval and a fix pushed meanwhile is deployed soon, not after the backoff of a down
+// server (plan 09-25).
+func TestPollerBlockedAutoDeployKeepsItsInterval(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	a.dep.set(func(d *fakeDeployer) {
+		d.refuse = &gitsync.DeployRefusal{Code: "policy_refused", Detail: "This stack uses settings that need Admin."}
+	})
+	f := &pollFixture{checkFixture: a.checkFixture, pc: newPollClock(a.clock), checked: make(chan polled, 256)}
+	a.changeWeb(t, "bind")
+	interval := 5 * time.Minute
+
+	f.start(t, gitsync.PollerDeps{})
+	wait := 15 * time.Second
+	for i := range 4 {
+		f.pc.Tick(t, wait)
+		got := f.awaitChecked(t, 1)
+		if want := string(gitsync.OutcomeError); i > 0 && got[0].outcome != want {
+			t.Fatalf("check %d = %+v, want %s", i+1, got, want)
+		}
+		if next := f.state(t).NextCheckAt; next == nil || next.Sub(f.pc.Now()) != interval {
+			t.Fatalf("after check %d the next check is at %v (now %v), want in %v", i+1, next, f.pc.Now(), interval)
+		}
+		wait = interval
+	}
+	if a.dep.count() != 1 {
+		t.Errorf("deploys started = %d, want the one attempt", a.dep.count())
+	}
+	if s := f.state(t); s.ReasonCode != string(gitsync.ReasonAutoDeployBlocked) || s.ConsecutiveFailures < 2 {
+		t.Errorf("state = %+v, want the commit still held back", s)
+	}
+}

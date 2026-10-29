@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -207,6 +208,17 @@ func TestAutoDeployToggleOfAStackNotFromGit(t *testing.T) {
 	}
 }
 
+// poll runs the check a poller would: Check now (the route) is a person asking again, which tries a held back commit
+// once more.
+func (a *autoFix) poll(t *testing.T) gitsync.Outcome {
+	t.Helper()
+	out, err := a.f.gitSync.CheckWith(context.Background(), a.env, a.stackID, gitsync.CheckOptions{Trigger: gitsync.TriggerPoll})
+	if err != nil {
+		t.Fatalf("CheckWith: %v", err)
+	}
+	return out
+}
+
 // revisionTrigger is what the revision of a stack started by: the sync trigger column.
 func (a *autoFix) revisionTrigger(t *testing.T, seq int64) (trigger, commit string) {
 	t.Helper()
@@ -231,6 +243,8 @@ func (a *autoFix) commitCompose(t *testing.T, compose, msg string) string {
 	t.Helper()
 	return a.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": compose}, msg)
 }
+
+const gitBindCompose = "services:\n  web:\n    image: nginx:1.27\n    env_file: web.env\n    volumes:\n      - /etc:/host-etc\n"
 
 func TestAutoDeployEndToEnd(t *testing.T) {
 	t.Parallel()
@@ -267,5 +281,106 @@ func TestAutoDeployEndToEnd(t *testing.T) {
 	deploys := a.f.deployAudits(t, a.stackID)
 	if len(deploys) != 1 || deploys[0].ActorID != "system:gitsync" || deploys[0].Details["onBehalfOf"] != opID || deploys[0].Details["commit"] != head {
 		t.Errorf("stack.deployed rows = %+v, want the system actor on behalf of the Operator at %s", deploys, head)
+	}
+}
+
+func TestAutoDeployEndToEndPolicyAndHostAccess(t *testing.T) {
+	t.Parallel()
+	t.Run("an Operator's auto-deploy holds back a bind mount", func(t *testing.T) {
+		t.Parallel()
+		a := newAutoFix(t)
+		operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+		a.turnOn(t, operator)
+		head := a.commitCompose(t, gitBindCompose, "mount /etc")
+
+		a.checkNow(t, operator, a.stackID, a.ended)
+		got := a.readGit(t, a.admin, a.stackID)
+		if got.Status != "error" || got.ReasonCode != "auto_deploy_blocked" || got.ReasonDetail == "" {
+			t.Fatalf("git = %+v, want error auto_deploy_blocked with the policy reason", got)
+		}
+		s, err := a.stackRepo().GitState(context.Background(), a.stackID)
+		if err != nil || s.PendingCommit != head || s.EventKind != stackops.GitEventSkipped {
+			t.Errorf("state = %+v, %v; want the commit pending and the skipped event", s, err)
+		}
+		if revs := a.f.revisions(t, a.stackID); len(revs) != 1 {
+			t.Errorf("revisions = %+v, a refused auto-deploy leaves none", revs)
+		}
+		if w := a.f.fake.Writes(); len(w) != 0 {
+			t.Errorf("writes = %v, a refused deploy writes nothing", w)
+		}
+		// Not tried again until the head changes or a person presses Check now: the polls that follow start no deploy.
+		a.poll(t)
+		a.poll(t)
+		if n := len(a.f.auditRowsOf(t, audit.ActionGitAutoDeployed)); n != 0 {
+			t.Errorf("git.autodeployed rows = %d, want none", n)
+		}
+		if got := a.readGit(t, a.admin, a.stackID); got.ReasonCode != "auto_deploy_blocked" {
+			t.Errorf("git after another check = %+v, want it still held back", got)
+		}
+	})
+
+	t.Run("an Admin's auto-deploy runs it and the owner must stay an Admin", func(t *testing.T) {
+		t.Parallel()
+		a := newAutoFix(t)
+		a.turnOn(t, a.admin)
+		head := a.commitCompose(t, gitBindCompose, "mount /etc")
+
+		a.checkNow(t, a.admin, a.stackID, a.ended)
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("job = %+v, want it done", job)
+		}
+		if o, ok := a.owned(t); !ok || o.needsAdmin != 1 || o.state != "active" {
+			t.Errorf("owned auto-deploy = %+v (found %v), want active and marked as needing an env Admin", o, ok)
+		}
+		if got := a.readGit(t, a.admin, a.stackID); got.Status != "in_sync" || got.DeployedSha != head {
+			t.Errorf("git = %+v, want in sync at %s", got, head)
+		}
+	})
+}
+
+func TestAutoDeployEndToEndJobFailed(t *testing.T) {
+	t.Parallel()
+	a := newAutoFix(t)
+	engine := func(createError string) {
+		cfg := swarmManagerEngine()
+		cfg.TasksFollowWrites = true
+		cfg.ServiceCreateError = createError
+		a.f.fake.Reconfigure(cfg)
+	}
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, operator)
+	engine("rpc error: code = InvalidArgument desc = the engine says no")
+	head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State == "done" {
+		t.Fatalf("job = %+v, want the deploy to fail", job)
+	}
+	got := a.readGit(t, a.admin, a.stackID)
+	if got.Status != "error" || got.ReasonCode != "auto_deploy_failed" || !strings.Contains(got.ReasonDetail, "web") || got.DeployedSha == head {
+		t.Fatalf("git = %+v, want error auto_deploy_failed naming the service and the last good version still the deployed one", got)
+	}
+	if revs := a.f.revisions(t, a.stackID); len(revs) != 2 || revs[1].Outcome != "failed" {
+		t.Errorf("revisions = %+v, want the first good and the second failed, and nothing rolled back", revs)
+	}
+
+	// The commit that failed is not deployed again in a loop.
+	a.poll(t)
+	if revs := a.f.revisions(t, a.stackID); len(revs) != 2 {
+		t.Errorf("revisions after another check = %+v, want still two", revs)
+	}
+	if got := a.readGit(t, a.admin, a.stackID); got.ReasonCode != "auto_deploy_failed" {
+		t.Errorf("git after another check = %+v, want it still failed", got)
+	}
+
+	// The next commit is tried.
+	engine("")
+	next := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n", "bump nginx again")
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("job = %+v, want the next commit to deploy", job)
+	}
+	if got := a.readGit(t, a.admin, a.stackID); got.Status != "in_sync" || got.DeployedSha != next {
+		t.Errorf("git = %+v, want in sync at %s", got, next)
 	}
 }

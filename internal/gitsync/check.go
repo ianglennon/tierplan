@@ -62,7 +62,9 @@ type checkCall struct {
 // tree come from the newest good revision, not from the stack's current settings (RESEARCH Pitfall 8). Behind counts the
 // commits that changed the folder.
 //
-// A check only records. It deploys nothing, and it makes no draft and no revision (GIT-03). A failure to reach the
+// A check only records. It deploys nothing and makes no draft and no revision (GIT-03), with one exception: a stack whose
+// owner turned auto-deploy on is deployed after the check, by autoDeploy, through the same checks as a person's deploy
+// (GIT-07). A failure to reach the
 // repository is an Outcome of OutcomeError with the reason stored, not an error; an error is returned for a stack that
 // is not a git stack of this environment, or for a failure of Bayplan's own storage.
 //
