@@ -66,6 +66,7 @@ function mount(name = "web") {
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: "/" }),
+      createRoute({ getParentRoute: () => root, path: "/away" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
     ]),
@@ -136,8 +137,95 @@ describe("GitSourcePage", () => {
       ref: "main",
       folder: "stacks/web",
       composeFiles: ["compose.yaml"],
+      commit: SHA,
     });
     expect(await screen.findByText("Created stack web. Nothing is deployed yet.")).toBeTruthy();
+  });
+
+  describe("pinned to the checked commit (WR-E04)", () => {
+    const MOVED = "fedcba9876543210fedcba9876543210fedcba98";
+
+    it("refuses a create whose ref moved, reads the ref again and checks the new head", async () => {
+      let head = SHA;
+      world.tree = (q) => {
+        const path = q.get("path") ?? "";
+        const entries =
+          path === ""
+            ? [dir("stacks"), file("README.md")]
+            : path === "stacks"
+              ? [dir("web", true)]
+              : [file("compose.yaml"), file(".env")];
+        return Response.json(treeOf(path, entries, { commit: head }));
+      };
+      world.check = (body) =>
+        Response.json(
+          checkOf({
+            services: ["web"],
+            commit: { sha: String(body.commit ?? head), when: "2026-10-20T10:00:00Z" },
+          }),
+        );
+      world.create = () =>
+        Response.json(
+          { type: "commit_moved", title: "Conflict", status: 409, detail: "moved" },
+          { status: 409 },
+        );
+      const router = mount();
+      await chooseWebFolder();
+      await waitFor(() => expect(checks().at(-1)?.body?.commit).toBe(SHA));
+
+      head = MOVED;
+      fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+      expect(
+        await screen.findByText(/moved after it was checked, so nothing was created/),
+      ).toBeTruthy();
+      expect(posts()[0]?.body).toMatchObject({ commit: SHA });
+      expect(router.state.location.pathname).toBe("/");
+      // The ref is read again and the check runs on its new head.
+      await waitFor(() => expect(checks().at(-1)?.body?.commit).toBe(MOVED));
+      world.create = () => Response.json({ stackId: "stack-9" }, { status: 201 });
+      fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/stacks/stack-9"));
+      expect(posts().at(-1)?.body).toMatchObject({ commit: MOVED });
+    });
+  });
+
+  describe("unsaved-changes guard (WR-E03)", () => {
+    it("asks Discard this stack? once a repository is chosen, and stays on Keep editing", async () => {
+      const router = mount();
+      await chooseRepository("homelab");
+      void router.navigate({ to: "/away" as never });
+      const dialog = await screen.findByRole("alertdialog", { name: "Discard this stack?" });
+      expect(within(dialog).getByText("web hasn't been created yet.")).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(router.state.location.pathname).toBe("/");
+      expect(screen.getByRole("combobox", { name: "Repository" }).textContent).toContain("homelab");
+    });
+
+    it("leaves on Discard", async () => {
+      const router = mount();
+      await chooseRepository("homelab");
+      void router.navigate({ to: "/away" as never });
+      const dialog = await screen.findByRole("alertdialog", { name: "Discard this stack?" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/away"));
+    });
+
+    it("leaves a page with nothing chosen without asking", async () => {
+      const router = mount();
+      await screen.findByRole("combobox", { name: "Repository" });
+      await router.navigate({ to: "/away" as never });
+      expect(router.state.location.pathname).toBe("/away");
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("does not ask on its own way out after a create", async () => {
+      const router = mount();
+      await chooseWebFolder();
+      fireEvent.click(screen.getByRole("button", { name: "Create stack" }));
+      await waitFor(() => expect(router.state.location.pathname).toBe("/env/e1/stacks/stack-9"));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
   });
 
   it("keeps Create stack off, with the reason, until a repository, a ref, a folder and a file are chosen", async () => {

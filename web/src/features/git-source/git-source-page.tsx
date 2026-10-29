@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useBlocker, useNavigate } from "@tanstack/react-router";
 import { CircleX } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
 import {
@@ -18,6 +18,16 @@ import { useConnectStackGit } from "@/api/stack-git";
 import { draftKey, draftQuery, type StackDraft, stackQuery } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -308,6 +318,25 @@ function GitSourcePageBody({
   );
   const check = useGitSourceCheck(envId, request);
 
+  // Leaving with anything chosen or typed asks first (UI-SPEC "Unsaved-changes guard"): the
+  // variable values and the overlay contents exist nowhere but in this page. The page's own
+  // navigation after a create or a connect is not asked about, and nothing is asked while it runs.
+  const startTable = useMemo(() => (convert ? tableOf(convert.draft) : []), [convert]);
+  const dirty =
+    repoId !== "" ||
+    overlays.length > 0 ||
+    Object.keys(choices).length > 0 ||
+    JSON.stringify(table) !== JSON.stringify(startTable);
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+  const finished = useRef(false);
+  const blocker = useBlocker({
+    shouldBlockFn: ({ current, next }) =>
+      dirtyRef.current && !finished.current && current.pathname !== next.pathname,
+    enableBeforeUnload: () => dirtyRef.current && !finished.current,
+    withResolver: true,
+  });
+
   function clearChoices() {
     setFolder(null);
     setFiles([]);
@@ -358,6 +387,8 @@ function GitSourcePageBody({
         return t("stackLists.create.errors.nameClash", { name });
       case "stack_name_invalid":
         return t("gitSource.errors.nameInvalid");
+      case "commit_moved":
+        return t("gitSource.errors.commitMoved");
     }
     if (err.status === 0) return t("stacks.create.errors.lost");
     if (err.status === 403) return t("stacks.create.errors.permission");
@@ -385,6 +416,7 @@ function GitSourcePageBody({
       },
       {
         onSuccess: () => {
+          finished.current = true;
           setTable([]);
           setOverlays([]);
           connect.reset();
@@ -404,6 +436,8 @@ function GitSourcePageBody({
     if (convert) return submitConvert();
     if (!ready || create.isPending || folder === null) return;
     setRefusal(null);
+    // What the last check read, else what the top of the page resolved the ref to.
+    const checked = check.check?.commit.sha ?? commit;
     create.mutate(
       {
         name,
@@ -412,11 +446,14 @@ function GitSourcePageBody({
         ref: gitRef,
         folder,
         composeFiles: files,
+        // The commit the person was shown: a ref that has moved since is refused, not followed.
+        ...(checked && FULL_COMMIT.test(checked) ? { commit: checked } : {}),
         ...(sentVars.length > 0 ? { vars: sentVars } : {}),
         ...(overlays.length > 0 ? { overlays } : {}),
       },
       {
         onSuccess: (made) => {
+          finished.current = true;
           setTable([]);
           setOverlays([]);
           create.reset();
@@ -427,7 +464,15 @@ function GitSourcePageBody({
             replace: true,
           });
         },
-        onError: (err) => setRefusal(refusalText(err)),
+        onError: (err) => {
+          setRefusal(refusalText(err));
+          if (err.type === "commit_moved") {
+            // Read the ref again: the new head becomes the commit of the next check.
+            void queryClient.invalidateQueries({
+              queryKey: gitTreeQuery(envId, repoId, kind, gitRef, "").queryKey.slice(0, -1),
+            });
+          }
+        },
       },
     );
   }
@@ -638,6 +683,32 @@ function GitSourcePageBody({
           onClose={() => setAdding(false)}
         />
       ) : null}
+
+      <AlertDialog
+        open={blocker.status === "blocked"}
+        onOpenChange={(next) => {
+          if (!next) blocker.reset?.();
+        }}
+      >
+        <AlertDialogContent className="sm:max-w-120">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t(convert ? "gitSource.convert.guard.title" : "gitSource.guard.title")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(convert ? "gitSource.convert.guard.body" : "gitSource.guard.body", { name })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel autoFocus>
+              {t(convert ? "gitSource.convert.guard.keep" : "gitSource.guard.keep")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={() => blocker.proceed?.()}>
+              {t(convert ? "gitSource.convert.guard.discard" : "gitSource.guard.discard")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
