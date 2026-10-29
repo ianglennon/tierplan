@@ -51,6 +51,7 @@ const (
 	problemStackTooLarge       = "stack_too_large"
 	problemComposeMissing      = "compose_missing"
 	problemDraftConflict       = "draft_conflict"
+	problemRepoFileReadOnly    = "repo_file_read_only"
 	problemTargetEngineAbsent  = "target_engine_missing"
 	problemComposeInvalid      = "compose_invalid"
 	problemComposeUnsupported  = "compose_unsupported"

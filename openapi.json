@@ -3203,6 +3203,14 @@
             "description": "The file's text. A secret file's content is \u003chidden\u003e on a read; sending \u003chidden\u003e back for a secret file that is already saved keeps the saved content",
             "type": "string"
           },
+          "origin": {
+            "description": "Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Bayplan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored",
+            "enum": [
+              "repo",
+              "overlay"
+            ],
+            "type": "string"
+          },
           "path": {
             "description": "The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid",
             "type": "string"
@@ -3216,6 +3224,29 @@
           "path",
           "content",
           "secret"
+        ],
+        "type": "object"
+      },
+      "DraftGitBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full ID of the commit the draft's repository files are from",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the draft follows",
+            "type": "string"
+          },
+          "repoName": {
+            "description": "The repository's name when the draft was made from it",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "repoName",
+          "ref"
         ],
         "type": "object"
       },
@@ -13640,6 +13671,16 @@
             "format": "int64",
             "type": "integer"
           },
+          "composeFiles": {
+            "description": "Left out for a stack with the one compose.yaml. For a stack from a git repository, the paths of its compose files in merge order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "files": {
             "description": "The draft's files by path",
             "items": {
@@ -13649,6 +13690,10 @@
               "array",
               "null"
             ]
+          },
+          "git": {
+            "$ref": "#/components/schemas/DraftGitBody",
+            "description": "Left out unless set: set for the draft of a stack made from a git repository, and says where its repository files are from"
           },
           "isDraft": {
             "description": "True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0",
@@ -13732,6 +13777,16 @@
       "StackDraftSaveRequest": {
         "additionalProperties": false,
         "properties": {
+          "composeFiles": {
+            "description": "For a stack from a git repository, its compose files as read. Left out is the same as unchanged; a list that differs from the draft's is refused with 422 repo_file_read_only. Ignored for any other stack",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "files": {
             "description": "Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all",
             "items": {
@@ -16670,10 +16725,15 @@
             "description": "True when the variable is marked secret in the table",
             "type": "boolean"
           },
+          "secretLike": {
+            "description": "True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then \u003chidden\u003e and a warning offers to set a secret variable",
+            "type": "boolean"
+          },
           "source": {
-            "description": "Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)",
+            "description": "Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)",
             "enum": [
               "table",
+              "repo-env",
               "default",
               "unset"
             ],
@@ -16693,6 +16753,7 @@
           "value",
           "secret",
           "source",
+          "secretLike",
           "default",
           "hasDefault",
           "required",

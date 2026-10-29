@@ -5827,10 +5827,23 @@ export interface components {
         DraftFileBody: {
             /** @description The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content */
             content: string;
+            /**
+             * @description Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Bayplan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored
+             * @enum {string}
+             */
+            origin?: "repo" | "overlay";
             /** @description The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid */
             path: string;
             /** @description True when the file is stored sealed and never shown */
             secret: boolean;
+        };
+        DraftGitBody: {
+            /** @description The full ID of the commit the draft's repository files are from */
+            commit: string;
+            /** @description The branch, tag or commit ID the draft follows */
+            ref: string;
+            /** @description The repository's name when the draft was made from it */
+            repoName: string;
         };
         DraftVarBody: {
             /** @description The variable's name: letters, digits and underscore, not starting with a digit */
@@ -9975,8 +9988,12 @@ export interface components {
              * @description The number of the deployed revision the draft started from, 0 for none
              */
             baseSeq: number;
+            /** @description Left out for a stack with the one compose.yaml. For a stack from a git repository, the paths of its compose files in merge order */
+            composeFiles?: string[] | null;
             /** @description The draft's files by path */
             files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description Left out unless set: set for the draft of a stack made from a git repository, and says where its repository files are from */
+            git?: components["schemas"]["DraftGitBody"];
             /** @description True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0 */
             isDraft: boolean;
             /** @description When, RFC 3339 UTC */
@@ -10007,6 +10024,8 @@ export interface components {
             version: number;
         };
         StackDraftSaveRequest: {
+            /** @description For a stack from a git repository, its compose files as read. Left out is the same as unchanged; a list that differs from the draft's is refused with 422 repo_file_read_only. Ignored for any other stack */
+            composeFiles?: string[] | null;
             /** @description Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all */
             files: components["schemas"]["DraftFileBody"][] | null;
             /** @description Every variable of the draft */
@@ -11244,11 +11263,13 @@ export interface components {
             required: boolean;
             /** @description True when the variable is marked secret in the table */
             secret: boolean;
+            /** @description True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable */
+            secretLike: boolean;
             /**
-             * @description Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)
+             * @description Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)
              * @enum {string}
              */
-            source: "table" | "default" | "unset";
+            source: "table" | "repo-env" | "default" | "unset";
             /** @description True when the variable is in the table and no file refers to it */
             unused: boolean;
             /** @description The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden> */

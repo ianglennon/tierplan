@@ -4,6 +4,7 @@
 package stackops
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -530,6 +531,71 @@ func (r Repo) SetAppliedSource(ctx context.Context, stackID string, src GitSourc
 	}
 	if n == 0 {
 		return ErrNoGit
+	}
+	return nil
+}
+
+// ErrRepoFileReadOnly means an edit of a git stack's draft touched what belongs to the repository: a file of the
+// repository, or the list of compose files (D-11). A *RepoFileEditError carries the path.
+var ErrRepoFileReadOnly = errors.New("stackops: repository files can't be edited")
+
+// RepoFileEditError names what a refused edit touched: the path of a repository file that was changed or left out, or
+// the empty string for the list of compose files.
+type RepoFileEditError struct{ Path string }
+
+func (e *RepoFileEditError) Error() string {
+	if e.Path == "" {
+		return "stackops: the compose files of a git stack can't be changed in a draft"
+	}
+	return "stackops: the repository file " + e.Path + " can't be edited"
+}
+
+// Is makes the error match ErrRepoFileReadOnly.
+func (e *RepoFileEditError) Is(target error) bool { return target == ErrRepoFileReadOnly }
+
+// GitDraftOrigins returns next with the origin of each file set the way a git stack's draft holds them: a file whose path prev holds keeps prev's origin, any other file is an overlay
+// (a person added it; the repository did not), and an overlay is always secret, so its content is stored sealed
+// (D-09). next is not changed.
+func GitDraftOrigins(prev, next stacks.WorkingCopy) stacks.WorkingCopy {
+	origin := make(map[string]stacks.FileOrigin, len(prev.Files))
+	for _, f := range prev.Files {
+		origin[f.Path] = f.Origin
+	}
+	out := next
+	out.Files = slices.Clone(next.Files)
+	for i := range out.Files {
+		o, held := origin[out.Files[i].Path]
+		if !held {
+			o = stacks.OriginOverlay
+		}
+		out.Files[i].Origin = o
+		if o == stacks.OriginOverlay {
+			out.Files[i].Secret = true
+		}
+	}
+	return out
+}
+
+// CheckGitDraftEdit refuses an edit of a git stack's draft that touches what belongs to the repository (D-11): every
+// file of prev with origin repo must be in next with the same content, and the compose files must be the same list.
+// Overlay files and the variables are free. A refusal is a *RepoFileEditError matching ErrRepoFileReadOnly. next
+// should come through GitDraftOrigins, so a repository path keeps its origin.
+func CheckGitDraftEdit(prev, next stacks.WorkingCopy) error {
+	if !slices.Equal(nonNil(prev.ComposeFiles), nonNil(next.ComposeFiles)) {
+		return &RepoFileEditError{}
+	}
+	held := make(map[string]stacks.File, len(next.Files))
+	for _, f := range next.Files {
+		held[f.Path] = f
+	}
+	for _, f := range prev.Files {
+		if f.Origin != stacks.OriginRepo {
+			continue
+		}
+		now, ok := held[f.Path]
+		if !ok || now.Origin != stacks.OriginRepo || !bytes.Equal(now.Content, f.Content) {
+			return &RepoFileEditError{Path: f.Path}
+		}
 	}
 	return nil
 }

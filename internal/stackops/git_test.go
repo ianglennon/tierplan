@@ -544,3 +544,87 @@ func TestSetAppliedSource(t *testing.T) {
 		t.Errorf("SetAppliedSource of an unknown stack = %v, want ErrNoGit", err)
 	}
 }
+
+// A git stack's draft may change its overlay files and variables and nothing that belongs to the repository (plan
+// 09-21, GIT-08, D-11).
+
+func gitDraftCopy() stacks.WorkingCopy {
+	return stacks.WorkingCopy{
+		Files: []stacks.File{
+			repoFile("compose.yaml", "services: {}\n"), repoFile("compose.prod.yaml", "services: {}\n"),
+			{Path: "web.env", Content: []byte("A=b\n"), Secret: true, Origin: stacks.OriginOverlay},
+		},
+		Vars:         []stacks.Var{{Name: "TAG", Value: "2"}},
+		ComposeFiles: []string{"compose.yaml", "compose.prod.yaml"},
+	}
+}
+
+func TestCheckGitDraftEdit(t *testing.T) {
+	t.Parallel()
+	prev := gitDraftCopy()
+	edit := func(mut func(*stacks.WorkingCopy)) stacks.WorkingCopy {
+		next := stacks.WorkingCopy{
+			Files: slices.Clone(prev.Files), Vars: slices.Clone(prev.Vars), ComposeFiles: slices.Clone(prev.ComposeFiles),
+		}
+		mut(&next)
+		return stackops.GitDraftOrigins(prev, next)
+	}
+	cases := map[string]struct {
+		next stacks.WorkingCopy
+		path string // the path the refusal names; "-" for an edit that is allowed
+	}{
+		"unchanged": {edit(func(*stacks.WorkingCopy) {}), "-"},
+		"a repository file edited": {edit(func(w *stacks.WorkingCopy) {
+			w.Files[0] = stacks.File{Path: "compose.yaml", Content: []byte("services: {a: {}}\n")}
+		}), "compose.yaml"},
+		"a repository file removed": {edit(func(w *stacks.WorkingCopy) { w.Files = slices.Delete(w.Files, 1, 2) }), "compose.prod.yaml"},
+		"the compose files reordered": {edit(func(w *stacks.WorkingCopy) {
+			w.ComposeFiles = []string{"compose.prod.yaml", "compose.yaml"}
+		}), ""},
+		"an overlay replaced": {edit(func(w *stacks.WorkingCopy) {
+			w.Files[2] = stacks.File{Path: "web.env", Content: []byte("A=c\n"), Secret: true}
+		}), "-"},
+		"an overlay removed": {edit(func(w *stacks.WorkingCopy) { w.Files = w.Files[:2] }), "-"},
+		"an overlay added": {edit(func(w *stacks.WorkingCopy) {
+			w.Files = append(w.Files, stacks.File{Path: "db.env", Content: []byte("X=1\n")})
+		}), "-"},
+		"a variable changed": {edit(func(w *stacks.WorkingCopy) {
+			w.Vars = []stacks.Var{{Name: "TAG", Value: "3"}, {Name: "NEW", Value: "1"}}
+		}), "-"},
+		"a repository path reused": {edit(func(w *stacks.WorkingCopy) {
+			w.Files = append(w.Files[:1], w.Files[2:]...)
+			w.Files = append(w.Files, stacks.File{Path: "compose.prod.yaml", Content: []byte("x")})
+		}), "compose.prod.yaml"},
+	}
+	for name, tc := range cases {
+		err := stackops.CheckGitDraftEdit(prev, tc.next)
+		if tc.path == "-" {
+			if err != nil {
+				t.Errorf("%s: %v, want the edit allowed", name, err)
+			}
+			continue
+		}
+		var re *stackops.RepoFileEditError
+		if !errors.Is(err, stackops.ErrRepoFileReadOnly) || !errors.As(err, &re) || re.Path != tc.path {
+			t.Errorf("%s: %v, want ErrRepoFileReadOnly naming %q", name, err, tc.path)
+		}
+	}
+}
+
+func TestGitDraftOriginsMakesNewFilesSecretOverlays(t *testing.T) {
+	t.Parallel()
+	prev := gitDraftCopy()
+	next := stacks.WorkingCopy{Files: []stacks.File{
+		{Path: "compose.yaml", Content: []byte("services: {}\n")}, {Path: "new.env", Content: []byte("K=v\n")},
+	}}
+	got := stackops.GitDraftOrigins(prev, next)
+	if f := got.Files[0]; f.Origin != stacks.OriginRepo || f.Secret {
+		t.Errorf("compose.yaml = %+v, want a plain repository file", f)
+	}
+	if f := got.Files[1]; f.Origin != stacks.OriginOverlay || !f.Secret {
+		t.Errorf("new.env = %+v, want a secret overlay", f)
+	}
+	if next.Files[1].Origin != stacks.OriginInline {
+		t.Errorf("the input was changed: %+v", next)
+	}
+}

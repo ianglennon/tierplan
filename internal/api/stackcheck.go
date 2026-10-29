@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -51,7 +52,8 @@ type StackVariableBody struct {
 	Name       string           `json:"name" doc:"The variable's name"`
 	Value      string           `json:"value" doc:"The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden>"`
 	Secret     bool             `json:"secret" doc:"True when the variable is marked secret in the table"`
-	Source     string           `json:"source" enum:"table,default,unset" doc:"Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)"`
+	Source     string           `json:"source" enum:"table,repo-env,default,unset" doc:"Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)"`
+	SecretLike bool             `json:"secretLike" doc:"True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable"`
 	Default    string           `json:"default" doc:"The default written in the compose file, when hasDefault is true"`
 	HasDefault bool             `json:"hasDefault" doc:"True when a reference in the compose file writes a default, even an empty one"`
 	Required   bool             `json:"required" doc:"True when the variable has no value in the table and no default, so a deploy is refused"`
@@ -137,6 +139,12 @@ func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackI
 	if err != nil {
 		return fail(err)
 	}
+	if st.Source.Kind == stacks.SourceGit {
+		// A stack from a repository is checked by its own rules, which need each file's origin and the ordered
+		// compose files; the browser holds neither, so they come from the saved draft (D-09, D-11).
+		wc.ComposeFiles = slices.Clone(saved.Copy.ComposeFiles)
+		wc = stackops.GitDraftOrigins(saved.Copy, wc)
+	}
 	if d.OnCheck != nil {
 		d.OnCheck(ctx)
 	}
@@ -187,7 +195,7 @@ func variableBodies(vars []stacks.ResolvedVar) []StackVariableBody {
 			places = append(places, StackPlaceBody{File: pl.File, Line: pl.Line})
 		}
 		out = append(out, StackVariableBody{
-			Name: v.Name, Value: v.Value, Secret: v.Secret, Source: v.Source, Default: v.Default,
+			Name: v.Name, Value: v.Value, Secret: v.Secret, SecretLike: v.SecretLike, Source: v.Source, Default: v.Default,
 			HasDefault: v.HasDefault, Required: v.Required, Unused: v.Unused, Places: places,
 		})
 	}

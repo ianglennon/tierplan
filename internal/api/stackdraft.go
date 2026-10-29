@@ -36,6 +36,14 @@ type DraftFileBody struct {
 	Path    string `json:"path" doc:"The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid"`
 	Content string `json:"content" doc:"The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content"`
 	Secret  bool   `json:"secret" doc:"True when the file is stored sealed and never shown"`
+	Origin  string `json:"origin,omitempty" enum:"repo,overlay" doc:"Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Bayplan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored"`
+}
+
+// DraftGitBody is where the repository files of a git stack's draft come from.
+type DraftGitBody struct {
+	Commit   string `json:"commit" doc:"The full ID of the commit the draft's repository files are from"`
+	RepoName string `json:"repoName" doc:"The repository's name when the draft was made from it"`
+	Ref      string `json:"ref" doc:"The branch, tag or commit ID the draft follows"`
 }
 
 // DraftVarBody is one variable of a stack's draft.
@@ -54,6 +62,9 @@ type StackDraftBody struct {
 	BaseSeq int64           `json:"baseSeq" doc:"The number of the deployed revision the draft started from, 0 for none"`
 	Files   []DraftFileBody `json:"files" doc:"The draft's files by path"`
 	Vars    []DraftVarBody  `json:"vars" doc:"The draft's variables by name"`
+	// ComposeFiles and Git are for a stack from a git repository.
+	ComposeFiles []string      `json:"composeFiles,omitempty" doc:"Left out for a stack with the one compose.yaml. For a stack from a git repository, the paths of its compose files in merge order"`
+	Git          *DraftGitBody `json:"git,omitempty" doc:"Left out unless set: set for the draft of a stack made from a git repository, and says where its repository files are from"`
 }
 
 // StackDraftOutput wraps StackDraftBody for huma.
@@ -67,6 +78,8 @@ type StackDraftSaveRequest struct {
 	Version int64           `json:"version" minimum:"0" doc:"The version of the draft you read, or 0 when you read a stack with no saved draft (isDraft false)"`
 	Files   []DraftFileBody `json:"files" doc:"Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all"`
 	Vars    []DraftVarBody  `json:"vars" maxItems:"500" doc:"Every variable of the draft"`
+	// ComposeFiles is for a stack from a git repository.
+	ComposeFiles []string `json:"composeFiles,omitempty" doc:"For a stack from a git repository, its compose files as read. Left out is the same as unchanged; a list that differs from the draft's is refused with 422 repo_file_read_only. Ignored for any other stack"`
 }
 
 // StackDraftSaveInput is the path and body of the save route.
@@ -149,7 +162,7 @@ func maskedDraft(s stackops.Snapshot) StackDraftBody {
 		Files: make([]DraftFileBody, 0, len(s.Copy.Files)), Vars: make([]DraftVarBody, 0, len(s.Copy.Vars)),
 	}
 	for _, f := range s.Copy.Files {
-		fb := DraftFileBody{Path: f.Path, Content: string(f.Content), Secret: f.Secret}
+		fb := DraftFileBody{Path: f.Path, Content: string(f.Content), Secret: f.Secret, Origin: string(f.Origin)}
 		if f.Secret {
 			fb.Content = redact.Placeholder
 		}
@@ -161,6 +174,12 @@ func maskedDraft(s stackops.Snapshot) StackDraftBody {
 			vb.Value = redact.Placeholder
 		}
 		b.Vars = append(b.Vars, vb)
+	}
+	if len(s.Copy.ComposeFiles) > 0 {
+		b.ComposeFiles = slices.Clone(s.Copy.ComposeFiles)
+	}
+	if s.Git.Commit != "" {
+		b.Git = &DraftGitBody{Commit: s.Git.Commit, RepoName: s.Git.Source.RepoName, Ref: s.Git.Source.Ref}
 	}
 	return b
 }
@@ -356,6 +375,16 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 	if err := stacks.CheckVars(wc.Vars); err != nil {
 		return nil, varRuleProblem(err)
 	}
+	if st.Source.Kind == stacks.SourceGit {
+		wc.ComposeFiles = slices.Clone(in.Body.ComposeFiles)
+		if len(wc.ComposeFiles) == 0 {
+			wc.ComposeFiles = slices.Clone(current.Copy.ComposeFiles)
+		}
+		wc = stackops.GitDraftOrigins(current.Copy, wc)
+		if err := stackops.CheckGitDraftEdit(current.Copy, wc); err != nil {
+			return nil, repoFileReadOnly(current.Git.Source.RepoName, err)
+		}
+	}
 	saved, changed, err := repo.SaveDraft(ctx, st.ID, in.Body.Version, p.Name, wc)
 	var conflict *stackops.DraftConflictError
 	if errors.As(err, &conflict) {
@@ -380,6 +409,25 @@ func saveStackDraft(ctx context.Context, d StacksDeps, in *StackDraftSaveInput) 
 		Changed: changed, Version: saved.Version, SavedBy: saved.CreatedBy, SavedAt: rfc3339(saved.CreatedAt),
 		SecretFiles: secretFiles,
 	}}, nil
+}
+
+// repoFileReadOnly is the 422 for an edit of a git stack's draft that touches the repository's files or the list of
+// compose files: the path in errors[].location, or "composeFiles" for the list.
+func repoFileReadOnly(repoName string, err error) error {
+	var re *stackops.RepoFileEditError
+	loc := "composeFiles"
+	if errors.As(err, &re) && re.Path != "" {
+		loc = re.Path
+	}
+	where := "the repository"
+	if repoName != "" {
+		where = repoName
+	}
+	detail := "Repository files can't be edited here. Change them in " + where + " and pull."
+	return &huma.ErrorModel{
+		Type: problemRepoFileReadOnly, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity,
+		Detail: detail, Errors: []*huma.ErrorDetail{{Location: loc, Message: detail}},
+	}
 }
 
 // discardStackDraft deletes a stack's draft. It is idempotent: with no draft it answers 204 and
