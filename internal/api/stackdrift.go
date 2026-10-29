@@ -91,6 +91,12 @@ type StackDriftOutput struct {
 // maxDriftChecksPerUser is how many reads of a stack for drift one user may have running: each reads the swarm.
 const maxDriftChecksPerUser = 2
 
+const (
+	// problemGitStack is the refusal of an accept-live for a stack that deploys from a git repository.
+	problemGitStack  = "git_stack"
+	gitStackNoAccept = "This stack deploys from git, so what runs can't be copied into its draft. Make the change in the repository."
+)
+
 // newDriftLimiter is the limiter of the drift route.
 func newDriftLimiter() *streamLimiter {
 	return &streamLimiter{max: maxDriftChecksPerUser, open: map[string]int{}}
@@ -120,6 +126,7 @@ func registerStackDrift(r *httpx.Router, d StacksDeps, lim *streamLimiter) {
 			"The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. " +
 			"draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. " +
 			"While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision, and a stack that is stopped is 409 stack_stopped (its services run no replicas, so there is nothing running to keep; start it first). " +
+			"A stack that deploys from a git repository, or whose draft is about to point at one, is 409 git_stack: its files are the repository's and read-only, so the change belongs in the repository. " +
 			"A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. " +
 			"Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.",
 		Tags: []string{"stacks"}, MaxBodyBytes: 1 << 10,
@@ -179,6 +186,8 @@ func acceptStackDrift(ctx context.Context, d StacksDeps, in *StackDriftAcceptInp
 		return nil, httpx.Problem(http.StatusConflict, problemNoDeployedRevision, noDeployedRevision)
 	case errors.Is(err, stackops.ErrStackStopped):
 		return nil, httpx.Problem(http.StatusConflict, problemStackStopped, stackStopped)
+	case errors.Is(err, stackops.ErrGitStack):
+		return nil, httpx.Problem(http.StatusConflict, problemGitStack, gitStackNoAccept)
 	case errors.As(err, &failed):
 		return nil, rebuildNotAccepted(failed.Reason)
 	case errors.Is(err, stackops.ErrRebuildTarget):

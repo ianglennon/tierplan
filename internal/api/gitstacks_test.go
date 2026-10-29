@@ -527,3 +527,31 @@ func TestEnvDeleteWithGitStack(t *testing.T) {
 		t.Errorf("delete the instance repository: %d %s, want 204: no stack uses it any more", rec.Code, rec.Body)
 	}
 }
+
+// CR-C02: what runs can't be copied into the draft of a stack that deploys from git: its files are the repository's and
+// read-only, so the change belongs in the repository. The draft is left as it was.
+func TestAcceptLiveIsRefusedForAGitStack(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	rec := g.create(t, g.admin, g.body(nil))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var made gitStackAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &made); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = g.f.credCall(t, g.admin, http.MethodPost, "/api/env/"+g.env+"/stacks/"+made.StackID+"/drift/accept", `{"draftVersion":1}`)
+
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "git_stack" || !strings.Contains(rec.Body.String(), "repository") {
+		t.Fatalf("accept on a git stack: %d %s, want 409 git_stack pointing at the repository", rec.Code, rec.Body)
+	}
+	draft, err := g.stackRepo().Draft(context.Background(), made.StackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Version != made.DraftVersion || draft.Git.Commit != g.sha {
+		t.Errorf("draft = version %d at %q, want it untouched at version %d", draft.Version, draft.Git.Commit, made.DraftVersion)
+	}
+}

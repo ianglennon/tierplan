@@ -297,3 +297,66 @@ func TestAcceptLiveChangesNothingOnTheEngine(t *testing.T) {
 		t.Errorf("the service no longer runs 3 replicas: %+v", spec.Mode)
 	}
 }
+
+// CR-C02: a stack that deploys from git has read-only repository files (D-11), so a definition rebuilt from what runs
+// has no file to go in. Accept live is refused before anything is read or written.
+func TestAcceptLiveRefusesAStackThatDeploysFromGit(t *testing.T) {
+	t.Parallel()
+	rig := newAcceptRig(t)
+	rig.scaleLive(t, 5)
+	st := rig.st
+	st.Source = stacks.Source{Kind: stacks.SourceGit}
+	before, err := rig.repo.Draft(testsupport.Context(t), st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = rig.deps.AcceptLive(testsupport.Context(t), rig.repo, stackops.AcceptLiveInput{EnvID: rig.envID, Stack: st, Caller: stackops.Caller{Actor: "bob"}})
+
+	if !errors.Is(err, stackops.ErrGitStack) {
+		t.Fatalf("AcceptLive = %v, want ErrGitStack", err)
+	}
+	after, err := rig.repo.Draft(testsupport.Context(t), st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != before.Version || after.IsDraft != before.IsDraft {
+		t.Errorf("draft went from %+v to %+v: it was written", before.Version, after.Version)
+	}
+}
+
+// A draft that points an inline stack at a repository holds repository files too, and accept live would replace it
+// with a draft that has none.
+func TestAcceptLiveRefusesAStackWithAPendingConversionToGit(t *testing.T) {
+	t.Parallel()
+	rig := newAcceptRig(t)
+	ctx := testsupport.Context(t)
+	repoFixture{repo: rig.repo, envID: rig.envID}.addGitRepo(t, gitRepoID, "acme")
+	draft, err := rig.repo.Draft(ctx, rig.st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := gitRevision()
+	rev.Source.ComposeFiles = []string{"compose.yaml"}
+	wc := stacks.WorkingCopy{
+		Files:        []stacks.File{repoFile("compose.yaml", "services: {web: {image: nginx}}\n")},
+		ComposeFiles: []string{"compose.yaml"},
+	}
+	saved, err := rig.repo.CreatePendingGitSource(ctx, rig.st.ID, draft.Version, "ada", wc, rev)
+	if err != nil {
+		t.Fatalf("CreatePendingGitSource: %v", err)
+	}
+
+	_, err = rig.accept(t, saved.Version)
+
+	if !errors.Is(err, stackops.ErrGitStack) {
+		t.Fatalf("AcceptLive = %v, want ErrGitStack", err)
+	}
+	after, err := rig.repo.Draft(ctx, rig.st.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != saved.Version || after.Git.Commit != gitCommit {
+		t.Errorf("draft = version %d at %q, want the pending conversion left as it was", after.Version, after.Git.Commit)
+	}
+}
