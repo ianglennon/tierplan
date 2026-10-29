@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 )
 
 // Changing what a git stack follows (plan 09-29, GIT-02, GIT-04, D-11, D-12): the change writes the draft as a pending
@@ -373,5 +374,38 @@ func TestChangeSourceDiscard(t *testing.T) {
 	}
 	if rv := operator.sourceReview(stackID); rv.Git == nil || rv.Git.Replaces != nil || rv.Git.Ref != "main" || rv.Git.Commit != head {
 		t.Errorf("review git after the pull = %+v, want main at %s", rv.Git, head)
+	}
+}
+
+func TestChangeSourceBlocksAutoDeploy(t *testing.T) {
+	t.Parallel()
+	a := newAutoFix(t)
+	owner := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, owner)
+	operator := a.f.caller(t, a.e, "operator-2", "operator")
+	first := a.sha
+	dev := a.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n"}, "dev")
+	a.repo.Branch(t, "dev", dev)
+	a.repo.Branch(t, "main", first)
+
+	if rec := a.sourceOf(operator, a.stackID, draftVersion(t, operator, a.stackID), func(b map[string]any) { b["ref"] = "dev" }); rec.Code != http.StatusOK {
+		t.Fatalf("change source: %d %s", rec.Code, rec.Body)
+	}
+	head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx on main")
+
+	// The head of main moved, but a new source waits for review: nothing is deployed and the draft is not pulled away.
+	a.checkNow(t, owner, a.stackID, a.ended)
+	s, err := a.stackRepo().GitState(context.Background(), a.stackID)
+	if err != nil || s.PendingCommit != head || s.ReasonCode != string(gitsync.ReasonAutoDeployBlocked) || !strings.Contains(s.ReasonDetail, "new source") {
+		t.Fatalf("state = %+v, %v; want the head held back for the new source", s, err)
+	}
+	if revs := a.f.revisions(t, a.stackID); len(revs) != 1 {
+		t.Errorf("revisions = %+v, want none made by the auto-deploy", revs)
+	}
+	if n := len(a.f.auditRowsOf(t, audit.ActionGitAutoDeployed)); n != 0 {
+		t.Errorf("git.autodeployed rows = %d, want none", n)
+	}
+	if rv := operator.sourceReview(a.stackID); rv.Git == nil || rv.Git.Ref != "dev" || rv.Git.Replaces == nil {
+		t.Errorf("review git = %+v, want the pending source still there", rv.Git)
 	}
 }

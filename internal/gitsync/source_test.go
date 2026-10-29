@@ -287,3 +287,38 @@ func TestChangeSourceRefusals(t *testing.T) {
 		t.Errorf("draft = %+v, want it untouched by every refusal", after)
 	}
 }
+
+func TestChangeSourceBlocksAutoDeploy(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	ctx := context.Background()
+	a.devBranch(t, "dev")
+	head := a.changeWeb(t, "main-2")
+	a.repo.Branch(t, "main", head)
+
+	d, err := a.rr.Draft(ctx, a.stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := a.svc.ChangeSource(ctx, "env-1", a.stackID, "bob", d.Version, a.branchSource("dev"))
+	if err != nil {
+		t.Fatalf("ChangeSource: %v", err)
+	}
+
+	// The head of the applied source moves; auto-deploy waits for a person, and the pending source is not pulled away.
+	if out := a.poll(t); out != gitsync.OutcomeBehind {
+		t.Fatalf("check = %s, want behind", out)
+	}
+	s := a.state(t)
+	if a.dep.count() != 0 || s.Status != stackops.GitStatusError || s.ReasonCode != string(gitsync.ReasonAutoDeployBlocked) ||
+		!strings.Contains(s.ReasonDetail, "new source") || s.PendingCommit != head {
+		t.Fatalf("%d deploys, state %+v; want nothing deployed and the commit held back for the new source", a.dep.count(), s)
+	}
+	after, err := a.rr.Draft(ctx, a.stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != res.DraftVersion || after.Git.Source.Ref != "dev" {
+		t.Errorf("draft = version %d source %+v, want the pending source untouched at version %d", after.Version, after.Git.Source, res.DraftVersion)
+	}
+}
