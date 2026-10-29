@@ -459,3 +459,54 @@ describe("Review and deploy on a git stack", () => {
     expect(pulls()).toHaveLength(0);
   });
 });
+
+describe("overlay files on the Files tab", () => {
+  it("replaces an overlay's content and saves it sealed", async () => {
+    mount({ file: "db_pw.txt" });
+    await screen.findByText("The content of db_pw.txt is hidden.");
+    fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
+    await screen.findByRole("textbox", { name: "db_pw.txt, text" });
+    typeIntoEditor("new-secret");
+    fireEvent.click(screen.getByRole("button", { name: /^Save draft/ }));
+    expect(await screen.findByText("Saved the draft of web.")).toBeTruthy();
+    const files = puts()[0]?.body?.files as { path: string; content: string; secret: boolean }[];
+    expect(files.find((f) => f.path === "db_pw.txt")).toEqual({
+      path: "db_pw.txt",
+      content: "new-secret",
+      secret: true,
+    });
+    // The text is let go of once the server holds it: the card is back.
+    expect(await screen.findByText("The content of db_pw.txt is hidden.")).toBeTruthy();
+  });
+
+  it("removes an overlay file and the next save leaves it out", async () => {
+    mount({ file: "db_pw.txt" });
+    await screen.findByText("The content of db_pw.txt is hidden.");
+    fireEvent.keyDown(screen.getByRole("button", { name: "Actions for db_pw.txt" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+    // The open file moves to the first compose file, which opens read-only.
+    expect((await composeBox()).getAttribute("aria-readonly")).toBe("true");
+    expect(
+      screen.getByText(
+        "No overlay files. Add one for a secret or config file that isn't in the repository.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Save draft/ }));
+    await screen.findByText("Saved the draft of web.");
+    const files = puts()[0]?.body?.files as { path: string }[];
+    expect(files.map((f) => f.path)).toEqual(["compose.yaml", "web.env"]);
+  });
+
+  it("gives a Viewer the files read-only, with the overlay's card and the muted footer line", async () => {
+    server.role = "viewer";
+    mount({ file: "db_pw.txt" });
+    await screen.findByText("The content of db_pw.txt is hidden.");
+    expect(screen.queryByRole("button", { name: "Replace content" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add overlay file" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Actions for/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Save draft/ })).toBeNull();
+    expect(screen.getByText("You can read this stack's files but not change them.")).toBeTruthy();
+  });
+});

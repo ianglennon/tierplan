@@ -448,3 +448,90 @@ describe("as the working copy changes", () => {
     });
   });
 });
+
+describe("a git stack", () => {
+  const gitFiles = [
+    file("compose.yaml", { origin: "repo" }),
+    file("web.env", { origin: "repo" }),
+    file("db_pw.txt", { origin: "overlay", secret: true, hidden: true }),
+  ];
+
+  it("badges each file Repo or Overlay and gives the menu to overlay files only", () => {
+    setup({ git: true, files: gitFiles, onAddOverlay: vi.fn() });
+    const row = (path: string) => nav().querySelector(`[data-file="${path}"]`) as HTMLElement;
+    expect(within(row("compose.yaml")).getByText("Repo")).toBeTruthy();
+    expect(within(row("db_pw.txt")).getByText("Overlay")).toBeTruthy();
+    // An overlay is always secret, so it carries one badge and not two.
+    expect(within(row("db_pw.txt")).queryByText("Secret")).toBeNull();
+    expect(within(nav()).getAllByRole("button", { name: /^Actions for/ })).toHaveLength(1);
+    expect(within(nav()).getByRole("button", { name: "Actions for db_pw.txt" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add file" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Add overlay file" })).toBeTruthy();
+  });
+
+  it("deletes an overlay file from its menu", async () => {
+    const { onDelete } = setup({ git: true, files: gitFiles, onAddOverlay: vi.fn() });
+    fireEvent.keyDown(within(nav()).getByRole("button", { name: "Actions for db_pw.txt" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete file" }));
+    expect(onDelete).toHaveBeenCalledWith("db_pw.txt");
+  });
+
+  it("says there are no overlay files, under the rail, until there is one", () => {
+    setup({ git: true, files: gitFiles.slice(0, 2), onAddOverlay: vi.fn() });
+    expect(
+      screen.getByText(
+        "No overlay files. Add one for a secret or config file that isn't in the repository.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+    setup({ git: true, files: gitFiles, onAddOverlay: vi.fn() });
+    expect(screen.queryByText(/^No overlay files\./)).toBeNull();
+  });
+
+  it("hands over the path and the contents of a new overlay file and nothing else", async () => {
+    const onAddOverlay = vi.fn();
+    const { onAdd } = setup({ git: true, files: gitFiles, onAddOverlay });
+    fireEvent.click(screen.getByRole("button", { name: "Add overlay file" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Path"), { target: { value: "secrets/x.txt" } });
+    fireEvent.change(within(dialog).getByLabelText("Contents"), { target: { value: "s3cret" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add overlay file" }));
+    expect(onAddOverlay).toHaveBeenCalledWith("secrets/x.txt", "s3cret");
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("gives a Viewer the files and the empty line, with no button and no menu", () => {
+    const { onSelect } = setup({
+      git: true,
+      readOnly: true,
+      files: gitFiles.slice(0, 2),
+      onAddOverlay: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: "Add overlay file" })).toBeNull();
+    expect(within(nav()).queryByRole("button", { name: /^Actions for/ })).toBeNull();
+    fireEvent.click(within(nav()).getByRole("button", { name: /^web\.env/ }));
+    expect(onSelect).toHaveBeenCalledWith("web.env");
+  });
+
+  describe("under 768px", () => {
+    beforeEach(() => {
+      vi.stubGlobal("innerWidth", 375);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("says in the select where each file comes from", () => {
+      setup({ git: true, files: gitFiles, onAddOverlay: vi.fn() });
+      const select = screen.getByRole("combobox", { name: "File" }) as HTMLSelectElement;
+      expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+        "compose.yaml (Repo)",
+        "web.env (Repo)",
+        "db_pw.txt (Overlay)",
+      ]);
+    });
+  });
+});
