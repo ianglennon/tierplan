@@ -346,6 +346,50 @@ func TestGitStackCreateRefKinds(t *testing.T) {
 	}
 }
 
+// A create that names the commit the check read is made from that commit, or refused when the ref has moved on (WR-E04):
+// what the person reviewed is what is created.
+func TestGitStackCreatePinnedToTheCheckedCommit(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	pinned := func(sha string) func(map[string]any) {
+		return func(b map[string]any) { b["commit"] = sha }
+	}
+
+	rec := g.create(t, g.admin, g.body(pinned(g.sha)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create at the checked commit: %d %s", rec.Code, rec.Body)
+	}
+	var got gitStackAnswer
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Commit != g.sha {
+		t.Fatalf("answer = %+v, %v, want the commit %s", got, err, g.sha)
+	}
+
+	// The branch moves: the old commit is no longer what the ref resolves to.
+	moved := g.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=c\n"}, "second")
+	rec = g.create(t, g.admin, g.body(func(b map[string]any) { b["name"], b["commit"] = "again", g.sha }))
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "commit_moved" {
+		t.Errorf("create at a commit the branch has left: %d %s, want 409 commit_moved", rec.Code, rec.Body)
+	}
+	// Naming the new head works; naming none follows the head, as before.
+	rec = g.create(t, g.admin, g.body(func(b map[string]any) { b["name"], b["commit"] = "head", moved }))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("create at the new head: %d %s", rec.Code, rec.Body)
+	}
+	rec = g.create(t, g.admin, g.body(func(b map[string]any) { b["name"] = "unpinned" }))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("create with no commit: %d %s", rec.Code, rec.Body)
+	}
+	// Only a full commit ID is a commit here.
+	rec = g.create(t, g.admin, g.body(func(b map[string]any) { b["name"], b["commit"] = "short", g.sha[:7] }))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("create with a short commit: %d %s, want 422", rec.Code, rec.Body)
+	}
+	var n int
+	if err := g.f.st.Read.QueryRow(`SELECT count(*) FROM stacks WHERE name IN ('again', 'short')`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("a refused create left %d stacks, %v", n, err)
+	}
+}
+
 func TestGitStackCreateDuplicate(t *testing.T) {
 	t.Parallel()
 	g := newGitStackFix(t)

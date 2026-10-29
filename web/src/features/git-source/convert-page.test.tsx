@@ -128,6 +128,7 @@ function mount() {
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: "/" }),
+      createRoute({ getParentRoute: () => root, path: "/away" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/review" }),
@@ -213,6 +214,23 @@ describe("the convert page", () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it("asks before leaving once a choice is made, and not before (WR-E03)", async () => {
+    const router = mount();
+    await screen.findByRole("heading", { name: "Files in legacy today" });
+    // The stack's own variables are the starting point, not a change.
+    await router.navigate({ to: "/away" as never });
+    expect(router.state.location.pathname).toBe("/away");
+    await router.navigate({ to: "/" });
+
+    fireEvent.click(radio("notes.txt", "Keep as overlay file"));
+    void router.navigate({ to: "/away" as never });
+    const dialog = await screen.findByRole("alertdialog", { name: "Discard these choices?" });
+    expect(within(dialog).getByText("Your choices for legacy haven't been applied.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("hides the existing-files card for a stack with no extra files", async () => {

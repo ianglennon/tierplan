@@ -84,6 +84,7 @@ describe("OverlayFilesCard", () => {
       overlays: ["db_pw.txt"],
       problems: [
         problem({
+          file: "db_pw.txt",
           message:
             "db_pw.txt exists in the repository and as an overlay file. Remove the overlay file or rename it.",
         }),
@@ -94,6 +95,24 @@ describe("OverlayFilesCard", () => {
     expect(row.textContent).toContain(
       "db_pw.txt exists in the repository and as an overlay file. Remove the overlay file or rename it.",
     );
+  });
+
+  it("attaches a clash to the overlay it is about, not to one whose path begins the same (WR-E02)", () => {
+    mount({
+      overlays: ["secrets/db", "secrets/db.key"],
+      problems: [
+        problem({
+          file: "secrets/db.key",
+          message: "secrets/db.key exists in the repository and as an overlay file.",
+        }),
+      ],
+    });
+    const plain = screen.getByText("secrets/db", { selector: "code" }).closest("li") as HTMLElement;
+    const clashing = screen
+      .getByText("secrets/db.key", { selector: "code" })
+      .closest("li") as HTMLElement;
+    expect(plain.textContent).not.toContain("Blocking: ");
+    expect(clashing.textContent).toContain("Blocking: ");
   });
 
   it("opens Add overlay file with no path from its own button", () => {

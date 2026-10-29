@@ -379,6 +379,8 @@ function FormSheet({
           if (made.type === "ssh") {
             // Drop the typed key now; the sheet goes on showing the public key.
             form.reset(defaults);
+            // The hook keeps the request it sent, key included, until it is reset or unmounts.
+            create.reset();
             setCreated(made);
           } else {
             close();

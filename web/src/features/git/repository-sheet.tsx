@@ -518,9 +518,14 @@ function FormSheet({
     result && result.hostKey.state !== "none" && result.hostKey.fingerprint !== dismissedKey
       ? result.hostKey
       : null;
+  // What is stored (the key, the last test) describes the address that was saved. Once the address
+  // in the field is another one, none of it is said of the new address: no key has been seen for it.
+  const addressUnchanged = repo !== undefined && url.trim() === repo.url.trim();
   // A stored key stays on screen while nothing has been tested in this sheet.
   const storedKey =
-    tested === null && repo?.hostKey && addressKind(url) === "ssh" ? repo.hostKey : null;
+    tested === null && addressUnchanged && repo?.hostKey && addressKind(url) === "ssh"
+      ? repo.hostKey
+      : null;
 
   return (
     <>
@@ -765,7 +770,7 @@ function FormSheet({
                     <AlertDescription>{testError}</AlertDescription>
                   </Alert>
                 ) : null}
-                {tested === null && repo?.lastTest ? (
+                {tested === null && addressUnchanged && repo?.lastTest ? (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span>{t("git.test.lastTest")}</span>
                     <LastTestCell test={repo.lastTest} />

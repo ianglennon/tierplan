@@ -201,7 +201,14 @@
     },
     "errors": {
       "createFailed": "Couldn't create the stack from that folder. Check the repository, ref, folder and files, then try again.",
-      "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number."
+      "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number.",
+      "commitMoved": "The branch or tag moved after it was checked, so nothing was created. Bayplan is reading it again: look over the result, then create the stack."
+    },
+    "guard": {
+      "title": "Discard this stack?",
+      "body": "{{name}} hasn't been created yet.",
+      "keep": "Keep editing",
+      "discard": "Discard"
     },
     "convert": {
       "action": "Use a git repository…",
@@ -222,6 +229,12 @@
         "note": "Nothing changes on {{env}} until you review and deploy.",
         "submit": "Review and sync",
         "pending": "Preparing…"
+      },
+      "guard": {
+        "title": "Discard these choices?",
+        "body": "Your choices for {{name}} haven't been applied.",
+        "keep": "Keep editing",
+        "discard": "Discard"
       },
       "errors": {
         "conflict": "{{user}} changed {{name}} while you were choosing. Reload to see it.",
