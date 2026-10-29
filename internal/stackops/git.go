@@ -684,7 +684,7 @@ var ErrAlreadyGit = errors.New("stackops: the stack is already from a git reposi
 // the draft is still at version: the draft becomes wc, the files and variables the person chose to carry over together with
 // the repository's, and records rev as the commit, tree and source it was made from; the source is stored as the stack's
 // pending git settings. The stack is not a git stack yet and nothing about it changes on the environment: a good deploy of
-// this draft finishes the conversion (FinalizeConvert), and discarding the draft ends it (DropPendingConvert). Asking again
+// this draft finishes the conversion (FinalizeConvert), and discarding the draft ends it (DiscardDraft). Asking again
 // replaces the pending source. A stack that already has git settings is ErrAlreadyGit and nothing is stored; a draft that
 // has moved is a *DraftConflictError.
 func (r Repo) CreatePendingGitSource(ctx context.Context, stackID string, version int64, actor string, wc stacks.WorkingCopy, rev GitRevision) (Snapshot, error) {
@@ -754,16 +754,6 @@ func (r Repo) FinalizeConvert(ctx context.Context, stackID string) (bool, error)
 		return false, fmt.Errorf("commit: %w", err)
 	}
 	return true, nil
-}
-
-// DropPendingConvert forgets the pending git settings of a stack whose convert draft was discarded; the stack is as it was.
-// It reports false when there were none.
-func (r Repo) DropPendingConvert(ctx context.Context, stackID string) (bool, error) {
-	n, err := r.Store.Q.DeletePendingStackGit(ctx, stackID)
-	if err != nil {
-		return false, fmt.Errorf("drop the pending git source: %w", err)
-	}
-	return n > 0, nil
 }
 
 // Detach turns a git stack back into an inline stack you edit in Bayplan (D-25), in one transaction: the files of rev (the

@@ -904,9 +904,6 @@ func TestDiscardingAConvertDraftDropsThePendingSource(t *testing.T) {
 	if _, ok, err := f.repo.PendingGit(ctx, st.ID); err != nil || ok {
 		t.Errorf("PendingGit after a discard = %v, %v, want none", ok, err)
 	}
-	if dropped, err := f.repo.DropPendingConvert(ctx, st.ID); err != nil || dropped {
-		t.Errorf("DropPendingConvert with nothing pending = %v, %v, want false", dropped, err)
-	}
 	if got, err := f.repo.Stack(ctx, f.envID, st.ID); err != nil || got.Source.Kind != stacks.SourceInline {
 		t.Errorf("stack = %+v, %v, want inline", got, err)
 	}
