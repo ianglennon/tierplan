@@ -58,6 +58,9 @@ const codeDraftChanged = "draft_changed"
 // localEditsDetail is why an automatic deploy waits for a person when the draft holds changes nobody reviewed (D-29).
 const localEditsDetail = "A draft with local changes is waiting for review."
 
+// pendingSourceDetail is why an automatic deploy waits for a person when the draft holds a new source nobody reviewed (D-11).
+const pendingSourceDetail = "A new source is waiting for review."
+
 // SetDeployer gives the service the deployer that starts an automatic deploy. The deployer is built from the stack
 // routes' dependencies, which hold this service's Deployed hook, so the two cannot be made in one expression: the
 // server makes the service, then the deployer, then calls this once before anything runs. Until it is set, a stack
@@ -163,6 +166,12 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 	draft, err := s.repo.Draft(ctx, stackID)
 	if err != nil {
 		s.log.Warn("could not read the draft for an automatic deploy", "stack", stackID, "error", err)
+		return
+	}
+	// A draft that holds another source than the stack follows is waiting for review (D-11): pulling would drop it, and
+	// deploying it is a person's decision.
+	if PendingSource(sg, draft) {
+		s.holdBack(ctx, st, head.SHA, pendingSourceDetail)
 		return
 	}
 	// Bayplan never deploys unreviewed local edits (D-29).
