@@ -69,11 +69,13 @@ type Service struct {
 	checking map[string]*checkCall
 	// triggers holds the stacks a Trigger is working on: a trigger while one runs only marks it to run once more.
 	triggers map[string]*triggerRun
+	// stateLocks holds the sync-state locks that are held or waited for (lockState).
+	stateLocks map[string]*stateLock
 }
 
 // New returns a Service.
 func New(d Deps) *Service {
-	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, access: d.Access, deployer: d.Deployer, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}}
+	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, access: d.Access, deployer: d.Deployer, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}, stateLocks: map[string]*stateLock{}}
 	if s.mirrors = d.Mirrors; s.mirrors == nil {
 		s.mirrors, _ = d.Git.(gitx.Mirrors)
 	}

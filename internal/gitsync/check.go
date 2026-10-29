@@ -144,25 +144,18 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 	if err != nil {
 		return "", err
 	}
-	prev, err := s.repo.GitState(ctx, stackID)
-	if err != nil {
-		return "", err
-	}
-	dep, deployed, err := s.repo.DeployedGit(ctx, stackID)
-	if err != nil {
-		return "", err
-	}
-	now := s.now().UTC()
-	next := prev
-	next.CheckedAt = &now
-	next.DeployedCommit, next.DeployedTree = "", ""
-	if deployed {
-		next.DeployedCommit, next.DeployedTree = dep.Commit, dep.Tree
-	}
+	// The state is read and written under the stack's state lock, and the lock is not held across the fetch: what a deploy
+	// or a pull wrote while the repository was being read is then what this answer is built on, and is not replaced by
+	// an answer made from an older reading (WR-B03).
 	if gitx.RefKind(sg.RefKind) == gitx.RefCommit {
-		return s.checkFixed(ctx, st, sg, prev, next, dep, deployed)
+		defer s.lockState(stackID)()
+		b, err := s.syncBase(ctx, stackID)
+		if err != nil {
+			return "", err
+		}
+		return s.checkFixed(ctx, st, sg, b.prev, b.next, b.dep, b.deployed)
 	}
-	if out, ok, err := s.checkCheaply(ctx, o, sg, prev, next, dep, deployed); ok || err != nil {
+	if out, ok, err := s.checkCheaply(ctx, o, sg); ok || err != nil {
 		return out, err
 	}
 	repo, err := s.conns.GetRepo(ctx, sg.RepoID)
@@ -173,18 +166,27 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 	rem, err := s.conns.Remote(ctx, repo)
 	if err != nil {
 		s.log.Error("could not prepare a git remote for a sync check", "stack", stackID, "error", err)
-		return s.fail(ctx, st, prev, next, ReasonFetchFailed, err)
+		return s.failFetch(ctx, st, ReasonFetchFailed, err)
 	}
 	mirror := gitx.MirrorID(repo.ID)
 	head, err := s.git.FetchRef(ctx, mirror, rem, gitx.RefKind(sg.RefKind), sg.Ref)
 	s.recordUse(ctx, repo, err)
 	if err != nil {
-		return s.fail(ctx, st, prev, next, reasonOf(err), err)
+		return s.failFetch(ctx, st, reasonOf(err), err)
 	}
 	tree, err := s.git.FolderTree(ctx, mirror, head.SHA, sg.Folder)
 	if err != nil {
-		return s.fail(ctx, st, prev, next, reasonOf(err), err)
+		return s.failFetch(ctx, st, reasonOf(err), err)
 	}
+
+	// What follows reads the mirror (headProblem fetches only when the mirror lacks the commit just fetched) and the
+	// database, and ends in the write, so the lock covers it.
+	defer s.lockState(stackID)()
+	b, err := s.syncBase(ctx, stackID)
+	if err != nil {
+		return "", err
+	}
+	prev, next, dep, deployed := b.prev, b.next, b.dep, b.deployed
 	next.HeadCommit, next.HeadTree = head.SHA, tree
 	next.Status, next.Behind = stackops.GitStatusUnknown, 0
 	next.ReasonCode, next.ReasonDetail, next.ErrorSince, next.ConsecutiveFailures = "", "", nil, 0
@@ -260,14 +262,23 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 // is written (RESEARCH Pitfall 4). It applies only when the stored answer is still the answer to the question: the
 // stack is not in error (an error is looked at again for real), the deployed revision and the stack's source are what
 // the answer was made with, and the answer carries no note. ok is false when the check has to be made in full.
-func (s *Service) checkCheaply(ctx context.Context, o CheckOptions, sg stackops.StackGit, prev, next stackops.GitState, dep stackops.GitRevision, deployed bool) (Outcome, bool, error) {
-	if o.RemoteHead == "" || prev.CheckedAt == nil || prev.HeadCommit != o.RemoteHead || prev.Status == stackops.GitStatusError || prev.ReasonCode != "" {
+func (s *Service) checkCheaply(ctx context.Context, o CheckOptions, sg stackops.StackGit) (Outcome, bool, error) {
+	if o.RemoteHead == "" {
 		return "", false, nil
 	}
-	if next.DeployedCommit != prev.DeployedCommit || next.DeployedTree != prev.DeployedTree || (deployed && sourceChanged(sg, dep)) {
+	defer s.lockState(sg.StackID)()
+	b, err := s.syncBase(ctx, sg.StackID)
+	if err != nil {
+		return "", false, err
+	}
+	prev, next := b.prev, b.next
+	if prev.CheckedAt == nil || prev.HeadCommit != o.RemoteHead || prev.Status == stackops.GitStatusError || prev.ReasonCode != "" {
 		return "", false, nil
 	}
-	err := s.repo.TouchGitChecked(ctx, prev.StackID, *next.CheckedAt)
+	if next.DeployedCommit != prev.DeployedCommit || next.DeployedTree != prev.DeployedTree || (b.deployed && sourceChanged(sg, b.dep)) {
+		return "", false, nil
+	}
+	err = s.repo.TouchGitChecked(ctx, prev.StackID, *next.CheckedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -281,6 +292,45 @@ func (s *Service) checkCheaply(ctx context.Context, o CheckOptions, sg stackops.
 		return OutcomeBehind, true, nil
 	}
 	return OutcomeSkipped, true, nil
+}
+
+// syncBase is what a check builds its answer on: the stored state as it is now, the revision that is deployed, and the
+// state's next value with the time of the check and the deployed commit and tree set from that revision. The caller
+// holds the stack's state lock.
+type syncBase struct {
+	prev, next stackops.GitState
+	dep        stackops.GitRevision
+	deployed   bool
+}
+
+func (s *Service) syncBase(ctx context.Context, stackID string) (syncBase, error) {
+	prev, err := s.repo.GitState(ctx, stackID)
+	if err != nil {
+		return syncBase{}, err
+	}
+	dep, deployed, err := s.repo.DeployedGit(ctx, stackID)
+	if err != nil {
+		return syncBase{}, err
+	}
+	now := s.now().UTC()
+	next := prev
+	next.CheckedAt = &now
+	next.DeployedCommit, next.DeployedTree = "", ""
+	if deployed {
+		next.DeployedCommit, next.DeployedTree = dep.Commit, dep.Tree
+	}
+	return syncBase{prev: prev, next: next, dep: dep, deployed: deployed}, nil
+}
+
+// failFetch is fail for a check whose repository could not be read: the state is taken under its lock now that the
+// fetch is over.
+func (s *Service) failFetch(ctx context.Context, st stackops.Stack, code ReasonCode, cause error) (Outcome, error) {
+	defer s.lockState(st.ID)()
+	b, err := s.syncBase(ctx, st.ID)
+	if err != nil {
+		return "", err
+	}
+	return s.fail(ctx, st, b.prev, b.next, code, cause)
 }
 
 // fail records a check that could not be made: the state goes to error with the reason, keeping the last answer about

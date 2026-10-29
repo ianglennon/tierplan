@@ -310,6 +310,7 @@ func (s *Service) pauseForOwner(ctx context.Context, st stackops.Stack, sg stack
 // problem, the commit is recorded as pending so it is not tried again, and the state notes the event for the bell
 // (D-19).
 func (s *Service) holdBack(ctx context.Context, st stackops.Stack, commit, detail string) {
+	defer s.lockState(st.ID)()
 	prev, err := s.repo.GitState(ctx, st.ID)
 	if err != nil {
 		s.log.Warn("could not read the git state to hold back a commit", "stack", st.ID, "error", err)
@@ -346,6 +347,7 @@ func (s *Service) pullFailed(ctx context.Context, st stackops.Stack, commit stri
 		return
 	}
 	code := reasonOf(err)
+	defer s.lockState(st.ID)()
 	prev, serr := s.repo.GitState(ctx, st.ID)
 	if serr != nil {
 		s.log.Warn("could not read the git state after a failed pull", "stack", st.ID, "error", serr)

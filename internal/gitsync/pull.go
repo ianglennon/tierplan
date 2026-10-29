@@ -119,6 +119,7 @@ func (s *Service) CommitsBetween(ctx context.Context, repoID, folder, from, to s
 // the stack against it. A state in error is left alone. A failure to write it is logged: the draft is refreshed and the
 // pull is done.
 func (s *Service) recordPulledHead(ctx context.Context, st stackops.Stack, sg stackops.StackGit, dep stackops.GitRevision, deployed bool, imp Import, touched int) {
+	defer s.lockState(st.ID)()
 	prev, err := s.repo.GitState(ctx, st.ID)
 	if err != nil || prev.Status == stackops.GitStatusError {
 		if err != nil {
