@@ -48,7 +48,9 @@ func newHostileMirror(t *testing.T, build func(h *hostileMirror) plumbing.Hash) 
 	return h
 }
 
-func (h *hostileMirror) store(t *testing.T, o interface{ Encode(plumbing.EncodedObject) error }) plumbing.Hash {
+func (h *hostileMirror) store(t *testing.T, o interface {
+	Encode(plumbing.EncodedObject) error
+}) plumbing.Hash {
 	t.Helper()
 	obj := h.st.Storer.NewEncodedObject()
 	if err := o.Encode(obj); err != nil {

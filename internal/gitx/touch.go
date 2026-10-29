@@ -154,7 +154,11 @@ func (q commitQueue) Less(i, j int) bool {
 	return q[i].Hash.String() < q[j].Hash.String()
 }
 func (q commitQueue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
-func (q *commitQueue) Push(x any)   { *q = append(*q, x.(*object.Commit)) }
+func (q *commitQueue) Push(x any) {
+	if c, ok := x.(*object.Commit); ok {
+		*q = append(*q, c)
+	}
+}
 func (q *commitQueue) Pop() any {
 	old := *q
 	c := old[len(old)-1]
