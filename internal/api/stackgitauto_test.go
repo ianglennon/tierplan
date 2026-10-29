@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/proto/testsupport"
@@ -492,5 +493,149 @@ func TestAutoDeployRevertedBellItem(t *testing.T) {
 		if items := a.autoBell(t, u); len(items) != 0 {
 			t.Errorf("%s was shown %+v, want nothing", name, items)
 		}
+	}
+}
+
+// ids are the ids of the items, in the order the bell lists them.
+func ids(items []autoBellItem) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.ID)
+	}
+	return out
+}
+
+func TestAutoDeployBellItems(t *testing.T) {
+	t.Parallel()
+	a := newAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	other := a.f.asRoleOn(t, "u-operator-2", a.env, "operator")
+	viewer := a.f.asRoleOn(t, "u-viewer", a.env, "viewer")
+	envAdmin := a.f.asRoleOn(t, "u-env-admin", a.env, "admin")
+	a.turnOn(t, operator)
+
+	// Nothing is wrong, so nobody is told anything.
+	for name, u := range map[string]credentialUser{"owner": operator, "environment admin": envAdmin} {
+		if items := a.autoBell(t, u); len(items) != 0 {
+			t.Fatalf("%s: items before anything happened = %+v, want none", name, items)
+		}
+	}
+
+	// A commit that asks for host access is held back for an Operator's automation.
+	head := a.commitCompose(t, gitBindCompose, "mount /etc")
+	a.checkNow(t, operator, a.stackID, a.ended)
+	for name, u := range map[string]credentialUser{"owner": operator, "environment admin": envAdmin, "instance admin": a.admin} {
+		items := a.autoBell(t, u)
+		if len(items) != 1 {
+			t.Errorf("%s: items = %v, want one skipped notice", name, ids(items))
+			continue
+		}
+		it := items[0]
+		if it.ID != "git_autodeploy_skipped" || it.Severity != "warning" || it.StackID != a.stackID || it.StackName != "web" ||
+			it.Commit != head[:7] || it.ReasonDetail == "" || it.Since == "" {
+			t.Errorf("%s: item = %+v, want web's commit %s held back with the reason", name, it, head[:7])
+		}
+	}
+	// T-09-100: someone else who can deploy, and a Viewer, are told nothing about another person's automation.
+	for name, u := range map[string]credentialUser{"another operator": other, "viewer": viewer} {
+		if items := a.autoBell(t, u); len(items) != 0 {
+			t.Errorf("%s was shown %v, want nothing", name, ids(items))
+		}
+	}
+
+	// A fix that deploys ends the wait, and the notice goes with it.
+	a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "no mount")
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("job = %+v, want the fix to deploy", job)
+	}
+	if items := a.autoBell(t, operator); len(items) != 0 {
+		t.Errorf("items after the fix deployed = %v, want none", ids(items))
+	}
+
+	// The owner loses the right to deploy (a Viewer still reads the environment): the automation pauses, and the owner
+	// and the Admins are told, apart from the stack's own alert.
+	if _, err := a.f.st.Write.Exec(`UPDATE role_assignments SET role_id = 'viewer' WHERE principal_id = ?`, a.userID(t, "u-operator")); err != nil {
+		t.Fatal(err)
+	}
+	a.commitCompose(t, "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n", "bump")
+	a.poll(t)
+	for name, u := range map[string]credentialUser{"owner": operator, "environment admin": envAdmin} {
+		items := a.autoBell(t, u)
+		if len(items) != 1 {
+			t.Errorf("%s: items = %v, want one paused notice", name, ids(items))
+			continue
+		}
+		it := items[0]
+		if it.ID != "git_autodeploy_paused" || it.ReasonCode != "owner" || it.StackID != a.stackID || it.Owner != "u-operator" || it.Since == "" {
+			t.Errorf("%s: item = %+v, want the pause for the owner, who is u-operator", name, it)
+		}
+	}
+	for name, u := range map[string]credentialUser{"another operator": other, "viewer": viewer} {
+		if items := a.autoBell(t, u); len(items) != 0 {
+			t.Errorf("%s was shown %v of a pause, want nothing", name, ids(items))
+		}
+	}
+
+	// A roll back pauses it too, with the revision it went back to; nobody owns it then, so only Admins are told.
+	if _, err := a.f.st.Write.Exec(`DELETE FROM owned_resources WHERE kind = ? AND resource_id = ?`, gitsync.KindGitAutoDeploy, a.stackID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.stackRepo().SetAutoDeploy(context.Background(), a.stackID, false, stackops.PausedRollback, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	items := a.autoBell(t, envAdmin)
+	if len(items) != 1 || items[0].ID != "git_autodeploy_paused" || items[0].ReasonCode != "rollback" || items[0].Revision != 1 || items[0].Owner != "" {
+		t.Errorf("environment admin: items = %+v, want the pause by a roll back to revision 1 with no owner", items)
+	}
+	if items := a.autoBell(t, operator); len(items) != 0 {
+		t.Errorf("the former owner was shown %v, want nothing once the automation has no owner", ids(items))
+	}
+
+	// Turned on again by a person, the pause and its notice are gone.
+	a.turnOn(t, a.admin)
+	if items := a.autoBell(t, envAdmin); len(items) != 0 {
+		t.Errorf("items after resuming = %v, want none", ids(items))
+	}
+}
+
+func TestAutoDeployKeepsUnchangedDigests(t *testing.T) {
+	t.Parallel()
+	a := newDeployedAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, operator)
+
+	dbDigest := dockertest.FakeDigestOf("docker.io/library/postgres:16")
+	webDigest := dockertest.FakeDigestOf("docker.io/library/nginx:1.28")
+	// The tag the database runs moves on the registry; nothing in the commit asks for it.
+	a.f.fake.SetDistributionDigest("docker.io/library/postgres:16", "sha256:"+strings.Repeat("c", 64))
+	looked := len(a.f.fake.DistributionRefs())
+
+	// The commit changes the text of the image of web only.
+	a.commitCompose(t, gitCompose("1.28"), "newer web")
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("job = %+v, want the deploy to finish", job)
+	}
+	for _, ref := range a.f.fake.DistributionRefs()[looked:] {
+		if strings.Contains(ref, "postgres") {
+			t.Errorf("the registry was asked about %s, an image the commit did not change", ref)
+		}
+	}
+
+	repo := a.stackRepo()
+	good, ok, err := repo.LatestGoodRevision(context.Background(), a.stackID)
+	if err != nil || !ok || good.SyncTrigger != stackops.SyncPoll {
+		t.Fatalf("newest good revision = %+v, %v, %v; want an automatic one", good, ok, err)
+	}
+	pins, err := repo.RevisionPins(context.Background(), good.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(pins["web_db"], "@"+dbDigest) {
+		t.Errorf("pin of db = %q, want it to keep the digest it runs (%s) although its tag moved", pins["web_db"], dbDigest)
+	}
+	if !strings.HasSuffix(pins["web_web"], "@"+webDigest) {
+		t.Errorf("pin of web = %q, want a fresh lookup of nginx:1.28 (%s)", pins["web_web"], webDigest)
 	}
 }
