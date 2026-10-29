@@ -1421,3 +1421,175 @@ describe("HealthBell git sync items", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 });
+
+// Auto-deploy items (plan 09-27, GIT-07, D-19, D-23, UI-SPEC "Bell"): a commit held back, drift that was put back, and a
+// pause. One stack reads in the singular; several of one kind in one environment collapse into one item with a count.
+
+const autoDeploy = (
+  id: "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused",
+  stackName: string,
+  extra: Record<string, unknown> = {},
+  envId = "e1",
+  envName = "Lab",
+) => ({
+  id,
+  severity: "warning",
+  envId,
+  envName,
+  stackId: `stack-${stackName}`,
+  stackName,
+  since: "2026-10-29T09:05:00Z",
+  ...extra,
+});
+
+describe("HealthBell auto-deploy items", () => {
+  beforeEach(() => {
+    me = READER;
+  });
+
+  it("tells a skipped auto-deploy with the reason and the commit, once, and links to the stack", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_skipped", "web", {
+        commit: "89abcde",
+        reasonDetail: "Commit 89abcde asks for host access.",
+      }),
+      // The stack is also in error because of it: one item says it all.
+      gitSync("web", { reasonCode: "auto_deploy_blocked", reasonDetail: "Waiting." }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Auto-deploy of web was skipped")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Commit 89abcde asks for host access. Commit 89abcde is waiting for a fix or a manual review.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("web can't sync with its repository")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/stack-web",
+    );
+  });
+
+  it("keeps the sync error of a stack whose auto-deploy was not skipped", async () => {
+    envItems = [autoDeploy("git_autodeploy_skipped", "web", { commit: "89abcde" }), gitSync("api")];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("api can't sync with its repository")).toBeTruthy();
+  });
+
+  it("tells drift that an auto-deploy put back, in the singular for one change, and opens the revision", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_reverted", "web", {
+        count: 1,
+        example: "web replicas 5 → 3",
+        revision: 7,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("web was auto-deployed and reverted drift")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "1 change made outside the stack was put back, for example web replicas 5 → 3.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open revision" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/stack-web/history?rev=7",
+    );
+  });
+
+  it("counts several changes", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_reverted", "web", {
+        count: 3,
+        example: "db created again",
+        revision: 2,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(
+      await screen.findByText(
+        "3 changes made outside the stack were put back, for example db created again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("tells a pause because the owner lost permission, and one after a roll back", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_paused", "web", { reasonCode: "owner", owner: "Ada" }),
+      autoDeploy(
+        "git_autodeploy_paused",
+        "api",
+        { reasonCode: "rollback", revision: 4 },
+        "e2",
+        "Edge",
+      ),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 2 items");
+    expect(await screen.findByText("Auto-deploy of web is paused")).toBeTruthy();
+    expect(screen.getByText("Ada no longer has permission to deploy here.")).toBeTruthy();
+    expect(screen.getByText("Auto-deploy of api is paused")).toBeTruthy();
+    expect(screen.getByText("Rolled back to #4.")).toBeTruthy();
+  });
+
+  it("says so when the person it ran for is gone", async () => {
+    envItems = [autoDeploy("git_autodeploy_paused", "web", { reasonCode: "owner" })];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(
+      await screen.findByText("The person who set it up no longer has permission to deploy here."),
+    ).toBeTruthy();
+  });
+
+  it("collapses several skipped stacks of one environment into one item that opens the list in error", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_skipped", "web", { commit: "1111111" }),
+      autoDeploy("git_autodeploy_skipped", "api", { commit: "2222222" }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("Auto-deploy was skipped for 2 stacks")).toBeTruthy();
+    expect(screen.queryByText("Auto-deploy of web was skipped")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open stacks" }).getAttribute("href")).toBe(
+      "/env/e1/stacks?status=sync-error",
+    );
+  });
+
+  it("collapses paused and reverted stacks by kind and keeps the kinds and environments apart", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_paused", "web", { reasonCode: "owner", owner: "Ada" }),
+      autoDeploy("git_autodeploy_paused", "api", { reasonCode: "owner", owner: "Ada" }),
+      autoDeploy(
+        "git_autodeploy_paused",
+        "db",
+        { reasonCode: "owner", owner: "Ada" },
+        "e2",
+        "Edge",
+      ),
+      autoDeploy("git_autodeploy_reverted", "web", { count: 2, example: "x", revision: 1 }),
+      autoDeploy("git_autodeploy_reverted", "api", { count: 1, example: "y", revision: 1 }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 3 items");
+    expect(await screen.findByText("Auto-deploy is paused for 2 stacks")).toBeTruthy();
+    expect(screen.getByText("Auto-deploy of db is paused")).toBeTruthy();
+    expect(screen.getByText("2 stacks were auto-deployed and reverted drift")).toBeTruthy();
+  });
+
+  it("draws a hostile stack name and example as text", async () => {
+    envItems = [
+      autoDeploy("git_autodeploy_reverted", "<b>web</b>", {
+        count: 1,
+        example: "<img src=x>",
+        revision: 1,
+      }),
+    ];
+    renderWarnings();
+    await openBell("Warnings, 1 item");
+    expect(await screen.findByText("<b>web</b> was auto-deployed and reverted drift")).toBeTruthy();
+    expect(document.querySelector("b")).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+  });
+});

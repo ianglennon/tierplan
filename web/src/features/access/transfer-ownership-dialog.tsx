@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { ownedName } from "@/features/access/owned-name";
 import { ownerLabel } from "@/features/access/owner-label";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -66,7 +67,7 @@ function TransferForm({ item, onClose, onDone, onStale, onPendingChange }: Trans
       const result = await transferOwned(item.kind, item.resourceId, chosen.id);
       if (result.kind === "ok") {
         toastSuccess(
-          t("owned.transfer.done", { automation: item.name, username: chosen.username }),
+          t("owned.transfer.done", { automation: ownedName(t, item), username: chosen.username }),
         );
         onDone(result.item);
         return;
@@ -79,10 +80,10 @@ function TransferForm({ item, onClose, onDone, onStale, onPendingChange }: Trans
           queryKey: eligibleOwnersQuery(item.kind, item.resourceId).queryKey,
         });
       } else if (result.kind === "not_found") {
-        setError(t("owned.transfer.errors.gone", { automation: item.name }));
+        setError(t("owned.transfer.errors.gone", { automation: ownedName(t, item) }));
         onStale();
       } else {
-        setError(t("owned.transfer.errors.generic", { automation: item.name }));
+        setError(t("owned.transfer.errors.generic", { automation: ownedName(t, item) }));
       }
     } finally {
       inFlight.current = false;
@@ -96,7 +97,7 @@ function TransferForm({ item, onClose, onDone, onStale, onPendingChange }: Trans
       <DialogHeader>
         {/* A long name wraps rather than running off the dialog. */}
         <DialogTitle className="break-words">
-          {t("owned.transfer.title", { automation: item.name })}
+          {t("owned.transfer.title", { automation: ownedName(t, item) })}
         </DialogTitle>
         <DialogDescription className="break-words">{t("owned.transfer.body")}</DialogDescription>
       </DialogHeader>

@@ -104,6 +104,36 @@ describe("the Owned automations card", () => {
     expect(within(card).getByText("Webhook")).toBeTruthy();
   });
 
+  it("names an auto-deploy and a webhook after their stack and environment, with the same Transfer… control", async () => {
+    items = [
+      owned({
+        kind: "git_autodeploy",
+        label: "Git auto-deploy",
+        resourceId: "s1",
+        name: "web",
+        envName: "Alpha",
+      }),
+      owned({
+        kind: "git_webhook",
+        label: "Git webhook",
+        resourceId: "s2",
+        name: "api",
+        envName: "Beta",
+        state: "paused_lacks_permission",
+      }),
+    ];
+    renderCard();
+    const card = await screen.findByRole("region", { name: "Owned automations" });
+    expect(within(card).getByText("Auto-deploy of web on Alpha")).toBeTruthy();
+    expect(within(card).getByText("Webhook of api on Beta")).toBeTruthy();
+    expect(
+      within(card).getByRole("button", { name: "Transfer Auto-deploy of web on Alpha…" }),
+    ).toBeTruthy();
+    expect(
+      within(card).getByRole("button", { name: "Transfer Webhook of api on Beta…" }),
+    ).toBeTruthy();
+  });
+
   it("is not on the page while the user owns nothing, nor while it loads", async () => {
     const { container } = renderCard();
     expect(container.querySelector("section")).toBeNull();

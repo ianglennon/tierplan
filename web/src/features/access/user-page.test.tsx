@@ -979,6 +979,27 @@ describe("the owned automations in the Disable and Delete dialogs (D-22)", () =>
     fireEvent.keyDown(await screen.findByRole("option", { name: option }), { key: "Enter" });
   }
 
+  it("names an auto-deploy and a webhook after their stack and environment", async () => {
+    owned = [
+      ownedBody({
+        kind: "git_autodeploy",
+        label: "Git auto-deploy",
+        resourceId: "s1",
+        name: "web",
+      }),
+      ownedBody({ kind: "git_webhook", label: "Git webhook", resourceId: "s2", name: "api" }),
+    ];
+    eligible = [BOB];
+    renderAt(PAGE);
+    const dialog = await openDelete();
+    const list = await within(dialog).findByRole("list", { name: "Automations alice owns" });
+    expect(within(list).getByText("Auto-deploy of web on Alpha")).toBeTruthy();
+    expect(within(list).getByText("Webhook of api on Alpha")).toBeTruthy();
+    expect(
+      await within(dialog).findByRole("combobox", { name: "Owner of Auto-deploy of web on Alpha" }),
+    ).toBeTruthy();
+  });
+
   it("lists each automation with an Owner select that starts on Leave paused, and sends only the hand-overs that were chosen", async () => {
     owned = [ownedBody(), ownedBody({ resourceId: "r2", name: "Hook r2", label: "Webhook" })];
     eligible = [BOB, DANA];

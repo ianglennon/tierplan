@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ownedName } from "@/features/access/owned-name";
 import { TransferOwnershipDialog } from "@/features/access/transfer-ownership-dialog";
 import { Truncated } from "@/features/access/truncated";
 import { SettingsCard } from "@/features/environments/settings-card";
@@ -117,7 +118,7 @@ export function OwnedResourcesCard({ userId, username }: OwnedResourcesCardProps
               {items.map((item) => (
                 <TableRow key={`${item.kind}/${item.resourceId}`} className={ROW}>
                   <TableCell className={cn(CELL, "font-medium")}>
-                    <Truncated text={item.name} />
+                    <Truncated text={ownedName(t, item)} />
                   </TableCell>
                   <TableCell className={CELL}>
                     <Truncated text={item.label} />
@@ -134,7 +135,7 @@ export function OwnedResourcesCard({ userId, username }: OwnedResourcesCardProps
                       variant="outline"
                       size="sm"
                       className="max-md:h-11"
-                      aria-label={t("owned.card.transferLabel", { automation: item.name })}
+                      aria-label={t("owned.card.transferLabel", { automation: ownedName(t, item) })}
                       onClick={() => setTransferring(item)}
                     >
                       {t("owned.card.transfer")}

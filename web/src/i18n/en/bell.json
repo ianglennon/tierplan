@@ -55,6 +55,42 @@
         "manyTitle_other": "{{count}} stacks can't sync with their repositories",
         "manyBody": "The last good versions on {{env}} are still running.",
         "manyOpen": "Open stacks"
+      },
+      "autoDeploySkipped": {
+        "title": "Auto-deploy of {{name}} was skipped",
+        "body": "{{reason}} Commit {{commit}} is waiting for a fix or a manual review.",
+        "open": "Open stack"
+      },
+      "autoDeployReverted": {
+        "title": "{{name}} was auto-deployed and reverted drift",
+        "body_one": "{{count}} change made outside the stack was put back, for example {{example}}.",
+        "body_other": "{{count}} changes made outside the stack were put back, for example {{example}}.",
+        "open": "Open revision"
+      },
+      "autoDeployPaused": {
+        "title": "Auto-deploy of {{name}} is paused",
+        "rollback": "Rolled back to #{{revision}}.",
+        "owner": "{{user}} no longer has permission to deploy here.",
+        "ownerGone": "The person who set it up no longer has permission to deploy here.",
+        "open": "Open stack"
+      },
+      "autoDeployMany": {
+        "git_autodeploy_skipped": {
+          "title_one": "Auto-deploy was skipped for {{count}} stack",
+          "title_other": "Auto-deploy was skipped for {{count}} stacks",
+          "body": "Commits on {{env}} are waiting for a fix or a manual review."
+        },
+        "git_autodeploy_reverted": {
+          "title_one": "{{count}} stack was auto-deployed and reverted drift",
+          "title_other": "{{count}} stacks were auto-deployed and reverted drift",
+          "body": "Changes made outside the stacks on {{env}} were put back."
+        },
+        "git_autodeploy_paused": {
+          "title_one": "Auto-deploy is paused for {{count}} stack",
+          "title_other": "Auto-deploy is paused for {{count}} stacks",
+          "body": "On {{env}}. Open each stack to resume or transfer it."
+        },
+        "open": "Open stacks"
       }
     },
     "refusalBurst": {
