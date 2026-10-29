@@ -104,20 +104,13 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	// The environment is the repository's .env under the table (D-07): a stack made from a repository
 	// takes its defaults from the committed .env, and a value in the table beats it. A .env that cannot
 	// be read refuses the load, so a deploy never goes ahead with half of its defaults.
-	repoEnv, err := RepoEnv(in.Copy)
+	interp, err := InterpolationEnv(in.Copy)
 	if err != nil {
 		return nil, err
 	}
-	env := make(types.Mapping, len(in.Copy.Vars)+len(repoEnv))
-	for name, value := range repoEnv {
-		if value != "" {
-			env[name] = value
-		}
-	}
-	for _, v := range in.Copy.Vars {
-		if v.Value != "" {
-			env[v.Name] = v.Value
-		}
+	env := make(types.Mapping, len(interp))
+	for name, value := range interp {
+		env[name] = value
 	}
 	unset := &unsetNames{}
 	deadline := in.Deadline

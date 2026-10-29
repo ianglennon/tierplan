@@ -73,12 +73,25 @@ func (d Deps) Policy(ctx context.Context, caller Caller, envID string, copy stac
 	var res PolicyResult
 	kinds := map[string]bool{}
 	flagged := map[string]bool{}
+	// The values are the ones a deploy interpolates with, the repository's .env under the table
+	// (stacks.InterpolationEnv, as in stacks.Load). A .env that cannot be read is refused, never judged
+	// on the table alone.
+	env, err := stacks.InterpolationEnv(copy)
+	if err != nil {
+		res.Refused = true
+		res.Problems = append(res.Problems, stacks.Problem{
+			Severity: stacks.SeverityError, Code: CodePolicyUnreadable, Message: "The " + stacks.DotEnvFile + " file can't be read for the policy check.",
+			File: stacks.DotEnvFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		})
+		return res, nil
+	}
+	lookup := mapLookup(env)
 	// Each compose file is judged on its own, and what any of them asks for counts: the rules read the raw
 	// YAML of a file, as they read every document of a file with several, so a setting split into an override
 	// file is seen where it is written. A setting an override file turns off again is still refused (the
 	// rules fail closed); the merge is never needed to find one.
 	for _, cf := range contents {
-		dec, err := d.Checker.CheckComposeDeployResolved(ctx, caller.Principal, envID, cf.Content, tableLookup(copy.Vars))
+		dec, err := d.Checker.CheckComposeDeployResolved(ctx, caller.Principal, envID, cf.Content, lookup)
 		if err != nil {
 			return PolicyResult{}, err
 		}
@@ -166,8 +179,22 @@ func (d Deps) HostAccess(copy stacks.WorkingCopy, plan convert.Plan) (PolicyResu
 		res.Entries = append(res.Entries, PolicyEntry{Text: m.Mask(text), File: file, Line: line})
 	}
 	flagged := map[string]bool{}
+	// The values a deploy interpolates with (stacks.InterpolationEnv): the repository's .env under the table.
+	// A .env that cannot be read is listed, as a compose file that cannot be read is.
+	env, err := stacks.InterpolationEnv(copy)
+	if err != nil {
+		list("a "+stacks.DotEnvFile+" file that can't be read for the policy check", stacks.DotEnvFile, 1)
+		kinds[KindUnresolvedValue] = true
+		for _, k := range kindOrder {
+			if kinds[k] {
+				res.Kinds = append(res.Kinds, k)
+			}
+		}
+		return res, nil
+	}
+	lookup := mapLookup(env)
 	for _, cf := range contents {
-		findings, err := compose.CheckResolved(cf.Content, tableLookup(copy.Vars))
+		findings, err := compose.CheckResolved(cf.Content, lookup)
 		if err != nil {
 			list("a compose file that can't be read for the policy check", cf.Path, 1)
 			kinds[KindUnresolvedValue] = true
@@ -235,17 +262,10 @@ func fileOfPos(pos lint.Pos, fallback string) string {
 	return fallback
 }
 
-// tableLookup is the lookup of the stack's variables a deploy interpolates with: a variable with a
-// blank value has no value, as in stacks.Load.
-func tableLookup(vars []stacks.Var) func(string) (string, bool) {
-	table := make(map[string]string, len(vars))
-	for _, v := range vars {
-		if v.Value != "" {
-			table[v.Name] = v.Value
-		}
-	}
+// mapLookup is the lookup of an interpolation environment (stacks.InterpolationEnv).
+func mapLookup(env map[string]string) func(string) (string, bool) {
 	return func(name string) (string, bool) {
-		v, ok := table[name]
+		v, ok := env[name]
 		return v, ok
 	}
 }

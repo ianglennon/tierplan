@@ -191,3 +191,27 @@ func RepoEnv(c WorkingCopy) (map[string]string, error) {
 	}
 	return vars, nil
 }
+
+// InterpolationEnv is the environment a compose file of the working copy is interpolated with (D-07): the
+// repository's .env (RepoEnv) under the table, where a value in the table beats the .env and a blank value in
+// either is no value. Load interpolates with it, and so must anything that judges the values a deploy would
+// use (the host-access policy), so that they never disagree. A .env that cannot be read is an error, never a
+// table-only environment.
+func InterpolationEnv(c WorkingCopy) (map[string]string, error) {
+	repoEnv, err := RepoEnv(c)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string, len(c.Vars)+len(repoEnv))
+	for name, value := range repoEnv {
+		if value != "" {
+			env[name] = value
+		}
+	}
+	for _, v := range c.Vars {
+		if v.Value != "" {
+			env[v.Name] = v.Value
+		}
+	}
+	return env, nil
+}
