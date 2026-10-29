@@ -74,10 +74,7 @@ func (d Deps) PrepareRollback(ctx context.Context, st Stack, target Snapshot, pi
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareLoad, err)
 	}
-	files, vars := stacks.NewFileSet(target.Copy.Files), make(map[string]string, len(target.Copy.Vars))
-	for _, v := range target.Copy.Vars {
-		vars[v.Name] = v.Value
-	}
+	files, vars := stacks.NewFileSet(target.Copy.Files), stacks.ObjectVars(target.Copy)
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
 		return RollbackPlan{}, refuse(PrepareObjects, err)

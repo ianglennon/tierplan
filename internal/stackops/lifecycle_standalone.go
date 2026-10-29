@@ -63,7 +63,7 @@ func (d Deps) standaloneProject(ctx context.Context, st Stack, store LifecycleSt
 		return nil, masker, err
 	}
 	project := loaded.Project
-	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, stacks.NewFileSet(rev.Copy.Files), varTable(rev.Copy.Vars))
+	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, stacks.NewFileSet(rev.Copy.Files), stacks.ObjectVars(rev.Copy))
 	if err != nil {
 		return nil, masker, err
 	}

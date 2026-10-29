@@ -55,7 +55,7 @@ func (d Deps) reviewAdoptPlan(ctx context.Context, in ReviewInput, rv *Review) (
 		return convert.Plan{}, d.reviewAdoptStandalone(ctx, in, loaded, rv)
 	}
 
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
 		return convert.Plan{}, &RebuildError{Reason: ObjectErrorDetail(err)}
@@ -117,7 +117,7 @@ func (d Deps) reviewAdoptPlan(ctx context.Context, in ReviewInput, rv *Review) (
 // person wrote: it is ownership-only.
 func (d Deps) reviewAdoptStandalone(ctx context.Context, in ReviewInput, loaded *stacks.Loaded, rv *Review) error {
 	project := loaded.Project
-	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars))
+	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy))
 	if err != nil {
 		return &RebuildError{Reason: ObjectErrorDetail(err)}
 	}

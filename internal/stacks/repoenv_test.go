@@ -238,3 +238,30 @@ func TestRepoEnvIsNotReportedAsUnread(t *testing.T) {
 		}
 	}
 }
+
+// A secret or config that reads `environment: NAME` is resolved from the table over the repository's .env, as
+// the compose files are interpolated, so a check, a review and a deploy agree (WR-C04).
+func TestObjectVarsLayersTheRepoEnvUnderTheTable(t *testing.T) {
+	t.Parallel()
+	const dotenv = "FROM_ENV=env-value\nBOTH=env-both\nBLANK_BOTH=\nBLANK_TABLE=env-fills\n"
+	vars := []stacks.Var{
+		{Name: "BOTH", Value: "table-both"}, {Name: "BLANK_BOTH"}, {Name: "BLANK_TABLE"}, {Name: "TABLE_ONLY", Value: "t"},
+	}
+	got := stacks.ObjectVars(repoCopy(stacks.OriginRepo, dotenv, vars...))
+	want := map[string]string{
+		"FROM_ENV": "env-value", "BOTH": "table-both", "BLANK_BOTH": "", "BLANK_TABLE": "env-fills", "TABLE_ONLY": "t",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ObjectVars = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if g, ok := got[k]; !ok || g != v {
+			t.Errorf("ObjectVars[%s] = %q (%v), want %q", k, g, ok, v)
+		}
+	}
+
+	// An inline or overlay .env supplies nothing.
+	if got := stacks.ObjectVars(repoCopy(stacks.OriginInline, dotenv)); len(got) != 0 {
+		t.Errorf("an inline .env supplied %v", got)
+	}
+}

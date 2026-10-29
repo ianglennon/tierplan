@@ -204,7 +204,7 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		return fail(ItemCheck, CodeStackInvalid, "")
 	}
 	project := checked.Loaded.Project
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, files, vars)
 	if err != nil {
 		var oe *stacks.ObjectError
