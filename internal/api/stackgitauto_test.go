@@ -720,3 +720,56 @@ func TestAutoDeployKeepsUnchangedDigests(t *testing.T) {
 		t.Errorf("pin of web = %q, want a fresh lookup of nginx:1.28 (%s)", pins["web_web"], webDigest)
 	}
 }
+
+// TestCheckNowByAViewerDoesNotRetryAHeldBackCommit: a commit that auto-deploy held back is tried once more by "Check now"
+// of someone who can deploy, and by nobody else (WR-D03).
+func TestCheckNowByAViewerDoesNotRetryAHeldBackCommit(t *testing.T) {
+	t.Parallel()
+	a := newAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	viewer := a.f.asRoleOn(t, "u-viewer", a.env, "viewer")
+	a.turnOn(t, operator)
+	head := a.commitCompose(t, gitBindCompose, "mount /etc")
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if got := a.readGit(t, a.admin, a.stackID); got.ReasonCode != "auto_deploy_blocked" {
+		t.Fatalf("git = %+v, want the commit held back", got)
+	}
+
+	// The cause goes away: the owner now holds the role a bind mount needs.
+	if _, err := a.f.st.Write.Exec(`UPDATE role_assignments SET role_id = 'admin' WHERE id = ?`, "ra-u-operator-"+a.env); err != nil {
+		t.Fatal(err)
+	}
+	a.checkNow(t, viewer, a.stackID, a.ended)
+	s, err := a.stackRepo().GitState(context.Background(), a.stackID)
+	if err != nil || s.PendingCommit != head || s.DeployedCommit == head {
+		t.Fatalf("after a Viewer's check: state %+v, %v; want the commit still held back and not deployed", s, err)
+	}
+	if revs := a.f.revisions(t, a.stackID); len(revs) != 1 {
+		t.Fatalf("revisions = %+v, a Viewer's check must start no deploy", revs)
+	}
+
+	a.checkNow(t, operator, a.stackID, a.ended)
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("job = %+v, want the deploy an owner who can deploy asked for", job)
+	}
+	if got := a.readGit(t, a.admin, a.stackID); got.Status != "in_sync" || got.DeployedSha != head {
+		t.Errorf("git = %+v, want in sync at %s", got, head)
+	}
+}
+
+// TestCheckNowIsRateLimitedPerUser: "Check now" starts a fetch with the repository's credential, so one user may start
+// only so many a minute (WR-D03).
+func TestCheckNowIsRateLimitedPerUser(t *testing.T) {
+	t.Parallel()
+	g, stackID, ended := newStackGitFix(t)
+	viewer := g.f.asRoleOn(t, "u-viewer", g.env, "viewer")
+	for i := 1; i <= 12; i++ {
+		g.checkNow(t, viewer, stackID, ended)
+	}
+	rec := g.f.credCall(t, viewer, http.MethodPost, g.gitRoute(stackID)+"/check", "")
+	if rec.Code != http.StatusTooManyRequests || problemType(t, rec) != "rate_limited" {
+		t.Errorf("13th check in a minute: %d %s, want 429 rate_limited", rec.Code, rec.Body)
+	}
+	// Another user has a budget of their own.
+	g.checkNow(t, g.admin, stackID, ended)
+}

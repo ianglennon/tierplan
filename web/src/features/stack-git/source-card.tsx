@@ -40,7 +40,7 @@ interface SourceCardProps {
 export function SourceCard({ envId, stackId, stackName, git }: SourceCardProps) {
   const t = useT();
   const headingId = useId();
-  const needs = useNeeds("stacks.deploy", envId);
+  const needs = useNeeds("git.manage", envId);
   const [editing, setEditing] = useState(false);
 
   return (

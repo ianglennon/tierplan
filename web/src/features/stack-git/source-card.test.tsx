@@ -181,6 +181,15 @@ describe("SourceCard", () => {
     expect(screen.queryByRole("combobox", { name: "Branch" })).toBeNull();
   });
 
+  it("is off for an Operator too: choosing the repository takes an Admin of the environment", async () => {
+    world.me = makeMe({ envs: { [ENV]: "operator" } });
+    mount();
+    const button = await change();
+    await waitFor(() => expect(button.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(button);
+    expect(screen.queryByRole("combobox", { name: "Branch" })).toBeNull();
+  });
+
   it("starts from what the stack follows and saves the new ref as the draft, then opens the Review", async () => {
     mount();
     await edit();

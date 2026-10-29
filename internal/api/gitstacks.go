@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -297,6 +298,8 @@ type checkLimiter struct {
 	mu    sync.Mutex
 	by    map[string]*checkEntry
 	swept time.Time
+	// perMinute is the rate; zero is checksPerMinute.
+	perMinute int
 }
 
 type checkEntry struct {
@@ -320,7 +323,8 @@ func (l *checkLimiter) allow(user string, now time.Time) bool {
 	}
 	e, ok := l.by[user]
 	if !ok {
-		e = &checkEntry{lim: rate.NewLimiter(rate.Every(time.Minute/checksPerMinute), checksPerMinute)}
+		n := cmp.Or(l.perMinute, checksPerMinute)
+		e = &checkEntry{lim: rate.NewLimiter(rate.Every(time.Minute/time.Duration(n)), n)}
 		l.by[user] = e
 	}
 	e.seen = now

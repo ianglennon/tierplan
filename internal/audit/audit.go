@@ -229,6 +229,13 @@ const (
 	// An Admin of the environment detached a git stack from its repository, so it is an inline stack again (D-25). The entry
 	// names the stack, the number of the revision whose files became the draft and its commit, never a path or content.
 	ActionGitStackDetached = "git.stack_detached"
+	// A person pulled the head of a git stack's ref into its draft. The entry names the stack, the repository, the ref,
+	// the folder, the commit that was read and the draft's version; it deploys nothing.
+	ActionGitPulled = "git.pulled"
+	// An Admin of the environment pointed a git stack at another repository, ref, folder or compose files, as a pending
+	// source for review. The entry names the stack, the new repository, ref kind, ref, folder and commit and the ones it
+	// replaces; the next good deploy of the draft makes it the stack's source.
+	ActionGitSourceChanged = "git.source_changed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

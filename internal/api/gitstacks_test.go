@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/gitx/gittest"
@@ -33,6 +34,9 @@ type gitStackFix struct {
 	repo  *gittest.Repo
 	sha   string
 	id    string
+	// srcOnce and srcAdminC hold the Admin of the environment who changes the source of a stack (srcAdmin).
+	srcOnce   sync.Once
+	srcAdminC *roleCaller
 }
 
 func newGitStackFix(t *testing.T) *gitStackFix {
