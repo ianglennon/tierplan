@@ -648,3 +648,51 @@ func TestPollerBlockedAutoDeployKeepsItsInterval(t *testing.T) {
 		t.Errorf("state = %+v, want the commit still held back", s)
 	}
 }
+
+// A repository that answered, but whose head or ref a person must fix, is polled at the stack's interval and not backed
+// off like a server that is down: the push that fixes it is noticed at the next interval, not up to an hour late
+// (review WR-B04).
+func TestPollerAnsweredRepositoryKeepsItsInterval(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		spoil  func(t *testing.T, f *pollFixture)
+		reason gitsync.ReasonCode
+	}{
+		"ref gone": {
+			spoil:  func(t *testing.T, f *pollFixture) { f.repo.DeleteRef(t, "refs/heads/main") },
+			reason: gitsync.ReasonRefGone,
+		},
+		"head fails the checks": {
+			spoil: func(t *testing.T, f *pollFixture) {
+				f.repo.Commit(t, map[string]string{"stacks/web/compose.yaml": "services:\n  web:\n    image: nginx:${NEWTAG}\n    env_file: web.env\n"}, "needs NEWTAG")
+			},
+			reason: gitsync.ReasonChecksFailed,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newPollFixture(t, nil)
+			f.checkNow(t, f.stackID)
+			tc.spoil(t, f)
+			interval := 5 * time.Minute
+
+			f.start(t, gitsync.PollerDeps{})
+			wait := 15 * time.Second
+			for i := range 5 {
+				f.pc.Tick(t, wait)
+				if got := f.awaitChecked(t, 1); got[0].outcome != string(gitsync.OutcomeError) {
+					t.Fatalf("check %d = %+v, want error", i+1, got)
+				}
+				s := f.state(t)
+				if s.ReasonCode != string(tc.reason) {
+					t.Fatalf("check %d: state = %+v, want %s", i+1, s, tc.reason)
+				}
+				if s.NextCheckAt == nil || s.NextCheckAt.Sub(f.pc.Now()) != interval {
+					t.Fatalf("after check %d the next check is at %v (now %v), want in %v", i+1, s.NextCheckAt, f.pc.Now(), interval)
+				}
+				wait = interval
+			}
+		})
+	}
+}

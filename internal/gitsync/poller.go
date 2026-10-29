@@ -246,7 +246,7 @@ func (p *poller) readRepo(ctx context.Context, g *pollGroup) (last *polledCheck)
 			// The run of failures was counted by the check; read what it stored.
 			if st, serr := p.s.repo.GitState(ctx, ps.StackID); serr == nil {
 				failures = st.ConsecutiveFailures
-				if autoDeployReason(ReasonCode(st.ReasonCode)) {
+				if repositoryAnswered(ReasonCode(st.ReasonCode)) {
 					// The repository answered; what waits is a person. A fix pushed meanwhile is deployed at the next
 					// interval and not an hour later.
 					failures = 0
