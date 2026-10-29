@@ -221,6 +221,10 @@ const (
 	// (D-20). The actor is the system principal that ran it; the entry names the stack, the commit, what started it (poll
 	// or webhook) and the owner.
 	ActionGitAutoDeployed = "git.autodeployed"
+	// A roll back paused a git stack's automatic deploys, so the repository head is not deployed over the restored
+	// revision (D-22). The actor is the person who rolled back; the entry names the stack, the reason (rollback) and the
+	// number of the revision restored.
+	ActionGitAutoDeployPaused = "git.autodeploy_paused"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

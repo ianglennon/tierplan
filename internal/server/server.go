@@ -773,7 +773,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
 	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{

@@ -33,7 +33,8 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 		return
 	}
 	src := rev.Git.Source
-	if sourceChanged(sg, rev.Git) || !slices.Equal(sg.ComposeFiles, src.ComposeFiles) {
+	rolledBack := rev.Origin == stackops.OriginRollback
+	if !rolledBack && (sourceChanged(sg, rev.Git) || !slices.Equal(sg.ComposeFiles, src.ComposeFiles)) {
 		if err := s.repo.SetAppliedSource(ctx, stackID, src); err != nil {
 			s.log.Warn("could not make the git settings follow the deployed revision", "stack", stackID, "error", err)
 		}
@@ -52,6 +53,11 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 	// A good deploy ends whatever a held back commit was waiting for (D-19).
 	next.PendingCommit = ""
 	switch {
+	case rolledBack && sourceChanged(sg, rev.Git):
+		// The restored revision came from another folder, ref or repository than the stack follows, so the two trees
+		// are not comparable and no commits are counted; the head waits for review.
+		next.Status, next.Behind = stackops.GitStatusBehind, 1
+		next.ReasonCode, next.ReasonDetail = string(ReasonSourceChanged), detailOf(ReasonSourceChanged, nil)
 	case prev.HeadCommit == "" || prev.Status == stackops.GitStatusError || prev.HeadCommit == rev.Git.Commit || prev.HeadTree == rev.Git.Tree:
 		next.HeadCommit, next.HeadTree = rev.Git.Commit, rev.Git.Tree
 		next.Status, next.Behind = stackops.GitStatusInSync, 0

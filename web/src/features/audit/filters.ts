@@ -161,6 +161,7 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.autodeploy_enabled",
   "git.autodeploy_disabled",
   "git.autodeployed",
+  "git.autodeploy_paused",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -358,7 +359,12 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
       sha: details.commit.slice(0, 7),
     });
   }
-  if ((key === "git.autodeploy_enabled" || key === "git.autodeploy_disabled") && details?.stack) {
+  if (
+    (key === "git.autodeploy_enabled" ||
+      key === "git.autodeploy_disabled" ||
+      key === "git.autodeploy_paused") &&
+    details?.stack
+  ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
   }
   // A git connection change names the credential or repository it was about.

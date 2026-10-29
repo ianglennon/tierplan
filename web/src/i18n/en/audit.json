@@ -234,7 +234,9 @@
         "autodeploy_disabled": "Turned off auto-deploy",
         "autodeploy_disabled_named": "Turned off auto-deploy for {{name}}",
         "autodeployed": "Auto-deployed a git stack",
-        "autodeployed_named": "Auto-deployed {{name}} at {{sha}}"
+        "autodeployed_named": "Auto-deployed {{name}} at {{sha}}",
+        "autodeploy_paused": "Paused auto-deploy after a roll back",
+        "autodeploy_paused_named": "Paused auto-deploy of {{name}} after a roll back"
       },
       "logs": {
         "viewed": "Container logs viewed",

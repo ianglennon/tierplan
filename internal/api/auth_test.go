@@ -409,7 +409,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
-			GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitDeployFailed: gitDeps.Sync.DeployFailed,
+			GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.

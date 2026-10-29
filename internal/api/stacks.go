@@ -152,6 +152,10 @@ type StacksDeps struct {
 	// GitDeployed, when set, is told that a revision of a stack ended good, so that a git stack's settings and sync state
 	// follow what was deployed (gitsync.Service.Deployed). It does nothing for a revision not made from a repository.
 	GitDeployed func(ctx context.Context, stackID string, rev stackops.Snapshot)
+	// GitRolledBack, when set, is told that a person rolled a stack back and the revision of the roll back exists, so that
+	// a git stack whose automatic deploys are on pauses them and the repository head is not deployed over the restored
+	// revision (gitsync.Service.RolledBack). It does nothing for a stack that is not from a repository.
+	GitRolledBack func(ctx context.Context, st stackops.Stack, rev stackops.Snapshot, actor audit.Actor)
 	// GitDeployFailed, when set, is told that the deploy of a revision ended failed, with the service that failed, so
 	// that a git stack whose revision an automatic deploy made goes to error (gitsync.Service.DeployFailed). It does
 	// nothing for a revision a person deployed.

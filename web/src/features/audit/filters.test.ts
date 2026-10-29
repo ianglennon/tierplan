@@ -197,7 +197,11 @@ describe("actionLabel", () => {
   });
 
   it("labels a git stack's auto-deploy with the stack, and an automatic deploy with its commit", () => {
-    for (const key of ["git.autodeploy_enabled", "git.autodeploy_disabled"] as const) {
+    for (const key of [
+      "git.autodeploy_enabled",
+      "git.autodeploy_disabled",
+      "git.autodeploy_paused",
+    ] as const) {
       expect(KNOWN_ACTIONS).toContain(key);
       expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
       expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);

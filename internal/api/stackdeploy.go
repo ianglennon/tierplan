@@ -828,6 +828,11 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
+	// A roll back stops the repository head from being deployed over what it restores: the stack's automatic deploys
+	// pause now, in the same action (D-22). A restore puts back the revision that already runs, so it pauses nothing.
+	if d.GitRolledBack != nil && mode == deployModeRollback {
+		d.GitRolledBack(context.WithoutCancel(ctx), st, rev, p.AuditActor())
+	}
 	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: masker}
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
