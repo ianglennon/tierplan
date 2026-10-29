@@ -7,11 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
 import type { StackGit } from "@/api/stack-git";
+import type { StackRevision } from "@/api/stack-history";
 import type { StackDetail } from "@/api/stacks";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
+import { JobsIndicator } from "@/features/jobs/jobs-indicator";
 import { DeployConsole } from "@/features/stack-deploy/deploy-console";
+import { AutoDeployPausedAlert } from "@/features/stack-git/auto-deploy-paused-alert";
 import { GitTab } from "@/features/stack-git/git-tab";
+import { RevisionTable } from "@/features/stack-history/revision-table";
+import { LastDeployedCell } from "@/features/stacks/stack-columns";
 import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
@@ -74,6 +79,8 @@ function makeStack(git: StackGit): StackDetail {
 }
 
 let git: StackGit;
+// The stack jobs the jobs indicator lists.
+let stackJobs: Record<string, unknown>[];
 let role: "viewer" | "operator" | "admin";
 let instanceAdmin: boolean;
 // The bodies the auto-deploy route was sent, and what it answers (a status other than 200 is a refusal).
@@ -88,6 +95,7 @@ beforeEach(() => {
   role = "operator";
   instanceAdmin = false;
   puts = [];
+  stackJobs = [];
   putStatus = 200;
   jobExtra = {};
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
@@ -109,6 +117,8 @@ beforeEach(() => {
       if (path === "/api/environments") {
         return Response.json({ items: [{ id: ENV, name: "Homelab" }] });
       }
+      if (path === "/api/stack-jobs") return Response.json({ jobs: stackJobs });
+      if (path === "/api/pulls") return Response.json({ pulls: [] });
       if (path === `/api/env/${ENV}/stacks/s1/git/auto-deploy` && req.method === "PUT") {
         const body = (await req.json()) as { enabled: boolean };
         puts.push(body);
@@ -327,5 +337,265 @@ describe("the console of an automatic deploy", () => {
     expect(await screen.findByRole("heading", { name: "Deploying web" })).toBeTruthy();
     expect(screen.getByText(/^Started .* by ada\./)).toBeTruthy();
     expect(screen.queryByText(/started by a poll check/)).toBeNull();
+  });
+});
+
+// The words under the Deploying card when something is unusual about the automation.
+describe("the Deploying card, owner and paused", () => {
+  it("names who it runs as and offers Transfer… to someone who can manage users", async () => {
+    git = makeGit({ autoDeploy: true, autoDeployOwner: { id: "u1", name: "Ada" } });
+    instanceAdmin = true;
+    mountTab();
+    const c = await card();
+    expect(
+      await within(c).findByRole("button", { name: "Transfer auto-deploy of web…" }),
+    ).toBeTruthy();
+    expect(within(c).getByText("Runs as")).toBeTruthy();
+    expect(within(c).getByText("Ada")).toBeTruthy();
+    expect(within(c).queryByText("Paused")).toBeNull();
+  });
+
+  it("shows the Paused badge and Resume… for a paused automation, and resumes after the confirm", async () => {
+    git = makeGit({
+      autoDeploy: true,
+      autoDeployPaused: true,
+      autoDeployPausedReason: "owner",
+      autoDeployOwner: { id: "u1", name: "Ada" },
+    });
+    mountTab();
+    const c = await card();
+    expect(await within(c).findByText("Paused")).toBeTruthy();
+    const resume = await within(c).findByRole("button", { name: "Resume…" });
+    await waitFor(() => expect((resume as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(resume);
+    const dialog = await screen.findByRole("alertdialog", { name: "Turn on auto-deploy?" });
+    expect(puts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn on auto-deploy" }));
+    await waitFor(() => expect(puts).toEqual([{ enabled: true }]));
+    await waitFor(() => expect(within(c).queryByText("Paused")).toBeNull());
+  });
+
+  it("hides the switch for a fixed commit and says there is nothing to deploy", async () => {
+    git = makeGit({ refKind: "commit", ref: DEPLOYED });
+    mountTab();
+    const c = await card();
+    expect(await within(c).findByText("A fixed commit has nothing to deploy.")).toBeTruthy();
+    expect(within(c).queryByRole("switch")).toBeNull();
+  });
+});
+
+function mountAlert(stack: StackDetail) {
+  return render(
+    <QueryClientProvider client={client}>
+      <TestRouter path={`/env/${ENV}/stacks/s1`}>
+        <TooltipProvider>
+          <AutoDeployPausedAlert stack={stack} />
+        </TooltipProvider>
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("the auto-deploy paused alert", () => {
+  const pausedGit = {
+    autoDeploy: true,
+    autoDeployPaused: true,
+    autoDeployPausedReason: "owner" as const,
+    autoDeployOwner: { id: "u1", name: "Ada" },
+  };
+
+  it("says the owner lost permission and leads to the git settings", async () => {
+    git = makeGit(pausedGit);
+    mountAlert(makeStack(git));
+    expect(await screen.findByText("Auto-deploy is paused")).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "Ada set it up and no longer has permission to deploy on Homelab. Transfer it to someone who can, or turn it off.",
+      ),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open git settings" });
+    expect(link.getAttribute("href")).toBe(`/env/${ENV}/stacks/s1/git`);
+  });
+
+  it("is not shown while the sync error alert is, or when nothing is paused", async () => {
+    git = makeGit({ ...pausedGit, status: "error", reasonCode: "fetch_failed" });
+    const view = mountAlert(makeStack(git));
+    await waitFor(() => expect(view.container.querySelector("[data-slot=alert]")).toBeNull());
+    view.unmount();
+
+    git = makeGit({ autoDeploy: true });
+    const second = mountAlert(makeStack(git));
+    await waitFor(() => expect(second.container.querySelector("[data-slot=alert]")).toBeNull());
+  });
+
+  it("leaves a rollback pause to the alert the rollback plan adds", async () => {
+    git = makeGit({ ...pausedGit, autoDeployPausedReason: "rollback" });
+    const view = mountAlert(makeStack(git));
+    await waitFor(() => expect(view.container.querySelector("[data-slot=alert]")).toBeNull());
+  });
+});
+
+describe("the jobs indicator", () => {
+  const job = (over: Record<string, unknown>) => ({
+    id: "d1",
+    envId: ENV,
+    envName: "Homelab",
+    stackId: "s1",
+    stackName: "web",
+    kind: "deploy",
+    state: "running",
+    startedAt: "2026-10-29T10:00:00Z",
+    finishedAt: "",
+    startedBy: "system:gitsync",
+    ...over,
+  });
+
+  async function open() {
+    render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <JobsIndicator />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /^Jobs/ }));
+    return screen.findByRole("list");
+  }
+
+  it.each([
+    ["running", "Auto-deploying"],
+    ["done", "Auto-deployed"],
+    ["failed", "Failed"],
+  ])("reads %s as %s for an automatic deploy, with the branch icon", async (state, words) => {
+    stackJobs = [
+      job({
+        state,
+        trigger: "poll",
+        finishedAt: state === "running" ? "" : "2026-10-29T10:01:00Z",
+      }),
+    ];
+    const list = await open();
+    expect(within(list).getByText(words)).toBeTruthy();
+    expect(list.querySelector("svg.lucide-git-branch")).not.toBeNull();
+    expect(list.querySelector("svg.lucide-rocket")).toBeNull();
+  });
+
+  it("keeps Deploying and the rocket for a deploy a person pressed", async () => {
+    stackJobs = [job({ startedBy: "ada" })];
+    const list = await open();
+    expect(within(list).getByText("Deploying")).toBeTruthy();
+    expect(list.querySelector("svg.lucide-rocket")).not.toBeNull();
+    expect(list.querySelector("svg.lucide-git-branch")).toBeNull();
+  });
+});
+
+const revisionOf = (over: Partial<StackRevision> = {}): StackRevision =>
+  ({
+    seq: 3,
+    origin: "deploy",
+    restoredFrom: 0,
+    outcome: "good",
+    createdBy: "Ada",
+    createdAt: "2026-10-20T10:00:00Z",
+    failedService: "",
+    code: "",
+    reason: "",
+    deployed: false,
+    images: [],
+    pinned: 0,
+    adoptedFrom: "",
+    commit: "",
+    tree: "",
+    syncTrigger: "",
+    ...over,
+  }) as StackRevision;
+
+describe("History", () => {
+  function mountTable(items: StackRevision[]) {
+    return render(
+      <QueryClientProvider client={client}>
+        <TestRouter path={`/env/${ENV}/stacks/s1/history`}>
+          <TooltipProvider>
+            <RevisionTable
+              envId={ENV}
+              stackId="s1"
+              name="web"
+              items={items}
+              selected={undefined}
+              fresh={new Set()}
+            />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("reads Auto-deploy for the user for an automatic revision, with a Tooltip naming the trigger", async () => {
+    mountTable([
+      revisionOf({ seq: 4, syncTrigger: "poll" }),
+      revisionOf({ seq: 3, syncTrigger: "webhook" }),
+      revisionOf({ seq: 2, createdBy: "bob" }),
+    ]);
+    const rows = await screen.findAllByRole("row");
+    // The header row, then one per revision, newest first.
+    const poll = rows[1] as HTMLElement;
+    const webhook = rows[2] as HTMLElement;
+    const manual = rows[3] as HTMLElement;
+    expect(within(poll).getByText("Auto-deploy")).toBeTruthy();
+    expect(within(poll).getByText("for Ada")).toBeTruthy();
+    expect(within(webhook).getByText("Auto-deploy")).toBeTruthy();
+    expect(within(manual).getByText("bob")).toBeTruthy();
+    expect(within(manual).queryByText("Auto-deploy")).toBeNull();
+
+    fireEvent.pointerMove(within(poll).getByText("Auto-deploy"));
+    fireEvent.mouseEnter(within(poll).getByText("Auto-deploy"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Started by a poll check on behalf of Ada.",
+    );
+  });
+
+  it("names a webhook in the Tooltip", async () => {
+    mountTable([revisionOf({ seq: 3, syncTrigger: "webhook" })]);
+    const label = await screen.findByText("Auto-deploy");
+    fireEvent.pointerMove(label);
+    fireEvent.mouseEnter(label);
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Started by a webhook on behalf of Ada.",
+    );
+  });
+});
+
+describe("the stack lists", () => {
+  const stackOf = (over: Record<string, unknown>) =>
+    ({
+      ...makeStack(makeGit()),
+      lastDeployedAt: "2026-10-29T10:00:00Z",
+      lastDeployedBy: "system:gitsync",
+      ...over,
+    }) as StackDetail;
+
+  function mountCell(stack: StackDetail) {
+    return render(
+      <QueryClientProvider client={client}>
+        <TestRouter>
+          <TooltipProvider>
+            <LastDeployedCell stack={stack} />
+          </TooltipProvider>
+        </TestRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("reads the short commit and auto-deploy for an automatic deploy", async () => {
+    mountCell(stackOf({ lastDeployedTrigger: "webhook" }));
+    expect(await screen.findByText("0123456 · auto-deploy")).toBeTruthy();
+    expect(screen.queryByText(/system:gitsync/)).toBeNull();
+  });
+
+  it("keeps the commit and the person for a deploy somebody pressed", async () => {
+    mountCell(stackOf({ lastDeployedBy: "ada" }));
+    expect(await screen.findByText("0123456 · by ada")).toBeTruthy();
   });
 });

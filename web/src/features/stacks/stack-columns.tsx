@@ -467,3 +467,8 @@ export function stackColumns(
   );
   return columns;
 }
+
+// LastDeployedCell is not built yet.
+export function LastDeployedCell(_props: { stack: StackItem }) {
+  return null;
+}
