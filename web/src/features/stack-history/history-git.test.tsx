@@ -23,6 +23,7 @@ const TREE_NEW = "aabbccddeeff00112233445566778899aabbccdd";
 type Json = Record<string, unknown>;
 
 let stackGit: boolean;
+let autoDeploy: boolean;
 let revisions: Json[];
 let details: Record<number, Json>;
 let client: QueryClient;
@@ -75,6 +76,7 @@ function detailOf(item: Json): Json {
 
 beforeEach(() => {
   stackGit = true;
+  autoDeploy = false;
   revisions = [
     gitRevision(3, COMMIT_NEW, { deployed: true }),
     gitRevision(2, COMMIT_OLD),
@@ -123,7 +125,7 @@ beforeEach(() => {
                   behindCapped: false,
                   status: "in_sync",
                   checking: false,
-                  autoDeploy: false,
+                  autoDeploy,
                   autoDeployPaused: false,
                   pollEnabled: true,
                   pollMinutes: 5,
@@ -209,6 +211,35 @@ describe("the Commit column", () => {
     mount();
     const table = await screen.findByRole("table", { name: "Revisions of web" });
     expect(headers(table)).not.toContain("Commit");
+  });
+});
+
+describe("the Roll back note of a git stack", () => {
+  it("says rolling back pauses auto-deploy, under the Roll back action, when auto-deploy is on", async () => {
+    autoDeploy = true;
+    mount(2);
+    const action = await screen.findByRole("button", { name: /Roll back/ });
+    const note = await screen.findByText("Rolling back pauses auto-deploy.");
+    expect(action.parentElement?.contains(note)).toBe(true);
+  });
+
+  it("is not there while auto-deploy is off, for a stack not from git, or for the deployed revision", async () => {
+    mount(2);
+    await screen.findByRole("button", { name: /Roll back/ });
+    expect(screen.queryByText("Rolling back pauses auto-deploy.")).toBeNull();
+    cleanup();
+
+    autoDeploy = true;
+    stackGit = false;
+    mount(2);
+    await screen.findByRole("button", { name: /Roll back/ });
+    expect(screen.queryByText("Rolling back pauses auto-deploy.")).toBeNull();
+    cleanup();
+
+    stackGit = true;
+    mount(3);
+    await screen.findByText("This is the deployed revision.");
+    expect(screen.queryByText("Rolling back pauses auto-deploy.")).toBeNull();
   });
 });
 

@@ -26,6 +26,7 @@ type Git = Record<string, unknown> | undefined;
 
 let git: Git;
 let stackGit: boolean;
+let stackAutoDeploy: boolean;
 let client: QueryClient;
 // openCard waits for the commits to arrive, which close the card past 5, and opens it.
 async function openCard() {
@@ -128,6 +129,7 @@ beforeEach(() => {
   sent = [];
   reviewReads = 0;
   stackGit = true;
+  stackAutoDeploy = false;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   setCsrfToken(null);
   vi.stubGlobal(
@@ -179,7 +181,7 @@ beforeEach(() => {
                   behindCapped: false,
                   status: "behind",
                   checking: false,
-                  autoDeploy: false,
+                  autoDeploy: stackAutoDeploy,
                   autoDeployPaused: false,
                   pollEnabled: true,
                   pollMinutes: 5,
@@ -223,12 +225,12 @@ afterEach(() => {
   client.clear();
 });
 
-function mount() {
+function mount(props: { mode?: "rollback" | "restore"; revision?: number } = {}) {
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <ReviewPage envId={ENV} stackId={STACK} onDeployed={vi.fn()} />
+          <ReviewPage envId={ENV} stackId={STACK} onDeployed={vi.fn()} {...props} />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
@@ -488,5 +490,33 @@ describe("the moved-head note of a git review", () => {
     await waitFor(() => expect(sent.some((r) => r.path.endsWith("/deploys"))).toBe(true));
     expect(sent.find((r) => r.path.endsWith("/deploys"))?.body).toMatchObject({ draftVersion: 7 });
     expect(sent.some((r) => r.path.endsWith("/git/pull"))).toBe(false);
+  });
+});
+
+describe("the rollback note of a git review", () => {
+  const NOTE =
+    "Auto-deploy will pause after this roll back, so the repository head isn't deployed over it. Turn it back on when the repository is fixed.";
+
+  it("says the roll back pauses auto-deploy when it is on", async () => {
+    stackAutoDeploy = true;
+    mount({ mode: "rollback", revision: 2 });
+    expect(await screen.findByText(NOTE)).toBeTruthy();
+  });
+
+  it("is not shown while auto-deploy is off, for a restore, or in a deploy review", async () => {
+    mount({ mode: "rollback", revision: 2 });
+    await screen.findByRole("heading", { name: /Roll back/ });
+    expect(screen.queryByText(NOTE)).toBeNull();
+    cleanup();
+
+    stackAutoDeploy = true;
+    mount({ mode: "restore", revision: 2 });
+    await screen.findByRole("heading", { level: 3, name: /Restore/ });
+    expect(screen.queryByText(NOTE)).toBeNull();
+    cleanup();
+
+    mount();
+    await screen.findByTestId("review-commit-line");
+    expect(screen.queryByText(NOTE)).toBeNull();
   });
 });

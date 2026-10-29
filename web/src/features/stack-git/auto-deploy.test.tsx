@@ -86,6 +86,8 @@ let instanceAdmin: boolean;
 // The bodies the auto-deploy route was sent, and what it answers (a status other than 200 is a refusal).
 let puts: { enabled: boolean }[];
 let putStatus: number;
+// How many times the head was pulled for a review.
+let pulls: number;
 // The job the console reads.
 let jobExtra: Record<string, unknown>;
 let client: QueryClient;
@@ -97,6 +99,7 @@ beforeEach(() => {
   puts = [];
   stackJobs = [];
   putStatus = 200;
+  pulls = 0;
   jobExtra = {};
   client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
   setCsrfToken(null);
@@ -137,6 +140,17 @@ beforeEach(() => {
             }
           : { ...git, autoDeploy: false, autoDeployPaused: false, autoDeployOwner: undefined };
         return Response.json(git);
+      }
+      if (path === `/api/env/${ENV}/stacks/s1/draft`) return Response.json({ version: 7 });
+      if (path === `/api/env/${ENV}/stacks/s1/git/pull` && req.method === "POST") {
+        pulls++;
+        return Response.json({
+          draftVersion: 8,
+          commit: git.headSha,
+          ref: "main",
+          deployedCommit: git.deployedSha,
+          touched: 1,
+        });
       }
       if (path === `/api/env/${ENV}/stacks/s1/git`) return Response.json(git);
       if (path === `/api/env/${ENV}/stacks/s1`) return Response.json(makeStack(git));
@@ -427,9 +441,69 @@ describe("the auto-deploy paused alert", () => {
     const second = mountAlert(makeStack(git));
     await waitFor(() => expect(second.container.querySelector("[data-slot=alert]")).toBeNull());
   });
+});
 
-  it("leaves a rollback pause to the alert the rollback plan adds", async () => {
-    git = makeGit({ ...pausedGit, autoDeployPausedReason: "rollback" });
+describe("the auto-deploy paused alert after a roll back", () => {
+  const HEAD = "1111111111111111111111111111111111111111";
+  const rolledBack = (over: Partial<StackGit> = {}) =>
+    makeGit({
+      autoDeploy: false,
+      autoDeployPaused: true,
+      autoDeployPausedReason: "rollback",
+      autoDeployPausedRevision: 4,
+      headSha: HEAD,
+      status: "behind",
+      behind: 1,
+      ...over,
+    });
+
+  it("says why, shows the pending head and offers Review update and Turn on auto-deploy…", async () => {
+    git = rolledBack();
+    mountAlert(makeStack(git));
+    expect(await screen.findByText("Auto-deploy paused after rollback to #4")).toBeTruthy();
+    expect(
+      screen.getByText("web now waits for review. The repository head, 1111111, shows as pending."),
+    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Review update" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Turn on auto-deploy…" })).toBeTruthy();
+    // State and not a notification: nothing closes it.
+    expect(screen.queryByRole("button", { name: /dismiss|close/i })).toBeNull();
+  });
+
+  it("opens the Turn on auto-deploy confirm and turns it on after it", async () => {
+    git = rolledBack();
+    mountAlert(makeStack(git));
+    const turnOn = await screen.findByRole("button", { name: "Turn on auto-deploy…" });
+    fireEvent.click(turnOn);
+    const dialog = await screen.findByRole("alertdialog", { name: "Turn on auto-deploy?" });
+    expect(puts).toEqual([]);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn on auto-deploy" }));
+    await waitFor(() => expect(puts).toEqual([{ enabled: true }]));
+  });
+
+  it("pulls the head when Review update is pressed", async () => {
+    git = rolledBack();
+    mountAlert(makeStack(git));
+    fireEvent.click(await screen.findByRole("button", { name: "Review update" }));
+    await waitFor(() => expect(pulls).toBe(1));
+  });
+
+  it("leaves out Review update and the head when nothing is pending", async () => {
+    git = rolledBack({ status: "in_sync", behind: 0, headSha: DEPLOYED });
+    mountAlert(makeStack(git));
+    expect(await screen.findByText("web now waits for review.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Turn on auto-deploy…" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review update" })).toBeNull();
+  });
+
+  it("names no revision when the server gave none", async () => {
+    git = rolledBack({ autoDeployPausedRevision: undefined });
+    mountAlert(makeStack(git));
+    expect(await screen.findByText("Auto-deploy paused after a roll back")).toBeTruthy();
+  });
+
+  it("gives way to the sync error alert", async () => {
+    git = rolledBack({ status: "error", reasonCode: "fetch_failed" });
     const view = mountAlert(makeStack(git));
     await waitFor(() => expect(view.container.querySelector("[data-slot=alert]")).toBeNull());
   });
