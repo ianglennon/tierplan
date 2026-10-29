@@ -6,7 +6,7 @@ import { useBlocker } from "@tanstack/react-router";
 import { CircleX, TriangleAlert } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { Trans } from "react-i18next";
-
+import { usePullStackGit } from "@/api/stack-git";
 import {
   type DraftRequestError,
   draftQuery,
@@ -55,6 +55,7 @@ import {
   withSecretsHidden,
   workingCopyReducer,
 } from "@/features/stack-editor/working-copy";
+import { pullReason } from "@/features/stacks/stack-actions";
 import { usePermission } from "@/hooks/use-me";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
@@ -127,6 +128,7 @@ export function StackEditorPage({
   const fromGit = stack.data?.source === "git";
   const draft = useQuery(draftQuery(envId, stackId));
   const save$ = useSaveDraft(envId, stackId);
+  const pull$ = usePullStackGit(envId, stackId);
   const discard$ = useDiscardDraft(envId, stackId);
   const [copy, dispatch] = useReducer(workingCopyReducer, emptyWorkingCopy);
   // The copy last loaded or saved: what "unsaved" is measured against.
@@ -390,11 +392,26 @@ export function StackEditorPage({
   function reviewAndDeploy() {
     if (!canEdit || !base || !copy.loaded || save$.isPending || reviewing) return;
     setReviewing(true);
+    const next = fromGit ? pullThenReview : openReview;
     if (!dirty) {
-      openReview();
+      next();
       return;
     }
-    save(undefined, openReview);
+    save(undefined, next);
+  }
+
+  // A stack from a git repository is reviewed against the head of its ref, so the edits are saved first and the head
+  // is pulled into the draft after them: the pull keeps the overlay files and the variables, and replaces the
+  // repository's files (D-17). A pull that fails leaves the draft as it was saved and the Review closed.
+  function pullThenReview() {
+    pull$.mutate(undefined, {
+      onSuccess: openReview,
+      onError: (err) => {
+        setReviewing(false);
+        const ref = copyRef.current.git?.ref ?? "";
+        setSaveError(t("stackGit.pull.failed", { ref, reason: pullReason(t, err, ref) }));
+      },
+    });
   }
 
   // Reload draft reads what is saved now and drops the edits.
@@ -709,7 +726,7 @@ export function StackEditorPage({
               ) : reviewing ? (
                 <>
                   <Spinner aria-hidden="true" />
-                  {t("stackReview.editor.checking")}
+                  {pull$.isPending ? t("stackGit.pull.pulling") : t("stackReview.editor.checking")}
                 </>
               ) : (
                 t("stackReview.editor.button")

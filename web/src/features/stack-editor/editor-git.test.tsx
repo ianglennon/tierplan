@@ -40,7 +40,11 @@ interface Sent {
 interface Server {
   sent: Sent[];
   role: "viewer" | "operator";
+  source: "git" | "inline";
+  // The version of the draft the server holds: a save moves it, and the pull reads it.
+  version: number;
   draft: () => Record<string, unknown>;
+  pull: (body: Record<string, unknown>) => Response;
   save: (body: Record<string, unknown>) => Response;
   check: () => Record<string, unknown>;
 }
@@ -71,15 +75,27 @@ beforeEach(() => {
   server = {
     sent: [],
     role: "operator",
-    draft: () => gitDraft(),
-    save: (body) =>
+    source: "git",
+    version: 7,
+    draft: () => gitDraft({ version: server.version }),
+    pull: (body) =>
       Response.json({
+        draftVersion: (body.draftVersion as number) + 1,
+        commit: SHA,
+        ref: "main",
+        deployedCommit: SHA,
+        touched: 1,
+      }),
+    save: (body) => {
+      server.version = (body.version as number) + 1;
+      return Response.json({
         changed: true,
-        version: (body.version as number) + 1,
+        version: server.version,
         savedBy: "grace",
         savedAt: new Date().toISOString(),
         secretFiles: ["db_pw.txt"],
-      }),
+      });
+    },
     check: () => ({ problems: [], unusedFiles: [], variables: [], secretFiles: ["db_pw.txt"] }),
   };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -111,7 +127,7 @@ beforeEach(() => {
           id: STACK,
           name: "web",
           target: "swarm",
-          source: "git",
+          source: server.source,
           state: "not_deployed",
           lastDeployedAt: "",
           lastDeployedBy: "",
@@ -126,6 +142,9 @@ beforeEach(() => {
       if (path === `/api/env/${ENV}/stacks/${STACK}/draft`) {
         if (req.method === "PUT") return server.save(entry.body ?? {});
         return Response.json(server.draft());
+      }
+      if (path === `/api/env/${ENV}/stacks/${STACK}/git/pull` && req.method === "POST") {
+        return server.pull(entry.body ?? {});
       }
       if (path === `/api/env/${ENV}/stacks/${STACK}/check` && req.method === "POST") {
         return Response.json(server.check());
@@ -292,5 +311,151 @@ describe("the Files tab of a git stack", () => {
         "Repository files can't be edited here. Change them in acme and pull.",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("the Variables pane of a git stack", () => {
+  const HIDDEN = "<hidden>";
+  const variables = [
+    {
+      name: "TAG",
+      value: "1.27",
+      secret: false,
+      source: "repo-env",
+      default: "",
+      hasDefault: false,
+      required: false,
+      unused: false,
+      places: [{ file: "compose.yaml", line: 3 }],
+    },
+    {
+      name: "DB_PASSWORD",
+      value: HIDDEN,
+      secret: false,
+      secretLike: true,
+      source: "repo-env",
+      default: "",
+      hasDefault: false,
+      required: false,
+      unused: false,
+      places: [{ file: "compose.yaml", line: 4 }],
+    },
+  ];
+
+  beforeEach(() => {
+    server.check = () => ({ problems: [], unusedFiles: [], variables, secretFiles: [] });
+  });
+
+  it("says a value comes from the repository's .env and shows it as the placeholder", async () => {
+    mount({ pane: "variables" });
+    const tag = await screen.findByTestId("variable-row-TAG");
+    expect(await within(tag).findByText("From the repo's .env")).toBeTruthy();
+    expect(within(tag).getByText("1.27")).toBeTruthy();
+    const input = within(tag).getByLabelText("Value of TAG") as HTMLInputElement;
+    expect(input.placeholder).toBe("1.27");
+  });
+
+  it("hides a secret-like value from the repository and offers Set secret value", async () => {
+    mount({ pane: "variables" });
+    const row = await screen.findByTestId("variable-row-DB_PASSWORD");
+    expect(await within(row).findByText("From the repo's .env")).toBeTruthy();
+    expect(within(row).getByText("••••")).toBeTruthy();
+    expect(within(row).queryByText("<hidden>")).toBeNull();
+    const warning = screen.getByTestId("variable-warning-DB_PASSWORD");
+    expect(
+      within(warning).getByText(
+        "DB_PASSWORD looks like a secret and is committed in the repository's .env. Set a secret variable here to override it.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(within(warning).getByRole("button", { name: "Set secret value" }));
+    const input = within(row).getByLabelText("Value of DB_PASSWORD");
+    expect(
+      (
+        within(row).getByRole("switch", { name: "Secret: DB_PASSWORD" }) as HTMLElement
+      ).getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(document.activeElement).toBe(input);
+    // Once a value is typed the warning goes.
+    fireEvent.change(input, { target: { value: "my-own-password" } });
+    expect(screen.queryByTestId("variable-warning-DB_PASSWORD")).toBeNull();
+  });
+
+  it("gives a Viewer the warning without the button", async () => {
+    server.role = "viewer";
+    mount({ pane: "variables" });
+    const warning = await screen.findByTestId("variable-warning-DB_PASSWORD");
+    expect(within(warning).queryByRole("button", { name: "Set secret value" })).toBeNull();
+  });
+});
+
+describe("Review and deploy on a git stack", () => {
+  const pulls = () => server.sent.filter((s) => s.path.endsWith("/git/pull"));
+
+  it("pulls the head of the ref after the save, keeping the edits, and then opens the Review", async () => {
+    const onReview = vi.fn();
+    mount({ onReview, file: "db_pw.txt" });
+    await screen.findByText("The content of db_pw.txt is hidden.");
+    fireEvent.click(screen.getByRole("button", { name: "Replace content" }));
+    await screen.findByRole("textbox", { name: "db_pw.txt, text" });
+    typeIntoEditor("changed");
+    fireEvent.click(screen.getByRole("button", { name: "Review and deploy" }));
+    await waitFor(() => expect(onReview).toHaveBeenCalledTimes(1));
+    // The save came first, at the version read, and the pull came after it, at the version the save made.
+    const order = server.sent.filter((s) => s.method === "PUT" || s.path.endsWith("/git/pull"));
+    expect(order.map((s) => s.method)).toEqual(["PUT", "POST"]);
+    expect(puts()[0]?.body?.version).toBe(7);
+    expect(pulls()[0]?.body).toEqual({ draftVersion: 8 });
+  });
+
+  it("pulls even when nothing is unsaved", async () => {
+    const onReview = vi.fn();
+    mount({ onReview });
+    await composeBox();
+    fireEvent.click(screen.getByRole("button", { name: "Review and deploy" }));
+    await waitFor(() => expect(onReview).toHaveBeenCalledTimes(1));
+    expect(puts()).toHaveLength(0);
+    expect(pulls()).toHaveLength(1);
+  });
+
+  it("says the draft changed and does not open the Review when another save came in between", async () => {
+    server.pull = () =>
+      Response.json(
+        { type: "draft_changed", title: "Conflict", status: 409, detail: "d" },
+        { status: 409 },
+      );
+    const onReview = vi.fn();
+    mount({ onReview });
+    await composeBox();
+    fireEvent.click(screen.getByRole("button", { name: "Review and deploy" }));
+    expect(
+      await screen.findByText(
+        "Couldn't pull main. The draft changed while you were pulling. Reload it and try again.",
+      ),
+    ).toBeTruthy();
+    expect(onReview).not.toHaveBeenCalled();
+    // The button is usable again.
+    expect(
+      (screen.getByRole("button", { name: "Review and deploy" }) as HTMLButtonElement).getAttribute(
+        "aria-disabled",
+      ),
+    ).toBeNull();
+  });
+
+  it("opens the Review of an inline stack with no pull", async () => {
+    server.source = "inline";
+    server.draft = () => ({
+      version: 7,
+      savedBy: "ada",
+      savedAt: "2026-10-28T10:00:00Z",
+      baseSeq: 0,
+      files: [{ path: "compose.yaml", content: COMPOSE, secret: false }],
+      vars: [],
+    });
+    const onReview = vi.fn();
+    mount({ onReview });
+    await composeBox();
+    fireEvent.click(screen.getByRole("button", { name: "Review and deploy" }));
+    await waitFor(() => expect(onReview).toHaveBeenCalledTimes(1));
+    expect(pulls()).toHaveLength(0);
   });
 });

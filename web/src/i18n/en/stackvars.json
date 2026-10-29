@@ -50,6 +50,7 @@
       "loading": "Checking",
       "source": {
         "table": "From the table",
+        "repo-env": "From the repo's .env",
         "default": "From the compose file's default",
         "unset": "Not set"
       }
@@ -58,6 +59,11 @@
       "table": "from the table",
       "default": "default in the file",
       "unset": "not set"
+    },
+    "git": {
+      "committedTip": "Committed in the repository. Hidden here because the name looks like a secret.",
+      "secretLike": "{{name}} looks like a secret and is committed in the repository's .env. Set a secret variable here to override it.",
+      "setSecret": "Set secret value"
     }
   }
 }
