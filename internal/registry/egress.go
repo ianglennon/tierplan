@@ -212,6 +212,13 @@ func (p EgressPolicy) DialControl() func(network, address string, c syscall.RawC
 //
 // It must be an *http.Transport: go-git clones it to add a per-call certificate authority.
 func (p EgressPolicy) GitTransport() *http.Transport {
+	return p.GitTransportBounded(gitResponseBytesMax)
+}
+
+// GitTransportBounded is GitTransport with limit as the most bytes read from a connection after one
+// request was written. A listing of a repository's refs is parsed into memory, several times its size
+// on the wire, so it is read through a transport with a far smaller limit than a packfile is (WR-A06).
+func (p EgressPolicy) GitTransportBounded(limit int64) *http.Transport {
 	return &http.Transport{
 		Proxy: nil,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -224,7 +231,7 @@ func (p EgressPolicy) GitTransport() *http.Transport {
 			if err != nil {
 				return nil, err
 			}
-			return &boundedConn{Conn: c, limit: gitResponseBytesMax}, nil
+			return &boundedConn{Conn: c, limit: limit}, nil
 		},
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,

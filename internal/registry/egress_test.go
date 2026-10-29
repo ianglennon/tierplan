@@ -156,6 +156,43 @@ func TestGitTransportDialsThroughThePolicyOfTheCallWhenTheContextCarriesOne(t *t
 	}
 }
 
+// A listing is read through a transport with a smaller bound than the one that carries a packfile (WR-A06).
+func TestGitTransportBoundedStopsAReadAtItsLimit(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		_, _ = c.Write(make([]byte, 64))
+	}()
+	conn, err := NewEgressPolicy(nil).GitTransportBounded(16).DialContext(context.Background(), "tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	var got int
+	buf := make([]byte, 64)
+	for {
+		n, err := conn.Read(buf)
+		got += n
+		if err != nil {
+			if !errors.Is(err, ErrResponseTooLarge) {
+				t.Fatalf("read past the limit = %v, want ErrResponseTooLarge", err)
+			}
+			break
+		}
+	}
+	if got != 16 {
+		t.Errorf("read %d bytes before the refusal, want exactly the limit of 16", got)
+	}
+}
+
 func TestDialControlRefusesWhatThePolicyBlocks(t *testing.T) {
 	ctl := NewEgressPolicy(nil).DialControl()
 	if err := ctl("tcp", "169.254.169.254:22", nil); !errors.Is(err, ErrEgressBlocked) {

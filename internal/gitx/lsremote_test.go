@@ -32,7 +32,10 @@ import (
 
 // TestMain installs the HTTPS transport once for the package, as the server does at startup.
 func TestMain(m *testing.M) {
-	gitx.InstallTransport(registry.NewEgressPolicy(nil))
+	// The one test that checks NewGoGit installs it runs in a child process that leaves it to NewGoGit.
+	if os.Getenv(noInstallEnv) == "" {
+		gitx.InstallTransport(registry.NewEgressPolicy(nil))
+	}
 	os.Exit(m.Run())
 }
 

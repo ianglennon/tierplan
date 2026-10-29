@@ -134,7 +134,7 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 	limits = limits.withDefaults()
 	out := Folder{Links: map[string]Link{}}
 	var repo *git.Repository
-	err := g.withCommitTreeRepo(ctx, m, sha, dir, func(r *git.Repository, t *object.Tree) error {
+	err := g.withCommitTreeRepo(ctx, m, sha, dir, func(ctx context.Context, r *git.Repository, t *object.Tree) error {
 		repo = r
 		out.Tree = t.Hash.String()
 		walker := object.NewTreeWalker(t, true, nil)
@@ -298,10 +298,12 @@ func sortFolder(f *Folder) {
 
 // withCommitTree runs fn with the tree of the folder dir of the commit sha, holding the mirror's read lock.
 func (g *GoGit) withCommitTree(ctx context.Context, m MirrorID, sha, dir string, fn func(*object.Tree) error) error {
-	return g.withCommitTreeRepo(ctx, m, sha, dir, func(_ *git.Repository, t *object.Tree) error { return fn(t) })
+	return g.withCommitTreeRepo(ctx, m, sha, dir, func(_ context.Context, _ *git.Repository, t *object.Tree) error { return fn(t) })
 }
 
-func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir string, fn func(*git.Repository, *object.Tree) error) error {
+// withCommitTreeRepo is withCommitTree for a fn that also reads the repository. fn is given the context the
+// read runs under, which ends with readDeadline.
+func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir string, fn func(context.Context, *git.Repository, *object.Tree) error) error {
 	if err := ctx.Err(); err != nil {
 		return Classify(err, "")
 	}
@@ -309,9 +311,11 @@ func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir str
 	if err != nil {
 		return err
 	}
-	mu := g.lockFor(m)
-	mu.RLock()
-	defer mu.RUnlock()
+	ctx, release, err := g.readLock(ctx, m)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	repo, err := openExisting(path)
 	if errors.Is(err, errMirrorMissing) {
@@ -340,5 +344,5 @@ func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir str
 			return &Error{Code: CodeFolderMissing}
 		}
 	}
-	return fn(repo, tree)
+	return fn(ctx, repo, tree)
 }

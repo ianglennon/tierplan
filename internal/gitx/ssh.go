@@ -19,7 +19,6 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -28,8 +27,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/registry"
 )
 
-// sshHandshakeTimeout is how long the TCP connect of an ssh call may take. go-git's dial ignores
-// the operation's context, so this is the only bound on the connect itself.
+// sshHandshakeTimeout is how long the connect and the handshake of an ssh call may take, to the moment
+// the server has answered the key. go-git's dial ignores the operation's context, so this is a bound
+// of the connection itself (see sshdial.go).
 const sshHandshakeTimeout = 15 * time.Second
 
 // defaultSSHUser is the user name every large git host expects.
@@ -207,7 +207,7 @@ func (m *sshMethod) ClientConfig() (*ssh.ClientConfig, error) {
 // sshAuth builds the auth method of one ssh call and the probe that records the host-key decision.
 // With no credential it offers a throwaway key, never the server's ssh agent (go-git's default when
 // no method is given): the handshake and the host key are checked before it is ever used.
-func (g *GoGit) sshAuth(r Remote, u URL) (*sshMethod, *hostKeyProbe, error) {
+func (g *GoGit) sshAuth(r Remote, u URL, call *sshCall) (*sshMethod, *hostKeyProbe, error) {
 	var signer ssh.Signer
 	user := u.User
 	switch a := r.Auth.(type) {
@@ -232,6 +232,7 @@ func (g *GoGit) sshAuth(r Remote, u URL) (*sshMethod, *hostKeyProbe, error) {
 	if user == "" {
 		user = defaultSSHUser
 	}
+	signer = markSigner{Signer: signer, call: call}
 	pinned := pinnedKeys(u.Host, r.HostKeys)
 	probe := &hostKeyProbe{}
 	return &sshMethod{&gitssh.PublicKeys{
@@ -248,46 +249,48 @@ func (g *GoGit) sshAuth(r Remote, u URL) (*sshMethod, *hostKeyProbe, error) {
 // anything is dialled, the host key is checked before authentication, and nothing of the server
 // user's ~/.ssh is read.
 func (g *GoGit) lsRemoteSSH(ctx context.Context, r Remote, u URL) (RefList, error) {
-	ctx, cancel := context.WithTimeout(ctx, lsRemoteDeadline)
+	ctx, cancel := context.WithTimeout(registry.WithEgressPolicy(ctx, g.policy), lsRemoteDeadline)
 	defer cancel()
 	if g.policy.RefusesHost(ctx, net.JoinHostPort(u.Host, strconv.Itoa(u.Port))) {
 		return RefList{}, &Error{Code: CodeEgressBlocked, Host: u.Host}
 	}
-	method, probe, err := g.sshAuth(r, u)
+	call, proxyOpts, done := newSSHCall(ctx, g.policy, g.advertisementMax, g.handshake)
+	defer done()
+	method, probe, err := g.sshAuth(r, u, call)
 	if err != nil {
 		return RefList{}, Classify(err, u.Host)
 	}
 	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{u.Raw}})
 
-	// go-git connects without looking at the context, so the call runs on its own goroutine and is
-	// abandoned when the deadline passes; the connect has its own timeout, which ends it.
-	type result struct {
-		refs []*plumbing.Reference
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		refs, err := rem.ListContext(ctx, &git.ListOptions{PeelingOption: git.AppendPeeled, Auth: method})
-		done <- result{refs, err}
-	}()
-	var res result
-	select {
-	case res = <-done:
-	case <-ctx.Done():
-		return RefList{}, Classify(ctx.Err(), u.Host)
-	}
-	if res.err != nil {
+	// go-git does not look at the context while it connects, but the connection is Bayplan's own and
+	// is closed when the context ends, so the call returns then.
+	refs, err := rem.ListContext(ctx, &git.ListOptions{PeelingOption: git.AppendPeeled, Auth: method, ProxyOptions: proxyOpts})
+	if err != nil {
 		if refusal := probe.refusal(); refusal != nil {
 			return RefList{}, Classify(refusal, u.Host)
 		}
-		if errors.Is(res.err, transport.ErrEmptyRemoteRepository) {
+		if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 			return RefList{HostKey: probe.presented()}, nil
 		}
-		return RefList{}, Classify(res.err, u.Host)
+		return RefList{}, Classify(sshFailure(ctx, call, err), u.Host)
 	}
-	out := refList(res.refs)
+	out := refList(refs)
 	out.HostKey = probe.presented()
 	return out, nil
+}
+
+// sshFailure is the error to classify when an ssh call failed with err: the size refusal when the
+// connection was cut for going over its limit (ssh reports that as a closed connection), and the
+// context's own error when the call ran out of time or was cancelled (the connection was closed under
+// go-git, whose error then says only that it was).
+func sshFailure(ctx context.Context, call *sshCall, err error) error {
+	if call.tooLarge.Load() {
+		return registry.ErrResponseTooLarge
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 // isSSHAuthFailure reports whether err is the key exchange having finished and the server having

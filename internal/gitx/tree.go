@@ -33,9 +33,11 @@ func (g *GoGit) ReadDir(ctx context.Context, m MirrorID, sha, dir string, limit 
 	if limit <= 0 {
 		limit = defaultDirLimit
 	}
-	mu := g.lockFor(m)
-	mu.RLock()
-	defer mu.RUnlock()
+	_, release, err := g.readLock(ctx, m)
+	if err != nil {
+		return Dir{}, err
+	}
+	defer release()
 
 	repo, err := openExisting(path)
 	if errors.Is(err, errMirrorMissing) {

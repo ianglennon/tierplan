@@ -65,9 +65,11 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 	if err != nil {
 		return Touch{}, err
 	}
-	mu := g.lockFor(m)
-	mu.RLock()
-	defer mu.RUnlock()
+	ctx, release, err := g.readLock(ctx, m)
+	if err != nil {
+		return Touch{}, err
+	}
+	defer release()
 
 	repo, err := openExisting(path)
 	if errors.Is(err, errMirrorMissing) {

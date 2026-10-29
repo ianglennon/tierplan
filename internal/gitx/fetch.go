@@ -68,7 +68,7 @@ func ValidRefName(kind RefKind, ref string) error {
 
 // FetchRef implements Client. The write lock of the mirror is held for the whole fetch, so a read
 // never sees it half done; the commit it answers is read by its ID, which later fetches cannot
-// change.
+// change. Waiting for the lock ends with the context.
 func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind, ref string) (Commit, error) {
 	if err := ValidRefName(kind, ref); err != nil {
 		return Commit{}, err
@@ -88,35 +88,18 @@ func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind
 	defer cancel()
 
 	mu := g.lockFor(m)
-	mu.Lock()
-	if u.Scheme != "ssh" {
-		defer mu.Unlock()
-		return g.fetchLocked(ctx, m, dir, r, u, kind, ref)
+	if err := mu.lock(ctx); err != nil {
+		return Commit{}, Classify(err, u.Host)
 	}
-	// go-git connects over ssh without looking at the context, so the fetch runs on its own
-	// goroutine and is abandoned when the deadline passes. It keeps the mirror's lock until it
-	// ends, so an abandoned fetch cannot run beside the next one.
-	type result struct {
-		c   Commit
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		defer mu.Unlock()
-		c, err := g.fetchLocked(ctx, m, dir, r, u, kind, ref)
-		done <- result{c, err}
-	}()
-	select {
-	case res := <-done:
-		return res.c, res.err
-	case <-ctx.Done():
-		return Commit{}, Classify(ctx.Err(), u.Host)
-	}
+	defer mu.unlock()
+	// An ssh connection is Bayplan's own and is closed when ctx ends (sshdial.go), so the fetch ends
+	// with its deadline and the lock cannot be held past it.
+	return g.fetchLocked(ctx, m, dir, r, u, kind, ref)
 }
 
 // fetchLocked is FetchRef with the write lock held.
 func (g *GoGit) fetchLocked(ctx context.Context, m MirrorID, dir string, r Remote, u URL, kind RefKind, ref string) (Commit, error) {
-	repo, err := openMirror(dir)
+	repo, err := openMirror(dir, originOf(u, r))
 	if err != nil {
 		g.log.Error("could not open a git mirror", "error", err)
 		return Commit{}, &Error{Code: CodeUnreachable, Host: u.Host}
@@ -220,15 +203,20 @@ func (g *GoGit) fetch(ctx context.Context, repo *git.Repository, r Remote, u URL
 		Force: true, Tags: git.NoTags,
 	}
 	var probe *hostKeyProbe
+	var call *sshCall
 	if u.Scheme == "ssh" {
 		if g.policy.RefusesHost(ctx, net.JoinHostPort(u.Host, strconv.Itoa(u.Port))) {
 			return &Error{Code: CodeEgressBlocked, Host: u.Host}
 		}
-		method, p, err := g.sshAuth(r, u)
+		var proxyOpts transport.ProxyOptions
+		var done func()
+		call, proxyOpts, done = newSSHCall(ctx, g.policy, g.packMax, g.handshake)
+		defer done()
+		method, p, err := g.sshAuth(r, u, call)
 		if err != nil {
 			return Classify(err, u.Host)
 		}
-		opts.Auth, probe = method, p
+		opts.Auth, opts.ProxyOptions, probe = method, proxyOpts, p
 	} else {
 		switch a := r.Auth.(type) {
 		case nil:
@@ -255,6 +243,9 @@ func (g *GoGit) fetch(ctx context.Context, repo *git.Repository, r Remote, u URL
 	}
 	if errors.Is(err, git.NoMatchingRefSpecError{}) || errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return &Error{Code: CodeRefMissing, Host: u.Host}
+	}
+	if call != nil {
+		err = sshFailure(ctx, call, err)
 	}
 	return Classify(err, u.Host)
 }

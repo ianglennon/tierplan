@@ -6,16 +6,14 @@ package gitx
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage/memory"
 
 	"github.com/ianglennon/bayplan/internal/registry"
 )
@@ -51,15 +49,7 @@ func (g *GoGit) LsRemote(ctx context.Context, r Remote) (RefList, error) {
 	ctx, cancel := context.WithTimeout(registry.WithEgressPolicy(ctx, g.policy), lsRemoteDeadline)
 	defer cancel()
 
-	opts := &git.ListOptions{PeelingOption: git.AppendPeeled}
-	if t, ok := r.Auth.(TokenAuth); ok && (t.Username != "" || t.Token != "") {
-		opts.Auth = &githttp.BasicAuth{Username: t.Username, Password: t.Token}
-	}
-	if r.CAPEM != "" {
-		opts.CABundle = []byte(r.CAPEM)
-	}
-	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{u.Raw}})
-	refs, err := rem.ListContext(ctx, opts)
+	refs, err := g.advertisedRefs(ctx, r, u)
 	if err != nil {
 		if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 			return RefList{}, nil
@@ -67,6 +57,54 @@ func (g *GoGit) LsRemote(ctx context.Context, r Remote) (RefList, error) {
 		return RefList{}, Classify(err, u.Host)
 	}
 	return refList(refs), nil
+}
+
+// advertisedRefs reads the refs an https server advertises, as git ls-remote does (go-git's Remote.List, which this
+// repeats): the listing is parsed into memory, so it is read through a transport of its own whose connections stop
+// at a far smaller size than the one that carries a packfile does (WR-A06). The connection is not kept after the
+// call.
+func (g *GoGit) advertisedRefs(ctx context.Context, r Remote, u URL) ([]*plumbing.Reference, error) {
+	tr := g.policy.GitTransportBounded(g.advertisementMax)
+	tr.DisableKeepAlives = true
+	ep, err := transport.NewEndpoint(u.Raw)
+	if err != nil {
+		return nil, err
+	}
+	if r.CAPEM != "" {
+		ep.CaBundle = []byte(r.CAPEM)
+	}
+	var auth transport.AuthMethod
+	if t, ok := r.Auth.(TokenAuth); ok && (t.Username != "" || t.Token != "") {
+		auth = &githttp.BasicAuth{Username: t.Username, Password: t.Token}
+	}
+	sess, err := githttp.NewClient(&http.Client{Transport: tr, CheckRedirect: checkRedirect}).NewUploadPackSession(ep, auth)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sess.Close() }()
+	ar, err := sess.AdvertisedReferencesContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all, err := ar.AllReferences()
+	if err != nil {
+		return nil, err
+	}
+	iter, err := all.IterReferences()
+	if err != nil {
+		return nil, err
+	}
+	var refs []*plumbing.Reference
+	if err := iter.ForEach(func(ref *plumbing.Reference) error {
+		refs = append(refs, ref)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	for name, h := range ar.Peeled {
+		refs = append(refs, plumbing.NewReferenceFromStrings(name+"^{}", h.String()))
+	}
+	return refs, nil
 }
 
 // refList keeps the heads and tags of an advertisement. An annotated tag is advertised twice, as
