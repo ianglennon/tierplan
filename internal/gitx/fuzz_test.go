@@ -16,7 +16,7 @@ import (
 func FuzzValidateURL(f *testing.F) {
 	for _, seed := range []string{
 		"https://git.example.org/acme/app.git", "https://git.example.org:8443/a/b.git", "ssh://git@git.example.org:2222/a.git",
-		"git@git.example.org:a/b.git", "https://[2001:db8::1]:8443/x.git",
+		"git@git.example.org:a/b.git", "https://[2001:db8::1]:8443/x.git", "git@[::1]:acme/app.git",
 		"file:///etc", "/etc/passwd", "./x", "git://host/x", "http://host/x", "https://user:pass@host/x",
 		"-oProxyCommand=x", "https://host/x\n", "https:///x", "", "https://host/x?token=abc", "host:x.git",
 		"user:pass@host:x.git", "ssh://git:pw@host/x", strings.Repeat("a", 3000),

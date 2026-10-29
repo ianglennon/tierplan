@@ -73,6 +73,39 @@ func (r *Repo) Dir() string { return r.bare }
 // commit's ID.
 func (r *Repo) Commit(tb testing.TB, files map[string]string, msg string) string {
 	tb.Helper()
+	r.writeFiles(tb, files)
+	r.git(tb, r.work, "add", "-A")
+	r.git(tb, r.work, "commit", "--allow-empty", "-m", msg)
+	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
+	r.git(tb, r.work, "push", "--force", "origin", "HEAD:refs/heads/main")
+	return sha
+}
+
+// Fork makes a commit that writes files on a new branch started at the commit from, in the working tree only: nothing is
+// pushed, and main is checked out again. It returns the commit's ID. Merge brings the branch in.
+func (r *Repo) Fork(tb testing.TB, from, branch string, files map[string]string, msg string) string {
+	tb.Helper()
+	r.git(tb, r.work, "checkout", "-b", branch, from)
+	r.writeFiles(tb, files)
+	r.git(tb, r.work, "add", "-A")
+	r.git(tb, r.work, "commit", "--allow-empty", "-m", msg)
+	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
+	r.git(tb, r.work, "checkout", "main")
+	return sha
+}
+
+// Merge merges the branch Fork made into main with a merge commit and pushes main. It returns the merge commit's ID.
+func (r *Repo) Merge(tb testing.TB, branch, msg string) string {
+	tb.Helper()
+	r.git(tb, r.work, "merge", "--no-ff", "-m", msg, branch)
+	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
+	r.git(tb, r.work, "push", "--force", "origin", "HEAD:refs/heads/main")
+	return sha
+}
+
+// writeFiles writes files into the working tree; a file whose content is Delete is removed.
+func (r *Repo) writeFiles(tb testing.TB, files map[string]string) {
+	tb.Helper()
 	for name, content := range files {
 		p := filepath.Join(r.work, filepath.FromSlash(name))
 		if content == Delete {
@@ -88,11 +121,6 @@ func (r *Repo) Commit(tb testing.TB, files map[string]string, msg string) string
 			tb.Fatal(err)
 		}
 	}
-	r.git(tb, r.work, "add", "-A")
-	r.git(tb, r.work, "commit", "--allow-empty", "-m", msg)
-	sha := strings.TrimSpace(r.git(tb, r.work, "rev-parse", "HEAD"))
-	r.git(tb, r.work, "push", "--force", "origin", "HEAD:refs/heads/main")
-	return sha
 }
 
 // CommitMany makes n commits on the current branch with one fast-import, which is how a test gets a long history

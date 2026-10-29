@@ -4,18 +4,22 @@
 package gitx
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 )
 
 // ErrNoMirrorRoot is what FetchRef and ReadDir fail with on a client built without Options.Root.
@@ -37,16 +41,34 @@ const (
 const mirrorRootMode = 0o700
 
 // lockFor returns the lock of mirror m: a fetch takes it for writing and every read for reading, so
-// a read never sees a fetch half done. The locks live as long as the client.
-func (g *GoGit) lockFor(m MirrorID) *sync.RWMutex {
+// a read never sees a fetch half done. The locks live as long as the client. Waiting for a lock gives
+// up with the caller's context (WR-A01).
+func (g *GoGit) lockFor(m MirrorID) *mirrorLock {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l, ok := g.locks[m]
 	if !ok {
-		l = &sync.RWMutex{}
+		l = newMirrorLock()
 		g.locks[m] = l
 	}
 	return l
+}
+
+// readDeadline is how long a read of a mirror (waiting for it included) may take. Every reader has one
+// of its own, so none is left to the caller: a read holds the mirror's read lock, which a fetch of the
+// same repository waits for.
+const readDeadline = 30 * time.Second
+
+// readLock takes the read lock of mirror m, waiting no longer than ctx or readDeadline. It returns the
+// context the read runs under, and the function that ends it and gives the lock back.
+func (g *GoGit) readLock(ctx context.Context, m MirrorID) (context.Context, func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, readDeadline)
+	mu := g.lockFor(m)
+	if err := mu.rlock(ctx); err != nil {
+		cancel()
+		return ctx, func() {}, Classify(err, "")
+	}
+	return ctx, func() { mu.runlock(); cancel() }, nil
 }
 
 // mirrorPath is {root}/{id}.git. The ID must be a canonical UUID, so no part of it can climb out
@@ -62,16 +84,63 @@ func (g *GoGit) mirrorPath(m MirrorID) (string, error) {
 	return filepath.Join(g.root, string(m)+".git"), nil
 }
 
-// openMirror opens the bare repository at dir, creating it (and the remote a fetch needs) when it
-// is not there, which includes a mirror whose directory was removed. The caller holds the write
-// lock of the mirror. Nothing is ever checked out: the mirror is only an object database.
-func openMirror(dir string) (*git.Repository, error) {
+// originFile is the file in a mirror that holds the digest of the destination it was filled from (see
+// originOf).
+const originFile = "bayplan-origin"
+
+// originOf is a digest of what a mirror's contents come from: the address, the certificate authority
+// and who signs in (the user name of a token, the public key of a deploy key; never a secret). A mirror
+// keeps every object and ref of the last origin it was fetched from, so one that is fetched from
+// another origin would answer a pinned commit, or a short ID, from the old repository (WR-A05). The
+// digest, not the address, is what the mirror holds.
+func originOf(u URL, r Remote) string {
+	h := sha256.New()
+	field := func(s string) {
+		_, _ = h.Write([]byte(strconv.Itoa(len(s)) + ":" + s))
+	}
+	field(u.Scheme)
+	field(u.Host)
+	field(strconv.Itoa(u.Port))
+	field(u.Path)
+	field(r.CAPEM)
+	switch a := r.Auth.(type) {
+	case TokenAuth:
+		field("token")
+		field(a.Username)
+	case SSHKeyAuth:
+		field("key")
+		if a.Signer != nil {
+			field(ssh.FingerprintSHA256(a.Signer.PublicKey()))
+		}
+	default:
+		field("none")
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// openMirror opens the bare repository at dir for a fetch from the origin with the digest origin,
+// creating it (and the remote a fetch needs) when it is not there, which includes a mirror whose
+// directory was removed. A mirror that was filled from another origin, or whose origin is not
+// recorded, is removed and made again: it is only a cache. The caller holds the write lock of the
+// mirror. Nothing is ever checked out: the mirror is only an object database.
+func openMirror(dir, origin string) (*git.Repository, error) {
+	if _, err := os.Stat(dir); err == nil {
+		recorded, _ := os.ReadFile(filepath.Join(dir, originFile)) //nolint:gosec // G304: path is under the mirror's own directory
+		if string(recorded) != origin {
+			if err := os.RemoveAll(dir); err != nil {
+				return nil, fmt.Errorf("gitx: reset the mirror: %w", err)
+			}
+		}
+	}
 	repo, err := git.PlainOpen(dir)
 	if errors.Is(err, git.ErrRepositoryNotExists) {
 		if err := os.MkdirAll(filepath.Dir(dir), mirrorRootMode); err != nil {
 			return nil, fmt.Errorf("gitx: create the mirrors directory: %w", err)
 		}
 		repo, err = git.PlainInit(dir, true)
+		if err == nil {
+			err = os.WriteFile(filepath.Join(dir, originFile), []byte(origin), 0o600)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("gitx: open the mirror: %w", err)
@@ -217,9 +286,15 @@ func (g *GoGit) RemoveMirror(m MirrorID) error {
 	if err != nil {
 		return err
 	}
+	// Whoever holds the lock ends within fetchDeadline, so this wait is bounded too; the limit is only
+	// for a holder that is not, so that a sweep or a delete never hangs.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*fetchDeadline)
+	defer cancel()
 	mu := g.lockFor(m)
-	mu.Lock()
-	defer mu.Unlock()
+	if err := mu.lock(ctx); err != nil {
+		return fmt.Errorf("gitx: remove the mirror: it is still in use: %w", err)
+	}
+	defer mu.unlock()
 	g.usedMu.Lock()
 	delete(g.used, m)
 	g.usedMu.Unlock()

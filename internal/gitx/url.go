@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/go-git/go-git/v5/plumbing/transport"
 )
 
 // The refusals read as the screens word them (09-UI-SPEC "Shared refusals and failures"). The
@@ -54,12 +56,46 @@ type URL struct {
 // the address: transport.NewEndpoint accepts file://, bare paths and git:// (RESEARCH Pitfall 3).
 //
 // Accepted: https://host[:port]/path, ssh://[user@]host[:port]/path and the scp-like
-// user@host:path, with IPv6 literals in brackets. Refused with ErrURLUnsupported: any other
+// user@host:path; an IPv6 literal goes in brackets in the first two (go-git reads no brackets in the scp-like form).
+// Refused with ErrURLUnsupported: any other
 // scheme, a path, a value that starts with "-", a control or space character, a query or fragment,
 // an empty host or a bad port, and more than 2048 bytes. Refused with ErrURLUserinfo: a password in
 // the address, or any user in an https address (the credential is a separate object). An ssh user
 // without a password (git@) is the way to name the account and is allowed.
 func ValidateURL(raw string) (URL, error) {
+	u, err := validateURL(raw)
+	if err != nil {
+		return URL{}, err
+	}
+	// Everything keyed on the host (the egress check, the host keys, the credential's destination) is judged on the
+	// host this parser found, while go-git connects to the one its own parser finds in the same text. They must be
+	// the same host, or the checks vouch for a place that is not the one dialled (WR-A07).
+	if !agreesWithGoGit(u) {
+		return URL{}, ErrURLUnsupported
+	}
+	return u, nil
+}
+
+// agreesWithGoGit says whether go-git reads the address u was made from as the same scheme, host and port.
+func agreesWithGoGit(u URL) bool {
+	ep, err := transport.NewEndpoint(u.Raw)
+	if err != nil {
+		return false
+	}
+	port := ep.Port
+	if port == 0 {
+		switch u.Scheme {
+		case "https":
+			port = 443
+		case "ssh":
+			port = 22
+		}
+	}
+	return ep.Protocol == u.Scheme && strings.ToLower(strings.Trim(ep.Host, "[]")) == u.Host && port == u.Port
+}
+
+// validateURL is ValidateURL before the check against go-git's reading.
+func validateURL(raw string) (URL, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" || len(s) > maxURLLen || strings.HasPrefix(s, "-") || strings.ContainsAny(s, "?#\\") {
 		return URL{}, ErrURLUnsupported
@@ -130,20 +166,13 @@ func parseSCP(s string) (URL, error) {
 	if !sshUser.MatchString(user) {
 		return URL{}, ErrURLUnsupported
 	}
-	var host, path string
-	if strings.HasPrefix(rest, "[") {
-		end := strings.Index(rest, "]")
-		if end < 0 || len(rest) < end+2 || rest[end+1] != ':' {
-			return URL{}, ErrURLUnsupported
-		}
-		host, path = rest[:end+1], rest[end+2:]
-	} else {
-		i := strings.Index(rest, ":")
-		if i < 0 {
-			return URL{}, ErrURLUnsupported
-		}
-		host, path = rest[:i], rest[i+1:]
+	// A bracketed IPv6 host is refused here: go-git cuts user@[::1]:path at the first colon, so it would connect
+	// to a host called "[" (WR-A07). ssh://user@[::1]/path is the form that works.
+	i := strings.Index(rest, ":")
+	if i < 0 || strings.HasPrefix(rest, "[") {
+		return URL{}, ErrURLUnsupported
 	}
+	host, path := rest[:i], rest[i+1:]
 	if path == "" {
 		return URL{}, ErrURLUnsupported
 	}

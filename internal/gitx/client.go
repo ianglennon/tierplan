@@ -207,15 +207,21 @@ type Options struct {
 	Now func() time.Time
 }
 
-// GoGit is the Client that uses go-git. InstallTransport must have run once in the process.
+// GoGit is the Client that uses go-git. NewGoGit installs the transport (InstallTransport) when no one has.
 type GoGit struct {
 	policy registry.EgressPolicy
 	log    *slog.Logger
 	root   string
 	now    func() time.Time
 
+	// The bounds of a call: the most bytes read for a listing and for a fetch, and how long the ssh
+	// handshake may take. Fields so that a test can set small ones; the defaults are the constants.
+	advertisementMax int64
+	packMax          int64
+	handshake        time.Duration
+
 	mu    sync.Mutex
-	locks map[MirrorID]*sync.RWMutex
+	locks map[MirrorID]*mirrorLock
 
 	usedMu sync.Mutex
 	// used is when each mirror was last fetched or read, since the process began; MirrorStats falls back to the
@@ -223,8 +229,13 @@ type GoGit struct {
 	used map[MirrorID]time.Time
 }
 
-// NewGoGit returns a client that dials through o.Policy.
+// NewGoGit returns a client that dials through o.Policy. It installs the hardened transport (see
+// InstallTransport) with o.Policy, so a client built where no one did cannot fall back to go-git's
+// own, which has no egress policy, no size bound and speaks http, git and file. Installation happens
+// once per process: the policy of the first client built, or of an earlier InstallTransport, is the
+// one the https transport keeps (a call can still bring its own through the context).
 func NewGoGit(o Options) *GoGit {
+	InstallTransport(o.Policy)
 	log := o.Log
 	if log == nil {
 		log = slog.Default()
@@ -233,7 +244,11 @@ func NewGoGit(o Options) *GoGit {
 	if now == nil {
 		now = time.Now
 	}
-	return &GoGit{policy: o.Policy, log: log, root: o.Root, now: now, locks: map[MirrorID]*sync.RWMutex{}, used: map[MirrorID]time.Time{}}
+	return &GoGit{
+		policy: o.Policy, log: log, root: o.Root, now: now,
+		advertisementMax: advertisementBytesMax, packMax: packBytesMax, handshake: sshHandshakeTimeout,
+		locks: map[MirrorID]*mirrorLock{}, used: map[MirrorID]time.Time{},
+	}
 }
 
 var _ Client = (*GoGit)(nil)

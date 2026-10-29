@@ -134,9 +134,15 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 	limits = limits.withDefaults()
 	out := Folder{Links: map[string]Link{}}
 	var repo *git.Repository
-	err := g.withCommitTreeRepo(ctx, m, sha, dir, func(r *git.Repository, t *object.Tree) error {
+	err := g.withCommitTreeRepo(ctx, m, sha, dir, func(ctx context.Context, r *git.Repository, t *object.Tree) error {
 		repo = r
 		out.Tree = t.Hash.String()
+		// The walker below takes a folder it cannot load for the end of the walk (go-git skips it, and
+		// everything after it, without an error), so a mirror that lacks a tree would read as a smaller
+		// folder. Every tree is checked to be there first (WR-A03).
+		if err := checkTrees(ctx, r, t); err != nil {
+			return err
+		}
 		walker := object.NewTreeWalker(t, true, nil)
 		defer walker.Close()
 		var seen int
@@ -188,12 +194,14 @@ func (g *GoGit) ReadFolder(ctx context.Context, m MirrorID, sha, dir string, wan
 			if err != nil {
 				return &Error{Code: CodeUnreachable}
 			}
+			// A folder counts as an entry too: a tree whose entries all lead to the same subtree has
+			// no end and no files, so counting files alone would not stop it (WR-A02).
+			if seen++; seen > limits.MaxEntries {
+				return &LimitError{}
+			}
 			kind := kindOf(entry.Mode)
 			if kind == EntryDir {
 				continue
-			}
-			if seen++; seen > limits.MaxEntries {
-				return &LimitError{}
 			}
 			if kind != EntryFile {
 				link := Link{Kind: kind}
@@ -296,12 +304,41 @@ func sortFolder(f *Folder) {
 	slices.SortFunc(f.Files, func(a, b FolderFile) int { return strings.Compare(a.Path, b.Path) })
 }
 
-// withCommitTree runs fn with the tree of the folder dir of the commit sha, holding the mirror's read lock.
-func (g *GoGit) withCommitTree(ctx context.Context, m MirrorID, sha, dir string, fn func(*object.Tree) error) error {
-	return g.withCommitTreeRepo(ctx, m, sha, dir, func(_ *git.Repository, t *object.Tree) error { return fn(t) })
+// checkTrees says whether every tree below t is in the repository: a missing one is commit_missing, as a
+// mirror that lacks an object of the commit is incomplete and wants fetching again. Each tree is
+// loaded once however many times it is named, and the work ends with ctx.
+func checkTrees(ctx context.Context, repo *git.Repository, t *object.Tree) error {
+	done := map[plumbing.Hash]bool{}
+	stack := []*object.Tree{t}
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return Classify(err, "")
+		}
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, e := range cur.Entries {
+			if e.Mode != filemode.Dir || done[e.Hash] {
+				continue
+			}
+			done[e.Hash] = true
+			sub, err := object.GetTree(repo.Storer, e.Hash)
+			if err != nil {
+				return &Error{Code: CodeCommitMissing}
+			}
+			stack = append(stack, sub)
+		}
+	}
+	return nil
 }
 
-func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir string, fn func(*git.Repository, *object.Tree) error) error {
+// withCommitTree runs fn with the tree of the folder dir of the commit sha, holding the mirror's read lock.
+func (g *GoGit) withCommitTree(ctx context.Context, m MirrorID, sha, dir string, fn func(*object.Tree) error) error {
+	return g.withCommitTreeRepo(ctx, m, sha, dir, func(_ context.Context, _ *git.Repository, t *object.Tree) error { return fn(t) })
+}
+
+// withCommitTreeRepo is withCommitTree for a fn that also reads the repository. fn is given the context the
+// read runs under, which ends with readDeadline.
+func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir string, fn func(context.Context, *git.Repository, *object.Tree) error) error {
 	if err := ctx.Err(); err != nil {
 		return Classify(err, "")
 	}
@@ -309,9 +346,11 @@ func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir str
 	if err != nil {
 		return err
 	}
-	mu := g.lockFor(m)
-	mu.RLock()
-	defer mu.RUnlock()
+	ctx, release, err := g.readLock(ctx, m)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	repo, err := openExisting(path)
 	if errors.Is(err, errMirrorMissing) {
@@ -340,5 +379,5 @@ func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir str
 			return &Error{Code: CodeFolderMissing}
 		}
 	}
-	return fn(repo, tree)
+	return fn(ctx, repo, tree)
 }

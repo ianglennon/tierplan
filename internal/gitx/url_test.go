@@ -28,7 +28,6 @@ func TestValidateURLAcceptsTheAddressesBayplanTalksTo(t *testing.T) {
 		{"git@git.example.org:/srv/git/b.git", gitx.URL{Scheme: "ssh", User: "git", Host: "git.example.org", Port: 22, Path: "/srv/git/b.git"}},
 		{"https://[2001:db8::1]:8443/x.git", gitx.URL{Scheme: "https", Host: "2001:db8::1", Port: 8443, Path: "/x.git"}},
 		{"ssh://git@[2001:db8::1]/x.git", gitx.URL{Scheme: "ssh", User: "git", Host: "2001:db8::1", Port: 22, Path: "/x.git"}},
-		{"git@[2001:db8::1]:x.git", gitx.URL{Scheme: "ssh", User: "git", Host: "2001:db8::1", Port: 22, Path: "x.git"}},
 		{"https://192.168.1.10/x.git", gitx.URL{Scheme: "https", Host: "192.168.1.10", Port: 443, Path: "/x.git"}},
 		// The host is lower-cased; the stored address is the input, trimmed, never rewritten.
 		{"  https://GitHub.COM/Acme/App.git \n", gitx.URL{Scheme: "https", Host: "github.com", Port: 443, Path: "/Acme/App.git"}},
@@ -54,6 +53,8 @@ func TestValidateURLRefusesWhatGoGitWouldHappilyOpen(t *testing.T) {
 		"https://git.example.org/x\n.git", "https://git.example.org/x\x00.git", "https://git.example.org/ x.git", "https://git.exam\tple.org/x.git",
 		"https:///x.git", "https://:443/x.git", "ssh:///x.git", "ssh://git@/x.git", "git@:x.git", "git@host",
 		"host:x.git", "localhost:8080/x.git", "C:/repo.git",
+		// go-git reads the host of the bracketed scp-like form as "[" (WR-A07); ssh://git@[::1]/x.git is the working form.
+		"git@[2001:db8::1]:x.git", "git@[::1]:acme/app.git",
 		"https://git.example.org:0/x.git", "https://git.example.org:99999/x.git", "ssh://git@git.example.org:abc/x.git",
 		"https://git.example.org/x.git?token=abc", "https://git.example.org/x.git#frag",
 		"https://exa mple.org/x.git", "https://[::1/x.git", "https://[fe80::1%25eth0]/x.git",

@@ -40,6 +40,7 @@ func InstallTransport(p registry.EgressPolicy) {
 			client.InstallProtocol(scheme, refusedTransport{})
 		}
 		gitssh.DefaultSSHConfig = nil
+		registerSSHDialer()
 	})
 }
 
