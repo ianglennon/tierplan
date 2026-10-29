@@ -121,6 +121,11 @@ func (s *Service) runCheck(ctx context.Context, envID, stackID string, o CheckOp
 	ctx, cancel := context.WithTimeout(ctx, checkDeadline)
 	defer cancel()
 	res, err := s.check(ctx, envID, stackID, o)
+	if err == nil {
+		// A stack with auto-deploy on that was found behind is deployed before the check reads as over, so a caller that
+		// waits on the check sees the deploy started.
+		s.afterCheck(ctx, envID, stackID, o, res)
+	}
 	s.mu.Lock()
 	delete(s.checking, stackID)
 	c.res, c.err = res, err
@@ -181,6 +186,13 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 	next.HeadCommit, next.HeadTree = head.SHA, tree
 	next.Status, next.Behind = stackops.GitStatusUnknown, 0
 	next.ReasonCode, next.ReasonDetail, next.ErrorSince, next.ConsecutiveFailures = "", "", nil, 0
+	// A commit an automatic deploy held back stays pending while it is the head. Another head, or a person pressing
+	// Check now, lets the next automatic deploy look at it afresh (D-19).
+	held := prev.PendingCommit
+	if o.Trigger == TriggerManual || held != head.SHA {
+		held = ""
+	}
+	next.PendingCommit = held
 
 	out := OutcomeSkipped
 	switch {
@@ -195,6 +207,7 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 	case tree == dep.Tree:
 		// The head may have moved without touching the folder: the stack stays in sync (D-13).
 		next.Status = stackops.GitStatusInSync
+		next.PendingCommit = ""
 		out = OutcomeInSync
 	default:
 		touch, err := s.git.CommitsTouching(ctx, mirror, head.SHA, dep.Commit, sg.Folder, BehindCap)
@@ -214,8 +227,24 @@ func (s *Service) check(ctx context.Context, envID, stackID string, o CheckOptio
 		if err != nil {
 			return s.failWith(ctx, st, prev, withHead(next, head.SHA, tree), reasonOf(err), detailOf(reasonOf(err), err))
 		}
+		if problem != "" && autoRuns(sg) {
+			// The stack deploys by itself, so a commit that fails the checks is a blocker: it is held back and left for a
+			// person, who hears of it (D-19).
+			blocked := withHead(next, head.SHA, tree)
+			blocked.PendingCommit = head.SHA
+			out, err := s.failWith(ctx, st, prev, blocked, ReasonAutoDeployBlocked, problem)
+			if err == nil && prev.PendingCommit != head.SHA {
+				s.setEvent(ctx, st.ID, stackops.GitEventSkipped, problem)
+			}
+			return out, err
+		}
 		if problem != "" {
 			return s.failWith(ctx, st, prev, withHead(next, head.SHA, tree), ReasonChecksFailed, problem)
+		}
+		if autoRuns(sg) && held == head.SHA {
+			// Held back before and nobody has acted: it keeps waiting, and keeps saying why.
+			code, detail := heldReason(prev)
+			return s.failWith(ctx, st, prev, withHead(next, head.SHA, tree), code, detail)
 		}
 	}
 	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
@@ -267,6 +296,20 @@ func (s *Service) failWith(ctx context.Context, st stackops.Stack, prev, next st
 		return "", err
 	}
 	return OutcomeError, nil
+}
+
+// heldReason is the reason a commit that was held back keeps showing: the one the state already holds when it is an
+// automatic deploy's, else the generic one for a held back commit.
+func heldReason(prev stackops.GitState) (ReasonCode, string) {
+	switch code := ReasonCode(prev.ReasonCode); code {
+	case ReasonAutoDeployBlocked, ReasonAutoDeployFailed:
+		return code, prev.ReasonDetail
+	}
+	detail := prev.EventDetail
+	if detail == "" {
+		detail = detailOf(ReasonAutoDeployBlocked, nil)
+	}
+	return ReasonAutoDeployBlocked, detail
 }
 
 func withHead(g stackops.GitState, commit, tree string) stackops.GitState {

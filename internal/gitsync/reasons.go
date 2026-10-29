@@ -44,6 +44,12 @@ func ReasonCodes() []ReasonCode {
 	}
 }
 
+// autoDeployReason says whether a reason is one an automatic deploy leaves: the repository was read, and a commit waits
+// for a person or failed to deploy.
+func autoDeployReason(c ReasonCode) bool {
+	return c == ReasonAutoDeployBlocked || c == ReasonAutoDeployFailed
+}
+
 // reasonOf maps a failed git call to a reason code. Nothing of the error's text is kept: only the code it maps to
 // (gitx has already reduced it to a fixed set).
 func reasonOf(err error) ReasonCode {

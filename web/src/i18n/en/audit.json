@@ -228,7 +228,13 @@
         "webhook_rotated": "Rotated a git webhook",
         "webhook_rotated_named": "Rotated the webhook of {{name}}",
         "webhook_removed": "Removed a git webhook",
-        "webhook_removed_named": "Removed the webhook of {{name}}"
+        "webhook_removed_named": "Removed the webhook of {{name}}",
+        "autodeploy_enabled": "Turned on auto-deploy",
+        "autodeploy_enabled_named": "Turned on auto-deploy for {{name}}",
+        "autodeploy_disabled": "Turned off auto-deploy",
+        "autodeploy_disabled_named": "Turned off auto-deploy for {{name}}",
+        "autodeployed": "Auto-deployed a git stack",
+        "autodeployed_named": "Auto-deployed {{name}} at {{sha}}"
       },
       "logs": {
         "viewed": "Container logs viewed",

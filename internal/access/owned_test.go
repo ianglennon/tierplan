@@ -630,3 +630,30 @@ func TestDeregisterOwnedForgetsOnlyThatAutomationAndTwiceIsNotAnError(t *testing
 		t.Errorf("RunAs of a deregistered automation = %v, want not found", err)
 	}
 }
+
+func TestMarkNeedsEnvAdminMakesTheRecheckDemandAnAdmin(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "op")
+	f.assign(t, "op", "operator", "env-a")
+	f.register(t, access.OwnedResource{Kind: kindTestSync, ResourceID: "r1", EnvID: "env-a", Name: "r1", OwnerID: "op"})
+
+	if err := f.svc.MarkNeedsEnvAdmin(f.ctx, kindTestSync, "r1"); err != nil {
+		t.Fatalf("MarkNeedsEnvAdmin: %v", err)
+	}
+	// Marking again changes nothing and is not an error.
+	if err := f.svc.MarkNeedsEnvAdmin(f.ctx, kindTestSync, "r1"); err != nil {
+		t.Fatalf("MarkNeedsEnvAdmin again: %v", err)
+	}
+	if got := f.state(t, kindTestSync, "r1"); got != "active" {
+		t.Errorf("state = %s, marking does not recheck by itself", got)
+	}
+	if n := f.recheck(t, "op"); n != 1 {
+		t.Fatalf("recheck changed %d rows, want the one that now needs an Admin", n)
+	}
+	if got := f.state(t, kindTestSync, "r1"); got != "paused_lacks_permission" {
+		t.Errorf("state = %s, want paused_lacks_permission", got)
+	}
+	if err := f.svc.MarkNeedsEnvAdmin(f.ctx, kindTestSync, "nope"); !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Errorf("MarkNeedsEnvAdmin of an unknown automation = %v, want ErrOwnedNotFound", err)
+	}
+}

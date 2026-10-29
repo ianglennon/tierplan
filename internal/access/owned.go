@@ -142,6 +142,28 @@ func (s *Service) DeregisterOwnedTx(ctx context.Context, tx *sql.Tx, q *sqlc.Que
 	return nil
 }
 
+// MarkNeedsEnvAdmin records that an automation's last run used host-escalating compose keys, so from now on its owner
+// must hold env Admin to keep it running (D-13, D-14). The owner is rechecked at the next RunAs, not here. An automation
+// that is not recorded is ErrOwnedNotFound; marking it twice changes nothing the second time.
+func (s *Service) MarkNeedsEnvAdmin(ctx context.Context, kind, resourceID string) error {
+	row, err := s.Store.RQ.GetOwnedResource(ctx, sqlc.GetOwnedResourceParams{Kind: kind, ResourceID: resourceID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrOwnedNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("access: read owned %s %s: %w", kind, resourceID, err)
+	}
+	if row.NeedsEnvAdmin != 0 {
+		return nil
+	}
+	if err := s.Store.Q.SetOwnedNeedsEnvAdmin(ctx, sqlc.SetOwnedNeedsEnvAdminParams{
+		NeedsEnvAdmin: 1, UpdatedAt: s.now().UnixNano(), Kind: kind, ResourceID: resourceID,
+	}); err != nil {
+		return fmt.Errorf("access: mark owned %s %s: %w", kind, resourceID, err)
+	}
+	return nil
+}
+
 // RecheckOwnedTx re-evaluates every automation the given owners hold, inside
 // the caller's write transaction, and returns how many changed state. Callers
 // run it in the transaction that disables or deletes a user, or changes a

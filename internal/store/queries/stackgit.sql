@@ -28,12 +28,13 @@ INSERT INTO stack_git_state (stack_id) VALUES (?);
 
 -- name: GetStackGitState :one
 SELECT stack_id, deployed_commit, deployed_tree, head_commit, head_tree, behind, status, reason_code, reason_detail,
-       checked_at, error_since, consecutive_failures, pending_commit, next_check_at
+       checked_at, error_since, consecutive_failures, pending_commit, next_check_at, event_kind, event_detail, event_at
 FROM stack_git_state WHERE stack_id = ?;
 
 -- name: ListStackGitStatesByEnv :many
 SELECT t.stack_id, t.deployed_commit, t.deployed_tree, t.head_commit, t.head_tree, t.behind, t.status, t.reason_code,
-       t.reason_detail, t.checked_at, t.error_since, t.consecutive_failures, t.pending_commit, t.next_check_at
+       t.reason_detail, t.checked_at, t.error_since, t.consecutive_failures, t.pending_commit, t.next_check_at,
+       t.event_kind, t.event_detail, t.event_at
 FROM stack_git_state t JOIN stacks s ON s.id = t.stack_id
 WHERE s.env_id = ? ORDER BY s.name;
 
@@ -117,3 +118,14 @@ WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != '';
 -- name: SetStackGitWebhookDelivery :exec
 -- The last delivery the webhook saw and what became of it ('accepted' or 'rejected').
 UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ?;
+
+-- name: SetStackGitAutoDeploy :execrows
+-- Auto-deploy on or off (D-18) and whether it is paused and why: 'rollback' after a roll back (at revision
+-- seq) or 'owner' while its owner lacks the permission; empty means running. Turning it on or off also clears a pause.
+UPDATE stack_git SET auto_deploy = ?, auto_deploy_paused_reason = ?, auto_deploy_paused_seq = ?, updated_at = ?
+WHERE stack_id = ?;
+
+-- name: SetStackGitEvent :execrows
+-- The last thing an automatic deploy did that a person should hear about (D-19); an empty kind clears it. A stack
+-- with no state row matches nothing.
+UPDATE stack_git_state SET event_kind = ?, event_detail = ?, event_at = ? WHERE stack_id = ?;

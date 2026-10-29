@@ -152,6 +152,10 @@ type StacksDeps struct {
 	// GitDeployed, when set, is told that a revision of a stack ended good, so that a git stack's settings and sync state
 	// follow what was deployed (gitsync.Service.Deployed). It does nothing for a revision not made from a repository.
 	GitDeployed func(ctx context.Context, stackID string, rev stackops.Snapshot)
+	// GitDeployFailed, when set, is told that the deploy of a revision ended failed, with the service that failed, so
+	// that a git stack whose revision an automatic deploy made goes to error (gitsync.Service.DeployFailed). It does
+	// nothing for a revision a person deployed.
+	GitDeployFailed func(ctx context.Context, st stackops.Stack, rev stackops.Snapshot, failedService string)
 	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
 	// router. Nil makes such a deploy refuse with environment_not_found.
 	Envs httpx.EnvResolver

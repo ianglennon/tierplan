@@ -765,11 +765,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	gitConns := gitconn.NewStore(st, vlt, nil)
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,
-		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log}),
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log, Access: accessSvc}),
 	}
 	// A git stack's webhook and auto-deploy act on their owner's authority while the owner is away (P3 D-14): the
 	// kinds are registered before any route can create or run one.
 	gitsync.RegisterOwnedKinds()
+	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
+	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
+	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
+	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -841,7 +846,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, Log: log},
+		Stacks:        stacksDeps,
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
 		Git:           gitDeps,
 		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},

@@ -255,6 +255,22 @@ func (in *StackGitUpdatesInput) Resolve(ctx huma.Context) []error {
 	return nil
 }
 
+// StackGitAutoDeployInput is the request of PUT /api/env/{envId}/stacks/{stackId}/git/auto-deploy.
+type StackGitAutoDeployInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		Enabled bool `json:"enabled" doc:"True to deploy a commit that changes the stack's folder by itself, on the authority of the person who sends this request; false to have such a commit wait for review"`
+	}
+	host string
+}
+
+// Resolve reads the host the request came to, for the masked webhook address of a server that has no public URL set.
+func (in *StackGitAutoDeployInput) Resolve(ctx huma.Context) []error {
+	in.host = ctx.Host()
+	return nil
+}
+
 // StackGitReadInput is the request of GET /api/env/{envId}/stacks/{stackId}/git.
 type StackGitReadInput struct {
 	StackPathInput
@@ -442,10 +458,25 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 			return updateStackGitUpdates(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
+		OperationID: "setStackGitAutoDeploy", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/auto-deploy",
+		Summary: "Turn a git stack's auto-deploy on or off",
+		Description: "Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. " +
+			"With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Bayplan rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, " +
+			"so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. " +
+			"A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. " +
+			"A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. " +
+			"Turning it on makes the caller the owner (and resumes a paused one), registers the automation to them and starts a check; turning it off forgets the owner. Turning it on or off is audited as git.autodeploy_enabled or git.autodeploy_disabled, and a request that changes nothing records nothing. " +
+			"Answers the stack's git summary. 403 owner_lacks_permission when the caller could not run it themselves; a stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitAutoDeployInput) (*StackGitOutput, error) {
+			return setStackGitAutoDeploy(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
 		OperationID: "createStackGitWebhook", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
 		Summary: "Give a git stack a webhook",
 		Description: "Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. " +
-			"Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, it never deploys, and it names no ref or commit. " +
+			"Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. " +
 			"flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. " +
 			"A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).",
 		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusCreated,
@@ -510,6 +541,78 @@ func updateStackGitUpdates(ctx context.Context, d StacksDeps, g GitDeps, in *Sta
 			"poll_enabled_from": strconv.FormatBool(sg.PollEnabled), "poll_minutes_from": strconv.Itoa(was),
 		})
 	}
+	return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
+}
+
+func setStackGitAutoDeploy(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitAutoDeployInput) (*StackGitOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if g.Access == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	sg, err := repo.StackGit(ctx, st.ID)
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return nil, stackNotGit()
+	case err != nil:
+		return nil, stackInternal(d, "read the git settings", env.ID, err)
+	}
+	_, ownedErr := g.Access.GetOwned(ctx, gitsync.KindGitAutoDeploy, st.ID)
+	if ownedErr != nil && !errors.Is(ownedErr, access.ErrOwnedNotFound) {
+		return nil, stackInternal(d, "read the auto-deploy owner", env.ID, ownedErr)
+	}
+	owned := ownedErr == nil
+
+	if in.Body.Enabled {
+		// Already running for someone: nothing changes, and nobody else's automation is taken over by asking again.
+		if sg.AutoDeploy && sg.AutoDeployPausedReason == "" && owned {
+			return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
+		}
+		err = repo.SetAutoDeploy(ctx, st.ID, true, "", 0, func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error {
+			// A paused one is handed to the caller, who must hold the permission now.
+			if err := g.Access.DeregisterOwnedTx(ctx, tx, q, gitsync.KindGitAutoDeploy, st.ID); err != nil {
+				return err
+			}
+			return g.Access.RegisterOwnedTx(ctx, tx, q, access.OwnedResource{
+				Kind: gitsync.KindGitAutoDeploy, ResourceID: st.ID, EnvID: env.ID, Name: st.Name, OwnerID: p.ID,
+			})
+		})
+		switch {
+		case errors.Is(err, stackops.ErrNoGit):
+			return nil, stackNotGit()
+		case errors.Is(err, access.ErrOwnerLacksPermission):
+			return nil, httpx.Problem(http.StatusForbidden, "owner_lacks_permission", "You can't turn on an automation that acts on your behalf without the permission it needs.")
+		case err != nil:
+			return nil, stackInternal(d, "turn on the auto-deploy", env.ID, err)
+		}
+		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitAutoDeployEnabled, st.ID, audit.ResultSuccess, "", map[string]string{"stack": st.Name})
+		// A stack that is behind deploys now, and not at the next commit: a person turning it on asked for exactly that.
+		if g.Sync != nil {
+			g.Sync.Trigger(env.ID, st.ID, gitsync.TriggerManual)
+		}
+		return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
+	}
+
+	if !sg.AutoDeploy && !owned {
+		return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
+	}
+	err = repo.SetAutoDeploy(ctx, st.ID, false, "", 0, func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error {
+		return g.Access.DeregisterOwnedTx(ctx, tx, q, gitsync.KindGitAutoDeploy, st.ID)
+	})
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return nil, stackNotGit()
+	case err != nil:
+		return nil, stackInternal(d, "turn off the auto-deploy", env.ID, err)
+	}
+	recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitAutoDeployDisabled, st.ID, audit.ResultSuccess, "", map[string]string{"stack": st.Name})
 	return gitSummaryAnswer(ctx, d, g, st.ID, env.ID, in.host)
 }
 

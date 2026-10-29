@@ -5,12 +5,16 @@ package stackops_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/bayplan/internal/stackops"
 	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
 // Stacks made from a repository folder (plan 09-10, GIT-02, D-06, D-08, D-14, D-18): the draft holds the
@@ -626,5 +630,127 @@ func TestGitDraftOriginsMakesNewFilesSecretOverlays(t *testing.T) {
 	}
 	if next.Files[1].Origin != stacks.OriginInline {
 		t.Errorf("the input was changed: %+v", next)
+	}
+}
+
+// The settings an automatic deploy keeps (plan 09-25, GIT-07, D-18, D-19).
+
+func TestSetAutoDeployOnOffAndPaused(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, _, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sg, err := f.repo.StackGit(ctx, st.ID); err != nil || sg.AutoDeploy || sg.AutoDeployPausedReason != "" {
+		t.Fatalf("a new git stack = %+v, %v; want auto-deploy off", sg, err)
+	}
+
+	ran := false
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, true, "", 0, func(context.Context, *sql.Tx, *sqlc.Queries) error { ran = true; return nil }); err != nil {
+		t.Fatalf("SetAutoDeploy on: %v", err)
+	}
+	if sg, _ := f.repo.StackGit(ctx, st.ID); !sg.AutoDeploy || sg.AutoDeployPausedReason != "" || !ran {
+		t.Errorf("after on = %+v (callback ran %v), want on and running", sg, ran)
+	}
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, true, stackops.PausedRollback, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	if sg, _ := f.repo.StackGit(ctx, st.ID); !sg.AutoDeploy || sg.AutoDeployPausedReason != stackops.PausedRollback || sg.AutoDeployPausedSeq != 4 {
+		t.Errorf("after pause = %+v, want paused for a roll back at 4", sg)
+	}
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, false, "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if sg, _ := f.repo.StackGit(ctx, st.ID); sg.AutoDeploy || sg.AutoDeployPausedReason != "" || sg.AutoDeployPausedSeq != 0 {
+		t.Errorf("after off = %+v, want off and not paused", sg)
+	}
+
+	// A callback that fails undoes the setting.
+	boom := errors.New("boom")
+	if err := f.repo.SetAutoDeploy(ctx, st.ID, true, "", 0, func(context.Context, *sql.Tx, *sqlc.Queries) error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("SetAutoDeploy with a failing callback = %v, want it", err)
+	}
+	if sg, _ := f.repo.StackGit(ctx, st.ID); sg.AutoDeploy {
+		t.Errorf("auto-deploy is on after its transaction failed")
+	}
+	if err := f.repo.SetAutoDeploy(ctx, "no-such-stack", true, "", 0, nil); !errors.Is(err, stackops.ErrNoGit) {
+		t.Errorf("SetAutoDeploy of a stack without git = %v, want ErrNoGit", err)
+	}
+}
+
+func TestSetSyncTriggerAndRevertedDriftAreForRevisions(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, draft, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, err := f.repo.NewRevision(ctx, st.ID, "ada", stackops.OriginDeploy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.SetSyncTrigger(ctx, rev.ID, stackops.SyncWebhook); err != nil {
+		t.Fatalf("SetSyncTrigger: %v", err)
+	}
+	if err := f.repo.SetSyncTrigger(ctx, rev.ID, "manual"); err == nil {
+		t.Errorf("SetSyncTrigger accepted a trigger no automatic deploy has")
+	}
+	if err := f.repo.SetSyncTrigger(ctx, draft.ID, stackops.SyncPoll); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("SetSyncTrigger of a draft = %v, want sql.ErrNoRows", err)
+	}
+	if err := f.repo.SetRevertedDrift(ctx, rev.ID, []string{"image of web: nginx:1.28 -> nginx:1.27"}); err != nil {
+		t.Fatalf("SetRevertedDrift: %v", err)
+	}
+	var trigger, drift string
+	if err := f.repo.Store.Read.QueryRow(`SELECT sync_trigger, reverted_drift FROM stack_snapshots WHERE id = ?`, rev.ID).Scan(&trigger, &drift); err != nil {
+		t.Fatal(err)
+	}
+	if trigger != "webhook" || !strings.Contains(drift, "nginx:1.28") || !strings.HasPrefix(drift, "[") {
+		t.Errorf("stored trigger %q, reverted drift %q", trigger, drift)
+	}
+	got, err := f.repo.Revision(ctx, st.ID, rev.Seq)
+	if err != nil || got.SyncTrigger != "webhook" {
+		t.Errorf("Revision = %+v, %v; want sync trigger webhook", got, err)
+	}
+}
+
+func TestSetGitEventIsStoredAndClearedBesideTheState(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	f.addGitRepo(t, gitRepoID, "acme")
+	ctx := context.Background()
+	st, _, err := f.repo.CreateGitStack(ctx, gitInput(f, "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	if err := f.repo.SetGitEvent(ctx, st.ID, stackops.GitEventSkipped, "a bind mount", at); err != nil {
+		t.Fatalf("SetGitEvent: %v", err)
+	}
+	s, err := f.repo.GitState(ctx, st.ID)
+	if err != nil || s.EventKind != stackops.GitEventSkipped || s.EventDetail != "a bind mount" || s.EventAt == nil || !s.EventAt.Equal(at) {
+		t.Fatalf("state = %+v, %v; want the event", s, err)
+	}
+	// A check's write of the answer leaves the event alone.
+	s.Behind = 3
+	if err := f.repo.WriteGitState(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ = f.repo.GitState(ctx, st.ID); s.EventKind != stackops.GitEventSkipped || s.Behind != 3 {
+		t.Errorf("state after a write = %+v, want the event kept", s)
+	}
+	if err := f.repo.SetGitEvent(ctx, st.ID, "", "ignored", at); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ = f.repo.GitState(ctx, st.ID); s.EventKind != "" || s.EventDetail != "" || s.EventAt != nil {
+		t.Errorf("state after clearing = %+v, want no event", s)
+	}
+	if err := f.repo.SetGitEvent(ctx, "no-such-stack", stackops.GitEventPaused, "x", at); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("SetGitEvent of an unknown stack = %v, want sql.ErrNoRows", err)
 	}
 }

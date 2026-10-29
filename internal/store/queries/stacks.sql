@@ -63,7 +63,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -103,7 +103,7 @@ WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -117,7 +117,7 @@ WHERE stack_id = ? AND kind = 'revision';
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -139,7 +139,7 @@ UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -157,6 +157,14 @@ UPDATE stack_snapshots SET compose_files = ? WHERE id = ?;
 -- What a snapshot of a git stack was made from (D-08): the commit, the tree hash of the folder, the source as JSON
 -- and what triggered the deploy of a revision ('' for a person).
 UPDATE stack_snapshots SET git_commit = ?, git_tree = ?, git_source = ?, sync_trigger = ? WHERE id = ?;
+
+-- name: SetSnapshotSyncTrigger :execrows
+-- What started the deploy of a revision no person pressed ('poll' or 'webhook'), set once the revision is taken.
+UPDATE stack_snapshots SET sync_trigger = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotRevertedDrift :execrows
+-- The lines an automatic deploy put back to what the repository says, a JSON array of strings.
+UPDATE stack_snapshots SET reverted_drift = ? WHERE id = ? AND kind = 'revision';
 
 -- name: SetSnapshotPlatforms :execrows
 -- The platforms each service of a revision was sent with, JSON by swarm service name.

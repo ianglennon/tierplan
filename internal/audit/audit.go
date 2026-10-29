@@ -214,6 +214,13 @@ const (
 	ActionGitWebhookCreated = "git.webhook_created"
 	ActionGitWebhookRotated = "git.webhook_rotated"
 	ActionGitWebhookRemoved = "git.webhook_removed"
+	// A person turned a git stack's automatic deploys on or off (D-18). The entry names the stack.
+	ActionGitAutoDeployEnabled  = "git.autodeploy_enabled"
+	ActionGitAutoDeployDisabled = "git.autodeploy_disabled"
+	// Bayplan deployed a new commit of a git stack by itself, on the authority of the person who turned auto-deploy on
+	// (D-20). The actor is the system principal that ran it; the entry names the stack, the commit, what started it (poll
+	// or webhook) and the owner.
+	ActionGitAutoDeployed = "git.autodeployed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

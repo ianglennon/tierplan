@@ -2420,6 +2420,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/auto-deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn a git stack's auto-deploy on or off
+         * @description Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Bayplan rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. Turning it on makes the caller the owner (and resumes a paused one), registers the automation to them and starts a check; turning it off forgets the owner. Turning it on or off is audited as git.autodeploy_enabled or git.autodeploy_disabled, and a request that changes nothing records nothing. Answers the stack's git summary. 403 owner_lacks_permission when the caller could not run it themselves; a stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         */
+        put: operations["setStackGitAutoDeploy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/git/check": {
         parameters: {
             query?: never;
@@ -2511,7 +2531,7 @@ export interface paths {
         put?: never;
         /**
          * Give a git stack a webhook
-         * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, it never deploys, and it names no ref or commit. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
+         * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
          */
         post: operations["createStackGitWebhook"];
         /**
@@ -10239,6 +10259,10 @@ export interface components {
             /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
             path: string;
         };
+        StackGitAutoDeployInputBody: {
+            /** @description True to deploy a commit that changes the stack's folder by itself, on the authority of the person who sends this request; false to have such a commit wait for review */
+            enabled: boolean;
+        };
         StackGitCheckBody: {
             /** @description True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer */
             checking: boolean;
@@ -17387,6 +17411,45 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSummary"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setStackGitAutoDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitAutoDeployInputBody"];
+            };
+        };
         responses: {
             /** @description OK */
             200: {

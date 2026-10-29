@@ -48,6 +48,8 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 	next.CheckedAt = &now
 	next.DeployedCommit, next.DeployedTree = rev.Git.Commit, rev.Git.Tree
 	next.ReasonCode, next.ReasonDetail = "", ""
+	// A good deploy ends whatever a held back commit was waiting for (D-19).
+	next.PendingCommit = ""
 	switch {
 	case prev.HeadCommit == "" || prev.Status == stackops.GitStatusError || prev.HeadCommit == rev.Git.Commit || prev.HeadTree == rev.Git.Tree:
 		next.HeadCommit, next.HeadTree = rev.Git.Commit, rev.Git.Tree
@@ -57,5 +59,40 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 	}
 	if err := s.writeState(ctx, stackops.Stack{ID: stackID}, prev, next, systemActor); err != nil {
 		s.log.Warn("could not store the git state after a deploy", "stack", stackID, "error", err)
+		return
+	}
+	if prev.EventKind == stackops.GitEventSkipped {
+		s.setEvent(ctx, stackID, "", "")
+	}
+}
+
+// DeployFailed is told that the deploy of a revision ended failed. For a revision an automatic deploy made it puts the
+// stack in error auto_deploy_failed naming the service that failed, and records the commit as pending so a commit that
+// failed is not deployed again in a loop; the last good version keeps running and nothing is rolled back (P7 D-14). The
+// next commit that changes the folder is tried as usual. A revision a person deployed, or one that is not from a
+// repository, changes nothing. A failure is logged and never fails the deploy that is over.
+func (s *Service) DeployFailed(ctx context.Context, st stackops.Stack, rev stackops.Snapshot, failedService string) {
+	if rev.Git.Commit == "" || rev.SyncTrigger == "" {
+		return
+	}
+	prev, err := s.repo.GitState(ctx, st.ID)
+	if err != nil {
+		s.log.Warn("could not read the git state after a failed deploy", "stack", st.ID, "error", err)
+		return
+	}
+	detail := "The automatic deploy failed."
+	if failedService != "" {
+		detail = "The automatic deploy failed at the service " + failedService + "."
+	}
+	now := s.now().UTC()
+	next := prev
+	next.CheckedAt = &now
+	next.Status, next.ReasonCode, next.ReasonDetail = stackops.GitStatusError, string(ReasonAutoDeployFailed), clipProblem(detail)
+	next.PendingCommit = rev.Git.Commit
+	if prev.HeadCommit == "" {
+		next.HeadCommit, next.HeadTree = rev.Git.Commit, rev.Git.Tree
+	}
+	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
+		s.log.Warn("could not store the git state after a failed deploy", "stack", st.ID, "error", err)
 	}
 }

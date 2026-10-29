@@ -371,6 +371,34 @@ func stackJobOwner(p *rbac.Principal) string {
 type deployOpts struct {
 	// Trigger is what started the deploy ("poll" or "webhook"); empty for one a person started.
 	Trigger string
+	// Escalating, when set, is set to whether the stack asks for host access that only an env Admin may deploy, once the
+	// policy has passed for the caller. An automatic deploy uses it to record that its owner must stay an Admin.
+	Escalating *bool
+}
+
+// noteHostAccess tells o.Escalating whether the stack asks for host access, judged without a role (stackops.HostAccess),
+// so an Admin's deploy of it is known for what it is. A stack that can't be read for it counts as escalating: the owner
+// is then held to the stricter rule.
+func (o deployOpts) noteHostAccess(d StacksDeps, copy stacks.WorkingCopy, plan convert.Plan) {
+	if o.Escalating == nil {
+		return
+	}
+	res, err := d.ops().HostAccess(copy, plan)
+	*o.Escalating = err != nil || len(res.Entries) > 0 || len(res.Kinds) > 0
+}
+
+// recordTrigger stores on a new revision what started its deploy when no person did, and on the in-memory copy, which
+// the end of the deploy reads. A failure marks the revision failed: nothing has started that could finish it.
+func (o deployOpts) recordTrigger(ctx context.Context, d StacksDeps, envID string, repo stackops.Repo, rev *stackops.Snapshot) error {
+	if o.Trigger == "" {
+		return nil
+	}
+	if err := repo.SetSyncTrigger(ctx, rev.ID, o.Trigger); err != nil {
+		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
+		return stackInternal(d, "record the trigger", envID, err)
+	}
+	rev.SyncTrigger = o.Trigger
+	return nil
 }
 
 // auditExtras are the audit details that say who an automated deploy acted for and what started it.
@@ -472,6 +500,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	if pol.Refused {
 		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
+	o.noteHostAccess(d, draft.Copy, plan)
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
@@ -499,6 +528,9 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	if err := o.recordTrigger(ctx, d, env.ID, repo, &rev); err != nil {
+		return nil, err
 	}
 	// The draft is now the content of this revision, so it starts from it: the next review does not
 	// take this deploy for one made by someone else.
@@ -580,6 +612,7 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	if pol.Refused {
 		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
+	o.noteHostAccess(d, draft.Copy, convert.Plan{})
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
@@ -604,6 +637,9 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	if err := o.recordTrigger(ctx, d, env.ID, repo, &rev); err != nil {
+		return nil, err
 	}
 	if err := repo.RebaseDraft(ctx, st.ID, rev.Seq); err != nil {
 		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
@@ -1043,6 +1079,10 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)
+	}
+	// A revision an automatic deploy made that failed puts the stack in error; a cancelled one does not, a person did it.
+	if state == stackops.DeployFailed && d.GitDeployFailed != nil && rev.Git.Commit != "" && rev.SyncTrigger != "" {
+		d.GitDeployFailed(wctx, st, rev, res.FailedService)
 	}
 	// The outcome is stored, so this revision is no longer pending and the deployed one is the newest good: prune
 	// the stack to the instance's limit (D-01). A failure is logged and never fails the record.

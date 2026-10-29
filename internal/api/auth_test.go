@@ -357,7 +357,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		Access: f.access, Instance: f.inst,
 		Sync: gitsync.New(gitsync.Deps{
 			Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Audit: f.aud, Log: log, Now: f.clk.now,
-			Triggered: f.gitTriggered, Joined: f.gitJoined,
+			Access: f.access, Triggered: f.gitTriggered, Joined: f.gitJoined,
 		}),
 	}
 	gitsync.RegisterOwnedKinds()
@@ -409,7 +409,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
-			GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed,
+			GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitDeployFailed: gitDeps.Sync.DeployFailed,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.
@@ -418,6 +418,8 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		}
 		stackDeps.Locks, stackDeps.Envs = f.stackLocks, f.envSvc
 		f.stackDeps = stackDeps
+		// A git stack with auto-deploy on deploys through the same deployer a background service would use.
+		gitDeps.Sync.SetDeployer(api.NewStackDeployer(stackDeps).GitDeployer())
 		api.RegisterStacks(r, stackDeps)
 		var logsSrc api.LogsSource = f.agg
 		if f.logsWrap != nil {

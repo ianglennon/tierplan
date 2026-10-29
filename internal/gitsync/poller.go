@@ -50,7 +50,8 @@ type PollerDeps struct {
 }
 
 // RunPoller checks every git stack with polling on, on its interval, until ctx ends (D-14). It is the one background
-// check of repositories, and it only records what it sees (CheckWith): a poll never starts a deploy.
+// check of repositories. A poll records what it sees (CheckWith); only a stack that has auto-deploy on goes on to deploy
+// what it finds (autoDeploy), as its owner and through the same checks as a person's deploy.
 //
 // It is polite to the git host and to the server (Pitfalls 4 and 14):
 //   - the stacks of one repository share one listing of its refs (ls-remote), kept for the shortest interval among them,
@@ -230,6 +231,11 @@ func (p *poller) readRepo(ctx context.Context, g *pollGroup) {
 			// The run of failures was counted by the check; read what it stored.
 			if st, serr := p.s.repo.GitState(ctx, ps.StackID); serr == nil {
 				failures = st.ConsecutiveFailures
+				if autoDeployReason(ReasonCode(st.ReasonCode)) {
+					// The repository answered; what waits is a person. A fix pushed meanwhile is deployed at the next
+					// interval and not an hour later.
+					failures = 0
+				}
 			} else {
 				failures++
 			}

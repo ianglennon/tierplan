@@ -124,7 +124,30 @@ type GitState struct {
 	ConsecutiveFailures int
 	PendingCommit       string
 	NextCheckAt         *time.Time
+	// EventKind is the last thing an automatic deploy did that a person should hear about (one of the GitEvent
+	// constants), empty when there is none. EventDetail is its sentence and EventAt when it happened. WriteGitState does
+	// not write them: SetGitEvent does.
+	EventKind, EventDetail string
+	EventAt                *time.Time
 }
+
+// The events an automatic deploy leaves on a git stack's state for a person to hear about (D-19).
+const (
+	// GitEventSkipped: a commit was held back and nothing was deployed.
+	GitEventSkipped = "autodeploy_skipped"
+	// GitEventReverted: an automatic deploy put changes made by hand on the host back to what the repository says.
+	GitEventReverted = "autodeploy_reverted"
+	// GitEventPaused: the automatic deploys were paused.
+	GitEventPaused = "autodeploy_paused"
+)
+
+// Why a stack's automatic deploys are paused (stack_git.auto_deploy_paused_reason).
+const (
+	// PausedRollback: a roll back stopped them, so the repository does not put the rolled-back version straight back.
+	PausedRollback = "rollback"
+	// PausedOwner: the person whose authority they run on no longer holds the permission.
+	PausedOwner = "owner"
+)
 
 // CreateGitStackInput is a stack to be made from a repository folder. Copy holds the files the import read, with
 // ComposeFiles set; Rev says which commit and tree they are.
@@ -404,6 +427,91 @@ func (r Repo) SetPolling(ctx context.Context, stackID string, enabled bool, inte
 	return nil
 }
 
+// SetAutoDeploy turns a git stack's automatic deploys on or off and records whether they are paused (PausedRollback at
+// revision pausedSeq, PausedOwner, or "" for running). Turning them on or off with "" clears a pause. inTx, when set,
+// runs in the same write transaction, so the record of whose authority they run on (the owned automation) changes with
+// the setting or not at all. A stack that is not from git is ErrNoGit and nothing changes.
+func (r Repo) SetAutoDeploy(ctx context.Context, stackID string, on bool, pausedReason string, pausedSeq int64, inTx func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error) error {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	flag := int64(0)
+	if on {
+		flag = 1
+	}
+	n, err := q.SetStackGitAutoDeploy(ctx, sqlc.SetStackGitAutoDeployParams{
+		AutoDeploy: flag, AutoDeployPausedReason: pausedReason, AutoDeployPausedSeq: pausedSeq, UpdatedAt: r.now().UnixNano(), StackID: stackID,
+	})
+	if err != nil {
+		return fmt.Errorf("set the auto-deploy: %w", err)
+	}
+	if n == 0 {
+		return ErrNoGit
+	}
+	if inTx != nil {
+		if err := inTx(ctx, tx, q); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// SetSyncTrigger records what started the deploy of a revision no person pressed (SyncPoll or SyncWebhook).
+func (r Repo) SetSyncTrigger(ctx context.Context, snapshotID, trigger string) error {
+	if trigger != SyncPoll && trigger != SyncWebhook {
+		return fmt.Errorf("stackops: %q is not what starts an automatic deploy", trigger)
+	}
+	n, err := r.Store.Q.SetSnapshotSyncTrigger(ctx, sqlc.SetSnapshotSyncTriggerParams{SyncTrigger: trigger, ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set the sync trigger: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetRevertedDrift records the lines an automatic deploy put back to what the repository says on a revision.
+func (r Repo) SetRevertedDrift(ctx context.Context, snapshotID string, lines []string) error {
+	raw, err := json.Marshal(nonNil(lines))
+	if err != nil {
+		return fmt.Errorf("encode the reverted drift: %w", err)
+	}
+	n, err := r.Store.Q.SetSnapshotRevertedDrift(ctx, sqlc.SetSnapshotRevertedDriftParams{RevertedDrift: string(raw), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set the reverted drift: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// SetGitEvent records the last thing an automatic deploy did that a person should hear about on the stack's sync
+// state; an empty kind clears it. A stack with no state row is left alone, and sql.ErrNoRows says so.
+func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at time.Time) error {
+	when := sql.NullInt64{}
+	if kind != "" {
+		when = nullUnixNano(&at)
+	} else {
+		detail = ""
+	}
+	n, err := r.Store.Q.SetStackGitEvent(ctx, sqlc.SetStackGitEventParams{EventKind: kind, EventDetail: detail, EventAt: when, StackID: stackID})
+	if err != nil {
+		return fmt.Errorf("set the git event: %w", err)
+	}
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // RefreshDraftFromGit replaces the files of a git stack's draft that came from the repository with those of a newer
 // commit, when the draft is still at version: the draft's repository files (origin repo) are dropped and repoFiles take
 // their place, a file of Bayplan's own (overlay, or one a person added) and the variables are kept, the compose files
@@ -625,6 +733,7 @@ func gitStateOf(row sqlc.StackGitState) GitState {
 		ReasonCode: row.ReasonCode, ReasonDetail: row.ReasonDetail, CheckedAt: unixNanoPtr(row.CheckedAt),
 		ErrorSince: unixNanoPtr(row.ErrorSince), ConsecutiveFailures: int(row.ConsecutiveFailures),
 		PendingCommit: row.PendingCommit, NextCheckAt: unixNanoPtr(row.NextCheckAt),
+		EventKind: row.EventKind, EventDetail: row.EventDetail, EventAt: unixNanoPtr(row.EventAt),
 	}
 }
 

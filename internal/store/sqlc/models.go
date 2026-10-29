@@ -314,28 +314,32 @@ type StackGitState struct {
 	ConsecutiveFailures int64
 	PendingCommit       string
 	NextCheckAt         sql.NullInt64
+	EventKind           string
+	EventDetail         string
+	EventAt             sql.NullInt64
 }
 
 type StackSnapshot struct {
-	ID           string
-	StackID      string
-	Kind         string
-	Seq          int64
-	BaseSeq      int64
-	Version      int64
-	Outcome      string
-	Rendered     string
-	Pins         string
-	CreatedBy    string
-	CreatedAt    int64
-	Origin       string
-	RestoredFrom int64
-	Platforms    string
-	GitCommit    string
-	GitTree      string
-	GitSource    string
-	ComposeFiles string
-	SyncTrigger  string
+	ID            string
+	StackID       string
+	Kind          string
+	Seq           int64
+	BaseSeq       int64
+	Version       int64
+	Outcome       string
+	Rendered      string
+	Pins          string
+	CreatedBy     string
+	CreatedAt     int64
+	Origin        string
+	RestoredFrom  int64
+	Platforms     string
+	GitCommit     string
+	GitTree       string
+	GitSource     string
+	ComposeFiles  string
+	SyncTrigger   string
+	RevertedDrift string
 }
 
 type StackSnapshotFile struct {

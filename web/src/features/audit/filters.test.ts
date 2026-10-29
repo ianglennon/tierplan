@@ -196,6 +196,25 @@ describe("actionLabel", () => {
     expect(audit.audit.actions.git.webhook_removed_named).toBe("Removed the webhook of {{name}}");
   });
 
+  it("labels a git stack's auto-deploy with the stack, and an automatic deploy with its commit", () => {
+    for (const key of ["git.autodeploy_enabled", "git.autodeploy_disabled"] as const) {
+      expect(KNOWN_ACTIONS).toContain(key);
+      expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+    expect(KNOWN_ACTIONS).toContain("git.autodeployed");
+    expect(
+      actionLabel("git.autodeployed", echo, { stack: "web", commit: "0123456789abcdef" }),
+    ).toBe("t:audit.actions.git.autodeployed_named");
+    expect(actionLabel("git.autodeployed", echo, { stack: "web" })).toBe(
+      "t:audit.actions.git.autodeployed",
+    );
+    expect(audit.audit.actions.git.autodeployed_named).toBe("Auto-deployed {{name}} at {{sha}}");
+    expect(audit.audit.actions.git.autodeploy_enabled_named).toBe(
+      "Turned on auto-deploy for {{name}}",
+    );
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

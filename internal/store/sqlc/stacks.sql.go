@@ -122,7 +122,7 @@ func (q *Queries) FinishStackDeploy(ctx context.Context, arg FinishStackDeployPa
 
 const getDraft = `-- name: GetDraft :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'
 `
 
@@ -149,13 +149,14 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 		&i.GitSource,
 		&i.ComposeFiles,
 		&i.SyncTrigger,
+		&i.RevertedDrift,
 	)
 	return i, err
 }
 
 const getRevision = `-- name: GetRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
 `
 
@@ -187,6 +188,7 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 		&i.GitSource,
 		&i.ComposeFiles,
 		&i.SyncTrigger,
+		&i.RevertedDrift,
 	)
 	return i, err
 }
@@ -267,7 +269,7 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 
 const goodRevisionBefore = `-- name: GoodRevisionBefore :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1
 `
@@ -302,6 +304,7 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 		&i.GitSource,
 		&i.ComposeFiles,
 		&i.SyncTrigger,
+		&i.RevertedDrift,
 	)
 	return i, err
 }
@@ -627,7 +630,7 @@ func (q *Queries) LatestDoneStackDeploysByEnv(ctx context.Context, envID string)
 
 const latestGoodRevision = `-- name: LatestGoodRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1
 `
@@ -655,6 +658,7 @@ func (q *Queries) LatestGoodRevision(ctx context.Context, stackID string) (Stack
 		&i.GitSource,
 		&i.ComposeFiles,
 		&i.SyncTrigger,
+		&i.RevertedDrift,
 	)
 	return i, err
 }
@@ -1226,6 +1230,42 @@ type SetSnapshotRenderedParams struct {
 // The masked rendering of a revision: what the next review compares the draft's rendering with.
 func (q *Queries) SetSnapshotRendered(ctx context.Context, arg SetSnapshotRenderedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotRendered, arg.Rendered, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotRevertedDrift = `-- name: SetSnapshotRevertedDrift :execrows
+UPDATE stack_snapshots SET reverted_drift = ? WHERE id = ? AND kind = 'revision'
+`
+
+type SetSnapshotRevertedDriftParams struct {
+	RevertedDrift string
+	ID            string
+}
+
+// The lines an automatic deploy put back to what the repository says, a JSON array of strings.
+func (q *Queries) SetSnapshotRevertedDrift(ctx context.Context, arg SetSnapshotRevertedDriftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotRevertedDrift, arg.RevertedDrift, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotSyncTrigger = `-- name: SetSnapshotSyncTrigger :execrows
+UPDATE stack_snapshots SET sync_trigger = ? WHERE id = ? AND kind = 'revision'
+`
+
+type SetSnapshotSyncTriggerParams struct {
+	SyncTrigger string
+	ID          string
+}
+
+// What started the deploy of a revision no person pressed ('poll' or 'webhook'), set once the revision is taken.
+func (q *Queries) SetSnapshotSyncTrigger(ctx context.Context, arg SetSnapshotSyncTriggerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotSyncTrigger, arg.SyncTrigger, arg.ID)
 	if err != nil {
 		return 0, err
 	}

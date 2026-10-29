@@ -158,6 +158,9 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "git.webhook_created",
   "git.webhook_rotated",
   "git.webhook_removed",
+  "git.autodeploy_enabled",
+  "git.autodeploy_disabled",
+  "git.autodeployed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -346,6 +349,16 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
       key === "git.webhook_removed") &&
     details?.stack
   ) {
+    return t(`audit.actions.${key}_named`, { name: details.stack });
+  }
+  // Auto-deploy names the stack it is for, and an automatic deploy the commit it ran.
+  if (key === "git.autodeployed" && details?.stack && details.commit) {
+    return t("audit.actions.git.autodeployed_named", {
+      name: details.stack,
+      sha: details.commit.slice(0, 7),
+    });
+  }
+  if ((key === "git.autodeploy_enabled" || key === "git.autodeploy_disabled") && details?.stack) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
   }
   // A git connection change names the credential or repository it was about.

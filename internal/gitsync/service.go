@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitx"
@@ -30,6 +31,12 @@ type Deps struct {
 	Audit *audit.Writer
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Access rechecks the owner of a stack's automatic deploys before each one (access.Service.RunAs). Nil, or no
+	// Deployer, means no stack deploys by itself: a check only records.
+	Access *access.Service
+	// Deployer starts the deploy of an automatic deploy. SetDeployer sets it after the service is made, when it cannot
+	// be built before.
+	Deployer Deployer
 	// Joined, when set, is called each time a caller starts or joins the check of a stack, with how many callers wait on
 	// it now. A test uses it to know that every caller has joined before it lets the check finish.
 	Joined func(stackID string, waiting int)
@@ -47,9 +54,13 @@ type Service struct {
 	audit *audit.Writer
 	now   func() time.Time
 
+	access *access.Service
+
 	joined    func(stackID string, waiting int)
 	triggered func(stackID string, outcome Outcome, err error, more bool)
 	mu        sync.Mutex
+	// deployer starts an automatic deploy; it is guarded by mu, since SetDeployer may run after checks have begun.
+	deployer Deployer
 	// checking holds the sync checks in flight, by stack ID: a second request for the same stack joins the first.
 	checking map[string]*checkCall
 	// triggers holds the stacks a Trigger is working on: a trigger while one runs only marks it to run once more.
@@ -58,7 +69,7 @@ type Service struct {
 
 // New returns a Service.
 func New(d Deps) *Service {
-	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}}
+	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, access: d.Access, deployer: d.Deployer, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

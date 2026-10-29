@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -40,6 +41,9 @@ func NewStackDeployer(d StacksDeps) *StackDeployer {
 type DeployStarted struct {
 	JobID string
 	Seq   int64
+	// HostEscalating is true when the stack asks for host access that only an env Admin may deploy. The deploy was
+	// judged as the user it acts for, so that user is an Admin of the environment.
+	HostEscalating bool
 }
 
 // DeployRefusal is the answer to a deploy that did not start. Code is stable and says why; Retry says whether
@@ -75,11 +79,31 @@ func (s *StackDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envI
 	if !dec.Allowed {
 		return DeployStarted{}, &DeployRefusal{Code: refusalForbidden, Detail: "The user this deploy acts for may not deploy here."}
 	}
-	out, err := deployDraft(ctx, s.d, p, env, stackID, StackDeployRequest{DraftVersion: draftVersion}, "", deployOpts{Trigger: trigger})
+	var escalating bool
+	out, err := deployDraft(ctx, s.d, p, env, stackID, StackDeployRequest{DraftVersion: draftVersion}, "", deployOpts{Trigger: trigger, Escalating: &escalating})
 	if err != nil {
 		return DeployStarted{}, s.refusal(stackID, err)
 	}
-	return DeployStarted{JobID: out.Body.JobID, Seq: out.Body.Revision}, nil
+	return DeployStarted{JobID: out.Body.JobID, Seq: out.Body.Revision, HostEscalating: escalating}, nil
+}
+
+// GitDeployer is the deployer as the git sync reads it (gitsync.Deployer): the same deploy with the types of that
+// package, which cannot import this one.
+func (s *StackDeployer) GitDeployer() gitsync.Deployer { return gitDeployer{s} }
+
+type gitDeployer struct{ s *StackDeployer }
+
+// DeployDraft implements gitsync.Deployer.
+func (g gitDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64, trigger string) (gitsync.DeployStarted, error) {
+	started, err := g.s.DeployDraft(ctx, p, envID, stackID, draftVersion, trigger)
+	var ref *DeployRefusal
+	if errors.As(err, &ref) {
+		return gitsync.DeployStarted{}, &gitsync.DeployRefusal{Code: ref.Code, Detail: ref.Detail, Retry: ref.Retry}
+	}
+	if err != nil {
+		return gitsync.DeployStarted{}, err
+	}
+	return gitsync.DeployStarted{JobID: started.JobID, Seq: started.Seq, HostEscalating: started.HostEscalating}, nil
 }
 
 // environment resolves the environment the way the router does: one that is gone or disabled is refused.
@@ -116,7 +140,7 @@ func (s *StackDeployer) refusal(stackID string, err error) error {
 	if errors.As(err, &em) && em.Status < http.StatusInternalServerError {
 		switch em.Type {
 		case problemStackInvalid:
-			return &DeployRefusal{Code: refusalNotDeployable, Detail: em.Detail}
+			return &DeployRefusal{Code: refusalNotDeployable, Detail: firstProblem(em)}
 		case problemNameClash:
 			return &DeployRefusal{Code: refusalNameClash, Detail: em.Detail}
 		case problemDraftChanged:
@@ -134,6 +158,20 @@ func (s *StackDeployer) refusal(stackID string, err error) error {
 	// Anything else is a failure of Bayplan or of the environment, which may pass: only the stack is logged.
 	s.d.Log.Error("an automated stack deploy failed", "stack", stackID, "error", err)
 	return &DeployRefusal{Code: refusalInternal, Detail: "Bayplan could not start the deploy.", Retry: true}
+}
+
+// firstProblem is the first problem a not deployable stack lists with where it is, which is what a person needs to
+// fix it; the problem's own sentence when it lists none.
+func firstProblem(em *huma.ErrorModel) string {
+	for _, e := range em.Errors {
+		if e != nil && e.Message != "" {
+			if e.Location != "" {
+				return e.Location + ": " + e.Message
+			}
+			return e.Message
+		}
+	}
+	return em.Detail
 }
 
 // problemDetail is the sentence of a problem, empty for any other error.
