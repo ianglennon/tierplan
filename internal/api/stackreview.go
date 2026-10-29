@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -153,6 +154,19 @@ type StackReviewGitBody struct {
 	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed"`
 	SourceChanged  bool   `json:"sourceChanged" doc:"True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable"`
 	HeadCommit     string `json:"headCommit" doc:"The full ID of the commit the ref pointed at when the stack was last checked or pulled; empty when it never was. When it is not commit, the branch moved on after the draft was made: a deploy still deploys commit"`
+
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files of the draft's source, in merge order"`
+
+	Replaces *StackReviewGitSourceBody `json:"replaces,omitempty" doc:"Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit"`
+}
+
+// StackReviewGitSourceBody is a source a git stack follows: where its files come from.
+type StackReviewGitSourceBody struct {
+	RepoName     string   `json:"repoName" doc:"The repository's name; empty when it could not be read"`
+	RefKind      string   `json:"refKind" enum:"branch,tag,commit" doc:"What ref names"`
+	Ref          string   `json:"ref" doc:"The branch, tag or commit ID"`
+	Folder       string   `json:"folder" doc:"The folder of the repository the stack lives in; empty for the root"`
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files, in merge order"`
 }
 
 // StackReviewBody is what a deploy of the saved draft would do.
@@ -330,10 +344,21 @@ func reviewGitBody(ctx context.Context, d StacksDeps, repo stackops.Repo, draft 
 	src := draft.Git.Source
 	out := &StackReviewGitBody{
 		Commit: draft.Git.Commit, Ref: src.Ref, RefKind: src.RefKind, Folder: src.Folder, RepoName: src.RepoName,
+		ComposeFiles: composeFilesOf(src.ComposeFiles),
 	}
 	// A stack that follows nothing any more has no head to compare with.
 	if state, err := repo.GitState(ctx, draft.StackID); err == nil {
 		out.HeadCommit = state.HeadCommit
+	} else if !errors.Is(err, stackops.ErrNoGit) {
+		return nil, err
+	}
+	// A draft that holds another source than the stack follows says which source it replaces (D-11). The head the sync
+	// state holds belongs to that source, so the draft's own commit stands in for it: it was read just now.
+	if sg, err := repo.StackGit(ctx, draft.StackID); err == nil {
+		if gitsync.PendingSource(sg, draft) {
+			out.Replaces = replacedSource(ctx, d, sg, src)
+			out.HeadCommit = draft.Git.Commit
+		}
 	} else if !errors.Is(err, stackops.ErrNoGit) {
 		return nil, err
 	}
@@ -350,6 +375,23 @@ func reviewGitBody(ctx context.Context, d StacksDeps, repo stackops.Repo, draft 
 		out.Touched = d.GitSync.CommitsSince(ctx, src.RepoID, src.Folder, dep.Commit, draft.Git.Commit)
 	}
 	return out, nil
+}
+
+// replacedSource is the source the stack follows now, as a pending source replaces it. The repository's name is read from
+// the repository, which may be gone; the draft's own record of its name stands when it is the same repository.
+func replacedSource(ctx context.Context, d StacksDeps, sg stackops.StackGit, pending stackops.GitSource) *StackReviewGitSourceBody {
+	name := ""
+	switch {
+	case sg.RepoID == pending.RepoID:
+		name = pending.RepoName
+	case d.GitConns != nil:
+		if r, err := d.GitConns.GetRepo(ctx, sg.RepoID); err == nil {
+			name = r.Name
+		}
+	}
+	return &StackReviewGitSourceBody{
+		RepoName: name, RefKind: sg.RefKind, Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: composeFilesOf(sg.ComposeFiles),
+	}
 }
 
 // stackReviewBody turns a review into its answer. Every list is present, empty when there is nothing.

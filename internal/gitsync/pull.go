@@ -54,37 +54,9 @@ func (s *Service) Pull(ctx context.Context, envID, stackID, actor string, versio
 	if draft.Version != version {
 		return PullResult{}, &stackops.DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
 	}
-	var overlays []Overlay
-	for _, f := range draft.Copy.Files {
-		if f.Origin == stacks.OriginOverlay {
-			overlays = append(overlays, Overlay{Path: f.Path, Content: f.Content})
-		}
-	}
-	kind := gitx.RefKind(sg.RefKind)
-	held := ""
-	if kind == gitx.RefCommit {
-		held = sg.Ref
-	}
-	imp, err := s.read(ctx, ImportRequest{
-		EnvID: envID, RepoID: sg.RepoID, RefKind: kind, Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: sg.ComposeFiles,
-		Name: st.Name, Target: st.Target, Vars: draft.Copy.Vars, Overlays: overlays,
-	}, held)
-	if err != nil {
-		return PullResult{}, err
-	}
-
-	var repoFiles []stacks.File
-	for _, f := range imp.Files {
-		if f.Origin == stacks.OriginRepo {
-			repoFiles = append(repoFiles, f)
-		}
-	}
-	for _, o := range overlays {
-		if slices.ContainsFunc(repoFiles, func(f stacks.File) bool { return f.Path == o.Path }) {
-			s.log.Warn("a commit holds a file at the path of an overlay; the repository's file stands", "stack", stackID, "path", o.Path)
-		}
-	}
-	saved, err := s.repo.RefreshDraftFromGit(ctx, stackID, version, actor, repoFiles, imp.Revision())
+	imp, saved, err := s.refreshDraft(ctx, st, draft, actor, version, SourceChange{
+		RepoID: sg.RepoID, RefKind: gitx.RefKind(sg.RefKind), Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: sg.ComposeFiles,
+	})
 	if err != nil {
 		return PullResult{}, err
 	}
@@ -177,4 +149,45 @@ func (s *Service) recordPulledHead(ctx context.Context, st stackops.Stack, sg st
 	if err := s.writeState(ctx, st, prev, next, systemActor); err != nil {
 		s.log.Warn("could not store the head a pull found", "stack", st.ID, "error", err)
 	}
+}
+
+// refreshDraft reads the stack at src (at its head, or at the commit it names) and refreshes the draft from it: the draft's
+// repository files become those of the commit (only the files the compose files name), the overlays and the variables stay,
+// and the draft records the commit, the folder's tree hash and src. It is the work of a pull (src is the stack's own source)
+// and of a change of source (src is another). The draft must still be at version.
+func (s *Service) refreshDraft(ctx context.Context, st stackops.Stack, draft stackops.Snapshot, actor string, version int64, src SourceChange) (Import, stackops.Snapshot, error) {
+	var overlays []Overlay
+	for _, f := range draft.Copy.Files {
+		if f.Origin == stacks.OriginOverlay {
+			overlays = append(overlays, Overlay{Path: f.Path, Content: f.Content})
+		}
+	}
+	held := ""
+	if src.RefKind == gitx.RefCommit {
+		held = src.Ref
+	}
+	imp, err := s.read(ctx, ImportRequest{
+		EnvID: st.EnvID, RepoID: src.RepoID, RefKind: src.RefKind, Ref: src.Ref, Folder: src.Folder, ComposeFiles: src.ComposeFiles,
+		Name: st.Name, Target: st.Target, Vars: draft.Copy.Vars, Overlays: overlays,
+	}, held)
+	if err != nil {
+		return Import{}, stackops.Snapshot{}, err
+	}
+
+	var repoFiles []stacks.File
+	for _, f := range imp.Files {
+		if f.Origin == stacks.OriginRepo {
+			repoFiles = append(repoFiles, f)
+		}
+	}
+	for _, o := range overlays {
+		if slices.ContainsFunc(repoFiles, func(f stacks.File) bool { return f.Path == o.Path }) {
+			s.log.Warn("a commit holds a file at the path of an overlay; the repository's file stands", "stack", st.ID, "path", o.Path)
+		}
+	}
+	saved, err := s.repo.RefreshDraftFromGit(ctx, st.ID, version, actor, repoFiles, imp.Revision())
+	if err != nil {
+		return Import{}, stackops.Snapshot{}, err
+	}
+	return imp, saved, nil
 }

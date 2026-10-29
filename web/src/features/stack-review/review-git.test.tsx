@@ -302,6 +302,89 @@ describe("the review of a git stack", () => {
   });
 });
 
+describe("the review of a change of source", () => {
+  const replaces = {
+    repoName: "acme",
+    refKind: "branch",
+    ref: "main",
+    folder: "stacks/web",
+    composeFiles: ["compose.yaml"],
+  };
+  const pending = (over: Record<string, unknown> = {}) =>
+    gitBody({
+      ref: "dev",
+      sourceChanged: true,
+      composeFiles: ["compose.yaml"],
+      replaces,
+      ...over,
+    });
+
+  it("is titled Review the new source and says what it replaces", async () => {
+    git = pending();
+    mount();
+    expect(
+      await screen.findByRole("heading", { name: "Review the new source for web" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "This deploys stacks/web of acme at dev, replacing stacks/web of acme at main.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Pull and redeploy web" })).toBeNull();
+  });
+
+  it("names another repository, folder and the repository root", async () => {
+    git = pending({
+      repoName: "shared",
+      folder: "",
+      replaces: { ...replaces, folder: "apps/web" },
+    });
+    mount();
+    expect(
+      await screen.findByText(
+        "This deploys the repository root of shared at dev, replacing apps/web of acme at main.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows a fixed commit as its short ID", async () => {
+    git = pending({
+      refKind: "commit",
+      ref: HEAD,
+      replaces: { ...replaces, refKind: "commit", ref: DEPLOYED },
+    });
+    mount();
+    expect(
+      await screen.findByText(
+        "This deploys stacks/web of acme at fedcba9, replacing stacks/web of acme at 0123456.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("names the compose files when they are all that changed", async () => {
+    git = pending({
+      ref: "main",
+      sourceChanged: false,
+      composeFiles: ["b.yaml", "compose.yaml"],
+      replaces: { ...replaces, composeFiles: ["compose.yaml", "b.yaml"] },
+    });
+    mount();
+    expect(
+      await screen.findByText(
+        "This deploys stacks/web of acme at main using b.yaml and compose.yaml, replacing stacks/web of acme at main using compose.yaml and b.yaml.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("does not say the branch moved on: the stack's head belongs to the source it replaces", async () => {
+    git = pending({ headCommit: HEAD });
+    stackHead = NEWER;
+    mount();
+    await screen.findByRole("heading", { name: "Review the new source for web" });
+    expect(screen.queryByText(/has moved on/)).toBeNull();
+  });
+});
+
 describe("the Commits card of a git review", () => {
   it("lists the commits that changed the folder, newest first, open when there are few", async () => {
     mount();

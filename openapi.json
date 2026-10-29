@@ -14369,6 +14369,85 @@
         ],
         "type": "object"
       },
+      "StackGitSourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "description": "The full ID of the commit the draft was made from, at the head of the new source",
+            "type": "string"
+          },
+          "draftVersion": {
+            "description": "The version of the draft after the change: review it and deploy it at this version",
+            "format": "int64",
+            "type": "integer"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the new source follows",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draftVersion",
+          "commit",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "StackGitSourceInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "composeFiles": {
+            "description": "The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "draftVersion": {
+            "description": "The version of the draft you read. If the draft moved since (a save, a pull, another change of source), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit. 422 ref_invalid for a name git would refuse",
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found",
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "draftVersion",
+          "repoId",
+          "refKind",
+          "ref",
+          "composeFiles"
+        ],
+        "type": "object"
+      },
       "StackGitSummary": {
         "additionalProperties": false,
         "properties": {
@@ -15931,6 +16010,16 @@
             "description": "The full ID of the commit the draft's repository files are from",
             "type": "string"
           },
+          "composeFiles": {
+            "description": "The compose files of the draft's source, in merge order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "deployedCommit": {
             "description": "The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository",
             "type": "string"
@@ -15956,6 +16045,10 @@
             ],
             "type": "string"
           },
+          "replaces": {
+            "$ref": "#/components/schemas/StackReviewGitSourceBody",
+            "description": "Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit"
+          },
           "repoName": {
             "description": "The repository's name when the draft was made from it",
             "type": "string"
@@ -15980,7 +16073,52 @@
           "deployedCommit",
           "touched",
           "sourceChanged",
-          "headCommit"
+          "headCommit",
+          "composeFiles"
+        ],
+        "type": "object"
+      },
+      "StackReviewGitSourceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "composeFiles": {
+            "description": "The compose files, in merge order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lives in; empty for the root",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID",
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoName": {
+            "description": "The repository's name; empty when it could not be read",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoName",
+          "refKind",
+          "ref",
+          "folder",
+          "composeFiles"
         ],
         "type": "object"
       },
@@ -28436,6 +28574,78 @@
           }
         },
         "summary": "Pull a git stack's newest commit into its draft",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/source": {
+      "post": {
+        "description": "Reads the new source (a repository of this environment or of the instance, a branch, tag or commit, a folder and its compose files) at its head into the draft, as a pending source (D-11, D-12): the draft's repository files become those of the new commit, the overlay files and the variables stay, and the draft records the commit, the folder's tree hash and the new source. Its version goes up by one. Nothing is applied: the stack keeps following its own repository, ref, folder and compose files, and Pull \u0026 redeploy and the checks keep using them, until a deploy of the draft ends good, which makes the new source the stack's source. Review the draft and deploy it as any stack; discarding the draft, or a pull, drops the pending source. A stack with auto-deploy on does not deploy while a pending source waits. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+        "operationId": "changeStackGitSource",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackGitSourceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitSourceBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Change what a git stack follows, through review",
         "tags": [
           "stacks",
           "git"

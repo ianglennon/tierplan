@@ -5,6 +5,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/r
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
+import { type GitRefKind, GitRequestError } from "@/api/git";
 import { type Problem, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } from "@/api/stacks";
@@ -13,6 +14,17 @@ import { ENV_WARNINGS_KEY } from "@/api/warnings";
 export type StackGit = components["schemas"]["StackGitSummary"];
 // What a pull did to the draft: the version to review and deploy, and the commit it holds.
 export type StackGitPull = components["schemas"]["StackGitPullBody"];
+// What a change of source did to the draft: the version to review and deploy, and the commit it holds.
+export type StackGitSourceChanged = components["schemas"]["StackGitSourceBody"];
+// Where a git stack is to follow from now on, with the version of the draft the person read.
+export interface StackGitSourceRequest {
+  draftVersion: number;
+  repoId: string;
+  refKind: GitRefKind;
+  ref: string;
+  folder: string;
+  composeFiles: string[];
+}
 // The commits that changed a git stack's folder between its deployed commit and a head, newest first.
 export type StackGitCommits = components["schemas"]["StackGitCommitsBody"];
 // Why a git stack's sync is in error, or why it is behind with a note: the union the server's enum generates.
@@ -276,6 +288,39 @@ export function usePullStackGit(envId: string, stackId: string) {
       }
     },
     retry: false,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
+      invalidateStacks(queryClient, envId);
+    },
+  });
+}
+
+// useChangeStackGitSource saves a new source (repository, ref, folder and compose files) into the stack's draft as a
+// pending source (D-11, D-12): nothing is applied, and the stack follows what it followed until a deploy of the draft ends
+// good. draftVersion is the version of the draft the person read when they began, so a draft saved by someone else since
+// is refused as draft_changed, with who saved it in the error's fields (savedBy). It is never retried. The stack, its git
+// summary and its lists are read again, whatever the answer.
+export function useChangeStackGitSource(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackGitSourceChanged, GitRequestError, StackGitSourceRequest>({
+    mutationFn: async (body) => {
+      try {
+        const { data, error, response } = await api.POST(
+          "/api/env/{envId}/stacks/{stackId}/git/source",
+          { params: { path: { envId, stackId } }, body },
+        );
+        if (!data) {
+          const problem = readProblem(error, response);
+          throw new GitRequestError(problem.status, problem.type, problem.fields, "POST");
+        }
+        return data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof GitRequestError ? e : new GitRequestError(0, undefined, [], "POST");
+      }
+    },
+    retry: false,
+    gcTime: 0,
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: stackGitKey(envId, stackId) });
       invalidateStacks(queryClient, envId);

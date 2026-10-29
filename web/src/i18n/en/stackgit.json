@@ -270,6 +270,24 @@
         "bodyNoHead": "{{name}} now waits for review.",
         "turnOn": "Turn on auto-deploy…"
       }
+    },
+    "source": {
+      "title": "Source",
+      "body": "Where {{name}} comes from. Changing it goes through review.",
+      "change": "Change source…",
+      "cancel": "Cancel",
+      "review": "Review change",
+      "preparing": "Preparing…",
+      "needsAll": "Choose a repository, a ref, a folder and at least one compose file.",
+      "reading": "Reading the draft…",
+      "conflict": "{{user}} changed the source of {{name}} while you were editing. Reload to see it.",
+      "conflictUnknown": "Someone changed the source of {{name}} while you were editing. Reload to see it.",
+      "reload": "Reload",
+      "failed": "Couldn't change the source. {{reason}}",
+      "repoGone": "That repository isn't available on this environment.",
+      "permission": "You don't have permission to change the source.",
+      "other": "Try again.",
+      "draftFailed": "Couldn't read the draft. Check the connection and try again."
     }
   }
 }

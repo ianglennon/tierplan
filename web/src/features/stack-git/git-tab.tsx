@@ -9,6 +9,7 @@ import { stackQuery } from "@/api/stacks";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { AutoDeployCard } from "@/features/stack-git/auto-deploy-card";
+import { SourceCard } from "@/features/stack-git/source-card";
 import { UpdatesCard, UpdatesSkeleton } from "@/features/stack-git/updates-card";
 import { WebhookCard } from "@/features/stack-git/webhook-card";
 import { useT } from "@/i18n/use-t";
@@ -56,6 +57,12 @@ export function GitTab({ envId, stackId }: GitTabProps) {
     <div className="flex max-w-6xl flex-col gap-8">
       {git.data ? (
         <>
+          <SourceCard
+            envId={envId}
+            stackId={stackId}
+            stackName={stack.data?.name ?? ""}
+            git={git.data}
+          />
           <UpdatesCard envId={envId} stackId={stackId} git={git.data} />
           <WebhookCard
             envId={envId}

@@ -2500,6 +2500,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change what a git stack follows, through review
+         * @description Reads the new source (a repository of this environment or of the instance, a branch, tag or commit, a folder and its compose files) at its head into the draft, as a pending source (D-11, D-12): the draft's repository files become those of the new commit, the overlay files and the variables stay, and the draft records the commit, the folder's tree hash and the new source. Its version goes up by one. Nothing is applied: the stack keeps following its own repository, ref, folder and compose files, and Pull & redeploy and the checks keep using them, until a deploy of the draft ends good, which makes the new source the stack's source. Review the draft and deploy it as any stack; discarding the draft, or a pull, drops the pending source. A stack with auto-deploy on does not deploy while a pending source waits. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).
+         */
+        post: operations["changeStackGitSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/git/updates": {
         parameters: {
             query?: never;
@@ -10340,6 +10360,37 @@ export interface components {
              */
             draftVersion: number;
         };
+        StackGitSourceBody: {
+            /** @description The full ID of the commit the draft was made from, at the head of the new source */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the change: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the new source follows */
+            ref: string;
+        };
+        StackGitSourceInputBody: {
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since (a save, a pull, another change of source), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+        };
         StackGitSummary: {
             /** @description True when a commit that changes the folder is deployed automatically */
             autoDeploy: boolean;
@@ -11011,6 +11062,8 @@ export interface components {
         StackReviewGitBody: {
             /** @description The full ID of the commit the draft's repository files are from */
             commit: string;
+            /** @description The compose files of the draft's source, in merge order */
+            composeFiles: string[] | null;
             /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository */
             deployedCommit: string;
             /** @description The folder of the repository the stack lives in; empty for the root */
@@ -11024,6 +11077,8 @@ export interface components {
              * @enum {string}
              */
             refKind: "branch" | "tag" | "commit";
+            /** @description Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit */
+            replaces?: components["schemas"]["StackReviewGitSourceBody"];
             /** @description The repository's name when the draft was made from it */
             repoName: string;
             /** @description True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable */
@@ -11033,6 +11088,21 @@ export interface components {
              * @description How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed
              */
             touched: number;
+        };
+        StackReviewGitSourceBody: {
+            /** @description The compose files, in merge order */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in; empty for the root */
+            folder: string;
+            /** @description The branch, tag or commit ID */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository's name; empty when it could not be read */
+            repoName: string;
         };
         StackReviewImageBody: {
             /** @description The digest the service runs with now; empty for a new service */
@@ -17624,6 +17694,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackGitPullBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    changeStackGitSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitSourceInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSourceBody"];
                 };
             };
             /** @description Error */

@@ -24,7 +24,9 @@
     "body": "Check what will change on {{env}}, then deploy.",
     "bodyUpdate": "These services get a newly looked-up digest. Everything else keeps its running image.",
     "titleGit": "Pull and redeploy {{name}}",
+    "titleSource": "Review the new source for {{name}}",
     "bodyGit": "Bayplan fetched {{ref}} just now and rendered {{folder}} at commit {{sha}}. This shows what would change on {{env}}.",
+    "bodySource": "This deploys {{now}}, replacing {{old}}.",
     "git": {
       "commit": "Commit",
       "onRef": "on {{ref}}",
@@ -52,7 +54,9 @@
         "review": "Review {{newSha}}",
         "pulling": "Pulling…"
       },
-      "rollbackNote": "Auto-deploy will pause after this roll back, so the repository head isn't deployed over it. Turn it back on when the repository is fixed."
+      "rollbackNote": "Auto-deploy will pause after this roll back, so the repository head isn't deployed over it. Turn it back on when the repository is fixed.",
+      "source": "{{folder}} of {{repo}} at {{ref}}",
+      "sourceFiles": "{{source}} using {{files}}"
     },
     "loading": "Checking the stack…",
     "lookingUp": "Looking up the digest…",

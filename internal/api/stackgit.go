@@ -343,6 +343,33 @@ type StackGitPullBody struct {
 	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with"`
 }
 
+// StackGitSourceInput is the body of POST /api/env/{envId}/stacks/{stackId}/git/source.
+type StackGitSourceInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		DraftVersion int64    `json:"draftVersion" minimum:"0" doc:"The version of the draft you read. If the draft moved since (a save, a pull, another change of source), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded"`
+		RepoID       string   `json:"repoId" maxLength:"64" doc:"The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found"`
+		RefKind      string   `json:"refKind" enum:"branch,tag,commit" doc:"What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters"`
+		Ref          string   `json:"ref" maxLength:"2048" doc:"The branch, tag or commit. 422 ref_invalid for a name git would refuse"`
+		Folder       string   `json:"folder,omitempty" maxLength:"4096" doc:"The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)"`
+		ComposeFiles []string `json:"composeFiles" minItems:"1" maxItems:"50" doc:"The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit"`
+	}
+}
+
+// StackGitSourceBody is what a change of source did to the draft.
+type StackGitSourceBody struct {
+	DraftVersion int64  `json:"draftVersion" doc:"The version of the draft after the change: review it and deploy it at this version"`
+	Commit       string `json:"commit" doc:"The full ID of the commit the draft was made from, at the head of the new source"`
+	Ref          string `json:"ref" doc:"The branch, tag or commit ID the new source follows"`
+}
+
+// StackGitSourceOutput wraps StackGitSourceBody for huma.
+type StackGitSourceOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackGitSourceBody
+}
+
 // StackGitCommitsInput is the query of GET /api/env/{envId}/stacks/{stackId}/git/commits.
 type StackGitCommitsInput struct {
 	StackPathInput
@@ -471,6 +498,21 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *StackGitPullInput) (*StackGitPullOutput, error) {
 			return pullStackGit(ctx, s, g, in)
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "changeStackGitSource", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/source",
+		Summary: "Change what a git stack follows, through review",
+		Description: "Reads the new source (a repository of this environment or of the instance, a branch, tag or commit, a folder and its compose files) at its head into the draft, as a pending source (D-11, D-12): " +
+			"the draft's repository files become those of the new commit, the overlay files and the variables stay, and the draft records the commit, the folder's tree hash and the new source. Its version goes up by one. " +
+			"Nothing is applied: the stack keeps following its own repository, ref, folder and compose files, and Pull & redeploy and the checks keep using them, until a deploy of the draft ends good, which makes the new source the stack's source. " +
+			"Review the draft and deploy it as any stack; discarding the draft, or a pull, drops the pending source. A stack with auto-deploy on does not deploy while a pending source waits. " +
+			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. The repository must be one of the environment's or the instance's (404 repository_not_found). " +
+			"422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. " +
+			"A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as stack.draft_saved. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitSourceInput) (*StackGitSourceOutput, error) {
+			return changeStackGitSource(ctx, s, g, in)
 		})
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStackGitCommits", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/git/commits",
@@ -913,6 +955,59 @@ func pullStackGit(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitPull
 	}
 	return &StackGitPullOutput{CacheControl: "no-store", Body: StackGitPullBody{
 		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref, DeployedCommit: res.DeployedCommit, Touched: res.Touched,
+	}}, nil
+}
+
+func changeStackGitSource(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitSourceInput) (*StackGitSourceOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if g.Sync == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	if _, err := repo.StackGit(ctx, st.ID); errors.Is(err, stackops.ErrNoGit) {
+		return nil, stackNotGit()
+	} else if err != nil {
+		return nil, stackInternal(d, "read the git settings", env.ID, err)
+	}
+	body := in.Body
+	// The layer rule: a repository of this environment or of the instance, else it is not found.
+	known, err := g.browseRepo(ctx, env.ID, body.RepoID)
+	if err != nil {
+		return nil, err
+	}
+	kind := gitx.RefKind(body.RefKind)
+	res, err := g.Sync.ChangeSource(ctx, env.ID, st.ID, p.Name, body.DraftVersion, gitsync.SourceChange{
+		RepoID: known.ID, RefKind: kind, Ref: body.Ref, Folder: body.Folder, ComposeFiles: body.ComposeFiles,
+	})
+	var conflict *stackops.DraftConflictError
+	if errors.As(err, &conflict) {
+		e := draftChanged(conflict)
+		if m, ok := e.(*huma.ErrorModel); ok {
+			m.Detail = "The draft changed while you were changing the source. Reload it, then change the source again."
+		}
+		return nil, e
+	}
+	if err != nil {
+		return nil, g.importProblem(known, kind, body.Ref, body.Folder, err)
+	}
+	if res.DraftVersion != body.DraftVersion {
+		draft, err := repo.Draft(ctx, st.ID)
+		if err != nil {
+			return nil, stackInternal(d, "read the changed draft", env.ID, err)
+		}
+		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionStackDraftSaved, st.ID, audit.ResultSuccess, "", map[string]string{
+			"stack": st.Name, "version": itoa(draft.Version), "files": itoa(int64(len(draft.Copy.Files))), "vars": itoa(int64(len(draft.Copy.Vars))),
+		})
+	}
+	return &StackGitSourceOutput{CacheControl: "no-store", Body: StackGitSourceBody{
+		DraftVersion: res.DraftVersion, Commit: res.Commit.SHA, Ref: res.Ref,
 	}}, nil
 }
 

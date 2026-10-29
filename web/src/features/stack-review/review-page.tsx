@@ -145,6 +145,30 @@ function listOf(items: string[]): string {
   return new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
 }
 
+type GitReview = NonNullable<StackReview["git"]>;
+
+// The words of a source in the review of a change of source: its folder, repository and ref, and the compose files when
+// they are all that differs from the source it replaces ("{old source}" of UI-SPEC "Source-change title").
+function sourceWords(t: Translate, now: GitReview, old: NonNullable<GitReview["replaces"]>) {
+  const describe = (s: GitReview | NonNullable<GitReview["replaces"]>, files: boolean) => {
+    const source = t("stackReview.git.source", {
+      folder: s.folder || t("stackGit.status.rootFolder"),
+      repo: s.repoName || t("stackGit.strip.repoUnknown"),
+      ref: s.refKind === "commit" ? shortSha(s.ref) : s.ref,
+    });
+    return files
+      ? t("stackReview.git.sourceFiles", { source, files: listOf(s.composeFiles ?? []) })
+      : source;
+  };
+  // Only the compose files differ: the two sources would read the same without them.
+  const sameWhere =
+    old.folder === now.folder &&
+    old.refKind === now.refKind &&
+    old.ref === now.ref &&
+    old.repoName === now.repoName;
+  return { now: describe(now, sameWhere), old: describe(old, sameWhere) };
+}
+
 // noChange says whether a deploy of the review would do nothing: no service to add, change or
 // remove, and no network, secret or config but the external ones the stack only names.
 function noChange(data: StackReview): boolean {
@@ -245,8 +269,10 @@ export function ReviewPage({
   // from a new pull. A fixed commit does not move.
   const stackHead = stack.data?.git?.headSha ?? "";
   const reviewedHead = gitReview?.headCommit ?? "";
+  // A draft that holds a new source (D-11) is about that source: the stack's head belongs to the source it replaces.
+  const replaces = gitReview?.replaces;
   const movedOn =
-    gitReview && gitReview.refKind !== "commit"
+    gitReview && !replaces && gitReview.refKind !== "commit"
       ? [stackHead, reviewedHead].find((h) => h !== "" && h !== gitReview.commit) || ""
       : "";
 
@@ -397,9 +423,11 @@ export function ReviewPage({
                 ? t("stackRollback.review.title", { name, seq: revision })
                 : update
                   ? t("stackReview.titleUpdate", { name })
-                  : gitStack
-                    ? t("stackReview.titleGit", { name })
-                    : t("stackReview.title", { name })}
+                  : replaces
+                    ? t("stackReview.titleSource", { name })
+                    : gitStack
+                      ? t("stackReview.titleGit", { name })
+                      : t("stackReview.title", { name })}
           </h3>
         )}
         <p className="text-sm text-muted-foreground">
@@ -411,14 +439,17 @@ export function ReviewPage({
               ? t("stackRollback.review.body", { seq: revision })
               : update
                 ? t("stackReview.bodyUpdate")
-                : gitReview
-                  ? t("stackReview.bodyGit", {
-                      ref: gitReview.refKind === "commit" ? shortSha(gitReview.ref) : gitReview.ref,
-                      folder: gitReview.folder || t("stackGit.status.rootFolder"),
-                      sha: shortSha(gitReview.commit),
-                      env: envName,
-                    })
-                  : t("stackReview.body", { env: envName })}
+                : gitReview && replaces
+                  ? t("stackReview.bodySource", sourceWords(t, gitReview, replaces))
+                  : gitReview
+                    ? t("stackReview.bodyGit", {
+                        ref:
+                          gitReview.refKind === "commit" ? shortSha(gitReview.ref) : gitReview.ref,
+                        folder: gitReview.folder || t("stackGit.status.rootFolder"),
+                        sha: shortSha(gitReview.commit),
+                        env: envName,
+                      })
+                    : t("stackReview.body", { env: envName })}
         </p>
         {data || failed ? null : (
           <p role="status" className="text-sm text-muted-foreground">

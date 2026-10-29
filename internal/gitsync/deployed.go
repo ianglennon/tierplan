@@ -34,7 +34,9 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 	}
 	src := rev.Git.Source
 	rolledBack := rev.Origin == stackops.OriginRollback
-	if !rolledBack && (sourceChanged(sg, rev.Git) || !slices.Equal(sg.ComposeFiles, src.ComposeFiles)) {
+	// A source the person changed through review (D-11) becomes the stack's when the deploy of it ends good.
+	newSource := !rolledBack && (sourceChanged(sg, rev.Git) || !slices.Equal(sg.ComposeFiles, src.ComposeFiles))
+	if newSource {
 		if err := s.repo.SetAppliedSource(ctx, stackID, src); err != nil {
 			s.log.Warn("could not make the git settings follow the deployed revision", "stack", stackID, "error", err)
 		}
@@ -58,6 +60,11 @@ func (s *Service) Deployed(ctx context.Context, stackID string, rev stackops.Sna
 		// are not comparable and no commits are counted; the head waits for review.
 		next.Status, next.Behind = stackops.GitStatusBehind, 1
 		next.ReasonCode, next.ReasonDetail = string(ReasonSourceChanged), detailOf(ReasonSourceChanged, nil)
+	case newSource:
+		// The head the state holds was read from the source the stack followed before, so it says nothing about the new
+		// one. The commit just deployed is the best head known, and the next check looks at the repository again.
+		next.HeadCommit, next.HeadTree = rev.Git.Commit, rev.Git.Tree
+		next.Status, next.Behind = stackops.GitStatusInSync, 0
 	case prev.HeadCommit == "" || prev.Status == stackops.GitStatusError || prev.HeadCommit == rev.Git.Commit || prev.HeadTree == rev.Git.Tree:
 		next.HeadCommit, next.HeadTree = rev.Git.Commit, rev.Git.Tree
 		next.Status, next.Behind = stackops.GitStatusInSync, 0
