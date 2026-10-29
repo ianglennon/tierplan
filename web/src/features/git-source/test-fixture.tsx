@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import { vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
-import type { GitRefs, GitRepo, GitTree, GitTreeEntry } from "@/api/git";
+import type { GitRefs, GitRepo, GitStackCheck, GitTree, GitTreeEntry } from "@/api/git";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -29,6 +29,8 @@ export interface World {
   // The answer to a read of one folder; the query holds refKind, ref and path.
   tree: (query: URLSearchParams) => Response | Promise<Response>;
   create: () => Response | Promise<Response>;
+  // The answer to a check of the chosen files; the argument is the body that was sent.
+  check: (body: Record<string, unknown>) => Response | Promise<Response>;
   me: ReturnType<typeof makeMe>;
   environments: { id: string; name: string; envType: string }[];
 }
@@ -62,6 +64,20 @@ export function treeOf(
     entries,
     path,
     total: entries.length,
+    ...extra,
+  };
+}
+
+// checkOf is the server's answer to a check; what a test does not name is empty.
+export function checkOf(extra: Partial<GitStackCheck> = {}): GitStackCheck {
+  return {
+    commit: { sha: SHA, when: COMMITTED_AT },
+    missing: [],
+    notImported: [],
+    notImportedTotal: 0,
+    problems: [],
+    services: [],
+    vars: [],
     ...extra,
   };
 }
@@ -107,6 +123,7 @@ export function makeWorld(): World {
     refs: () => Response.json(refsOf(["main"])),
     tree: (q) => Response.json(treeOf(q.get("path") ?? "", [])),
     create: () => Response.json({ stackId: "stack-9" }, { status: 201 }),
+    check: () => Response.json(checkOf({ services: ["web"] })),
     me: makeMe({ envs: { [ENV]: "admin" } }),
     environments: [{ id: ENV, name: "Prod", envType: "swarm" }],
   };
@@ -138,6 +155,9 @@ export function stubFetch(world: World) {
       }
       if (entry.path === `/api/env/${ENV}/git-stacks` && req.method === "POST") {
         return world.create();
+      }
+      if (entry.path === `/api/env/${ENV}/git-stacks/check` && req.method === "POST") {
+        return world.check(entry.body ?? {});
       }
       return Response.json({}, { status: 404 });
     }),

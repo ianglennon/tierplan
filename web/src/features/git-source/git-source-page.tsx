@@ -4,13 +4,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CircleX } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { environmentsQuery } from "@/api/environments";
 import {
   type GitRefKind,
   type GitRequestError,
   gitEnvReposQuery,
+  gitTreeQuery,
   useCreateGitStack,
 } from "@/api/git";
 import { NeedsTooltip } from "@/components/needs-tooltip";
@@ -19,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { RepositorySheet } from "@/features/git/repository-sheet";
+import { CheckSummary, useGitSourceCheck } from "@/features/git-source/check-summary";
 import { ComposeFileList } from "@/features/git-source/compose-file-list";
 import { FolderBrowser } from "@/features/git-source/folder-browser";
 import { RepoCard } from "@/features/git-source/repo-card";
@@ -30,6 +32,8 @@ import { toastSuccess } from "@/lib/toast";
 
 // A commit is named by 7 to 40 hex characters; a branch or tag by anything the list holds.
 const COMMIT = /^[0-9a-f]{7,40}$/i;
+// The full commit ID the top of the page resolved a ref to.
+const FULL_COMMIT = /^[0-9a-f]{40}$/;
 
 interface GitSourcePageProps {
   envId: string;
@@ -96,6 +100,30 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
 
   const refChosen = kind === "commit" ? COMMIT.test(gitRef) : gitRef !== "";
   const ready = repo !== undefined && refChosen && folder !== null && files.length > 0;
+
+  // The commit the ref resolved to at the top of the page. The check reads that commit, so the
+  // summary, the variables and the create all speak of the same files.
+  const resolved = useQuery({
+    ...gitTreeQuery(envId, repo?.id ?? "", kind, gitRef, ""),
+    enabled: repo !== undefined && refChosen,
+  });
+  const commit = resolved.data?.commit;
+  const request = useMemo(
+    () =>
+      ready && repo && folder !== null
+        ? {
+            name,
+            repoId: repo.id,
+            refKind: kind,
+            ref: gitRef,
+            folder,
+            composeFiles: files,
+            ...(commit && FULL_COMMIT.test(commit) ? { commit } : {}),
+          }
+        : null,
+    [ready, repo, name, kind, gitRef, folder, files, commit],
+  );
+  const check = useGitSourceCheck(envId, request);
 
   function clearChoices() {
     setFolder(null);
@@ -238,6 +266,7 @@ function GitSourcePageBody({ envId, name }: GitSourcePageProps) {
                   onChange={setFiles}
                 />
               ) : null}
+              {request ? <CheckSummary state={check} repoName={repo.name} /> : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">

@@ -120,7 +120,26 @@
       "ref_invalid": "That isn't a ref name git accepts.",
       "offline": "The server didn't answer. Check the connection and try again.",
       "permission": "You don't have permission to read this repository.",
-      "unknown": "Bayplan couldn't read the repository. Try again."
+      "unknown": "Bayplan couldn't read the repository. Try again.",
+      "compose_file_missing": "A compose file you chose isn't in that folder at this ref.",
+      "compose_path_invalid": "A compose file path is outside the stack folder or is named twice.",
+      "file_path_invalid": "An overlay file path isn't a path inside the stack folder.",
+      "folder_invalid": "That folder isn't a path inside the repository."
+    },
+    "check": {
+      "checking": "Checking the files…",
+      "found_one": "Found {{count}} service:",
+      "found_other": "Found {{count}} services:",
+      "more": "and {{count}} more",
+      "none": "No services found.",
+      "blockingTitle": "Fix these in the repository",
+      "severity": {
+        "error": "Blocking",
+        "warning": "Warning"
+      },
+      "failed": "Couldn't check the files: {{reason}}",
+      "retry": "Retry",
+      "addOverlay": "Add overlay file"
     },
     "footer": {
       "note": "Checks the repository every 5 minutes and waits for your review. Change this under Git settings.",

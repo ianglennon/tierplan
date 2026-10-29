@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Toaster } from "@/components/ui/sonner";
 import { GitSourcePage } from "@/features/git-source/git-source-page";
 import {
+  checkOf,
   dir,
   ENV,
   file,
@@ -22,6 +23,7 @@ import {
   refsOf,
   renderUi,
   repoOf,
+  SHA,
   stubFetch,
   treeOf,
   type World,
@@ -80,14 +82,30 @@ async function chooseRepository(name: string) {
   fireEvent.click(options.find((o) => o.textContent?.includes(name)) as HTMLElement);
 }
 
-// useThisFolder presses Use this folder once the folder has been read: it is off until then.
-async function useThisFolder() {
+// pressUseThisFolder presses Use this folder once the folder has been read: it is off until then.
+async function pressUseThisFolder() {
   const button = await screen.findByRole("button", { name: "Use this folder" });
   await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(button);
 }
 
-const posts = () => world.sent.filter((s) => s.method === "POST");
+// The creates the server saw; a check is a POST too, and saves nothing.
+const posts = () =>
+  world.sent.filter((s) => s.method === "POST" && !s.path.endsWith("/git-stacks/check"));
+const checks = () =>
+  world.sent.filter((s) => s.method === "POST" && s.path.endsWith("/git-stacks/check"));
+
+// chooseWebFolder picks the repository, goes to stacks/web and uses it.
+async function chooseWebFolder() {
+  await chooseRepository("homelab");
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Branch" }).textContent).toContain("main"),
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "stacks" }));
+  fireEvent.click(await screen.findByRole("button", { name: /web/ }));
+  await pressUseThisFolder();
+  await screen.findByText("Picked compose.yaml. Change it if the stack uses another.");
+}
 
 describe("GitSourcePage", () => {
   it("creates a stack from a repository, a branch, a folder and its compose file", async () => {
@@ -99,7 +117,7 @@ describe("GitSourcePage", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "stacks" }));
     fireEvent.click(await screen.findByRole("button", { name: /web/ }));
-    await useThisFolder();
+    await pressUseThisFolder();
     // The one conventional file is picked for the person.
     expect(
       await screen.findByText("Picked compose.yaml. Change it if the stack uses another."),
@@ -133,6 +151,65 @@ describe("GitSourcePage", () => {
     expect(posts()).toEqual([]);
   });
 
+  it("checks the chosen files against the commit the ref resolved to and shows what they deploy, without saving", async () => {
+    world.check = () =>
+      Response.json(
+        checkOf({
+          services: ["web", "db"],
+          problems: [
+            {
+              severity: "error",
+              code: "git_submodule",
+              message: "vendor is a submodule. Bayplan doesn't support submodules.",
+              file: "compose.yaml",
+              line: 4,
+              col: 1,
+              endLine: 4,
+              endCol: 2,
+            },
+          ],
+        }),
+      );
+    mount();
+    await chooseWebFolder();
+    expect(await screen.findByText("Found 2 services:")).toBeTruthy();
+    expect(screen.getByText("compose.yaml:4")).toBeTruthy();
+    expect(checks()).toHaveLength(1);
+    expect(checks()[0]?.body).toEqual({
+      name: "web",
+      repoId: "r1",
+      refKind: "branch",
+      ref: "main",
+      folder: "stacks/web",
+      composeFiles: ["compose.yaml"],
+      commit: SHA,
+    });
+    expect(posts()).toEqual([]);
+    // Problems do not stop a draft from being created.
+    expect(
+      screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled"),
+    ).toBeNull();
+  });
+
+  it("keeps Create stack on while the check runs and when it fails, and checks again on Retry", async () => {
+    let calls = 0;
+    world.check = () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ type: "ref_missing", title: "x", status: 422 }, { status: 422 })
+        : Response.json(checkOf({ services: ["web"] }));
+    };
+    mount();
+    await chooseWebFolder();
+    const alert = await screen.findByText(/Couldn't check the files:/);
+    expect(alert.textContent).toContain("That branch or tag isn't in homelab any more.");
+    expect(
+      screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Found 1 service:")).toBeTruthy();
+  });
+
   it("names the stack and the environment", async () => {
     mount("shop");
     expect(await screen.findByRole("heading", { name: "Create shop from git" })).toBeTruthy();
@@ -143,7 +220,7 @@ describe("GitSourcePage", () => {
     world.repos = [repoOf("r1", "homelab"), repoOf("r2", "tools")];
     mount();
     await chooseRepository("homelab");
-    await useThisFolder();
+    await pressUseThisFolder();
     expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
     expect(
       screen.getByText("Changing the repository clears the folder and files you chose."),
@@ -157,7 +234,7 @@ describe("GitSourcePage", () => {
   it("clears the folder and files when the kind of ref changes", async () => {
     mount();
     await chooseRepository("homelab");
-    await useThisFolder();
+    await pressUseThisFolder();
     expect(await screen.findByText("Stack folder: / (repository root)")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Tag" }));
     await waitFor(() => expect(screen.queryByText(/Stack folder:/)).toBeNull());
@@ -172,7 +249,7 @@ describe("GitSourcePage", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: "stacks" }));
     fireEvent.click(await screen.findByRole("button", { name: /web/ }));
-    await useThisFolder();
+    await pressUseThisFolder();
     await screen.findByText("Picked compose.yaml. Change it if the stack uses another.");
     expect(
       screen.getByRole("button", { name: "Create stack" }).getAttribute("aria-disabled"),
