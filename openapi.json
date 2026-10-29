@@ -16084,6 +16084,10 @@
             "description": "The code of the failure; empty when the revision did not fail",
             "type": "string"
           },
+          "commit": {
+            "description": "The full ID of the commit the revision was made from; empty for a revision of a stack that was not from a git repository then",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the revision was taken, RFC 3339 UTC",
             "format": "date-time",
@@ -16148,6 +16152,23 @@
             "description": "The revision number, unique per stack and never reused",
             "format": "int64",
             "type": "integer"
+          },
+          "source": {
+            "$ref": "#/components/schemas/StackRevisionSource",
+            "description": "Where the revision was read from; left out for a revision that was not made from a git repository"
+          },
+          "syncTrigger": {
+            "description": "What started the deploy of a revision no person started: poll for a check on a schedule, webhook for a push the repository announced. Empty for any other revision",
+            "enum": [
+              "",
+              "poll",
+              "webhook"
+            ],
+            "type": "string"
+          },
+          "tree": {
+            "description": "The hash of the stack's folder at that commit; empty when commit is",
+            "type": "string"
           }
         },
         "required": [
@@ -16163,7 +16184,10 @@
           "deployed",
           "images",
           "pinned",
-          "adoptedFrom"
+          "adoptedFrom",
+          "commit",
+          "tree",
+          "syncTrigger"
         ],
         "type": "object"
       },
@@ -16217,6 +16241,55 @@
           "service",
           "image",
           "digest"
+        ],
+        "type": "object"
+      },
+      "StackRevisionSource": {
+        "additionalProperties": false,
+        "properties": {
+          "composeFiles": {
+            "description": "The compose files of the folder the revision merged, in merge order",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "folder": {
+            "description": "The folder of the repository the stack lived in; empty for the root",
+            "type": "string"
+          },
+          "ref": {
+            "description": "The branch, tag or commit ID the stack followed",
+            "type": "string"
+          },
+          "refKind": {
+            "description": "What ref names",
+            "enum": [
+              "branch",
+              "tag",
+              "commit"
+            ],
+            "type": "string"
+          },
+          "repoId": {
+            "description": "The repository the revision was made from; compare it with the stack's repository to know whether a commit link applies",
+            "type": "string"
+          },
+          "repoName": {
+            "description": "The repository's name when the revision was made",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repoId",
+          "repoName",
+          "refKind",
+          "ref",
+          "folder",
+          "composeFiles"
         ],
         "type": "object"
       },

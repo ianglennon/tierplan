@@ -222,6 +222,7 @@ GROUP BY r.stack_id;
 -- The revisions of one stack, newest first, with the failure each one's deploy ended in. Two operations can name one
 -- seq (a retry of the same revision), so the newest deploy row is the one read.
 SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       r.git_commit, r.git_tree, r.git_source, r.sync_trigger,
        COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
 FROM stack_snapshots r
 LEFT JOIN stack_deploys d ON d.id = (

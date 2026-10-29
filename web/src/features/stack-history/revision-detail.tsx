@@ -21,6 +21,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { historyRepoOf, RevisionCommit } from "@/features/stack-history/revision-commit";
 import { RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { failureReason } from "@/features/stack-history/revision-result-cell";
 import { RevisionTabs } from "@/features/stack-history/revision-tabs";
@@ -128,6 +129,13 @@ export function RevisionDetail({
               )}{" "}
               {t("stackHistory.detail.by", { user: item.createdBy || t("stackHistory.missing") })}{" "}
               <RelativeTime value={item.createdAt} />
+              {item.commit ? (
+                <>
+                  {" · "}
+                  {t("stackHistory.detail.commit")}{" "}
+                  <RevisionCommit item={item} repo={historyRepoOf(stack)} />
+                </>
+              ) : null}
             </p>
           </div>
           {canRollBack ? (

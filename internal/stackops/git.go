@@ -56,12 +56,17 @@ func (g GitRevision) isZero() bool {
 // gitRevisionOf reads the git columns of a snapshot row. A source that is not valid JSON reads as none and is
 // logged: a revision must stay readable, and it then restores from its files.
 func gitRevisionOf(row sqlc.StackSnapshot) GitRevision {
-	out := GitRevision{Commit: row.GitCommit, Tree: row.GitTree}
-	if row.GitSource == "" || row.GitSource == "{}" {
+	return parseGitRevision(row.GitCommit, row.GitTree, row.GitSource, row.ID)
+}
+
+// parseGitRevision is gitRevisionOf for the three columns alone; label names the snapshot in the log.
+func parseGitRevision(commit, tree, source, label string) GitRevision {
+	out := GitRevision{Commit: commit, Tree: tree}
+	if source == "" || source == "{}" {
 		return out
 	}
-	if err := json.Unmarshal([]byte(row.GitSource), &out.Source); err != nil {
-		slog.Default().Warn("could not read the git source of a stack snapshot", "snapshot", row.ID, "error", err)
+	if err := json.Unmarshal([]byte(source), &out.Source); err != nil {
+		slog.Default().Warn("could not read the git source of a stack snapshot", "snapshot", label, "error", err)
 		out.Source = GitSource{}
 	}
 	return out

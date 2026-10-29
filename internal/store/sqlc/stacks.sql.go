@@ -809,6 +809,7 @@ func (q *Queries) ListLatestRevisionTimesByEnv(ctx context.Context, envID string
 
 const listRevisions = `-- name: ListRevisions :many
 SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       r.git_commit, r.git_tree, r.git_source, r.sync_trigger,
        COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
 FROM stack_snapshots r
 LEFT JOIN stack_deploys d ON d.id = (
@@ -833,6 +834,10 @@ type ListRevisionsRow struct {
 	Pins          string
 	CreatedBy     string
 	CreatedAt     int64
+	GitCommit     string
+	GitTree       string
+	GitSource     string
+	SyncTrigger   string
 	FailedService string
 	Code          string
 }
@@ -856,6 +861,10 @@ func (q *Queries) ListRevisions(ctx context.Context, arg ListRevisionsParams) ([
 			&i.Pins,
 			&i.CreatedBy,
 			&i.CreatedAt,
+			&i.GitCommit,
+			&i.GitTree,
+			&i.GitSource,
+			&i.SyncTrigger,
 			&i.FailedService,
 			&i.Code,
 		); err != nil {

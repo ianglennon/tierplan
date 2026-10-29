@@ -46,6 +46,11 @@ type RevisionRow struct {
 	// with (the first revision of a stack, or an adopted one), and 0 otherwise.
 	Images []ImageChange
 	Pinned int
+	// Git is the commit, the folder's tree and the source the revision was made from; the zero value for a revision of
+	// a stack that was not from git then. SyncTrigger is SyncPoll or SyncWebhook for a revision an automatic deploy
+	// made, and empty for any other.
+	Git         GitRevision
+	SyncTrigger string
 }
 
 // ListRevisions lists the revisions of a stack, newest first by seq. Seq is unique per stack, so the order
@@ -70,6 +75,7 @@ func (r Repo) ListRevisions(ctx context.Context, stackID string) (rows []Revisio
 		row := RevisionRow{
 			Seq: g.Seq, Origin: g.Origin, RestoredFrom: g.RestoredFrom, Outcome: g.Outcome, CreatedBy: g.CreatedBy,
 			CreatedAt: time.Unix(0, g.CreatedAt).UTC(), FailedService: g.FailedService, Code: g.Code,
+			Git: parseGitRevision(g.GitCommit, g.GitTree, g.GitSource, fmt.Sprintf("%s#%d", stackID, g.Seq)), SyncTrigger: g.SyncTrigger,
 		}
 		if g.Outcome == OutcomeGood && !deployed {
 			row.Deployed, deployed = true, true
@@ -163,7 +169,7 @@ func (r Repo) RevisionDetail(ctx context.Context, stack Stack, seq int64) (Revis
 	}
 	out.Row = RevisionRow{
 		Seq: snap.Seq, Origin: snap.Origin, RestoredFrom: snap.RestoredFrom, Outcome: snap.Outcome, CreatedBy: snap.CreatedBy,
-		CreatedAt: snap.CreatedAt,
+		CreatedAt: snap.CreatedAt, Git: snap.Git, SyncTrigger: snap.SyncTrigger,
 	}
 	for _, row := range rows {
 		if row.Seq == seq {

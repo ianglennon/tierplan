@@ -10992,6 +10992,8 @@ export interface components {
             adoptedFrom: string;
             /** @description The code of the failure; empty when the revision did not fail */
             code: string;
+            /** @description The full ID of the commit the revision was made from; empty for a revision of a stack that was not from a git repository then */
+            commit: string;
             /**
              * Format: date-time
              * @description When the revision was taken, RFC 3339 UTC
@@ -11032,6 +11034,15 @@ export interface components {
              * @description The revision number, unique per stack and never reused
              */
             seq: number;
+            /** @description Where the revision was read from; left out for a revision that was not made from a git repository */
+            source?: components["schemas"]["StackRevisionSource"];
+            /**
+             * @description What started the deploy of a revision no person started: poll for a check on a schedule, webhook for a push the repository announced. Empty for any other revision
+             * @enum {string}
+             */
+            syncTrigger: "" | "poll" | "webhook";
+            /** @description The hash of the stack's folder at that commit; empty when commit is */
+            tree: string;
         };
         StackRevisionListBody: {
             /** @description True when the stack has more revisions than the 500 the list holds; the oldest are left out */
@@ -11051,6 +11062,23 @@ export interface components {
             image: string;
             /** @description The service's name in the compose file */
             service: string;
+        };
+        StackRevisionSource: {
+            /** @description The compose files of the folder the revision merged, in merge order */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lived in; empty for the root */
+            folder: string;
+            /** @description The branch, tag or commit ID the stack followed */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository the revision was made from; compare it with the stack's repository to know whether a commit link applies */
+            repoId: string;
+            /** @description The repository's name when the revision was made */
+            repoName: string;
         };
         StackRevisionVarBody: {
             /** @description The variable's name */

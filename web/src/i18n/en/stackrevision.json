@@ -74,6 +74,19 @@
         "image": "Image",
         "digest": "Digest",
         "none": "This revision pinned no images."
+      },
+      "source": {
+        "title": "Source",
+        "caption": "Source of revision #{{seq}}",
+        "repository": "Repository",
+        "ref": "Ref",
+        "commit": "Commit",
+        "copy": "Copy commit ID",
+        "copied": "Commit ID copied",
+        "tree": "Folder tree",
+        "folder": "Folder",
+        "composeFiles": "Compose files",
+        "helper": "A roll back restores this revision from what Bayplan stored. It never needs the repository."
       }
     },
     "error": {

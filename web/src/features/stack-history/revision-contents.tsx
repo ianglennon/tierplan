@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TruncatedText } from "@/features/resources/resource-table";
+import { RevisionSource } from "@/features/stack-history/revision-source";
 import { DigestChip } from "@/features/stacks/digest-chip";
 import { useT } from "@/i18n/use-t";
 
@@ -56,6 +57,13 @@ export function RevisionContents({ detail }: RevisionContentsProps) {
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <p className="text-sm text-muted-foreground">{t("stackRevision.contents.helper")}</p>
+
+      {detail.item.commit ? (
+        <section className="flex min-w-0 flex-col gap-2">
+          <h4 className="text-sm font-medium">{t("stackRevision.contents.source.title")}</h4>
+          <RevisionSource item={detail.item} />
+        </section>
+      ) : null}
 
       <Section
         title={t("stackRevision.contents.files.title")}

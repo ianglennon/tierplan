@@ -11,6 +11,7 @@
       "columns": {
         "revision": "Revision",
         "kind": "Kind",
+        "commit": "Commit",
         "result": "Result",
         "who": "Who",
         "when": "When",
@@ -60,7 +61,8 @@
         "title": "Revision #{{seq}} is still deploying",
         "console": "Open console"
       },
-      "by": "by {{user}},"
+      "by": "by {{user}},",
+      "commit": "commit"
     },
     "empty": {
       "title": "No revisions yet",

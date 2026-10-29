@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { ImageChangeSummary } from "@/features/stack-history/image-change-summary";
+import { type HistoryRepo, RevisionCommit } from "@/features/stack-history/revision-commit";
 import { RevisionKindCell, RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { RevisionResultCell } from "@/features/stack-history/revision-result-cell";
 import { useNeeds } from "@/hooks/use-needs";
@@ -39,6 +40,8 @@ interface RevisionTableProps {
   selected: number | undefined;
   // Revisions that appeared while the tab was open: their rows are highlighted for a moment (P4 D-05).
   fresh: ReadonlySet<number>;
+  // The repository a git stack follows. Its presence adds the Commit column; so does any revision that has a commit.
+  repo?: HistoryRepo;
 }
 
 // The body shows 8 rows of 36px and scrolls inside, with the header row above them (UI-SPEC "Spacing
@@ -111,8 +114,10 @@ export function RevisionTable({
   items,
   selected,
   fresh,
+  repo,
 }: RevisionTableProps) {
   const t = useT();
+  const commits = repo !== undefined || items.some((i) => !!i.commit);
   return (
     <div className={cn("overflow-auto rounded-md border", BODY_MAX)}>
       <table className="w-full caption-bottom text-sm">
@@ -121,6 +126,9 @@ export function RevisionTable({
           <TableRow className="hover:bg-muted">
             <TableHead scope="col">{t("stackHistory.table.columns.revision")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.kind")}</TableHead>
+            {commits ? (
+              <TableHead scope="col">{t("stackHistory.table.columns.commit")}</TableHead>
+            ) : null}
             <TableHead scope="col">{t("stackHistory.table.columns.result")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.who")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.when")}</TableHead>
@@ -152,6 +160,11 @@ export function RevisionTable({
               <TableCell>
                 <RevisionKindCell item={item} envId={envId} stackId={stackId} />
               </TableCell>
+              {commits ? (
+                <TableCell>
+                  <RevisionCommit item={item} repo={repo} />
+                </TableCell>
+              ) : null}
               <TableCell>
                 <RevisionResultCell item={item} />
               </TableCell>

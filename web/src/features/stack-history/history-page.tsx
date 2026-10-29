@@ -19,6 +19,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { historyRepoOf } from "@/features/stack-history/revision-commit";
 import { RevisionDetail, RevisionGone } from "@/features/stack-history/revision-detail";
 import { RevisionTable } from "@/features/stack-history/revision-table";
 import { usePermission } from "@/hooks/use-me";
@@ -175,6 +176,7 @@ export function HistoryPage({ envId, stackId, rev }: HistoryPageProps) {
           items={items}
           selected={selected?.seq}
           fresh={fresh}
+          repo={historyRepoOf(stack.data)}
         />
         <p className="text-sm text-muted-foreground">
           {t("stackRetention.note", { count: history.data?.kept })}
