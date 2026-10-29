@@ -204,6 +204,11 @@ const (
 	ActionGitSyncFailed = "git.sync_failed"
 	// A person turned a git stack's polling on or off, or changed how often it is checked (D-14).
 	ActionGitUpdatesChanged = "git.updates_changed"
+	// A webhook accepted a delivery and asked for a check, and a request to a webhook that exists failed its signature.
+	// A request to an address that is no webhook writes nothing (D-15). Neither carries the address, the token, the
+	// secret or the signature.
+	ActionGitWebhookDelivered = "git.webhook_delivered"
+	ActionGitWebhookRejected  = "git.webhook_rejected"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

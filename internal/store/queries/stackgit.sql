@@ -85,3 +85,28 @@ UPDATE stack_git_state SET next_check_at = NULL WHERE stack_id = ?;
 -- The repository, ref, folder and compose files a stack follows, set from the source of the revision that was
 -- deployed (the applied settings, D-08).
 UPDATE stack_git SET repo_id = ?, ref_kind = ?, ref = ?, folder = ?, compose_files = ?, updated_at = ? WHERE stack_id = ?;
+
+-- name: SetStackGitWebhook :execrows
+-- Sets a git stack's one webhook (D-15): the git host, where the secret goes, the SHA-256 of the routing token, the
+-- sealed secret (empty when the token in the address is the secret), its last four characters, and who made it. A new
+-- webhook has had no delivery.
+UPDATE stack_git SET webhook_flavour = ?, webhook_placement = ?, webhook_token_hash = ?, webhook_secret_sealed = ?,
+       webhook_secret_last4 = ?, webhook_created_by = ?, webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ?;
+
+-- name: ClearStackGitWebhook :execrows
+-- Removes a git stack's webhook: every webhook column back to its default.
+UPDATE stack_git SET webhook_flavour = '', webhook_placement = '', webhook_token_hash = '', webhook_secret_sealed = '',
+       webhook_secret_last4 = '', webhook_created_by = '', webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ?;
+
+-- name: GetStackGitByTokenHash :one
+-- The stack a webhook delivery is for, found by the SHA-256 of the routing token in its address. An empty hash matches
+-- nothing: a stack with no webhook stores an empty one.
+SELECT g.stack_id, s.env_id, s.name, g.webhook_flavour, g.webhook_placement, g.webhook_secret_sealed
+FROM stack_git g JOIN stacks s ON s.id = g.stack_id
+WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != '';
+
+-- name: SetStackGitWebhookDelivery :exec
+-- The last delivery the webhook saw and what became of it ('accepted' or 'rejected').
+UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ?;

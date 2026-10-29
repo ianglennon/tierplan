@@ -654,7 +654,11 @@ func (r *Router) Guarded(method, path string, need rbac.Requirement, h http.Hand
 // user authentication because the agent handshake is its own authentication
 // (join token or certificate, proof of possession, per-environment CA), and it
 // is not in the OpenAPI contract.
-var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true, "/agent/connect": true}
+//
+// /hooks/git/{token} is the sixth: the address a git host calls when something is pushed. It is exempt from user
+// authentication because the request proves itself (the routing token in the address, and the signature or secret of
+// the webhook it names), and it is not in the OpenAPI contract. It can only ask for a check of one stack.
+var exemptPaths = map[string]bool{"/healthz": true, "/readyz": true, "/setup": true, "/setup/*": true, "/agent/connect": true, "/hooks/git/{token}": true}
 
 // Problem builds the RFC 9457 error a huma handler returns when it must answer
 // with a specific status and a stable machine-readable type the SPA maps to
@@ -680,7 +684,7 @@ func VerifyAllGuarded(r *Router) error {
 		case !ok:
 			problems = append(problems, "unguarded route "+key+" (register it with httpx.Register or Router.Guarded)")
 		case rec.Exempt && !exemptPaths[rec.Path]:
-			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup, /agent/connect)")
+			problems = append(problems, "route "+key+" is exempt from the policy but is not on the D-47 list (/healthz, /readyz, /setup, /agent/connect, /hooks/git/{token})")
 		}
 		return nil
 	})

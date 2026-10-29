@@ -18,12 +18,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/envs"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/rbac"
 )
 
@@ -53,6 +55,12 @@ type GitDeps struct {
 	Log     *slog.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
+	// Access registers the owner of a webhook in the transaction that creates it. Nil answers 503 git_unavailable on the
+	// create-webhook route.
+	Access *access.Service
+	// Instance supplies the public URL a webhook address is built on. Nil, or no public URL set, builds the address on
+	// the origin the request came to.
+	Instance *instance.Instance
 	// OnCheck, when set, is called when the sync check a request started has ended, with the stack, what it found and
 	// the error of Bayplan's own storage if there was one. Tests use it to know that a check is over.
 	OnCheck func(stackID string, outcome gitsync.Outcome, err error)

@@ -63,6 +63,12 @@ func newCheckFixture(t *testing.T, wrap func(gitx.Client) gitx.Client, joined fu
 // the request the stack is made from, and make the refs it names, once the repository has its first commit.
 func newCheckFixtureWith(t *testing.T, wrap func(gitx.Client) gitx.Client, joined func(string, int), tune func(f *fixture, req *gitsync.ImportRequest)) *checkFixture {
 	t.Helper()
+	return newCheckFixtureDeps(t, wrap, func(d *gitsync.Deps) { d.Joined = joined }, tune)
+}
+
+// newCheckFixtureDeps is newCheckFixtureWith for a test that sets fields of the service's Deps (a hook it listens on).
+func newCheckFixtureDeps(t *testing.T, wrap func(gitx.Client) gitx.Client, deps func(*gitsync.Deps), tune func(f *fixture, req *gitsync.ImportRequest)) *checkFixture {
+	t.Helper()
 	f := newFixture(t, webFiles(), nil)
 	v, err := vault.New(bytes.Repeat([]byte{5}, 32), "test")
 	if err != nil {
@@ -78,9 +84,11 @@ func newCheckFixtureWith(t *testing.T, wrap func(gitx.Client) gitx.Client, joine
 		client = wrap(client)
 	}
 	clock := &checkClock{t: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)}
-	svc := gitsync.New(gitsync.Deps{
-		Git: client, Conns: f.conns, Repo: rr, Audit: audit.NewWriter(f.st, v, nil, clock.now), Now: clock.now, Joined: joined,
-	})
+	d := gitsync.Deps{Git: client, Conns: f.conns, Repo: rr, Audit: audit.NewWriter(f.st, v, nil, clock.now), Now: clock.now}
+	if deps != nil {
+		deps(&d)
+	}
+	svc := gitsync.New(d)
 
 	ctx := context.Background()
 	req := f.request()

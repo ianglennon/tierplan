@@ -218,7 +218,11 @@
         "sync_failed": "Git sync failed",
         "sync_failed_named": "Sync of {{name}} failed: {{reason}}",
         "updates_changed": "Git update checks changed",
-        "updates_changed_named": "Changed how {{name}} checks for updates"
+        "updates_changed_named": "Changed how {{name}} checks for updates",
+        "webhook_delivered": "Git webhook delivered a push",
+        "webhook_delivered_named": "Webhook for {{name}} delivered a push",
+        "webhook_rejected": "Git webhook rejected a request",
+        "webhook_rejected_named": "Webhook for {{name}} rejected a request"
       },
       "logs": {
         "viewed": "Container logs viewed",

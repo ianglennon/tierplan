@@ -20,6 +20,26 @@ func (q *Queries) ClearStackGitNextCheck(ctx context.Context, stackID string) er
 	return err
 }
 
+const clearStackGitWebhook = `-- name: ClearStackGitWebhook :execrows
+UPDATE stack_git SET webhook_flavour = '', webhook_placement = '', webhook_token_hash = '', webhook_secret_sealed = '',
+       webhook_secret_last4 = '', webhook_created_by = '', webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ?
+`
+
+type ClearStackGitWebhookParams struct {
+	UpdatedAt int64
+	StackID   string
+}
+
+// Removes a git stack's webhook: every webhook column back to its default.
+func (q *Queries) ClearStackGitWebhook(ctx context.Context, arg ClearStackGitWebhookParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, clearStackGitWebhook, arg.UpdatedAt, arg.StackID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countStacksUsingRepo = `-- name: CountStacksUsingRepo :one
 SELECT count(*) FROM stack_git WHERE repo_id = ?
 `
@@ -65,6 +85,37 @@ func (q *Queries) GetStackGit(ctx context.Context, stackID string) (StackGit, er
 		&i.PendingConvert,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getStackGitByTokenHash = `-- name: GetStackGitByTokenHash :one
+SELECT g.stack_id, s.env_id, s.name, g.webhook_flavour, g.webhook_placement, g.webhook_secret_sealed
+FROM stack_git g JOIN stacks s ON s.id = g.stack_id
+WHERE g.webhook_token_hash = ? AND g.webhook_token_hash != ''
+`
+
+type GetStackGitByTokenHashRow struct {
+	StackID             string
+	EnvID               string
+	Name                string
+	WebhookFlavour      string
+	WebhookPlacement    string
+	WebhookSecretSealed string
+}
+
+// The stack a webhook delivery is for, found by the SHA-256 of the routing token in its address. An empty hash matches
+// nothing: a stack with no webhook stores an empty one.
+func (q *Queries) GetStackGitByTokenHash(ctx context.Context, webhookTokenHash string) (GetStackGitByTokenHashRow, error) {
+	row := q.db.QueryRowContext(ctx, getStackGitByTokenHash, webhookTokenHash)
+	var i GetStackGitByTokenHashRow
+	err := row.Scan(
+		&i.StackID,
+		&i.EnvID,
+		&i.Name,
+		&i.WebhookFlavour,
+		&i.WebhookPlacement,
+		&i.WebhookSecretSealed,
 	)
 	return i, err
 }
@@ -388,6 +439,59 @@ func (q *Queries) SetStackGitSource(ctx context.Context, arg SetStackGitSourcePa
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setStackGitWebhook = `-- name: SetStackGitWebhook :execrows
+UPDATE stack_git SET webhook_flavour = ?, webhook_placement = ?, webhook_token_hash = ?, webhook_secret_sealed = ?,
+       webhook_secret_last4 = ?, webhook_created_by = ?, webhook_last_at = NULL, webhook_last_result = '', updated_at = ?
+WHERE stack_id = ?
+`
+
+type SetStackGitWebhookParams struct {
+	WebhookFlavour      string
+	WebhookPlacement    string
+	WebhookTokenHash    string
+	WebhookSecretSealed string
+	WebhookSecretLast4  string
+	WebhookCreatedBy    string
+	UpdatedAt           int64
+	StackID             string
+}
+
+// Sets a git stack's one webhook (D-15): the git host, where the secret goes, the SHA-256 of the routing token, the
+// sealed secret (empty when the token in the address is the secret), its last four characters, and who made it. A new
+// webhook has had no delivery.
+func (q *Queries) SetStackGitWebhook(ctx context.Context, arg SetStackGitWebhookParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackGitWebhook,
+		arg.WebhookFlavour,
+		arg.WebhookPlacement,
+		arg.WebhookTokenHash,
+		arg.WebhookSecretSealed,
+		arg.WebhookSecretLast4,
+		arg.WebhookCreatedBy,
+		arg.UpdatedAt,
+		arg.StackID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setStackGitWebhookDelivery = `-- name: SetStackGitWebhookDelivery :exec
+UPDATE stack_git SET webhook_last_at = ?, webhook_last_result = ? WHERE stack_id = ?
+`
+
+type SetStackGitWebhookDeliveryParams struct {
+	WebhookLastAt     sql.NullInt64
+	WebhookLastResult string
+	StackID           string
+}
+
+// The last delivery the webhook saw and what became of it ('accepted' or 'rejected').
+func (q *Queries) SetStackGitWebhookDelivery(ctx context.Context, arg SetStackGitWebhookDeliveryParams) error {
+	_, err := q.db.ExecContext(ctx, setStackGitWebhookDelivery, arg.WebhookLastAt, arg.WebhookLastResult, arg.StackID)
+	return err
 }
 
 const upsertStackGitState = `-- name: UpsertStackGitState :exec

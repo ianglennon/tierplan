@@ -120,6 +120,10 @@ type authFixture struct {
 	// the git routes, set when the routes are built.
 	gitOnCheck func(stackID string, outcome gitsync.Outcome, err error)
 	gitSync    *gitsync.Service
+	// gitTriggered is told after each check a webhook delivery started, and whether another follows (plan 09-22).
+	gitTriggered func(stackID string, outcome gitsync.Outcome, err error, more bool)
+	// gitJoined is told when a caller starts or joins the check of a stack (plan 09-14, 09-22).
+	gitJoined func(stackID string, waiting int)
 	// envSvc, when set, is the environment registry behind the environment
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
@@ -350,8 +354,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	gitConns := gitconn.NewStore(f.st, f.v, f.clk.now)
 	gitDeps := api.GitDeps{
 		Git: gitClient, Conns: gitConns, Envs: f.envSvc, Audit: f.aud, Checker: checker, Log: log, Now: f.clk.now, OnCheck: f.gitOnCheck,
-		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Audit: f.aud, Log: log, Now: f.clk.now}),
+		Access: f.access, Instance: f.inst,
+		Sync: gitsync.New(gitsync.Deps{
+			Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: f.st, Vault: f.v}, Audit: f.aud, Log: log, Now: f.clk.now,
+			Triggered: f.gitTriggered, Joined: f.gitJoined,
+		}),
 	}
+	gitsync.RegisterOwnedKinds()
 	f.gitSync = gitDeps.Sync
 	if f.envSvc != nil {
 		api.RegisterEnvWarnings(r, api.EnvWarningsDeps{
@@ -451,6 +460,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	}
 	api.RegisterRegistries(r, api.RegistriesDeps{Store: registry.NewStore(f.st, f.v, f.clk.now), Now: f.clk.now, Envs: f.envSvc, Aggregator: f.agg, Audit: f.aud, Checker: checker, Egress: f.registryEgress, Version: "test", Log: log})
 	api.RegisterGit(r, gitDeps)
+	api.RegisterGitHooks(r, api.GitHookDeps{
+		Repo: stackops.Repo{Store: f.st, Vault: f.v, Now: f.clk.now}, Sync: gitDeps.Sync, Access: f.access, Audit: f.aud, Log: log, Now: f.clk.now,
+	})
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterGitStacks(r, f.stackDeps, gitDeps)
 	}

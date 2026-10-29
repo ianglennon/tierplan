@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"math"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/access"
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitsync"
@@ -22,6 +24,7 @@ import (
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/bayplan/internal/store/sqlc"
 )
 
 // problemStackNotGit is the problem type of a git route asked about a stack that is not from a repository.
@@ -229,6 +232,43 @@ type StackGitPullOutput struct {
 	Body         StackGitPullBody
 }
 
+// StackGitWebhookInput is the request of POST /api/env/{envId}/stacks/{stackId}/git/webhook.
+type StackGitWebhookInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		Flavour   string `json:"flavour" enum:"github,gitlab,gitea,generic" doc:"The git host that will call the address: github, gitlab, gitea (Gitea, Forgejo and Gogs) or generic (any tool that can send a POST request). It decides which header proves a request came from the host"`
+		Placement string `json:"placement,omitempty" enum:"path,header" doc:"Only for generic: where the secret goes. path (the default) puts it in the address, so the address is the secret; header expects it as Authorization: Bearer <secret>. The other flavours always send a signature in a header, so they take header or nothing. Anything else is 422 webhook_placement"`
+	}
+	host string
+}
+
+// Resolve reads the host the request came to, for the address of a server that has no public URL set.
+func (in *StackGitWebhookInput) Resolve(ctx huma.Context) []error {
+	in.host = ctx.Host()
+	return nil
+}
+
+// StackGitWebhookBody is a new webhook, shown once.
+type StackGitWebhookBody struct {
+	URL       string `json:"url" doc:"The full address the git host calls, built on the public URL: {publicURL}/hooks/git/{token}. It holds the routing token and is shown only in this answer. For a generic webhook with the secret in the address, the address is the secret"`
+	Secret    string `json:"secret" doc:"The secret to give the git host (GitHub's Secret, GitLab's Secret token, Gitea's Secret, a generic webhook's bearer token). Shown only in this answer. Empty for a generic webhook with the secret in the address"`
+	Flavour   string `json:"flavour" enum:"github,gitlab,gitea,generic" doc:"The git host the webhook is for"`
+	Placement string `json:"placement" enum:"path,header" doc:"Where the secret goes: path (in the address) or header"`
+}
+
+// StackGitWebhookOutput wraps StackGitWebhookBody for huma.
+type StackGitWebhookOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         StackGitWebhookBody
+}
+
+// problemWebhookPlacement and problemWebhookExists are the problem types of the create-webhook route.
+const (
+	problemWebhookPlacement = "webhook_placement"
+	problemWebhookExists    = "webhook_exists"
+)
+
 // registerStackGit registers the routes that read a git stack's sync state and ask for a check.
 func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	httpx.Register(r, huma.Operation{
@@ -290,6 +330,18 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		func(ctx context.Context, in *StackGitUpdatesInput) (*StackGitOutput, error) {
 			return updateStackGitUpdates(ctx, s, in)
 		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "createStackGitWebhook", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
+		Summary: "Give a git stack a webhook",
+		Description: "Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. " +
+			"Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, it never deploys, and it names no ref or commit. " +
+			"flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. " +
+			"A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).",
+		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusCreated,
+	}, rbac.Requirement{Perm: rbac.PermGitManage, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitWebhookInput) (*StackGitWebhookOutput, error) {
+			return createStackGitWebhook(ctx, s, g, in)
+		})
 }
 
 func updateStackGitUpdates(ctx context.Context, d StacksDeps, in *StackGitUpdatesInput) (*StackGitOutput, error) {
@@ -332,6 +384,81 @@ func updateStackGitUpdates(ctx context.Context, d StacksDeps, in *StackGitUpdate
 		return nil, stackNotGit()
 	}
 	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
+}
+
+func createStackGitWebhook(ctx context.Context, d StacksDeps, g GitDeps, in *StackGitWebhookInput) (*StackGitWebhookOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	if g.Access == nil {
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemGitUnavailable, "Git repositories are not available on this server.")
+	}
+	flavour, placement := gitsync.Flavour(in.Body.Flavour), gitsync.Placement(in.Body.Placement)
+	switch {
+	case placement == "" && flavour == gitsync.FlavourGeneric:
+		placement = gitsync.PlacementPath
+	case placement == "":
+		placement = gitsync.PlacementHeader
+	case flavour != gitsync.FlavourGeneric && placement != gitsync.PlacementHeader:
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemWebhookPlacement, "A webhook for this git host always sends its signature in a header.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+
+	token, secret := gitsync.NewWebhookSecrets()
+	shown := secret
+	if flavour == gitsync.FlavourGeneric && placement == gitsync.PlacementPath {
+		shown = "" // the token in the address is the secret
+	}
+	last4 := lastFour(secret)
+	if shown == "" {
+		last4 = lastFour(token)
+	}
+	err = repo.CreateGitWebhook(ctx, stackops.NewGitWebhook{
+		StackID: st.ID, Flavour: string(flavour), Placement: string(placement), TokenHash: gitsync.TokenHash(token),
+		Secret: shown, Last4: last4, CreatedBy: p.ID,
+	}, func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error {
+		return g.Access.RegisterOwnedTx(ctx, tx, q, access.OwnedResource{
+			Kind: gitsync.KindGitWebhook, ResourceID: st.ID, EnvID: env.ID, Name: st.Name, OwnerID: p.ID,
+		})
+	})
+	switch {
+	case errors.Is(err, stackops.ErrNoGit):
+		return nil, stackNotGit()
+	case errors.Is(err, stackops.ErrWebhookExists):
+		return nil, httpx.Problem(http.StatusConflict, problemWebhookExists, "This stack already has a webhook.")
+	case errors.Is(err, access.ErrOwnerLacksPermission):
+		return nil, httpx.Problem(http.StatusForbidden, "owner_lacks_permission", "You can't create a webhook that acts on your behalf without the permission it needs.")
+	case err != nil:
+		return nil, stackInternal(d, "create the webhook", env.ID, err)
+	}
+	return &StackGitWebhookOutput{CacheControl: "no-store", Body: StackGitWebhookBody{
+		URL: g.webhookAddress(ctx, in.host, token), Secret: shown, Flavour: string(flavour), Placement: string(placement),
+	}}, nil
+}
+
+// webhookAddress is the address a git host calls: the public URL if one is set, else the origin the request came to.
+func (g GitDeps) webhookAddress(ctx context.Context, host, token string) string {
+	base := ""
+	if g.Instance != nil {
+		base = g.Instance.PublicURL()
+	}
+	if base == "" {
+		base = httpx.EffectiveScheme(ctx) + "://" + host
+	}
+	return strings.TrimSuffix(base, "/") + "/hooks/git/" + token
+}
+
+// lastFour is the last four characters of s, or all of it when it is shorter.
+func lastFour(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
 }
 
 // maxPollMinutes is the longest polling interval: a day.

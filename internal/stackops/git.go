@@ -19,6 +19,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/stacks"
 	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/bayplan/internal/vault"
 )
 
 // What started the deploy of a revision that no person started.
@@ -683,6 +684,127 @@ func (r Repo) copyGit(ctx context.Context, q *sqlc.Queries, id string, rev GitRe
 		GitCommit: rev.Commit, GitTree: rev.Tree, GitSource: string(raw), SyncTrigger: trigger, ID: id,
 	}); err != nil {
 		return fmt.Errorf("store the git revision: %w", err)
+	}
+	return nil
+}
+
+// ErrWebhookExists means the stack already has a webhook: it has one, and rotating or removing it is how it changes.
+var ErrWebhookExists = errors.New("stackops: the stack already has a webhook")
+
+// ErrNoWebhook means no stack has a webhook with that routing token.
+var ErrNoWebhook = errors.New("stackops: no webhook has that token")
+
+// NewGitWebhook is the webhook to give a git stack. Secret is the signing secret in the clear, empty when the routing
+// token in the address is the secret (a generic webhook with the secret in the address); it is sealed before it is
+// stored. TokenHash is the SHA-256 of the routing token, never the token.
+type NewGitWebhook struct {
+	StackID   string
+	Flavour   string
+	Placement string
+	TokenHash string
+	Secret    string
+	// Last4 is the last four characters of what the person copies as the secret: the secret, or the token when that
+	// is the secret.
+	Last4     string
+	CreatedBy string
+}
+
+// CreateGitWebhook gives a git stack its webhook and runs inTx in the same write transaction, so a record kept beside
+// it (the owner of the automation) is made or not made with it. A stack that is not from git is ErrNoGit, one that
+// already has a webhook is ErrWebhookExists. The secret is sealed under the stack's ID.
+func (r Repo) CreateGitWebhook(ctx context.Context, w NewGitWebhook, inTx func(ctx context.Context, tx *sql.Tx, q *sqlc.Queries) error) error {
+	sealed := ""
+	if w.Secret != "" {
+		var err error
+		if sealed, err = r.Vault.Seal(vault.ContextGitWebhook+w.StackID, []byte(w.Secret)); err != nil {
+			return fmt.Errorf("seal the webhook secret: %w", err)
+		}
+	}
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	row, err := q.GetStackGit(ctx, w.StackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoGit
+	}
+	if err != nil {
+		return fmt.Errorf("read the git settings: %w", err)
+	}
+	if row.WebhookTokenHash != "" {
+		return ErrWebhookExists
+	}
+	if _, err := q.SetStackGitWebhook(ctx, sqlc.SetStackGitWebhookParams{
+		WebhookFlavour: w.Flavour, WebhookPlacement: w.Placement, WebhookTokenHash: w.TokenHash, WebhookSecretSealed: sealed,
+		WebhookSecretLast4: w.Last4, WebhookCreatedBy: w.CreatedBy, UpdatedAt: r.now().UnixNano(), StackID: w.StackID,
+	}); err != nil {
+		return fmt.Errorf("set the webhook: %w", err)
+	}
+	if inTx != nil {
+		if err := inTx(ctx, tx, q); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// ClearGitWebhook removes a git stack's webhook. A stack that is not from git is ErrNoGit.
+func (r Repo) ClearGitWebhook(ctx context.Context, stackID string) error {
+	n, err := r.Store.Q.ClearStackGitWebhook(ctx, sqlc.ClearStackGitWebhookParams{UpdatedAt: r.now().UnixNano(), StackID: stackID})
+	if err != nil {
+		return fmt.Errorf("clear the webhook: %w", err)
+	}
+	if n == 0 {
+		return ErrNoGit
+	}
+	return nil
+}
+
+// GitWebhook is a stack's webhook as a delivery needs it: which stack it is for and how to judge a request, with the
+// secret open. The secret must not outlive the delivery or be logged.
+type GitWebhook struct {
+	StackID, EnvID, StackName string
+	Flavour, Placement        string
+	// Secret is empty when the routing token is the secret.
+	Secret []byte
+}
+
+// GitWebhookByToken finds the webhook whose routing token has this SHA-256 and opens its secret. No such webhook is
+// ErrNoWebhook; a secret that does not open is an error.
+func (r Repo) GitWebhookByToken(ctx context.Context, tokenHash string) (GitWebhook, error) {
+	row, err := r.Store.RQ.GetStackGitByTokenHash(ctx, tokenHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GitWebhook{}, ErrNoWebhook
+	}
+	if err != nil {
+		return GitWebhook{}, fmt.Errorf("read the webhook: %w", err)
+	}
+	w := GitWebhook{StackID: row.StackID, EnvID: row.EnvID, StackName: row.Name, Flavour: row.WebhookFlavour, Placement: row.WebhookPlacement}
+	if row.WebhookSecretSealed != "" {
+		if w.Secret, err = r.Vault.Open(vault.ContextGitWebhook+row.StackID, row.WebhookSecretSealed); err != nil {
+			return GitWebhook{}, fmt.Errorf("open the webhook secret: %w", err)
+		}
+	}
+	return w, nil
+}
+
+// Webhook delivery results as stored.
+const (
+	WebhookAccepted = "accepted"
+	WebhookRejected = "rejected"
+)
+
+// RecordGitWebhookDelivery stores when the stack's webhook last saw a request and whether it was accepted or rejected.
+func (r Repo) RecordGitWebhookDelivery(ctx context.Context, stackID string, at time.Time, result string) error {
+	if err := r.Store.Q.SetStackGitWebhookDelivery(ctx, sqlc.SetStackGitWebhookDeliveryParams{
+		WebhookLastAt: sql.NullInt64{Int64: at.UnixNano(), Valid: true}, WebhookLastResult: result, StackID: stackID,
+	}); err != nil {
+		return fmt.Errorf("record the webhook delivery: %w", err)
 	}
 	return nil
 }

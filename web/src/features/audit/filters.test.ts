@@ -167,6 +167,20 @@ describe("actionLabel", () => {
     );
   });
 
+  it("labels a git webhook's deliveries and rejections with the stack when the entry has it", () => {
+    for (const key of ["git.webhook_delivered", "git.webhook_rejected"] as const) {
+      expect(KNOWN_ACTIONS).toContain(key);
+      expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+    expect(audit.audit.actions.git.webhook_delivered_named).toBe(
+      "Webhook for {{name}} delivered a push",
+    );
+    expect(audit.audit.actions.git.webhook_rejected_named).toBe(
+      "Webhook for {{name}} rejected a request",
+    );
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

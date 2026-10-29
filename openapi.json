@@ -14473,6 +14473,71 @@
         ],
         "type": "object"
       },
+      "StackGitWebhookBody": {
+        "additionalProperties": false,
+        "properties": {
+          "flavour": {
+            "description": "The git host the webhook is for",
+            "enum": [
+              "github",
+              "gitlab",
+              "gitea",
+              "generic"
+            ],
+            "type": "string"
+          },
+          "placement": {
+            "description": "Where the secret goes: path (in the address) or header",
+            "enum": [
+              "path",
+              "header"
+            ],
+            "type": "string"
+          },
+          "secret": {
+            "description": "The secret to give the git host (GitHub's Secret, GitLab's Secret token, Gitea's Secret, a generic webhook's bearer token). Shown only in this answer. Empty for a generic webhook with the secret in the address",
+            "type": "string"
+          },
+          "url": {
+            "description": "The full address the git host calls, built on the public URL: {publicURL}/hooks/git/{token}. It holds the routing token and is shown only in this answer. For a generic webhook with the secret in the address, the address is the secret",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "secret",
+          "flavour",
+          "placement"
+        ],
+        "type": "object"
+      },
+      "StackGitWebhookInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "flavour": {
+            "description": "The git host that will call the address: github, gitlab, gitea (Gitea, Forgejo and Gogs) or generic (any tool that can send a POST request). It decides which header proves a request came from the host",
+            "enum": [
+              "github",
+              "gitlab",
+              "gitea",
+              "generic"
+            ],
+            "type": "string"
+          },
+          "placement": {
+            "description": "Only for generic: where the secret goes. path (the default) puts it in the address, so the address is the secret; header expects it as Authorization: Bearer \u003csecret\u003e. The other flavours always send a signature in a header, so they take header or nothing. Anything else is 422 webhook_placement",
+            "enum": [
+              "path",
+              "header"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "flavour"
+        ],
+        "type": "object"
+      },
       "StackHistoryPreviewBody": {
         "additionalProperties": false,
         "properties": {
@@ -28179,6 +28244,78 @@
           }
         },
         "summary": "Turn a git stack's polling on or off and set how often it is checked",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/webhook": {
+      "post": {
+        "description": "Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, it never deploys, and it names no ref or commit. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).",
+        "operationId": "createStackGitWebhook",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackGitWebhookInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitWebhookBody"
+                }
+              }
+            },
+            "description": "Created",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Give a git stack a webhook",
         "tags": [
           "stacks",
           "git"

@@ -33,6 +33,9 @@ type Deps struct {
 	// Joined, when set, is called each time a caller starts or joins the check of a stack, with how many callers wait on
 	// it now. A test uses it to know that every caller has joined before it lets the check finish.
 	Joined func(stackID string, waiting int)
+	// Triggered, when set, is called after each check a Trigger ran, with its outcome and whether another (trailing)
+	// check follows at once. A test uses it to know that the triggered checks are over.
+	Triggered func(stackID string, outcome Outcome, err error, more bool)
 }
 
 // Service imports the files of a stack from a repository folder.
@@ -44,15 +47,18 @@ type Service struct {
 	audit *audit.Writer
 	now   func() time.Time
 
-	joined func(stackID string, waiting int)
-	mu     sync.Mutex
+	joined    func(stackID string, waiting int)
+	triggered func(stackID string, outcome Outcome, err error, more bool)
+	mu        sync.Mutex
 	// checking holds the sync checks in flight, by stack ID: a second request for the same stack joins the first.
 	checking map[string]*checkCall
+	// triggers holds the stacks a Trigger is working on: a trigger while one runs only marks it to run once more.
+	triggers map[string]*triggerRun
 }
 
 // New returns a Service.
 func New(d Deps) *Service {
-	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, joined: d.Joined, checking: map[string]*checkCall{}}
+	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
