@@ -7,7 +7,8 @@ A stack is a compose file that Bayplan deploys and keeps tidy: its services, net
 together, and nothing is left behind when you remove it. This page explains how to write one, what the review
 shows before anything changes, what a deploy does on a swarm and on a standalone host, how it stops, starts and
 goes away again, how to see its history and roll back, how to take over a stack that something else made (for
-instance Portainer), how Bayplan spots changes made behind its back, and what Bayplan writes on your hosts. It
+instance Portainer), how Bayplan spots changes made behind its back, how a stack can follow a folder of a git repository, and what
+Bayplan writes on your hosts. It
 also says plainly what is not in this version, and a few behaviours that are open decisions, not oversights.
 
 The workflow is always the same: **edit, save, review, deploy**. Nothing is sent to any engine until you press
@@ -37,6 +38,7 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 - [Unmanaged stacks](#unmanaged-stacks)
 - [Adopting a stack](#adopting-a-stack)
 - [Drift](#drift)
+- [Git stacks](#git-stacks)
 - [One operation at a time](#one-operation-at-a-time)
 - [What Bayplan writes on your hosts](#what-bayplan-writes-on-your-hosts)
 - [Host access and who may do what](#host-access-and-who-may-do-what)
@@ -827,6 +829,252 @@ accident, and it **never holds Deploy back**. A setting your draft changes itsel
 listed. If Bayplan could not check, the section says *Couldn't check for drift; the changes below are still accurate.*
 There is no such section on a restore, an adoption or a first deploy, and none for a stopped stack.
 
+## Git stacks
+
+A **git stack** gets its compose files from a folder of a git repository instead of from the editor. The repository is
+the source of truth: Bayplan reads it, shows you what changed, and deploys it through the same review, deploy console,
+revisions and roll back as any other stack. It never writes to the repository. Stacks show their source in the list:
+*Inline* (files kept in Bayplan), *Adopted* (taken over from something else) or *Git*.
+
+- [Repositories and credentials](#repositories-and-credentials)
+- [What a git stack imports](#what-a-git-stack-imports)
+- [Variables, secrets and the committed `.env`](#variables-secrets-and-the-committed-env)
+- [Checking for changes: polling and webhooks](#checking-for-changes-polling-and-webhooks)
+- [Reviewing, pulling and deploying](#reviewing-pulling-and-deploying)
+- [Auto-deploy](#auto-deploy)
+- [Rolling back a git stack](#rolling-back-a-git-stack)
+- [Changing the source, converting and detaching](#changing-the-source-converting-and-detaching)
+- [Who may do what](#who-may-do-what-with-git)
+- [Where the repository is kept: mirrors](#where-the-repository-is-kept-mirrors)
+- [Git limits](#git-limits)
+
+### Repositories and credentials
+
+Git connections come in two objects, in two layers:
+
+- A **credential** is an HTTPS token (with the user name the server expects) or an SSH deploy key. It is encrypted at rest
+  and never shown again once saved; the page shows only the last four characters of a token or the fingerprint of a key.
+- A **repository** is an address plus the credential you pick for it (or none, for a public repository). Bayplan never
+  guesses a credential from the address: you choose it, and many repositories can share one.
+
+Each object lives either on the **instance** (managed by instance administrators, usable in every environment) or on
+**one environment** (managed by that environment's Admins, usable only there). A repository of an environment may use a
+credential of its own environment or an instance credential. An instance repository can use only an instance credential.
+The pages are **Git** in the environment's sidebar, and the instance-wide one for administrators.
+
+The address must be `https://host/path`, `ssh://git@host/path` or `git@host:path`. Anything else is refused before a
+connection is made: **`http://`** (it would send a token in clear text; use `https` or `ssh`), `git://`, `file://` and
+a bare path. An address with a user name and password in it is refused too: add them as a credential. A redirect
+from `https` to anything but `https` is not followed.
+
+A repository can carry a custom certificate authority (PEM) for a self-hosted server with its own CA. There is no
+option to skip certificate verification.
+
+**SSH host keys are trusted on first use, by a person.** Bayplan ships the pinned host keys of github.com, gitlab.com
+and bitbucket.org. For any other host, **Test** shows the key's fingerprint and you confirm it; Bayplan stores it on
+the repository. From then on a different key is a hard error (*host key changed*), never accepted by itself, and
+trusting the new key is an explicit, audited action by an Admin. An SSH address with no known key stops at the handshake,
+before any credential is sent. Bayplan never reads the server user's `known_hosts` or `ssh_config`.
+
+**Test** lists the branches and tags and reports whether the credential works. Saving never waits for a test and works
+whether or not it passed; a problem shows when a stack uses the repository.
+
+Every address Bayplan connects to goes through the same egress policy as registry calls (see
+[threat-model.md](threat-model.md)): link-local, unspecified and multicast addresses are refused, and an operator can
+refuse more ranges with `BAYPLAN_REGISTRY_BLOCK_CIDRS`.
+
+### What a git stack imports
+
+You pick, in order, a repository, a **ref** (a branch, a tag or a fixed commit), a **stack folder** and **one or more
+compose files** inside that folder. Several compose files are merged in the order you list them, like
+`docker compose -f a.yaml -f b.yaml`.
+
+- A **branch** is followed. A **tag** is followed too, so a tag that is moved counts as a change. A **commit** is fixed
+  and is never behind; to move it you change the stack's ref, which goes through review.
+- The folder is the stack's root and its boundary. Nothing outside it is read.
+- Only the files the stack needs are imported: the compose files, the folder's `.env`, and every file an `env_file`,
+  a secret's `file:` or a config's `file:` names. Other files in the folder are listed as *not imported*, and a folder
+  that breaks the [stack file limits](#limits) is refused with the file named.
+- A symlink is followed only when it points at a file inside the folder; a link that leaves the folder is a blocking
+  problem naming the path.
+- **`include` and `extends` are blocked** on git stacks, with a message, the same as for every stack (see
+  [What a stack cannot use](#what-a-stack-cannot-use)). Merge several files with the ordered list instead.
+- **Submodules and Git LFS are not supported.** A file that is a submodule or a Git LFS pointer is a blocking problem
+  naming the path, rather than a pointer file being deployed.
+- Relative bind mounts stay unsupported, as for every stack.
+
+There is no compose editor on a git stack, because the repository is the source: the files from the repository are
+read-only in Bayplan. What you can edit in Bayplan are the variables and the **overlay files** below. The stack's
+**Git** tab holds the rest of the settings.
+
+### Variables, secrets and the committed `.env`
+
+A `${VAR}` in the repository's compose files is found the same way as on any stack, and the form asks for the ones that
+have no value. A value comes, in this order of precedence, from:
+
+1. the stack's **variables table** (the strongest);
+2. the **`.env` committed in the stack folder**;
+3. the compose file's own default, `${VAR:-default}`.
+
+The preview shows where each value comes from (*From the table*, *From the repo's .env*, *From the compose file's
+default*, *Not set*).
+
+**Do not commit secrets.** The repository is readable by everyone who can read it and by the git host. A key of the
+committed `.env` whose name looks like a secret (a name with a `PASSWORD`, `PASSWD`, `PWD`, `SECRET`, `TOKEN`, `KEY`,
+`APIKEY`, `CREDENTIAL` or `PRIVATE` part, such as `DB_PASSWORD`) raises a warning that names the key, never its value,
+and advises setting a **secret variable** in Bayplan, which overrides it. Secret variables are sealed in Bayplan
+and shown as `<hidden>`.
+
+A secret that a compose file reads from a file (`secrets: db_pw: file: ./db_pw.txt`) is not in the repository either.
+Add an **overlay file** at that path on the stack: it is stored in Bayplan, sealed like any secret stack file, and fills
+a path the repository does not have. **A path that exists both in the repository and as an overlay file is a blocking
+error**, never a silent shadow.
+
+### Checking for changes: polling and webhooks
+
+Bayplan compares the stack folder at the head of the ref with the deployed one. The status is one of:
+
+- **In sync**: the folder's contents are the same. A commit that changes other folders of the repository does not make
+  the stack behind and starts nothing, so a monorepo with a folder per stack does not redeploy every stack on every
+  commit.
+- **Behind (N)**: N commits changed the stack's folder since the deployed commit (it says *at least N* when the count is
+  capped at 2,000 commits). **Review update** opens the review.
+- **Error** with a reason: the repository could not be reached or refused the credential, the host key changed or is
+  not trusted, the branch or tag is gone, the folder is gone, the new commit fails the checks (a missing variable, a
+  blocked setting), the source differs from the deployed one, or an automatic deploy was held back or failed. The last
+  good version keeps running. The status clears on the next success. Each new error is audited and appears on the bell.
+
+A stack newly created, or one restored from a backup, reads *unknown* until its first check.
+
+**Polling** is on by default, every 5 minutes, per stack (1 to 1,440 minutes; a fixed commit has nothing to check). Checks
+are spread out with a little random delay, a failing stack backs off up to an hour, stacks that share a repository share
+one listing of its refs, and at most four repositories are read at once, so a hundred stacks do not hit a git host at the
+same second. **Keep polling on even with a webhook**: it catches a push the webhook missed. **Check now** checks at once.
+
+**A webhook** tells Bayplan about a push straight away. Each git stack can have one. In the stack's **Git** tab choose
+**Set up webhook**, pick the git host, and copy the address and the secret, which are **shown once**; a lost secret is
+replaced with **Rotate secret**. The address is `{public URL}/hooks/git/{token}`, built on the instance's public URL
+(Settings) or, when none is set, on the address you reached Bayplan at; your git host must be able to reach it. Then add it at the host:
+
+- **GitHub**: in the repository open *Settings*, then *Webhooks*, then *Add webhook*. Payload URL: the address. Content
+  type: `application/json`. Secret: the secret. Events: just the push event. Bayplan checks the
+  `X-Hub-Signature-256` signature.
+- **GitLab**: in the project open *Settings*, then *Webhooks*. URL: the address. Secret token: the secret. Trigger:
+  push events. Bayplan checks the `X-Gitlab-Token` header.
+- **Gitea or Forgejo** (and Gogs): in the repository open *Settings*, then *Webhooks*, then *Add webhook*, then *Gitea* or
+  *Forgejo*. Target URL: the address. Secret: the secret. Trigger: push events. Bayplan checks the HMAC signature header.
+- **Other (generic)**: send a `POST` to the address whenever the repository changes. Choose where the secret goes:
+  **in the address** (the token in the address is the secret, and the request carries nothing else) or **in an
+  `Authorization: Bearer <secret>` header**.
+
+**A webhook only tells Bayplan to check.** It never deploys by itself: Bayplan ignores the body of the request, takes no
+branch and no commit from it, and fetches the stack's own ref itself. Whether the check then deploys is a separate
+setting (see [Auto-deploy](#auto-deploy)). Several pushes in a burst cost one check and one trailing check.
+
+A request that names no webhook, one with a wrong signature and one for a paused webhook all get the same empty `404`,
+so the address cannot be probed. A delivery is limited to **60 a minute per client address and 10 a minute per webhook**
+(a burst of 10), and a body over **5 MiB** is refused; the body is only the input of the signature check. Behind a
+reverse proxy the client address is the one the proxy reports, so set `BAYPLAN_TRUSTED_PROXIES` as described in
+[reverse-proxy.md](reverse-proxy.md); if the table of client addresses is ever full (65,536 addresses at once), new
+addresses are refused until it empties, and polling still catches the push. Accepted deliveries and rejected signatures
+are audited (`git.webhook_delivered`, `git.webhook_rejected`) without the address, the token or the signature, and the
+tab shows the last delivery.
+
+A webhook acts on the authority of the **Admin who set it up**. If that person loses `git.manage` on the environment,
+requests to it do nothing and the tab says so until an Admin takes it over from the user's page, or removes it.
+
+### Reviewing, pulling and deploying
+
+A new git stack waits for review by default. When it is behind, **Review update** (or **Pull & redeploy…**, which an
+Operator may press) fetches the head, shows the normal [review](#the-review) against what is running, and deploys through
+the console. The revision records the commit and the folder's tree hash.
+
+- Image pinning follows [the usual rule](#image-pinning-and-update-images): only a service whose image text changed gets
+  a fresh digest, so a push never silently pulls a newer `:latest`. **Update images** stays the explicit action.
+- Overlay-file and variable edits are local changes handled by the normal review, not *behind*.
+- Pinning problems found at a deploy are shown against `compose.yaml` only; that is a known limit of how git stacks
+  report them.
+
+### Auto-deploy
+
+**Auto-deploy** is off for every new git stack and is opt-in per stack (*Deploying* card of the Git tab). When it is on,
+a check that finds the stack behind pulls the head and deploys it **without a review**, on the same checks, operation
+lock, revision and console as a person's deploy. It runs on the authority the person who turned it on holds **now**:
+if they lose the permission to deploy on the environment, auto-deploy **pauses**, and if the stack uses host access
+(bind mounts, privileges) they must hold Admin. The stack's Git tab and the bell say who it is paused for; an Admin can
+take it over.
+
+Auto-deploy never deploys when something blocks it. Instead the commit is held back, nothing is deployed, the stack shows
+*error: held back* with the first problem, and the commit stays pending until a later commit fixes it, someone reviews
+it by hand, or you press **Check now**. These hold a commit back:
+
+- a blocking lint, policy or variable problem in the new commit (a missing variable, a blocked setting, a path clash
+  between a repository file and an overlay file, `include`, a Git LFS pointer, a submodule);
+- **unreviewed local edits**: a draft with changes nobody reviewed, or a new source waiting for review. Bayplan never
+  deploys over them;
+- the operation lock is held: that is not an error, and the next check tries again.
+
+An automatic deploy goes ahead even when it **puts back changes made by hand** on the host: the repository is the source
+of truth. The revision and the audit row list what was put back (for example *web replicas 5 → 3*), with sensitive values
+withheld from readers who may not reveal them, and the bell notes it.
+
+Auto-deploys are audited as `git.autodeployed` with the system actor (`system:gitsync` or `system:webhook`), the owner it
+acted for, the commit and what started it.
+
+### Rolling back a git stack
+
+[Rolling back](#rolling-back-to-a-revision) restores a stored revision exactly, including its files and variables; it
+needs neither the repository nor its mirror. A roll back **pauses auto-deploy**, so the repository's head is not deployed
+straight back over the version you chose: the Git tab shows *Auto-deploy paused after rollback to #N*, and the head shows
+as pending. Turn auto-deploy on again when the repository is fixed. The stack keeps following the same repository, ref and
+folder, and a roll back does not change the draft.
+
+### Changing the source, converting and detaching
+
+- **Change source** (Git tab) edits the repository, ref, folder or compose files. It goes through review, so history is
+  kept. Needs the permission to deploy.
+- **Use a git repository…** points an **inline** or **adopted** stack at a repository. The first sync goes through review
+  and is recorded as a revision. Existing variables are kept; the stack's own files are dropped unless you keep them as
+  overlay files, and a path clash is a blocking error. Needs Admin.
+- **Detach from git** (the *Advanced* section at the end of the Git tab, for Admins; not among the header actions) turns
+  a git stack back into an inline stack. The files now deployed are copied into an editable draft, **replacing any draft
+  the stack already had** (an unreviewed pull or an overlay edit is overwritten, and the dialog does not warn about it),
+  polling stops, the webhook is removed, auto-deploy is turned off, and nothing running changes. It is audited as
+  `git.stack_detached`. You can point the stack at a repository again later.
+
+### Who may do what with git
+
+Git has three permissions, listed in [permissions.md](permissions.md): `git.read` (view the repositories and credentials
+that apply to an environment: Viewer and up), `git.manage` (Admin: manage the environment's repositories and
+credentials, set up, rotate and remove webhooks, convert and detach stacks) and `git.instance` (instance administrators:
+the instance's repositories and credentials). Creating a git stack needs `stacks.create` (Admin). Changing the polling
+settings, turning auto-deploy on or off, changing the source and pulling need `stacks.deploy` (Operator). An instance
+credential is **usable by every Admin of every environment** (it can be picked for their repositories), so give it
+only the access a deploy needs: see [threat-model.md](threat-model.md).
+
+### Where the repository is kept: mirrors
+
+For each repository Bayplan keeps a bare **mirror** under `/data/git/<repository id>.git`, fetched one ref at a time and
+read by commit ID; nothing is ever checked out, and the mirror holds neither the address nor the credential. A mirror is
+only a cache:
+
+- deleting a repository removes its mirror at once;
+- a **daily sweep** removes a mirror that nothing has fetched or read for **14 days**, or that has grown past **2 GiB**,
+  and the next check builds it again;
+- a mirror is not in a [backup](backup.md), and a restored instance fetches it again on the first check;
+- roll back never needs a mirror.
+
+### Git limits
+
+| What | Limit |
+|------|-------|
+| Files imported by a stack | the [stack limits](#limits): 50 files, 1 MiB each, 8 MiB in all |
+| Polling interval | 1 to 1,440 minutes, 5 by default |
+| One fetch | 10 minutes, and 1 GiB of response |
+| "N commits behind" | counts up to 2,000 commits |
+| Webhook delivery | 60 a minute per address, 10 a minute per webhook, body at most 5 MiB |
+| Mirrors | removed after 14 days unused or over 2 GiB |
+
 ## One operation at a time
 
 Deploys, updates, roll backs, stops, starts and removals take a **per-environment operation lock**: one stack
@@ -942,7 +1190,12 @@ variable or file shown, never its value), and `stack.adopted` (the stack, its ta
 taken from, how many services it has and the revision it started with), `stack.drift_accepted` (the stack, the revision, the
 draft version and the number of services) and, when the number of revisions kept
 changes, `settings.updated` (the old and the new limit and how many revisions went). Opening and downloading a stack's logs write `logs.viewed` and
-`logs.downloaded` with the stack as the target and none of the lines. See [access.md](access.md) for the audit log itself.
+`logs.downloaded` with the stack as the target and none of the lines. Git adds `git.credential_created`, `git.credential_updated`,
+`git.credential_deleted`, `git.repo_created`, `git.repo_updated`, `git.repo_deleted`, `git.repo_tested`, `git.host_key_trusted`,
+`git.host_key_retrusted`, `git.sync_failed` (each new error of a stack's sync), `git.updates_changed`, `git.webhook_created`,
+`git.webhook_rotated`, `git.webhook_removed`, `git.webhook_delivered`, `git.webhook_rejected`, `git.autodeploy_enabled`,
+`git.autodeploy_disabled`, `git.autodeploy_paused`, `git.autodeployed` and `git.stack_detached`; none holds a token, a key,
+a webhook secret or the webhook's address. See [access.md](access.md) for the audit log itself.
 
 ## Behaviour that is still open
 
@@ -1016,11 +1269,13 @@ These are decided and planned for later phases. None of them is in this version.
   variables, and the contents of existing swarm secrets and configs are referenced as external and never imported.
 - **Removing an unmanaged stack without adopting it first**, and adopting services or containers that carry no stack
   label.
-- **Git-backed stacks.** Every stack is *Inline*: its files live in Bayplan.
+- **Two-way git sync.** Bayplan reads a repository and never commits to it; [git stacks](#git-stacks) are read-only
+  apart from their variables and overlay files.
 - **Update detection.** Nothing says an image has a newer version, and there is no fleet view of updates.
 - **A janitor** for old objects (it will share the operation lock), and orphan rules for networks and volumes (they
   will treat [an adopted stack's recorded networks and volumes as owned](#what-adopting-owns)).
 - **Variables shared across stacks or environments.**
 - **A folder on the host, synced by the agent, for relative bind mounts.**
 - **Delivering a secret variable as a Docker secret.**
-- **Building images**, and `include` and `extends`.
+- **Building images**, and `include` and `extends` (also on git stacks).
+- **Submodules and Git LFS** in a git stack's folder.
