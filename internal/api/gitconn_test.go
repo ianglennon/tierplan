@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/gitx/gittest"
 )
 
@@ -680,4 +681,35 @@ func ed25519PEMWithPassphrase(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(pem.EncodeToMemory(block))
+}
+
+// A mirror is only a cache of its repository (plan 09-32, D-08): deleting the repository removes it at once, and nothing
+// else is touched.
+func TestRepoDeleteRemovesMirror(t *testing.T) {
+	t.Parallel()
+	f := newEnvFix(t, dockertest.FakeConfig{Hostname: "node-1"})
+	env := f.add(t).ID
+	mirrors := gitx.NewGoGit(gitx.Options{Root: t.TempDir()})
+	f.gitClient = mirrors
+	f.h = f.build(t)
+	admin := f.asAdmin(t)
+	b := newBrowseRepoFix(t)
+	doomed := b.save(t, f, admin, "/api/git/repos", "doomed")
+	kept := b.save(t, f, admin, "/api/git/repos", "kept")
+	for _, id := range []string{doomed, kept} {
+		if rec := f.credCall(t, admin, http.MethodGet, treeURL(env, id, "branch", "main", ""), ""); rec.Code != http.StatusOK {
+			t.Fatalf("browse %s: %d %s", id, rec.Code, rec.Body)
+		}
+	}
+	if ids, err := mirrors.ListMirrors(); err != nil || len(ids) != 2 {
+		t.Fatalf("mirrors after browsing two repositories = %v, %v, want two", ids, err)
+	}
+
+	if rec := f.credCall(t, admin, http.MethodDelete, "/api/git/repos/"+doomed, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	ids, err := mirrors.ListMirrors()
+	if err != nil || len(ids) != 1 || string(ids[0]) != kept {
+		t.Fatalf("mirrors after the delete = %v, %v, want only the other repository's", ids, err)
+	}
 }

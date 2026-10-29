@@ -77,6 +77,7 @@ func (g *GoGit) CommitsTouching(ctx context.Context, m MirrorID, head, base, dir
 		g.log.Error("could not open a git mirror", "error", err)
 		return Touch{}, &Error{Code: CodeUnreachable}
 	}
+	g.markUsed(m, path)
 	headCommit, err := repo.CommitObject(plumbing.NewHash(head))
 	if err != nil {
 		return Touch{}, &Error{Code: CodeCommitMissing}

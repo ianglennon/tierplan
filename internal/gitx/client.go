@@ -202,6 +202,9 @@ type Options struct {
 	// Root is the directory the mirrors live in ({data}/git). Without it FetchRef and ReadDir
 	// answer ErrNoMirrorRoot.
 	Root string
+	// Now is the clock the mirrors' last use is recorded on; nil is time.Now. A test passes its own so that the
+	// sweep of unused mirrors needs no waiting.
+	Now func() time.Time
 }
 
 // GoGit is the Client that uses go-git. InstallTransport must have run once in the process.
@@ -209,9 +212,15 @@ type GoGit struct {
 	policy registry.EgressPolicy
 	log    *slog.Logger
 	root   string
+	now    func() time.Time
 
 	mu    sync.Mutex
 	locks map[MirrorID]*sync.RWMutex
+
+	usedMu sync.Mutex
+	// used is when each mirror was last fetched or read, since the process began; MirrorStats falls back to the
+	// mirror's bayplan-last-used file for one not used since.
+	used map[MirrorID]time.Time
 }
 
 // NewGoGit returns a client that dials through o.Policy.
@@ -220,7 +229,11 @@ func NewGoGit(o Options) *GoGit {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &GoGit{policy: o.Policy, log: log, root: o.Root, locks: map[MirrorID]*sync.RWMutex{}}
+	now := o.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &GoGit{policy: o.Policy, log: log, root: o.Root, now: now, locks: map[MirrorID]*sync.RWMutex{}, used: map[MirrorID]time.Time{}}
 }
 
 var _ Client = (*GoGit)(nil)

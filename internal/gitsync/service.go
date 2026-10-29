@@ -22,6 +22,9 @@ import (
 type Deps struct {
 	// Git reads the repository and its mirror.
 	Git gitx.Client
+	// Mirrors lists, measures and removes the mirrors for the sweep (RunMirrorGC). Nil takes the Git client when that
+	// keeps mirrors on disk (gitx.Mirrors), else the sweep does nothing.
+	Mirrors gitx.Mirrors
 	// Conns holds the repositories and their credentials.
 	Conns *gitconn.Store
 	// Repo stores the stacks.
@@ -47,12 +50,13 @@ type Deps struct {
 
 // Service imports the files of a stack from a repository folder.
 type Service struct {
-	git   gitx.Client
-	conns *gitconn.Store
-	repo  stackops.Repo
-	log   *slog.Logger
-	audit *audit.Writer
-	now   func() time.Time
+	git     gitx.Client
+	mirrors gitx.Mirrors
+	conns   *gitconn.Store
+	repo    stackops.Repo
+	log     *slog.Logger
+	audit   *audit.Writer
+	now     func() time.Time
 
 	access *access.Service
 
@@ -70,6 +74,9 @@ type Service struct {
 // New returns a Service.
 func New(d Deps) *Service {
 	s := &Service{git: d.Git, conns: d.Conns, repo: d.Repo, log: d.Log, audit: d.Audit, now: d.Now, access: d.Access, deployer: d.Deployer, joined: d.Joined, triggered: d.Triggered, checking: map[string]*checkCall{}, triggers: map[string]*triggerRun{}}
+	if s.mirrors = d.Mirrors; s.mirrors == nil {
+		s.mirrors, _ = d.Git.(gitx.Mirrors)
+	}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

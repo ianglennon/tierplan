@@ -91,7 +91,7 @@ func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind
 	mu.Lock()
 	if u.Scheme != "ssh" {
 		defer mu.Unlock()
-		return g.fetchLocked(ctx, dir, r, u, kind, ref)
+		return g.fetchLocked(ctx, m, dir, r, u, kind, ref)
 	}
 	// go-git connects over ssh without looking at the context, so the fetch runs on its own
 	// goroutine and is abandoned when the deadline passes. It keeps the mirror's lock until it
@@ -103,7 +103,7 @@ func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind
 	done := make(chan result, 1)
 	go func() {
 		defer mu.Unlock()
-		c, err := g.fetchLocked(ctx, dir, r, u, kind, ref)
+		c, err := g.fetchLocked(ctx, m, dir, r, u, kind, ref)
 		done <- result{c, err}
 	}()
 	select {
@@ -115,12 +115,13 @@ func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind
 }
 
 // fetchLocked is FetchRef with the write lock held.
-func (g *GoGit) fetchLocked(ctx context.Context, dir string, r Remote, u URL, kind RefKind, ref string) (Commit, error) {
+func (g *GoGit) fetchLocked(ctx context.Context, m MirrorID, dir string, r Remote, u URL, kind RefKind, ref string) (Commit, error) {
 	repo, err := openMirror(dir)
 	if err != nil {
 		g.log.Error("could not open a git mirror", "error", err)
 		return Commit{}, &Error{Code: CodeUnreachable, Host: u.Host}
 	}
+	g.markUsed(m, dir)
 	if kind == RefCommit {
 		return g.fetchCommit(ctx, repo, r, u, strings.ToLower(ref))
 	}

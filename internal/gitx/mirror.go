@@ -6,9 +6,12 @@ package gitx
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -97,3 +100,131 @@ func openExisting(dir string) (*git.Repository, error) {
 }
 
 var errMirrorMissing = errors.New("gitx: the mirror is not there")
+
+// lastUsedFile is the file in a mirror whose modification time says when it was last fetched or read, so the
+// answer survives a restart.
+const lastUsedFile = "bayplan-last-used"
+
+// usedWriteEvery is how often a busy mirror's lastUsedFile is written again; the in-memory time is always current.
+const usedWriteEvery = time.Hour
+
+// Mirrors is what a sweep of the mirror directory needs of a Client: which mirrors there are, how big and how old
+// each is, and a way to remove one. A mirror is only a cache of a repository, so removing it loses nothing: the
+// next fetch builds it again.
+type Mirrors interface {
+	// ListMirrors names the mirrors on disk, by ID.
+	ListMirrors() ([]MirrorID, error)
+	// MirrorStats is the size in bytes of mirror m and when it was last fetched or read.
+	MirrorStats(m MirrorID) (size int64, lastUsed time.Time, err error)
+	// RemoveMirror deletes mirror m, waiting for a fetch or read of it to end. One that is not there is not an error.
+	RemoveMirror(m MirrorID) error
+}
+
+var _ Mirrors = (*GoGit)(nil)
+
+// markUsed records that mirror m (at dir, which exists) was used now. The file is written again only when the
+// last write is old, so a read does not touch the disk.
+func (g *GoGit) markUsed(m MirrorID, dir string) {
+	now := g.now()
+	g.usedMu.Lock()
+	prev, seen := g.used[m]
+	g.used[m] = now
+	g.usedMu.Unlock()
+	if seen && now.Sub(prev) < usedWriteEvery && now.After(prev) {
+		return
+	}
+	path := filepath.Join(dir, lastUsedFile)
+	if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: path is under the mirror's own directory
+		_ = f.Close()
+	} else {
+		return
+	}
+	_ = os.Chtimes(path, now, now)
+}
+
+// ListMirrors implements Mirrors.
+func (g *GoGit) ListMirrors() ([]MirrorID, error) {
+	if g.root == "" {
+		return nil, ErrNoMirrorRoot
+	}
+	entries, err := os.ReadDir(g.root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("gitx: list the mirrors: %w", err)
+	}
+	var out []MirrorID
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".git")
+		if !ok || !e.IsDir() {
+			continue
+		}
+		if id, err := uuid.Parse(name); err != nil || id.String() != name {
+			continue
+		}
+		out = append(out, MirrorID(name))
+	}
+	return out, nil
+}
+
+// MirrorStats implements Mirrors. The last use is the newer of the time this process saw and the one the mirror's
+// file records; a mirror with neither is as old as its directory.
+func (g *GoGit) MirrorStats(m MirrorID) (int64, time.Time, error) {
+	dir, err := g.mirrorPath(m)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("gitx: read the mirror: %w", err)
+	}
+	last := info.ModTime()
+	if fi, err := os.Stat(filepath.Join(dir, lastUsedFile)); err == nil {
+		last = fi.ModTime()
+	}
+	g.usedMu.Lock()
+	if t, ok := g.used[m]; ok && t.After(last) {
+		last = t
+	}
+	g.usedMu.Unlock()
+	var size int64
+	err = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// A file that went while the walk ran (a fetch tidying up) is not an error.
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				size += fi.Size()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("gitx: measure the mirror: %w", err)
+	}
+	return size, last, nil
+}
+
+// RemoveMirror implements Mirrors. It takes the mirror's write lock, so it waits for a fetch or read that is under way
+// and no fetch starts on the files while they are removed.
+func (g *GoGit) RemoveMirror(m MirrorID) error {
+	dir, err := g.mirrorPath(m)
+	if err != nil {
+		return err
+	}
+	mu := g.lockFor(m)
+	mu.Lock()
+	defer mu.Unlock()
+	g.usedMu.Lock()
+	delete(g.used, m)
+	g.usedMu.Unlock()
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("gitx: remove the mirror: %w", err)
+	}
+	return nil
+}

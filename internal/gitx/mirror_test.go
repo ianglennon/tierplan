@@ -334,3 +334,79 @@ func TestMirrorRecreated(t *testing.T) {
 		t.Errorf("FetchRef into an empty directory = %+v, %v, want %s", c, err, f.sha)
 	}
 }
+
+// Keeping the mirrors (plan 09-32, D-08): they can be listed, measured, dated by their last use and removed, so a sweep
+// can keep a server's disk bounded. A removed mirror is built again by the next fetch.
+func TestMirrorKeeping(t *testing.T) {
+	t.Parallel()
+	f := newBrowseFixture(t, gittest.HTTPOptions{})
+	ctx := context.Background()
+	at := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	now := at
+	g := gitx.NewGoGit(gitx.Options{Root: f.root, Now: func() time.Time { return now }})
+
+	if ids, err := g.ListMirrors(); err != nil || len(ids) != 0 {
+		t.Fatalf("ListMirrors before any fetch = %v, %v, want none", ids, err)
+	}
+	if _, _, err := g.MirrorStats(f.m); err == nil {
+		t.Fatal("MirrorStats of a mirror that is not there succeeded")
+	}
+	if err := g.RemoveMirror(f.m); err != nil {
+		t.Fatalf("RemoveMirror of a mirror that is not there: %v", err)
+	}
+
+	c, err := g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main")
+	if err != nil {
+		t.Fatalf("FetchRef: %v", err)
+	}
+	// A directory that is not a mirror's is left alone by the listing.
+	if err := os.MkdirAll(filepath.Join(f.root, "not-a-mirror.git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := g.ListMirrors()
+	if err != nil || len(ids) != 1 || ids[0] != f.m {
+		t.Fatalf("ListMirrors = %v, %v, want the one mirror", ids, err)
+	}
+	size, last, err := g.MirrorStats(f.m)
+	if err != nil || size <= 0 || !last.Equal(at) {
+		t.Fatalf("MirrorStats = %d, %v, %v, want a size and the time of the fetch %v", size, last, err, at)
+	}
+
+	// Reading the mirror is a use as well.
+	now = at.Add(3 * 24 * time.Hour)
+	if _, err := g.ReadDir(ctx, f.m, c.SHA, "", 0); err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if _, last, _ = g.MirrorStats(f.m); !last.Equal(now) {
+		t.Errorf("last use after a read = %v, want %v", last, now)
+	}
+
+	// A process that has not used the mirror (a restart) reads the time from the mirror's own file.
+	now = at.Add(10 * 24 * time.Hour)
+	restarted := gitx.NewGoGit(gitx.Options{Root: f.root, Now: func() time.Time { return now }})
+	if _, last, _ = restarted.MirrorStats(f.m); !last.Equal(at.Add(3 * 24 * time.Hour)) {
+		t.Errorf("last use after a restart = %v, want the time of the read %v", last, at.Add(3*24*time.Hour))
+	}
+
+	if err := g.RemoveMirror(f.m); err != nil {
+		t.Fatalf("RemoveMirror: %v", err)
+	}
+	if _, err := os.Stat(f.mirrorDir()); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the mirror is still on disk after RemoveMirror: %v", err)
+	}
+	if _, err := g.ReadDir(ctx, f.m, c.SHA, "", 0); err == nil {
+		t.Error("ReadDir of a removed mirror succeeded")
+	}
+	// The next fetch builds it again.
+	if _, err := g.FetchRef(ctx, f.m, f.remote(), gitx.RefBranch, "main"); err != nil {
+		t.Fatalf("FetchRef after the removal: %v", err)
+	}
+	if _, err := g.ReadDir(ctx, f.m, c.SHA, "", 0); err != nil {
+		t.Errorf("ReadDir after the mirror was built again: %v", err)
+	}
+
+	// A name that is not a repository ID never reaches the disk.
+	if err := g.RemoveMirror(gitx.MirrorID("../x")); !errors.Is(err, gitx.ErrMirrorID) {
+		t.Errorf("RemoveMirror(../x) = %v, want ErrMirrorID", err)
+	}
+}

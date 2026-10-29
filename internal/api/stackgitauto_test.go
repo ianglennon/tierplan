@@ -463,10 +463,19 @@ func TestAutoDeployEndToEndJobFailed(t *testing.T) {
 // is the repository's second one.
 func newDeployedAutoFix(t *testing.T) *autoFix {
 	t.Helper()
+	return newDeployedAutoFixWith(t, nil)
+}
+
+// newDeployedAutoFixWith is newDeployedAutoFix for a test that sets a field of the fixture too.
+func newDeployedAutoFixWith(t *testing.T, tune func(*envFix)) *autoFix {
+	t.Helper()
 	a := &autoFix{ended: make(checkEnded, 8), triggered: make(chan bool, 8)}
 	g, _, stackID := deployedGitStackWith(t, func(f *envFix) {
 		f.gitOnCheck = a.ended.tell
 		f.gitTriggered = func(_ string, _ gitsync.Outcome, _ error, more bool) { a.triggered <- more }
+		if tune != nil {
+			tune(f)
+		}
 	})
 	a.gitStackFix, a.stackID = g, stackID
 	return a

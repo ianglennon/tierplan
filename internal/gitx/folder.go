@@ -321,6 +321,7 @@ func (g *GoGit) withCommitTreeRepo(ctx context.Context, m MirrorID, sha, dir str
 		g.log.Error("could not open a git mirror", "error", err)
 		return &Error{Code: CodeUnreachable}
 	}
+	g.markUsed(m, path)
 	commit, err := repo.CommitObject(plumbing.NewHash(sha))
 	if err != nil {
 		return &Error{Code: CodeCommitMissing}

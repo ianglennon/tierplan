@@ -885,6 +885,13 @@ func (d GitDeps) deleteGitRepo(ctx context.Context, p *rbac.Principal, envID, id
 	if err != nil {
 		return d.repoFail("delete repository", err)
 	}
+	// The mirror is a cache of the repository that is gone. A failure to remove it is not the caller's: the daily
+	// sweep removes a mirror whose repository does not exist.
+	if m, ok := d.Git.(gitx.Mirrors); ok {
+		if err := m.RemoveMirror(gitx.MirrorID(id)); err != nil && d.Log != nil {
+			d.Log.Warn("could not remove the mirror of a deleted repository", "repository", id, "error", err)
+		}
+	}
 	return nil
 }
 

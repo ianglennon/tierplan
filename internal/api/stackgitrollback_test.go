@@ -10,6 +10,7 @@ import (
 
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitsync"
+	"github.com/ianglennon/bayplan/internal/gitx"
 )
 
 // Rolling back a git stack (plan 09-28, GIT-07, D-22, D-28): the revision's files and variables come back exactly, the
@@ -119,5 +120,44 @@ func TestGitRollbackKeepsSettings(t *testing.T) {
 	}
 	if later := a.readGit(t, a.admin, a.stackID); later.DeployedSha != second {
 		t.Errorf("deployed = %s after a poll, want it still %s", later.DeployedSha, second)
+	}
+}
+
+// A mirror is only a cache (plan 09-32, D-08): a roll back is made from the revisions the stack stores, so it needs
+// neither the mirror nor the git server, and the sweep or a deleted repository can take the mirror away at any time.
+func TestRollbackWithoutMirror(t *testing.T) {
+	t.Parallel()
+	mirrors := gitx.NewGoGit(gitx.Options{Root: t.TempDir()})
+	a := newDeployedAutoFixWith(t, func(f *envFix) { f.gitClient = mirrors })
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, operator)
+
+	a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("check = %s, want behind", out)
+	}
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("deploy of #2 = %+v, want done", job)
+	}
+
+	ids, err := mirrors.ListMirrors()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("mirrors before = %v, %v, want the repository's one", ids, err)
+	}
+	if err := mirrors.RemoveMirror(ids[0]); err != nil {
+		t.Fatalf("RemoveMirror: %v", err)
+	}
+
+	rolledBy := a.f.caller(t, a.e, "operator-2", "operator")
+	rec := rolledBy.do(http.MethodPost, rollbackPath(a.stackID), `{"revision":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back without a mirror: %d %s", rec.Code, rec.Body)
+	}
+	if job := a.f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+	got, err := a.stackRepo().Revision(context.Background(), a.stackID, 3)
+	if err != nil || got.Origin != "rollback" || got.RestoredFrom != 1 {
+		t.Errorf("revision #3 = origin %q restored from #%d (%v), want a roll back to #1", got.Origin, got.RestoredFrom, err)
 	}
 }

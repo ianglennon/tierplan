@@ -45,6 +45,7 @@ func (g *GoGit) ReadDir(ctx context.Context, m MirrorID, sha, dir string, limit 
 		g.log.Error("could not open a git mirror", "error", err)
 		return Dir{}, &Error{Code: CodeUnreachable}
 	}
+	g.markUsed(m, path)
 	commit, err := repo.CommitObject(plumbing.NewHash(sha))
 	if err != nil {
 		return Dir{}, &Error{Code: CodeCommitMissing}
