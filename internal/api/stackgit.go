@@ -53,8 +53,10 @@ type StackGitSummary struct {
 	CheckedAt    string `json:"checkedAt,omitempty" format:"date-time" doc:"When the stack was last checked, RFC 3339 UTC; left out when it never was"`
 	Checking     bool   `json:"checking" doc:"True while a check of the stack runs now"`
 
-	AutoDeploy       bool `json:"autoDeploy" doc:"True when a commit that changes the folder is deployed automatically"`
-	AutoDeployPaused bool `json:"autoDeployPaused" doc:"True when automatic deploys are paused: after a roll back, or because the owner lacks a permission"`
+	AutoDeploy             bool                     `json:"autoDeploy" doc:"True when a commit that changes the folder is deployed automatically"`
+	AutoDeployPaused       bool                     `json:"autoDeployPaused" doc:"True when automatic deploys are paused: after a roll back, or because the owner lacks a permission"`
+	AutoDeployPausedReason string                   `json:"autoDeployPausedReason,omitempty" enum:"owner,rollback" doc:"Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused"`
+	AutoDeployOwner        *StackGitAutoDeployOwner `json:"autoDeployOwner,omitempty" doc:"The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record"`
 
 	PollEnabled bool `json:"pollEnabled" doc:"True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
 	PollMinutes int  `json:"pollMinutes" minimum:"1" maximum:"1440" doc:"How often the repository is checked, in minutes"`
@@ -75,6 +77,12 @@ type StackGitWebhookSummary struct {
 	Paused     bool                 `json:"paused" doc:"True when the webhook does nothing: its owner no longer holds the permission that made it, is disabled or deleted. Every request to it is a 404 until it is handed to an Admin of the environment"`
 }
 
+// StackGitAutoDeployOwner names the owner of a stack's automatic deploys.
+type StackGitAutoDeployOwner struct {
+	ID   string `json:"id" doc:"The user's ID"`
+	Name string `json:"name" doc:"The user's display name, else the username; empty when the user is gone"`
+}
+
 // StackGitWebhookOwner names the owner of a webhook.
 type StackGitWebhookOwner struct {
 	ID   string `json:"id" doc:"The user's ID; empty when the webhook has no owner on record"`
@@ -88,7 +96,7 @@ func gitSummaryOf(sg stackops.StackGit, st stackops.GitState, repo gitconn.Repo,
 		RepoID: sg.RepoID, RepoName: repo.Name, RefKind: sg.RefKind, Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: composeFilesOf(sg.ComposeFiles),
 		DeployedSha: st.DeployedCommit, HeadSha: st.HeadCommit, Behind: st.Behind, BehindCapped: st.Behind >= gitsync.BehindCap,
 		Status: st.Status, ReasonCode: st.ReasonCode, ReasonDetail: st.ReasonDetail, Checking: checking,
-		AutoDeploy: sg.AutoDeploy, AutoDeployPaused: sg.AutoDeployPausedReason != "",
+		AutoDeploy: sg.AutoDeploy, AutoDeployPaused: sg.AutoDeployPausedReason != "", AutoDeployPausedReason: sg.AutoDeployPausedReason,
 		PollEnabled: sg.PollEnabled, PollMinutes: sg.PollIntervalSeconds / 60,
 	}
 	if out.Status == "" {
@@ -214,6 +222,33 @@ func (g GitDeps) webhookSummary(ctx context.Context, sg stackops.StackGit, host 
 		out.Owner.Name = u.DisplayName
 	default:
 		out.Owner.Name = u.Username
+	}
+	return out, nil
+}
+
+// autoDeployOwner is the person automatic deploys of a git stack run for: nothing while auto-deploy is off or when the
+// access service holds no record of it (a roll back forgets it). A user who is gone has an empty name.
+func (g GitDeps) autoDeployOwner(ctx context.Context, sg stackops.StackGit) (*StackGitAutoDeployOwner, error) {
+	if !sg.AutoDeploy || g.Access == nil {
+		return nil, nil
+	}
+	owned, err := g.Access.GetOwned(ctx, gitsync.KindGitAutoDeploy, sg.StackID)
+	switch {
+	case errors.Is(err, access.ErrOwnedNotFound):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	out := &StackGitAutoDeployOwner{ID: owned.OwnerID}
+	switch u, err := g.Access.Store.RQ.GetUserByID(ctx, owned.OwnerID); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return nil, err
+	case u.DeletedAt.Valid:
+	case u.DisplayName != "":
+		out.Name = u.DisplayName
+	default:
+		out.Name = u.Username
 	}
 	return out, nil
 }
@@ -792,6 +827,9 @@ func gitSummaryAnswer(ctx context.Context, d StacksDeps, g GitDeps, stackID, env
 	}
 	if sum.Webhook, err = g.webhookSummary(ctx, sg, host); err != nil {
 		return nil, stackInternal(d, "read the webhook", envID, err)
+	}
+	if sum.AutoDeployOwner, err = g.autoDeployOwner(ctx, sg); err != nil {
+		return nil, stackInternal(d, "read the auto-deploy owner", envID, err)
 	}
 	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
 }

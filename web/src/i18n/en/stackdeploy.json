@@ -3,6 +3,15 @@
     "title": "Deploying {{name}}",
     "started": "Started {{time}} by {{user}}.",
     "startedAnon": "Started {{time}}.",
+    "auto": {
+      "title": "Auto-deploying {{name}}",
+      "started": "Commit {{commit}}, started by {{trigger}} for {{user}}.",
+      "startedNoUser": "Commit {{commit}}, started by {{trigger}}.",
+      "startedNoCommit": "Started by {{trigger}} for {{user}}.",
+      "startedBare": "Started by {{trigger}}.",
+      "poll": "a poll check",
+      "webhook": "a webhook"
+    },
     "elapsedRunning": "Running for {{elapsed}}.",
     "elapsedDone": "Took {{elapsed}}.",
     "elapsed": {

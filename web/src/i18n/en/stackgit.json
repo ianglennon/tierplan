@@ -230,6 +230,39 @@
         "permission": "You need Admin on this environment to remove the webhook.",
         "failed": "Couldn't remove the webhook. Try again."
       }
+    },
+    "autoDeploy": {
+      "title": "Deploying",
+      "body": "Choose whether new commits deploy by themselves or wait for you.",
+      "switch": "Deploy changes automatically",
+      "folderRoot": "the repository root",
+      "ownerFallback": "its owner",
+      "helperOff": "A new commit that changes {{folder}} makes {{name}} show as behind. You review and deploy it.",
+      "helperOn": "A new commit that changes {{folder}} deploys without review, as {{user}}. A blocked change is skipped and shown as an error.",
+      "fixed": "A fixed commit has nothing to deploy.",
+      "runsAs": "Runs as",
+      "transfer": "Transfer…",
+      "transferLabel": "Transfer auto-deploy of {{name}}…",
+      "paused": "Paused",
+      "resume": "Resume…",
+      "needsOnEnvironment": "{{need}} on {{name}}",
+      "turnedOff": "{{name}} now waits for review.",
+      "turnedOn": "Auto-deploy is on for {{name}}.",
+      "failed": "Couldn't change auto-deploy. Try again.",
+      "permission": "You don't hold the permission to deploy here, so you can't turn on auto-deploy.",
+      "confirm": {
+        "title": "Turn on auto-deploy?",
+        "body": "New commits to {{ref}} that change {{folder}} will deploy by themselves, without a review, as you. If you lose permission to deploy on {{environment}}, auto-deploy pauses. Changes that fail a check are skipped and shown as an error.",
+        "cancel": "Keep waiting for review",
+        "confirm": "Turn on auto-deploy",
+        "pending": "Turning on…"
+      },
+      "pausedAlert": {
+        "title": "Auto-deploy is paused",
+        "body": "{{user}} set it up and no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
+        "bodyNoUser": "The person who set it up no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
+        "openSettings": "Open git settings"
+      }
     }
   }
 }

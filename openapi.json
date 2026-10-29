@@ -14214,6 +14214,24 @@
         ],
         "type": "object"
       },
+      "StackGitAutoDeployOwner": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "The user's ID",
+            "type": "string"
+          },
+          "name": {
+            "description": "The user's display name, else the username; empty when the user is gone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "StackGitCheckBody": {
         "additionalProperties": false,
         "properties": {
@@ -14350,9 +14368,21 @@
             "description": "True when a commit that changes the folder is deployed automatically",
             "type": "boolean"
           },
+          "autoDeployOwner": {
+            "$ref": "#/components/schemas/StackGitAutoDeployOwner",
+            "description": "The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record"
+          },
           "autoDeployPaused": {
             "description": "True when automatic deploys are paused: after a roll back, or because the owner lacks a permission",
             "type": "boolean"
+          },
+          "autoDeployPausedReason": {
+            "description": "Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused",
+            "enum": [
+              "owner",
+              "rollback"
+            ],
+            "type": "string"
           },
           "behind": {
             "description": "How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1",
@@ -14810,6 +14840,10 @@
       "StackJobBody": {
         "additionalProperties": false,
         "properties": {
+          "commit": {
+            "description": "Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys",
+            "type": "string"
+          },
           "createdAt": {
             "description": "When the job started, RFC 3339 UTC",
             "type": "string"
@@ -14843,6 +14877,10 @@
               "start",
               "remove"
             ],
+            "type": "string"
+          },
+          "onBehalfOf": {
+            "description": "Left out unless set: for an automatic deploy, the name of the user it ran for (the one who turned auto-deploy on), at most 64 characters",
             "type": "string"
           },
           "output": {
@@ -14881,6 +14919,14 @@
               "partial",
               "failed",
               "cancelled"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "description": "Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook. A deploy a person started has none",
+            "enum": [
+              "poll",
+              "webhook"
             ],
             "type": "string"
           }
@@ -15078,6 +15124,14 @@
               "done",
               "failed",
               "cancelled"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "description": "Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook",
+            "enum": [
+              "poll",
+              "webhook"
             ],
             "type": "string"
           }

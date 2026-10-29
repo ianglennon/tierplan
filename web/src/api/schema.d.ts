@@ -10274,6 +10274,12 @@ export interface components {
             /** @description True to deploy a commit that changes the stack's folder by itself, on the authority of the person who sends this request; false to have such a commit wait for review */
             enabled: boolean;
         };
+        StackGitAutoDeployOwner: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's display name, else the username; empty when the user is gone */
+            name: string;
+        };
         StackGitCheckBody: {
             /** @description True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer */
             checking: boolean;
@@ -10332,8 +10338,15 @@ export interface components {
         StackGitSummary: {
             /** @description True when a commit that changes the folder is deployed automatically */
             autoDeploy: boolean;
+            /** @description The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record */
+            autoDeployOwner?: components["schemas"]["StackGitAutoDeployOwner"];
             /** @description True when automatic deploys are paused: after a roll back, or because the owner lacks a permission */
             autoDeployPaused: boolean;
+            /**
+             * @description Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused
+             * @enum {string}
+             */
+            autoDeployPausedReason?: "owner" | "rollback";
             /**
              * Format: int64
              * @description How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1
@@ -10546,6 +10559,8 @@ export interface components {
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackJobBody: {
+            /** @description Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys */
+            commit?: string;
             /** @description When the job started, RFC 3339 UTC */
             createdAt: string;
             /** @description When the job ended, RFC 3339 UTC, empty while it runs */
@@ -10559,6 +10574,8 @@ export interface components {
              * @enum {string}
              */
             mode: "deploy" | "update" | "rollback" | "restore" | "stop" | "start" | "remove";
+            /** @description Left out unless set: for an automatic deploy, the name of the user it ran for (the one who turned auto-deploy on), at most 64 characters */
+            onBehalfOf?: string;
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /**
@@ -10580,6 +10597,11 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * @description Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook. A deploy a person started has none
+             * @enum {string}
+             */
+            trigger?: "poll" | "webhook";
         };
         StackJobItemBody: {
             /** @description A stable word for how an item failed or was not run, empty otherwise */
@@ -10660,6 +10682,11 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "done" | "failed" | "cancelled";
+            /**
+             * @description Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook
+             * @enum {string}
+             */
+            trigger?: "poll" | "webhook";
         };
         StackKindCountsBody: {
             /**

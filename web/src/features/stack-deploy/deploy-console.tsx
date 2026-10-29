@@ -226,6 +226,25 @@ function CancelAction({
   );
 }
 
+// AutoLine says what an automatic deploy deploys and what started it: "Commit 1a2b3c4, started by a poll check for
+// Ada." The commit and the person are left out when the server did not say them.
+function AutoLine({ job }: { job: StackJob }) {
+  const t = useT();
+  const trigger = t(`stackDeploy.auto.${job.trigger === "webhook" ? "webhook" : "poll"}`);
+  const key = job.commit
+    ? job.onBehalfOf
+      ? "stackDeploy.auto.started"
+      : "stackDeploy.auto.startedNoUser"
+    : job.onBehalfOf
+      ? "stackDeploy.auto.startedNoCommit"
+      : "stackDeploy.auto.startedBare";
+  return (
+    <span data-slot="auto-deploy-line">
+      {t(key, { commit: job.commit, trigger, user: job.onBehalfOf })}
+    </span>
+  );
+}
+
 // DeployConsole is the live view of a deploy (STK-07, D-13): the title and how long it has run, the
 // connection, the overall progress, the steps with a row for each service, and the result. It is a
 // view of a job on the server, so leaving never stops the deploy: opening it again shows the job as
@@ -333,6 +352,8 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
       ? follow.status
       : undefined;
   const startedAt = formatRelative(job.createdAt, new Date(now), t);
+  // An automatic deploy (D-20, T-09-82): the server says what started it, so it never reads like a person's.
+  const auto = job.trigger !== undefined && (job.mode === "deploy" || job.mode === "update");
 
   return (
     <div className="mx-auto flex w-full max-w-[960px] flex-col gap-6">
@@ -350,7 +371,9 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
                     ? "stackStop.console.title"
                     : job.mode === "remove"
                       ? "stackRemove.console.title"
-                      : "stackDeploy.title",
+                      : auto
+                        ? "stackDeploy.auto.title"
+                        : "stackDeploy.title",
               { name, revision: job.revision },
             )}
           </h3>
@@ -367,9 +390,10 @@ export function DeployConsole({ envId, stackId, jobId }: DeployConsoleProps) {
           </div>
         </div>
         <p className="text-sm text-muted-foreground">
-          {job.startedBy
-            ? t("stackDeploy.started", { time: startedAt, user: job.startedBy })
-            : t("stackDeploy.startedAnon", { time: startedAt })}{" "}
+          {auto ? <AutoLine job={job} /> : null}{" "}
+          {auto || !job.startedBy
+            ? t("stackDeploy.startedAnon", { time: startedAt })
+            : t("stackDeploy.started", { time: startedAt, user: job.startedBy })}{" "}
           <Elapsed job={job} />
         </p>
       </div>

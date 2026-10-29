@@ -43,6 +43,11 @@ type stackGitAnswer struct {
 	Checking     bool     `json:"checking"`
 	AutoDeploy   bool     `json:"autoDeploy"`
 	Paused       bool     `json:"autoDeployPaused"`
+	PausedReason string   `json:"autoDeployPausedReason"`
+	Owner        *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"autoDeployOwner"`
 	PollEnabled  bool     `json:"pollEnabled"`
 	PollMinutes  int      `json:"pollMinutes"`
 }

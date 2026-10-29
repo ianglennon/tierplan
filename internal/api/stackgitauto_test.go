@@ -148,6 +148,8 @@ func TestAutoDeployToggle(t *testing.T) {
 	}
 	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy {
 		t.Errorf("git after turning it on = %+v, want auto-deploy on", got)
+	} else if got.Owner == nil || got.Owner.ID != a.userID(t, "u-operator") || got.Owner.Name == "" {
+		t.Errorf("auto-deploy owner = %+v, want the Operator who turned it on", got.Owner)
 	}
 
 	// Asking again changes nothing, records nothing and does not hand it to someone else.
@@ -186,11 +188,11 @@ func TestAutoDeployToggle(t *testing.T) {
 	if err := a.stackRepo().SetAutoDeploy(context.Background(), a.stackID, true, stackops.PausedRollback, 2, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy || !got.Paused {
-		t.Fatalf("git after a roll back pause = %+v, want on and paused", got)
+	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy || !got.Paused || got.PausedReason != stackops.PausedRollback {
+		t.Fatalf("git after a roll back pause = %+v, want on and paused by the roll back", got)
 	}
 	a.turnOn(t, a.admin)
-	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy || got.Paused {
+	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy || got.Paused || got.PausedReason != "" {
 		t.Errorf("git after turning it on again = %+v, want on and running", got)
 	}
 	if o, ok := a.owned(t); !ok || o.owner == a.userID(t, "u-operator") || o.state != "active" {
@@ -282,6 +284,60 @@ func TestAutoDeployEndToEnd(t *testing.T) {
 	deploys := a.f.deployAudits(t, a.stackID)
 	if len(deploys) != 1 || deploys[0].ActorID != "system:gitsync" || deploys[0].Details["onBehalfOf"] != opID || deploys[0].Details["commit"] != head {
 		t.Errorf("stack.deployed rows = %+v, want the system actor on behalf of the Operator at %s", deploys, head)
+	}
+}
+
+// TestStackJobBodyAutoDeploy: the job of an automatic deploy says what started it, whom it ran for and which commit it
+// deploys, so the console and the jobs indicator can tell it from a deploy a person pressed (T-09-82).
+func TestStackJobBodyAutoDeploy(t *testing.T) {
+	t.Parallel()
+	a := newAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, operator)
+	head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("check = %s, want behind", out)
+	}
+	jobID := a.lastJob(t)
+	if job := a.f.awaitDeploy(t, jobID); job.State != "done" {
+		t.Fatalf("job = %+v, want it done", job)
+	}
+
+	var body struct {
+		Trigger    string `json:"trigger"`
+		OnBehalfOf string `json:"onBehalfOf"`
+		Commit     string `json:"commit"`
+		StartedBy  string `json:"startedBy"`
+	}
+	route := "/api/env/" + a.env + "/stacks/" + a.stackID + "/deploys/" + jobID
+	rec := a.f.credCall(t, a.admin, http.MethodGet, route, "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+		t.Fatalf("GET job: %d %s", rec.Code, rec.Body)
+	}
+	if body.Trigger != "poll" || body.Commit != head[:7] || body.OnBehalfOf == "" {
+		t.Errorf("job body = %+v, want a poll of %s for the Operator", body, head[:7])
+	}
+	var list struct {
+		Jobs []struct {
+			ID      string `json:"id"`
+			Trigger string `json:"trigger"`
+		} `json:"jobs"`
+	}
+	rec = a.f.credCall(t, a.admin, http.MethodGet, "/api/stack-jobs", "")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &list) != nil {
+		t.Fatalf("GET jobs: %d %s", rec.Code, rec.Body)
+	}
+	found := false
+	for _, j := range list.Jobs {
+		if j.ID == jobID {
+			found = true
+			if j.Trigger != "poll" {
+				t.Errorf("jobs list entry = %+v, want trigger poll", j)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("jobs list = %+v, want the auto-deploy's job", list.Jobs)
 	}
 }
 

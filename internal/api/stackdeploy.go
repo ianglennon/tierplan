@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -37,6 +38,12 @@ const (
 	// as. A deploy has no metaRevision.
 	metaRevision = "revision"
 	metaRecorded = "recorded"
+	// metaTrigger, metaOnBehalfOf and metaCommit are what an automatic deploy adds: what started it (poll or webhook),
+	// the name of the user it ran for and the short commit it deploys. A deploy a person started has no metaTrigger or
+	// metaOnBehalfOf.
+	metaTrigger    = "trigger"
+	metaOnBehalfOf = "onBehalfOf"
+	metaCommit     = "commit"
 
 	deployModeDeploy   = "deploy"
 	deployModeUpdate   = "update"
@@ -139,6 +146,9 @@ type StackJobBody struct {
 	Revision   int64                `json:"revision,omitempty" doc:"Left out unless set: for a roll back or a restore, the number of the revision it restores"`
 	Recorded   int64                `json:"recordedRevision,omitempty" doc:"Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
+	Trigger    string               `json:"trigger,omitempty" enum:"poll,webhook" doc:"Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook. A deploy a person started has none"`
+	OnBehalfOf string               `json:"onBehalfOf,omitempty" doc:"Left out unless set: for an automatic deploy, the name of the user it ran for (the one who turned auto-deploy on), at most 64 characters"`
+	Commit     string               `json:"commit,omitempty" doc:"Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
@@ -950,6 +960,15 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	if l.rev.Seq > 0 {
 		meta[metaRecorded] = itoa(l.rev.Seq)
 	}
+	if l.trigger != "" {
+		meta[metaTrigger] = l.trigger
+	}
+	if l.p.OnBehalfOf != "" {
+		meta[metaOnBehalfOf] = clipName(ownerName(ctx, &repo, l.p.OnBehalfOf))
+	}
+	if l.rev.Git.Commit != "" {
+		meta[metaCommit] = shortCommit(l.rev.Git.Commit)
+	}
 	spec := jobs.Spec{Kind: kind, EnvID: l.env.ID, Owner: stackJobOwner(l.p), Meta: meta, Items: l.items}
 	if d.BeforeJob != nil {
 		d.BeforeJob(ctx)
@@ -1346,6 +1365,7 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 	b := StackJobBody{
 		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: stackJobState(j),
 		Revision: metaInt(j.Meta, metaRevision), Recorded: metaInt(j.Meta, metaRecorded),
+		Trigger: j.Meta[metaTrigger], OnBehalfOf: j.Meta[metaOnBehalfOf], Commit: j.Meta[metaCommit],
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
 		Output: make([]StackJobOutputLine, 0, len(output)),
 	}
@@ -1356,6 +1376,20 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+// clipName cleans a user's name for a job's meta: no control characters, at most 64 characters.
+func clipName(s string) string {
+	s = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s))
+	if r := []rune(s); len(r) > 64 {
+		s = string(r[:64])
+	}
+	return s
 }
 
 // metaInt reads a number out of a job's meta, 0 for one that is not there.

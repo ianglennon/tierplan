@@ -8,6 +8,7 @@ import { api } from "@/api/client";
 import { type Problem, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } from "@/api/stacks";
+import { ENV_WARNINGS_KEY } from "@/api/warnings";
 
 export type StackGit = components["schemas"]["StackGitSummary"];
 // What a pull did to the draft: the version to review and deploy, and the commit it holds.
@@ -179,6 +180,52 @@ export function useUpdateStackGitUpdates(envId: string, stackId: string) {
     onSuccess: (data) => {
       queryClient.setQueryData(stackGitKey(envId, stackId), data);
       invalidateStacks(queryClient, envId);
+    },
+  });
+}
+
+// StackGitAutoDeployError is a change of auto-deploy the server refused or that got no answer. The status is 0 when the
+// server could not be reached; the type is the problem type it named (owner_lacks_permission, stack_not_git).
+export class StackGitAutoDeployError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`PUT git/auto-deploy failed (${status})`);
+    this.name = "StackGitAutoDeployError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// useSetStackGitAutoDeploy turns a git stack's automatic deploys on or off (D-18). Turning them on registers the caller as
+// the person they run for and resumes a paused one, so the caller confirms first; it is never retried. The answer is the
+// stack's git summary, which replaces the one held; the stack, its lists and the bell are read again.
+export function useSetStackGitAutoDeploy(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackGit, StackGitAutoDeployError, boolean>({
+    mutationFn: async (enabled) => {
+      try {
+        const { data, error, response } = await api.PUT(
+          "/api/env/{envId}/stacks/{stackId}/git/auto-deploy",
+          { params: { path: { envId, stackId } }, body: { enabled } },
+        );
+        if (!data) {
+          const problem = readProblem(error, response);
+          throw new StackGitAutoDeployError(problem.status, problem.type);
+        }
+        return data;
+      } catch (e) {
+        // A network failure has no status.
+        throw e instanceof StackGitAutoDeployError ? e : new StackGitAutoDeployError(0);
+      }
+    },
+    retry: false,
+    onSuccess: (data) => {
+      queryClient.setQueryData(stackGitKey(envId, stackId), data);
+    },
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
     },
   });
 }
