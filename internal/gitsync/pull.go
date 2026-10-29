@@ -5,7 +5,6 @@ package gitsync
 
 import (
 	"context"
-	"slices"
 
 	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/stackops"
@@ -180,9 +179,12 @@ func (s *Service) refreshDraft(ctx context.Context, st stackops.Stack, draft sta
 			repoFiles = append(repoFiles, f)
 		}
 	}
-	for _, o := range overlays {
-		if slices.ContainsFunc(repoFiles, func(f stacks.File) bool { return f.Path == o.Path }) {
-			s.log.Warn("a commit holds a file at the path of an overlay; the repository's file stands", "stack", st.ID, "path", o.Path)
+	// A commit that holds a file at the path of an overlay would shadow a sealed secret of the person's, which a refresh
+	// would drop without a word. The refresh is refused instead (overlay_clash, as for keeping a file at connect), the
+	// draft untouched, until the person removes or renames the overlay file (D-09).
+	for _, p := range imp.Problems {
+		if p.Code == stacks.CodeOverlayClash {
+			return Import{}, stackops.Snapshot{}, &OverlayClashError{Path: p.File}
 		}
 	}
 	saved, err := s.repo.RefreshDraftFromGit(ctx, st.ID, version, actor, repoFiles, imp.Revision())

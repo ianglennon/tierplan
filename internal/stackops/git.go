@@ -571,7 +571,8 @@ func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at 
 // commit, when the draft is still at version: the draft's repository files (origin repo) are dropped and repoFiles take
 // their place, a file of Bayplan's own (overlay, or one a person added) and the variables are kept, the compose files
 // are the source's, and the commit, tree and source the draft records are rev. A path both a kept file and a
-// repository file hold goes to the repository file, as an import does (D-09). The version of the draft goes up by one.
+// repository file hold goes to the repository file, as an import does (D-09); gitsync refuses the refresh before it gets
+// here (overlay_clash), so a sealed overlay is never dropped by a pull. The version of the draft goes up by one.
 // A stack with no draft (it was discarded) starts one from its last good revision, and only a caller at version 0 may,
 // as for a save. A draft that has moved is a *DraftConflictError. Nothing changes when the draft already holds exactly
 // this: it is returned as it is.
