@@ -385,6 +385,39 @@ describe("the review of a change of source", () => {
   });
 });
 
+describe("the review of a conversion to git", () => {
+  const converts = (over: Record<string, unknown> = {}) =>
+    gitBody({
+      converts: true,
+      deployedCommit: "",
+      touched: 0,
+      composeFiles: ["compose.yaml"],
+      ...over,
+    });
+
+  it("is titled Review the new source and says it replaces the inline files", async () => {
+    git = converts();
+    mount();
+    expect(
+      await screen.findByRole("heading", { name: "Review the new source for web" }),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "This deploys stacks/web of acme at main, replacing the inline files.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Pull and redeploy web" })).toBeNull();
+  });
+
+  it("does not say the branch moved on: the stack has no head of its own yet", async () => {
+    git = converts({ headCommit: HEAD });
+    stackHead = NEWER;
+    mount();
+    await screen.findByRole("heading", { name: "Review the new source for web" });
+    expect(screen.queryByText(/has moved on/)).toBeNull();
+  });
+});
+
 describe("the Commits card of a git review", () => {
   it("lists the commits that changed the folder, newest first, open when there are few", async () => {
     mount();

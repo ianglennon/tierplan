@@ -347,3 +347,94 @@ func varValue(vars []stacks.Var, name string) string {
 	}
 	return ""
 }
+
+func TestConvertPermissions(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	admin, stackID := inlineWithHistory(t, g)
+	operator := g.f.caller(t, g.e, "operator-1", "operator")
+	viewer := g.f.caller(t, g.e, "viewer-1", "viewer")
+	repo := g.stackRepo()
+	ctx := context.Background()
+	version := draftVersion(t, admin, stackID)
+
+	// Pointing a stack at a repository is for an Admin of the environment (git.manage), whatever a person may deploy.
+	for name, who := range map[string]*roleCaller{"an operator": operator, "a viewer": viewer} {
+		if rec := who.connectGit(stackID, version, g.id, nil); rec.Code != http.StatusForbidden {
+			t.Errorf("connect as %s: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+	}
+	if _, ok, err := repo.PendingGit(ctx, stackID); err != nil || ok {
+		t.Errorf("PendingGit after refused calls = %v, %v, want none", ok, err)
+	}
+	if got := draftVersion(t, admin, stackID); got != version {
+		t.Errorf("draft version = %d, want %d: a refused call stores nothing", got, version)
+	}
+	for _, a := range g.f.stackAudits(t) {
+		if a.Action == audit.ActionStackPointedAtGit {
+			t.Errorf("a refused call was audited: %+v", a)
+		}
+	}
+
+	// An adopted stack converts like an inline one.
+	if _, err := g.f.st.Write.ExecContext(ctx, `UPDATE stacks SET source_kind = 'adopted' WHERE id = ?`, stackID); err != nil {
+		t.Fatal(err)
+	}
+	if s := admin.stackOf(stackID); s.Source != "adopted" {
+		t.Fatalf("source = %q, want adopted", s.Source)
+	}
+	if rec := admin.connectGit(stackID, version, g.id, nil); rec.Code != http.StatusOK {
+		t.Fatalf("connect an adopted stack: %d %s", rec.Code, rec.Body)
+	}
+	review, code, raw := admin.reviewStack(stackID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if job := g.f.deployAndWait(t, admin, stackID, `{"draftVersion":`+itoaT(review.DraftVersion)+`,"pins":`+pinsJSON(t, review.Pins)+`}`); job.State != "done" {
+		t.Fatalf("deploy = %+v, want done", job)
+	}
+	if s := admin.stackOf(stackID); s.Source != "git" {
+		t.Errorf("source after the deploy = %q, want git", s.Source)
+	}
+
+	// A git stack is not converted again.
+	rec := admin.connectGit(stackID, draftVersion(t, admin, stackID), g.id, nil)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "already_git" {
+		t.Errorf("connect a git stack: %d %s, want 409 already_git", rec.Code, rec.Body)
+	}
+	// A stack of another environment, or one that is not there, is not found.
+	if rec := admin.do(http.MethodPost, "stacks/nope/connect-git", `{"draftVersion":0,"repoId":"`+g.id+`","refKind":"branch","ref":"main","composeFiles":["compose.yaml"]}`); rec.Code != http.StatusNotFound {
+		t.Errorf("connect a stack that is not there: %d %s, want 404", rec.Code, rec.Body)
+	}
+}
+
+func TestAConvertDraftIsEditedByTheRulesOfAGitStack(t *testing.T) {
+	t.Parallel()
+	g := newGitStackFix(t)
+	admin, stackID := inlineWithHistory(t, g)
+	if rec := admin.connectGit(stackID, draftVersion(t, admin, stackID), g.id, nil); rec.Code != http.StatusOK {
+		t.Fatalf("connect: %d %s", rec.Code, rec.Body)
+	}
+	draft := answerOf[draftAnswer](t, admin.do(http.MethodGet, "stacks/"+stackID+"/draft", ""))
+
+	// A repository file can't be edited in the draft, as in any git stack's.
+	files := make([]map[string]any, 0, len(draft.Files))
+	for _, f := range draft.Files {
+		content := f.Content
+		if f.Path == "compose.yaml" {
+			content = "services:\n  web:\n    image: nginx:9\n"
+		}
+		files = append(files, map[string]any{"path": f.Path, "content": content, "secret": f.Secret})
+	}
+	body, err := json.Marshal(map[string]any{"version": draft.Version, "files": files, "vars": []map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := admin.saveDraft(stackID, string(body))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("edit a repository file of a convert draft: %d %s, want 422", rec.Code, rec.Body)
+	}
+	if got := draftVersion(t, admin, stackID); got != draft.Version {
+		t.Errorf("draft version = %d, want %d: a refused edit stores nothing", got, draft.Version)
+	}
+}
