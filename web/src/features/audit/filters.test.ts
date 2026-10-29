@@ -156,6 +156,17 @@ describe("actionLabel", () => {
     expect(audit.audit.actions.git.sync_failed_named).toBe("Sync of {{name}} failed: {{reason}}");
   });
 
+  it("labels a change of a git stack's update checks with the stack when the entry has it", () => {
+    expect(KNOWN_ACTIONS).toContain("git.updates_changed");
+    expect(actionLabel("git.updates_changed", echo, { stack: "web" })).toBe(
+      "t:audit.actions.git.updates_changed_named",
+    );
+    expect(actionLabel("git.updates_changed", echo)).toBe("t:audit.actions.git.updates_changed");
+    expect(audit.audit.actions.git.updates_changed_named).toBe(
+      "Changed how {{name}} checks for updates",
+    );
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

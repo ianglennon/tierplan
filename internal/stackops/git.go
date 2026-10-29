@@ -356,6 +356,47 @@ func (r Repo) SetNextCheck(ctx context.Context, stackID string, at time.Time) er
 	return nil
 }
 
+// Bounds of the polling interval a person may set (D-14): a minute to a day.
+const (
+	MinPollInterval = time.Minute
+	MaxPollInterval = 24 * time.Hour
+)
+
+// SetPolling turns a git stack's polling on or off and sets how often it is checked, and has the poller schedule the
+// stack afresh. The interval is kept whole seconds and must be within MinPollInterval and MaxPollInterval. A stack that
+// is not from git is ErrNoGit.
+func (r Repo) SetPolling(ctx context.Context, stackID string, enabled bool, interval time.Duration) error {
+	if interval < MinPollInterval || interval > MaxPollInterval {
+		return fmt.Errorf("stackops: the polling interval %v is outside %v to %v", interval, MinPollInterval, MaxPollInterval)
+	}
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+	on := int64(0)
+	if enabled {
+		on = 1
+	}
+	n, err := q.SetStackGitPolling(ctx, sqlc.SetStackGitPollingParams{
+		PollEnabled: on, PollIntervalS: int64(interval / time.Second), UpdatedAt: r.now().UnixNano(), StackID: stackID,
+	})
+	if err != nil {
+		return fmt.Errorf("set the polling: %w", err)
+	}
+	if n == 0 {
+		return ErrNoGit
+	}
+	if err := q.ClearStackGitNextCheck(ctx, stackID); err != nil {
+		return fmt.Errorf("reschedule the polling: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
 // ErrNoGit means the stack has no git settings: it is not a stack from a repository.
 var ErrNoGit = errors.New("stackops: the stack is not from a git repository")
 

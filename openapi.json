@@ -14191,6 +14191,17 @@
             "description": "The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was",
             "type": "string"
           },
+          "pollEnabled": {
+            "description": "True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says",
+            "type": "boolean"
+          },
+          "pollMinutes": {
+            "description": "How often the repository is checked, in minutes",
+            "format": "int64",
+            "maximum": 1440,
+            "minimum": 1,
+            "type": "integer"
+          },
           "reasonCode": {
             "description": "Why the status is error, or a note on behind (source_changed); left out when there is no reason. fetch_failed: the repository can't be reached or refused the credential. host_key_changed, host_key_untrusted: the ssh host key. ref_gone: the branch or tag no longer exists. folder_gone: the folder is not in the repository. checks_failed: the new commit fails the checks. source_changed: the stack follows another repository, ref or folder than the one deployed. auto_deploy_blocked, auto_deploy_failed: an automatic deploy was held back or failed",
             "enum": [
@@ -14266,7 +14277,28 @@
           "status",
           "checking",
           "autoDeploy",
-          "autoDeployPaused"
+          "autoDeployPaused",
+          "pollEnabled",
+          "pollMinutes"
+        ],
+        "type": "object"
+      },
+      "StackGitUpdatesInputBody": {
+        "additionalProperties": false,
+        "properties": {
+          "pollEnabled": {
+            "description": "True to check the repository on a schedule",
+            "type": "boolean"
+          },
+          "pollMinutes": {
+            "description": "How often to check, in whole minutes from 1 to 1440. Anything else, including a fraction, is 422 poll_interval",
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "pollEnabled",
+          "pollMinutes"
         ],
         "type": "object"
       },
@@ -27616,6 +27648,78 @@
           }
         },
         "summary": "Check a git stack against its repository now",
+        "tags": [
+          "stacks",
+          "git"
+        ]
+      }
+    },
+    "/api/env/{envId}/stacks/{stackId}/git/updates": {
+      "put": {
+        "description": "Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll only records the new head and how far behind the stack is; it deploys nothing. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).",
+        "operationId": "updateStackGitUpdates",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The stack ID",
+            "in": "path",
+            "name": "stackId",
+            "required": true,
+            "schema": {
+              "description": "The stack ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StackGitUpdatesInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StackGitSummary"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Turn a git stack's polling on or off and set how often it is checked",
         "tags": [
           "stacks",
           "git"

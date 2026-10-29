@@ -41,6 +41,8 @@ function makeGit(over: Partial<StackGit> = {}): StackGit {
     checking: false,
     autoDeploy: false,
     autoDeployPaused: false,
+    pollEnabled: true,
+    pollMinutes: 5,
     ...over,
   };
 }

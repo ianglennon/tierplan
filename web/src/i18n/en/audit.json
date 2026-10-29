@@ -216,7 +216,9 @@
         "host_key_retrusted": "Git host key re-trusted",
         "host_key_retrusted_named": "Re-trusted a changed host key for {{name}}",
         "sync_failed": "Git sync failed",
-        "sync_failed_named": "Sync of {{name}} failed: {{reason}}"
+        "sync_failed_named": "Sync of {{name}} failed: {{reason}}",
+        "updates_changed": "Git update checks changed",
+        "updates_changed_named": "Changed how {{name}} checks for updates"
       },
       "logs": {
         "viewed": "Container logs viewed",

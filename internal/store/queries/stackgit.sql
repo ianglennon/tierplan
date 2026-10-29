@@ -72,3 +72,11 @@ ORDER BY g.stack_id;
 -- When the poller looks at the stack next. The row is made if a restore left none.
 INSERT INTO stack_git_state (stack_id, next_check_at) VALUES (?, ?)
 ON CONFLICT (stack_id) DO UPDATE SET next_check_at = excluded.next_check_at;
+
+-- name: SetStackGitPolling :execrows
+-- Polling on or off and how often (D-14). The interval is in seconds, 60 to 86400.
+UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ?;
+
+-- name: ClearStackGitNextCheck :exec
+-- A stack whose polling was changed is scheduled afresh by the poller.
+UPDATE stack_git_state SET next_check_at = NULL WHERE stack_id = ?;

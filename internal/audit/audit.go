@@ -202,6 +202,8 @@ const (
 	// The sync check of a git stack went into error, or into a different error (D-16). A repeat of the error already
 	// recorded writes nothing.
 	ActionGitSyncFailed = "git.sync_failed"
+	// A person turned a git stack's polling on or off, or changed how often it is checked (D-14).
+	ActionGitUpdatesChanged = "git.updates_changed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

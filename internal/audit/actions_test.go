@@ -377,7 +377,8 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 // a key again also records the fingerprint it replaced (plan 09-06, D-03). Creating a stack from a repository folder
 // records the stack, the repository's name, the ref and the folder (plan 09-11, GIT-02). A sync that went into error
 // records the stack's name, the reason code, the fixed sentence for it and the short SHA of the head last seen
-// (plan 09-15, D-16).
+// (plan 09-15, D-16). A change of a git stack's polling records the stack and the new and the previous values (plan
+// 09-18, D-14).
 var phase9DetailKeys = map[string][]string{
 	audit.ActionStackCreatedFromGit:  {"stack", "repository", "ref", "folder"},
 	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
@@ -390,6 +391,7 @@ var phase9DetailKeys = map[string][]string{
 	audit.ActionGitHostKeyTrusted:    {"name", "layer", "host", "fingerprint"},
 	audit.ActionGitHostKeyRetrusted:  {"name", "layer", "host", "fingerprint", "fingerprint_from"},
 	audit.ActionGitSyncFailed:        {"stack", "reason_code", "reason", "commit"},
+	audit.ActionGitUpdatesChanged:    {"stack", "poll_enabled", "poll_minutes", "poll_enabled_from", "poll_minutes_from"},
 }
 
 func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
@@ -424,6 +426,7 @@ func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"git.host_key_trusted":   audit.ActionGitHostKeyTrusted,
 		"git.host_key_retrusted": audit.ActionGitHostKeyRetrusted,
 		"git.sync_failed":        audit.ActionGitSyncFailed,
+		"git.updates_changed":    audit.ActionGitUpdatesChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

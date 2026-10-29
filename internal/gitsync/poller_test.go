@@ -40,7 +40,7 @@ func newPollClock(c *checkClock) *pollClock {
 	return &pollClock{checkClock: c, armed: make(chan struct{}, 4096)}
 }
 
-func (c *pollClock) Now() time.Time { return c.checkClock.now() }
+func (c *pollClock) Now() time.Time { return c.now() }
 
 func (c *pollClock) After(d time.Duration) <-chan time.Time {
 	c.tmu.Lock()
@@ -55,7 +55,7 @@ func (c *pollClock) After(d time.Duration) <-chan time.Time {
 func (c *pollClock) Advance(d time.Duration) {
 	c.tmu.Lock()
 	defer c.tmu.Unlock()
-	c.checkClock.advance(d)
+	c.advance(d)
 	now := c.Now()
 	kept := c.timers[:0]
 	for _, t := range c.timers {

@@ -10,6 +10,16 @@ import (
 	"database/sql"
 )
 
+const clearStackGitNextCheck = `-- name: ClearStackGitNextCheck :exec
+UPDATE stack_git_state SET next_check_at = NULL WHERE stack_id = ?
+`
+
+// A stack whose polling was changed is scheduled afresh by the poller.
+func (q *Queries) ClearStackGitNextCheck(ctx context.Context, stackID string) error {
+	_, err := q.db.ExecContext(ctx, clearStackGitNextCheck, stackID)
+	return err
+}
+
 const countStacksUsingRepo = `-- name: CountStacksUsingRepo :one
 SELECT count(*) FROM stack_git WHERE repo_id = ?
 `
@@ -321,6 +331,31 @@ type SetStackGitNextCheckParams struct {
 func (q *Queries) SetStackGitNextCheck(ctx context.Context, arg SetStackGitNextCheckParams) error {
 	_, err := q.db.ExecContext(ctx, setStackGitNextCheck, arg.StackID, arg.NextCheckAt)
 	return err
+}
+
+const setStackGitPolling = `-- name: SetStackGitPolling :execrows
+UPDATE stack_git SET poll_enabled = ?, poll_interval_s = ?, updated_at = ? WHERE stack_id = ?
+`
+
+type SetStackGitPollingParams struct {
+	PollEnabled   int64
+	PollIntervalS int64
+	UpdatedAt     int64
+	StackID       string
+}
+
+// Polling on or off and how often (D-14). The interval is in seconds, 60 to 86400.
+func (q *Queries) SetStackGitPolling(ctx context.Context, arg SetStackGitPollingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setStackGitPolling,
+		arg.PollEnabled,
+		arg.PollIntervalS,
+		arg.UpdatedAt,
+		arg.StackID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const upsertStackGitState = `-- name: UpsertStackGitState :exec

@@ -8,7 +8,6 @@ import { useCheckStackGit } from "@/api/stack-git";
 import type { StackDetail } from "@/api/stacks";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { GIT_TAB } from "@/features/stack-git/git-tab-link";
 import { shortSha } from "@/features/stack-git/sha-link";
 import { reasonOfGit } from "@/features/stack-git/sync-status";
 import { useT } from "@/i18n/use-t";
@@ -64,7 +63,10 @@ export function SyncErrorAlert({ stack }: SyncErrorAlertProps) {
             {checking ? t("stackGit.alert.checking") : t("stackGit.alert.checkNow")}
           </Button>
           <Button asChild variant="outline" className="max-md:h-11">
-            <Link to={GIT_TAB} params={{ envId: stack.envId, stackId: stack.id }}>
+            <Link
+              to="/env/$envId/stacks/$stackId/git"
+              params={{ envId: stack.envId, stackId: stack.id }}
+            >
               {t("stackGit.alert.openSettings")}
             </Link>
           </Button>

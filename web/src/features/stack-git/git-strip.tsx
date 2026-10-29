@@ -11,7 +11,6 @@ import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { GIT_TAB } from "@/features/stack-git/git-tab-link";
 import { ShaLink } from "@/features/stack-git/sha-link";
 import { SyncStatus } from "@/features/stack-git/sync-status";
 import { useNeeds } from "@/hooks/use-needs";
@@ -184,7 +183,7 @@ export function GitSettingsLink({ envId, stackId }: { envId: string; stackId: st
   const t = useT();
   return (
     <Button asChild variant="link" className="px-1 text-accent-ink max-md:h-11 max-md:flex-1">
-      <Link to={GIT_TAB} params={{ envId, stackId }}>
+      <Link to="/env/$envId/stacks/$stackId/git" params={{ envId, stackId }}>
         {t("stackGit.strip.settings")}
       </Link>
     </Button>

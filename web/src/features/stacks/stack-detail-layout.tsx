@@ -108,6 +108,14 @@ const TABS = [
   },
 ] as const;
 
+// The Git tab of a stack from a repository, last in the order. Other stacks have no such tab.
+const GIT_TAB_ENTRY = {
+  id: "git",
+  to: "/env/$envId/stacks/$stackId/git",
+  labelKey: "stackGit.tab.label",
+  exact: false,
+} as const;
+
 function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {
   const t = useT();
   return (
@@ -405,7 +413,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
             aria-label={t("stacks.detail.tabs.label")}
             className="h-9 max-md:h-11"
           >
-            {TABS.map((tab) => (
+            {(data?.source === "git" ? [...TABS, GIT_TAB_ENTRY] : TABS).map((tab) => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}

@@ -7,11 +7,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/gitconn"
 	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/gitx"
@@ -48,6 +52,9 @@ type StackGitSummary struct {
 
 	AutoDeploy       bool `json:"autoDeploy" doc:"True when a commit that changes the folder is deployed automatically"`
 	AutoDeployPaused bool `json:"autoDeployPaused" doc:"True when automatic deploys are paused: after a roll back, or because the owner lacks a permission"`
+
+	PollEnabled bool `json:"pollEnabled" doc:"True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
+	PollMinutes int  `json:"pollMinutes" minimum:"1" maximum:"1440" doc:"How often the repository is checked, in minutes"`
 }
 
 // gitSummaryOf builds the summary of a stack from its settings, the state of its last check and its repository. A zero
@@ -58,6 +65,7 @@ func gitSummaryOf(sg stackops.StackGit, st stackops.GitState, repo gitconn.Repo,
 		DeployedSha: st.DeployedCommit, HeadSha: st.HeadCommit, Behind: st.Behind, BehindCapped: st.Behind >= gitsync.BehindCap,
 		Status: st.Status, ReasonCode: st.ReasonCode, ReasonDetail: st.ReasonDetail, Checking: checking,
 		AutoDeploy: sg.AutoDeploy, AutoDeployPaused: sg.AutoDeployPausedReason != "",
+		PollEnabled: sg.PollEnabled, PollMinutes: sg.PollIntervalSeconds / 60,
 	}
 	if out.Status == "" {
 		out.Status = stackops.GitStatusUnknown
@@ -156,6 +164,19 @@ type StackGitCheckOutput struct {
 	Body         StackGitCheckBody
 }
 
+// StackGitUpdatesInput is the body of PUT /api/env/{envId}/stacks/{stackId}/git/updates.
+type StackGitUpdatesInput struct {
+	StackPathInput
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      struct {
+		PollEnabled bool    `json:"pollEnabled" doc:"True to check the repository on a schedule"`
+		PollMinutes float64 `json:"pollMinutes" doc:"How often to check, in whole minutes from 1 to 1440. Anything else, including a fraction, is 422 poll_interval"`
+	}
+}
+
+// problemPollInterval is the problem type of a polling interval that is not a whole number of minutes from 1 to 1440.
+const problemPollInterval = "poll_interval"
+
 // registerStackGit registers the routes that read a git stack's sync state and ask for a check.
 func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	httpx.Register(r, huma.Operation{
@@ -180,7 +201,64 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		func(ctx context.Context, in *StackPathInput) (*StackGitCheckOutput, error) {
 			return checkStackGit(ctx, s, g, in)
 		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "updateStackGitUpdates", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/updates",
+		Summary: "Turn a git stack's polling on or off and set how often it is checked",
+		Description: "Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. " +
+			"A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll only records the new head and how far behind the stack is; it deploys nothing. " +
+			"Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. " +
+			"A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).",
+		Tags: []string{"stacks", "git"},
+	}, rbac.Requirement{Perm: rbac.PermStacksDeploy, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *StackGitUpdatesInput) (*StackGitOutput, error) {
+			return updateStackGitUpdates(ctx, s, in)
+		})
 }
+
+func updateStackGitUpdates(ctx context.Context, d StacksDeps, in *StackGitUpdatesInput) (*StackGitOutput, error) {
+	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+	if p == nil || env == nil {
+		return nil, huma.Error500InternalServerError("internal error")
+	}
+	minutes := in.Body.PollMinutes
+	if minutes < 1 || minutes > maxPollMinutes || minutes != math.Trunc(minutes) {
+		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemPollInterval, "Use a whole number from 1 to 1440.")
+	}
+	repo := d.repo()
+	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	if err != nil {
+		return nil, stackLookupProblem(d, env.ID, err)
+	}
+	sg, err := repo.StackGit(ctx, st.ID)
+	if errors.Is(err, stackops.ErrNoGit) {
+		return nil, stackNotGit()
+	}
+	if err != nil {
+		return nil, stackInternal(d, "read the git settings", env.ID, err)
+	}
+	was := sg.PollIntervalSeconds / 60
+	now := int(minutes)
+	if sg.PollEnabled != in.Body.PollEnabled || was != now {
+		if err := repo.SetPolling(ctx, st.ID, in.Body.PollEnabled, time.Duration(now)*time.Minute); err != nil {
+			return nil, stackInternal(d, "set the polling", env.ID, err)
+		}
+		recordStack(ctx, d, p, env.ID, in.UserAgent, audit.ActionGitUpdatesChanged, st.ID, audit.ResultSuccess, "", map[string]string{
+			"stack": st.Name, "poll_enabled": strconv.FormatBool(in.Body.PollEnabled), "poll_minutes": strconv.Itoa(now),
+			"poll_enabled_from": strconv.FormatBool(sg.PollEnabled), "poll_minutes_from": strconv.Itoa(was),
+		})
+	}
+	sum, err := d.gitSummaryOfStack(ctx, st.ID)
+	if err != nil {
+		return nil, stackInternal(d, "read the git state", env.ID, err)
+	}
+	if sum == nil {
+		return nil, stackNotGit()
+	}
+	return &StackGitOutput{CacheControl: "no-store", Body: *sum}, nil
+}
+
+// maxPollMinutes is the longest polling interval: a day.
+const maxPollMinutes = 1440
 
 func getStackGit(ctx context.Context, d StacksDeps, in *StackPathInput) (*StackGitOutput, error) {
 	st, err := d.repo().Stack(ctx, in.EnvID, in.StackID)

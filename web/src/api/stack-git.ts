@@ -5,7 +5,7 @@ import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/r
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type Problem, readProblem } from "@/api/problem";
 import type { components } from "@/api/schema";
 import { invalidateStacks, isStackGone, StacksLoadError, stackKey, stackQuery } from "@/api/stacks";
 
@@ -134,4 +134,47 @@ export function useCheckStackGit(
     },
     running: mutation.isPending || polling,
   };
+}
+
+// StackGitUpdatesError is a change of polling the server refused, with the problem it answered, or no problem when it
+// could not be reached.
+export class StackGitUpdatesError extends Error {
+  readonly problem?: Problem;
+  constructor(problem?: Problem) {
+    super(`PUT git/updates failed (${problem?.status ?? 0})`);
+    this.name = "StackGitUpdatesError";
+    this.problem = problem;
+  }
+}
+
+export interface StackGitUpdates {
+  pollEnabled: boolean;
+  // Whole minutes from 1 to 1440.
+  pollMinutes: number;
+}
+
+// useUpdateStackGitUpdates turns a git stack's polling on or off and sets how often it is checked (D-14). It is not
+// retried. The answer is the stack's git summary, which replaces the one held; the stack, its lists and the bell are
+// read again.
+export function useUpdateStackGitUpdates(envId: string, stackId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<StackGit, StackGitUpdatesError, StackGitUpdates>({
+    mutationFn: async (body) => {
+      try {
+        const { data, error, response } = await api.PUT(
+          "/api/env/{envId}/stacks/{stackId}/git/updates",
+          { params: { path: { envId, stackId } }, body },
+        );
+        if (!data) throw new StackGitUpdatesError(readProblem(error, response));
+        return data;
+      } catch (e) {
+        throw e instanceof StackGitUpdatesError ? e : new StackGitUpdatesError();
+      }
+    },
+    retry: false,
+    onSuccess: (data) => {
+      queryClient.setQueryData(stackGitKey(envId, stackId), data);
+      invalidateStacks(queryClient, envId);
+    },
+  });
 }

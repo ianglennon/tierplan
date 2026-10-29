@@ -38,6 +38,7 @@ export function TestRouter({ children, path = "/" }: { children: ReactNode; path
       }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/review" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/editor" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks/$stackId/git" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/unmanaged-stacks/$name" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/events" }),
       createRoute({ getParentRoute: () => root, path: "/registries" }),

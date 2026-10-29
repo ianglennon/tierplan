@@ -2440,6 +2440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/stacks/{stackId}/git/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn a git stack's polling on or off and set how often it is checked
+         * @description Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll only records the new head and how far behind the stack is; it deploys nothing. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         */
+        put: operations["updateStackGitUpdates"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/stacks/{stackId}/removal-preview": {
         parameters: {
             query?: never;
@@ -10147,6 +10167,13 @@ export interface components {
             folder: string;
             /** @description The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was */
             headSha: string;
+            /** @description True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says */
+            pollEnabled: boolean;
+            /**
+             * Format: int64
+             * @description How often the repository is checked, in minutes
+             */
+            pollMinutes: number;
             /**
              * @description Why the status is error, or a note on behind (source_changed); left out when there is no reason. fetch_failed: the repository can't be reached or refused the credential. host_key_changed, host_key_untrusted: the ssh host key. ref_gone: the branch or tag no longer exists. folder_gone: the folder is not in the repository. checks_failed: the new commit fails the checks. source_changed: the stack follows another repository, ref or folder than the one deployed. auto_deploy_blocked, auto_deploy_failed: an automatic deploy was held back or failed
              * @enum {string}
@@ -10174,6 +10201,15 @@ export interface components {
              * @enum {string}
              */
             status: "unknown" | "in_sync" | "behind" | "error";
+        };
+        StackGitUpdatesInputBody: {
+            /** @description True to check the repository on a schedule */
+            pollEnabled: boolean;
+            /**
+             * Format: double
+             * @description How often to check, in whole minutes from 1 to 1440. Anything else, including a fraction, is 422 poll_interval
+             */
+            pollMinutes: number;
         };
         StackHistoryPreviewBody: {
             /**
@@ -17117,6 +17153,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackGitCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateStackGitUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitUpdatesInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSummary"];
                 };
             };
             /** @description Error */

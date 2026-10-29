@@ -102,6 +102,31 @@
       "checkNow": "Check now",
       "checking": "Checking…",
       "openSettings": "Open git settings"
+    },
+    "tab": {
+      "label": "Git",
+      "error": {
+        "title": "Couldn't load the git settings.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading git settings"
+      }
+    },
+    "updates": {
+      "title": "Updates",
+      "body": "How Bayplan learns that the repository changed.",
+      "poll": "Check on a schedule",
+      "minutes": "Check every (minutes)",
+      "helper": "Stacks on the same repository share one check, and checks are spread out a little so a git host isn't hit all at once. Keep this on even with a webhook; it catches pushes the webhook missed.",
+      "invalid": "Use a whole number from 1 to 1440.",
+      "save": "Save update settings",
+      "saving": "Saving…",
+      "saved": "Saved the update settings.",
+      "saveFailed": "Couldn't save the update settings. Try again.",
+      "fixed": "A fixed commit has nothing to check.",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "lastChecked": "Last checked",
+      "neverChecked": "Not checked yet"
     }
   }
 }

@@ -432,10 +432,35 @@ describe("the Git strip", () => {
     checking: false,
     autoDeploy: false,
     autoDeployPaused: false,
+    pollEnabled: true,
+    pollMinutes: 5,
   };
 
   beforeEach(() => {
     detail = { ...detail, source: "git", state: "running", git };
+  });
+
+  it("adds the Git tab last, linking to the Git tab, for a stack from a repository only", async () => {
+    mount();
+    await screen.findByRole("tab", { name: "Git" });
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Editor",
+      "History",
+      "Resources",
+      "Logs",
+      "Git",
+    ]);
+    expect(screen.getByRole("tab", { name: "Git" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/git",
+    );
+    cleanup();
+    // The second page starts from what the server answers, not from what the first one cached.
+    client.clear();
+    detail = { ...detail, source: "inline", git: undefined };
+    mount();
+    await screen.findByRole("tab", { name: "Overview" });
+    expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
   });
 
   it("is under the header and above the tabs of a git stack, and its Git badge names the repository and the ref", async () => {
