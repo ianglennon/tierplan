@@ -147,7 +147,10 @@ export function useCheckStackGit(
       setPolling(true);
     },
     onError: (e) => onError?.(e),
-    onSettled: () => invalidateStacks(queryClient, envId),
+    onSettled: () => {
+      invalidateStacks(queryClient, envId);
+      void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
+    },
   });
 
   // While waiting, the stack is read every 2 s by an observer of its own: the page's observer keeps its 30 s.
@@ -163,9 +166,12 @@ export function useCheckStackGit(
     answers > startCount.current &&
     stack.data?.git?.checking !== true;
 
+  // The check has ended: a sync error it raised or cleared is read by the bell now, not at its next poll.
   useEffect(() => {
-    if (settled) setPolling(false);
-  }, [settled]);
+    if (!settled) return;
+    setPolling(false);
+    void queryClient.invalidateQueries({ queryKey: ENV_WARNINGS_KEY });
+  }, [settled, queryClient]);
 
   useEffect(() => {
     if (!polling) return;
