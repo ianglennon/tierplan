@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { LIST_REFETCH_MS } from "@/api/resources";
+import { STACK_GIT_POLL_MS } from "@/api/stack-git";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { StackListSearch, StackListSearchPatch } from "@/features/stacks/list-search";
 import { StackList } from "@/features/stacks/stack-list";
@@ -14,6 +16,7 @@ import "@/i18n";
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 import { TestRouter } from "@/test-router";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const ENV = "e1";
 
@@ -1261,6 +1264,59 @@ describe("StackList git stacks", () => {
     fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Check now" }));
     await waitFor(() => expect(checks).toEqual([`/api/env/${ENV}/stacks/web/git/check`]));
+  });
+
+  it("goes on waiting for a check after the menu closed, and reads the list again so the badge follows the answer", async () => {
+    stacks = { items: [gitStack("web")] };
+    // What the server answers for the stack while the check runs, and once it has ended.
+    let checking = true;
+    const base = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (req) => {
+      const r = req as Request;
+      const path = new URL(r.url).pathname;
+      if (r.method === "POST" && path === `/api/env/${ENV}/stacks/web/git/check`) {
+        return Response.json({ checking: true }, { status: 202 });
+      }
+      if (r.method === "GET" && path === `/api/env/${ENV}/stacks/web`) {
+        return Response.json({
+          ...gitStack("web"),
+          envId: ENV,
+          git: git({ checking }),
+        });
+      }
+      return (base as (r: Request) => Promise<Response>)(r);
+    });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const item = await screen.findByRole("menuitem", { name: "Check now" });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(item);
+      // The menu is gone with the click, and the check is still waited for.
+      await waitUnderFakeClock(() => expect(screen.queryByRole("menuitem")).toBeNull());
+      // The answer to the click has come and the lists were read once for it, before the check ended.
+      await waitUnderFakeClock(() => {
+        expect(client.isMutating()).toBe(0);
+        expect(client.isFetching()).toBe(0);
+      });
+      const listReads = requests.length;
+      // The server has ended the check and found the stack behind: the next poll of the stack says so.
+      checking = false;
+      stacks = {
+        items: [gitStack("web", { status: "behind", behind: 2, headSha: "f".repeat(40) })],
+      };
+      const before = Date.now();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STACK_GIT_POLL_MS);
+      });
+      await waitUnderFakeClock(() => expect(screen.getByText("Behind 2")).toBeTruthy());
+      // It came from the end of the check and not from the list's own 30 s refresh.
+      expect(Date.now() - before).toBeLessThan(LIST_REFETCH_MS);
+      expect(requests.length).toBeGreaterThan(listReads);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reads Pull & redeploy… for a git stack in the place of Deploy…, and Review update only while it is behind", async () => {
