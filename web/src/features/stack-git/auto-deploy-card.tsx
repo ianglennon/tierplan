@@ -187,7 +187,8 @@ export function AutoDeployCard({ envId, stackId, stackName, git }: AutoDeployCar
         stackName={stackName}
         gitRef={git.ref}
         folder={git.folder}
-        environmentName={envName}
+        // The consent names the environment: until its name is known it names the ID, never nothing.
+        environmentName={envName || envId}
         open={confirming}
         onOpenChange={setConfirming}
       />
