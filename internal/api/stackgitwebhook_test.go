@@ -467,3 +467,362 @@ func TestWebhookRotateKeepsTheShape(t *testing.T) {
 		})
 	}
 }
+
+// webhookSummaryAnswer is the webhook of the git route.
+type webhookSummaryAnswer struct {
+	Flavour    string `json:"flavour"`
+	Placement  string `json:"placement"`
+	Address    string `json:"address"`
+	Last4      string `json:"last4"`
+	LastAt     string `json:"lastAt"`
+	LastResult string `json:"lastResult"`
+	Owner      struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"owner"`
+	Paused bool `json:"paused"`
+}
+
+// readWebhook reads the git route as u and answers the raw body and its webhook, nil when it has none.
+func (h *hookFix) readWebhook(t *testing.T, u credentialUser) (string, *webhookSummaryAnswer) {
+	t.Helper()
+	rec := h.f.credCall(t, u, http.MethodGet, h.gitRoute(h.stackID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET git: %d %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Webhook *webhookSummaryAnswer `json:"webhook"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Body.String(), out.Webhook
+}
+
+// storedWebhook reads the webhook columns of the stack.
+func (h *hookFix) storedWebhook(t *testing.T) (tokenHash, sealed, last4, flavour, placement, createdBy string) {
+	t.Helper()
+	if err := h.f.st.Read.QueryRow(`SELECT webhook_token_hash, webhook_secret_sealed, webhook_secret_last4, webhook_flavour, webhook_placement, webhook_created_by
+		FROM stack_git WHERE stack_id = ?`, h.stackID).Scan(&tokenHash, &sealed, &last4, &flavour, &placement, &createdBy); err != nil {
+		t.Fatal(err)
+	}
+	return
+}
+
+// ownedWebhooks counts the owned-automation rows of the stack's webhook.
+func (h *hookFix) ownedWebhooks(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := h.f.st.Read.QueryRow(`SELECT count(*) FROM owned_resources WHERE kind = ? AND resource_id = ?`, gitsync.KindGitWebhook, h.stackID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// signedIn adds a user with a role on the environment and signs them in.
+func (h *hookFix) signedIn(t *testing.T, name, role string) credentialUser {
+	t.Helper()
+	h.f.addUser(t, name, false)
+	h.f.addEnvRole(t, name, h.env, role)
+	cookie, csrf := h.f.signIn(t, name, false)
+	return credentialUser{cookie, csrf}
+}
+
+// TestWebhookRemove: the address is a 404 from then on, nothing of the webhook is kept, and a new one can be made.
+func TestWebhookRemove(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	old := h.makeWebhook(t, "github", "")
+	body := `{"ref":"refs/heads/main"}`
+	if h.ownedWebhooks(t) != 1 {
+		t.Fatal("the webhook has no owned-automation row")
+	}
+
+	rec := h.f.credCall(t, h.admin, http.MethodDelete, h.webhookRoute(), "")
+	if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Fatalf("remove: %d %q, want 204 and no body", rec.Code, rec.Body)
+	}
+	unknown := h.deliver(t, strings.Repeat("Y", 43), body, githubSig(old.Secret, body))
+	gone := h.deliver(t, old.token(), body, githubSig(old.Secret, body))
+	if gone.Code != http.StatusNotFound || gone.Body.Len() != 0 || gone.Header().Get("Cache-Control") != unknown.Header().Get("Cache-Control") {
+		t.Errorf("removed address: %d %q, want the empty 404 of an unknown token", gone.Code, gone.Body)
+	}
+	if hash, sealed, last4, flavour, placement, createdBy := h.storedWebhook(t); hash != "" || sealed != "" || last4 != "" || flavour != "" || placement != "" || createdBy != "" {
+		t.Errorf("stored webhook = %q %q %q %q %q %q, want every column back to its default", hash, sealed, last4, flavour, placement, createdBy)
+	}
+	if n := h.ownedWebhooks(t); n != 0 {
+		t.Errorf("owned %s rows = %d, want 0: the automation is deregistered with the webhook", gitsync.KindGitWebhook, n)
+	}
+	if _, wh := h.readWebhook(t, h.admin); wh != nil {
+		t.Errorf("the git route still answers a webhook: %+v", wh)
+	}
+	if got := h.readGit(t, h.admin, h.stackID); got.Status != "unknown" || got.CheckedAt != "" {
+		t.Errorf("state = %+v, want never checked: the removed address started nothing", got)
+	}
+
+	// Removing again, or rotating a webhook that is not there, is a 404 that says so.
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"remove again": h.f.credCall(t, h.admin, http.MethodDelete, h.webhookRoute(), ""),
+		"rotate":       h.f.credCall(t, h.admin, http.MethodPost, h.webhookRoute()+"/rotate", ""),
+	} {
+		if rec.Code != http.StatusNotFound || problemType(t, rec) != "webhook_not_found" {
+			t.Errorf("%s: %d %s, want 404 webhook_not_found", name, rec.Code, rec.Body)
+		}
+	}
+
+	// The removal is audited, with the stack and the git host and nothing secret.
+	removed := h.f.auditRowsOf(t, audit.ActionGitWebhookRemoved)
+	if len(removed) != 1 {
+		t.Fatalf("git.webhook_removed rows = %d, want 1 (a refused removal writes none)", len(removed))
+	}
+	if r := removed[0]; r.TargetType != "stack" || r.TargetID != h.stackID || r.EnvID != h.env || r.Details["stack"] != "web" || r.Details["flavour"] != "github" {
+		t.Errorf("audit row = %+v", r)
+	}
+	for what, secret := range map[string]string{"the token": old.token(), "the secret": old.Secret, "the address": old.URL} {
+		if strings.Contains(h.auditAndLogDump(t), secret) {
+			t.Errorf("the audit log or the logs hold %s", what)
+		}
+	}
+
+	// A new webhook can be made; the old address stays dead and the new one works.
+	fresh := h.makeWebhook(t, "gitlab", "")
+	if fresh.token() == old.token() {
+		t.Fatal("the new webhook has the old token")
+	}
+	if h.ownedWebhooks(t) != 1 {
+		t.Error("the new webhook has no owned-automation row")
+	}
+	if rec := h.deliver(t, old.token(), body, githubSig(old.Secret, body)); rec.Code != http.StatusNotFound {
+		t.Errorf("old address after a new webhook: %d, want 404", rec.Code)
+	}
+	if rec := h.deliver(t, fresh.token(), body, map[string]string{"X-Gitlab-Token": fresh.Secret}); rec.Code != http.StatusAccepted {
+		t.Errorf("new address: %d, want 202", rec.Code)
+	}
+	h.awaitChecks(t)
+}
+
+// TestWebhookSummaryHasNoSecret: after the show-once answer the git route says what a webhook is and how it last fared,
+// and never what it needs to be called (T-09-98).
+func TestWebhookSummaryHasNoSecret(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	if raw, wh := h.readWebhook(t, h.admin); wh != nil || strings.Contains(raw, `"webhook"`) {
+		t.Fatalf("a stack with no webhook answers one: %s", raw)
+	}
+
+	for name, tc := range map[string]struct {
+		flavour, placement string
+	}{
+		"github": {"github", ""}, "generic in the address": {"generic", "path"}, "generic bearer": {"generic", "header"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newOpenHookFix(t)
+			wh := h.makeWebhook(t, tc.flavour, tc.placement)
+			_, sealed, _, _, _, _ := h.storedWebhook(t)
+			viewer := h.signedIn(t, "viewer", "viewer")
+			updates := h.f.credCall(t, h.admin, http.MethodPut, h.gitRoute(h.stackID)+"/updates", `{"pollEnabled":true,"pollMinutes":5}`)
+			if updates.Code != http.StatusOK {
+				t.Fatalf("PUT updates: %d %s", updates.Code, updates.Body)
+			}
+
+			for who, raw := range map[string]string{
+				"admin":              func() string { r, _ := h.readWebhook(t, h.admin); return r }(),
+				"viewer":             func() string { r, _ := h.readWebhook(t, viewer); return r }(),
+				"the polling answer": updates.Body.String(),
+				"the stack list":     h.f.credCall(t, h.admin, http.MethodGet, "/api/env/"+h.env+"/stacks", "").Body.String(),
+				"the stack detail":   h.f.credCall(t, h.admin, http.MethodGet, "/api/env/"+h.env+"/stacks/"+h.stackID, "").Body.String(),
+			} {
+				for what, secret := range map[string]string{
+					"the token": wh.token(), "the token hash": gitsync.TokenHash(wh.token()), "the sealed secret": sealed, "the address": wh.URL,
+				} {
+					if secret != "" && strings.Contains(raw, secret) {
+						t.Errorf("%s: the answer holds %s", who, what)
+					}
+				}
+				if wh.Secret != "" && strings.Contains(raw, wh.Secret) {
+					t.Errorf("%s: the answer holds the secret", who)
+				}
+			}
+
+			_, got := h.readWebhook(t, viewer)
+			if got == nil {
+				t.Fatal("the git route answers no webhook")
+			}
+			wantLast4 := wh.token()[len(wh.token())-4:]
+			if wh.Secret != "" {
+				wantLast4 = wh.Secret[len(wh.Secret)-4:]
+			}
+			wantPlacement := "header"
+			if tc.flavour == "generic" && tc.placement != "header" {
+				wantPlacement = "path"
+			}
+			if got.Flavour != tc.flavour || got.Placement != wantPlacement || got.Last4 != wantLast4 || got.Paused || got.LastAt != "" || got.LastResult != "" {
+				t.Errorf("webhook = %+v, want %s in %s, last four %q, active and never called", got, tc.flavour, wantPlacement, wantLast4)
+			}
+			if got.Address != "http://example.com/hooks/git/\u2022\u2022\u2022\u2022" {
+				t.Errorf("address = %q, want the address with the token masked", got.Address)
+			}
+			if got.Owner.ID == "" || got.Owner.Name == "" {
+				t.Errorf("owner = %+v, want the person who made it", got.Owner)
+			}
+		})
+	}
+
+	// The last delivery and what became of it.
+	wh := h.makeWebhook(t, "github", "")
+	body := `{"ref":"refs/heads/main"}`
+	if rec := h.deliver(t, wh.token(), body, githubSig("not the secret", body)); rec.Code != http.StatusNotFound {
+		t.Fatalf("bad signature: %d", rec.Code)
+	}
+	if _, got := h.readWebhook(t, h.admin); got == nil || got.LastResult != "rejected" || got.LastAt == "" {
+		t.Errorf("after a bad signature = %+v, want rejected with a time", got)
+	}
+	if rec := h.deliver(t, wh.token(), body, githubSig(wh.Secret, body)); rec.Code != http.StatusAccepted {
+		t.Fatalf("delivery: %d", rec.Code)
+	}
+	h.awaitChecks(t)
+	if _, got := h.readWebhook(t, h.admin); got == nil || got.LastResult != "accepted" || got.LastAt == "" {
+		t.Errorf("after a delivery = %+v, want accepted with a time", got)
+	}
+}
+
+// TestWebhookOwnerRecheck: a webhook acts on its owner's authority. When the owner stops being an Admin the next
+// delivery does nothing and says nothing, the webhook shows paused, the pause is audited once, and handing the webhook
+// to an Admin makes it work again (P3 D-14, T-09-71).
+func TestWebhookOwnerRecheck(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	owner := h.signedIn(t, "owner", "admin")
+	h.signedIn(t, "heir", "admin")
+	rec, wh := h.createWebhook(t, owner, `{"flavour":"github"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	body := `{"ref":"refs/heads/main"}`
+	sig := githubSig(wh.Secret, body)
+	if _, got := h.readWebhook(t, h.admin); got == nil || got.Paused || got.Owner.ID != "id-owner" || got.Owner.Name != "owner" {
+		t.Fatalf("webhook = %+v, want active and owned by owner", got)
+	}
+	if rec := h.deliver(t, wh.token(), body, sig); rec.Code != http.StatusAccepted {
+		t.Fatalf("delivery by an Admin's webhook: %d, want 202", rec.Code)
+	}
+	h.awaitChecks(t)
+
+	// The owner drops to Operator.
+	if _, err := h.f.st.Write.Exec(`UPDATE role_assignments SET role_id = 'operator' WHERE id = ?`, "ra-owner-"+h.env); err != nil {
+		t.Fatal(err)
+	}
+	unknown := h.deliver(t, strings.Repeat("X", 43), body, sig)
+	for i := 0; i < 2; i++ {
+		got := h.deliver(t, wh.token(), body, sig)
+		if got.Code != http.StatusNotFound || got.Body.Len() != 0 || got.Header().Get("Cache-Control") != unknown.Header().Get("Cache-Control") {
+			t.Fatalf("delivery %d of a paused webhook: %d %q, want the empty 404 of an unknown token", i+1, got.Code, got.Body)
+		}
+	}
+	if _, got := h.readWebhook(t, h.admin); got == nil || !got.Paused || got.Owner.ID != "id-owner" {
+		t.Errorf("webhook = %+v, want paused, still owned by owner", got)
+	}
+	// Exactly one audit entry records the pause, however many deliveries came after it, and none of them checked.
+	paused := h.f.auditRowsOf(t, audit.ActionAutomationPaused)
+	if len(paused) != 1 || paused[0].TargetID != h.stackID || paused[0].Details["kind"] != gitsync.KindGitWebhook {
+		t.Errorf("automation.paused rows = %+v, want one, for this webhook", paused)
+	}
+	if got := h.readGit(t, h.admin, h.stackID); got.Status == "behind" || got.Checking {
+		t.Errorf("state = %+v: a paused webhook started a check", got)
+	}
+
+	// Handed to another Admin, it works again.
+	head := h.repo.Commit(t, map[string]string{"stacks/web/web.env": "A=after the hand over\n"}, "push after the hand over")
+	tr := h.f.call(t, authReq{method: http.MethodPost, path: "/api/owned/" + gitsync.KindGitWebhook + "/" + h.stackID + "/transfer", body: `{"ownerId":"id-heir"}`, cookie: h.admin.cookie, csrf: h.admin.csrf})
+	if tr.Code != http.StatusOK {
+		t.Fatalf("transfer: %d %s", tr.Code, tr.Body)
+	}
+	if _, got := h.readWebhook(t, h.admin); got == nil || got.Paused || got.Owner.ID != "id-heir" || got.Owner.Name != "heir" {
+		t.Errorf("webhook = %+v, want active and owned by heir", got)
+	}
+	if rec := h.deliver(t, wh.token(), body, sig); rec.Code != http.StatusAccepted {
+		t.Fatalf("delivery after the transfer: %d, want 202", rec.Code)
+	}
+	h.awaitChecks(t)
+	if got := h.readGit(t, h.admin, h.stackID); got.Status != "behind" || got.HeadSha != head {
+		t.Errorf("state = %+v, want behind at %s", got, head)
+	}
+	if resumed := h.f.auditRowsOf(t, audit.ActionAutomationResumed); len(resumed) != 1 {
+		t.Errorf("automation.resumed rows = %d, want 1", len(resumed))
+	}
+}
+
+// TestWebhookCreateRules: one webhook per stack, Admin of the environment only, and every management action audited.
+func TestWebhookCreateRules(t *testing.T) {
+	t.Parallel()
+	h := newOpenHookFix(t)
+	wh := h.makeWebhook(t, "github", "")
+	body := `{"ref":"refs/heads/main"}`
+
+	// A second webhook is refused and changes nothing.
+	rec, _ := h.createWebhook(t, h.admin, `{"flavour":"gitlab"}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "webhook_exists" {
+		t.Errorf("second webhook: %d %s, want 409 webhook_exists", rec.Code, rec.Body)
+	}
+	if rec := h.deliver(t, wh.token(), body, githubSig(wh.Secret, body)); rec.Code != http.StatusAccepted {
+		t.Errorf("the first webhook after a refused second one: %d, want 202", rec.Code)
+	}
+	h.awaitChecks(t)
+
+	// An Operator and a Viewer can do none of the three, and the webhook is as it was.
+	for _, role := range []string{"operator", "viewer"} {
+		u := h.signedIn(t, role, role)
+		for name, rec := range map[string]*httptest.ResponseRecorder{
+			"create": h.f.credCall(t, u, http.MethodPost, h.webhookRoute(), `{"flavour":"github"}`),
+			"rotate": h.f.credCall(t, u, http.MethodPost, h.webhookRoute()+"/rotate", ""),
+			"remove": h.f.credCall(t, u, http.MethodDelete, h.webhookRoute(), ""),
+		} {
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("%s as %s: %d %s, want 403", name, role, rec.Code, rec.Body)
+			}
+		}
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"create": h.f.call(t, authReq{method: http.MethodPost, path: h.webhookRoute(), body: `{"flavour":"github"}`}),
+		"rotate": h.f.call(t, authReq{method: http.MethodPost, path: h.webhookRoute() + "/rotate"}),
+		"remove": h.f.call(t, authReq{method: http.MethodDelete, path: h.webhookRoute()}),
+	} {
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a session: %d, want 401", name, rec.Code)
+		}
+	}
+	if hash, _, _, _, _, _ := h.storedWebhook(t); hash != gitsync.TokenHash(wh.token()) {
+		t.Error("a refused request changed the webhook")
+	}
+	if h.ownedWebhooks(t) != 1 {
+		t.Error("a refused request changed the owned-automation rows")
+	}
+
+	// An Admin of the environment who is not the owner may rotate and remove it.
+	other := h.signedIn(t, "other", "admin")
+	if rec, _ := h.rotateWebhook(t, other); rec.Code != http.StatusOK {
+		t.Fatalf("rotate by another Admin: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.f.credCall(t, other, http.MethodDelete, h.webhookRoute(), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove by another Admin: %d %s", rec.Code, rec.Body)
+	}
+
+	// Each management action left exactly one entry, made by the person, and none holds a secret.
+	for action, want := range map[string]int{audit.ActionGitWebhookCreated: 1, audit.ActionGitWebhookRotated: 1, audit.ActionGitWebhookRemoved: 1} {
+		rows := h.f.audits(t, action)
+		if len(rows) != want {
+			t.Errorf("%s rows = %d, want %d (a refused request writes none)", action, len(rows), want)
+			continue
+		}
+		if rows[0].ActorType != "user" || rows[0].TargetID != h.stackID || rows[0].Result != "success" {
+			t.Errorf("%s row = %+v, want a successful action by a user on the stack", action, rows[0])
+		}
+	}
+	dump := h.auditAndLogDump(t)
+	for what, secret := range map[string]string{"the token": wh.token(), "the secret": wh.Secret, "the address": wh.URL} {
+		if strings.Contains(dump, secret) {
+			t.Errorf("the audit log or the logs hold %s", what)
+		}
+	}
+}

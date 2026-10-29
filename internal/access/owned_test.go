@@ -603,3 +603,30 @@ func TestTransferOwnedRechecksTheNewOwnerInsideTheTransactionAgainstTheirGrantAs
 		t.Fatalf("owner = %s, want alice", o)
 	}
 }
+
+// Deregistering an automation (plan 09-23): the row goes with the resource it ran for, nothing else does, and doing it
+// twice is not an error.
+func TestDeregisterOwnedForgetsOnlyThatAutomationAndTwiceIsNotAnError(t *testing.T) {
+	f := newOwnedFixture(t)
+	f.addUser(t, "alice")
+	f.assign(t, "alice", "operator", "env-a")
+	f.register(t, syncResource("alice"))
+	other := syncResource("alice")
+	other.ResourceID = "r2"
+	f.register(t, other)
+
+	for range 2 {
+		f.inTx(t, func(tx *sql.Tx, q *sqlc.Queries) error {
+			return f.svc.DeregisterOwnedTx(f.ctx, tx, q, kindTestSync, "r1")
+		})
+	}
+	if _, err := f.svc.GetOwned(f.ctx, kindTestSync, "r1"); !errors.Is(err, access.ErrOwnedNotFound) {
+		t.Errorf("the deregistered automation = %v, want not found", err)
+	}
+	if got := f.state(t, kindTestSync, "r2"); got != access.OwnedActive {
+		t.Errorf("the other automation = %q, want it untouched", got)
+	}
+	if _, _, err := f.svc.RunAs(f.ctx, kindTestSync, "r1", "system:gitsync"); !errors.Is(err, access.ErrNotFound) {
+		t.Errorf("RunAs of a deregistered automation = %v, want not found", err)
+	}
+}
