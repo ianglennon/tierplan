@@ -174,6 +174,9 @@ describe("UpdateImagesDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
     expect(screen.getByText("0 services selected")).toBeTruthy();
     expect(submit().getAttribute("aria-disabled")).toBe("true");
+    // G-09-8c: aria-disabled alone does not fade the Button primitive; the call site must.
+    expect(submit().className).toContain("aria-disabled:cursor-not-allowed");
+    expect(submit().className).toContain("aria-disabled:opacity-50");
     expect(screen.getAllByText("Tick at least one service.").length).toBeGreaterThan(0);
     fireEvent.click(submit());
     expect(reviews).toHaveLength(0);

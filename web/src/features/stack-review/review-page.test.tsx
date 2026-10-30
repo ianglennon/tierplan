@@ -166,6 +166,13 @@ function mount(props: Partial<Parameters<typeof ReviewPage>[0]> = {}) {
 const posts = (suffix: string) =>
   sent.filter((s) => s.method === "POST" && s.path.endsWith(suffix));
 const deployButton = () => screen.getByRole("button", { name: /^(Deploy stack|Starting…)$/ });
+// G-09-8c: the Button primitive styles only native :disabled, so a button that is only aria-disabled
+// must carry the aria-disabled variants to look off. jsdom has no computed style, so this pins the
+// classes; the faded look is the human check in plan 09-36.
+function expectLooksDisabled(button: HTMLElement) {
+  expect(button.className).toContain("aria-disabled:cursor-not-allowed");
+  expect(button.className).toContain("aria-disabled:opacity-50");
+}
 
 describe("the page", () => {
   it("is titled for the stack and says which environment the change is on", async () => {
@@ -451,6 +458,7 @@ describe("Deploy stack", () => {
     fireEvent.click(deployButton());
     fireEvent.click(deployButton());
     expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expectLooksDisabled(deployButton());
     release(Response.json({ jobId: "j1", revision: 3 }, { status: 202 }));
     await waitFor(() => expect(onDeployed).toHaveBeenCalledTimes(1));
     expect(posts("/deploys")).toHaveLength(1);
@@ -616,6 +624,7 @@ describe("what stops a deploy", () => {
       "/env/e1/stacks/s1/editor?file=compose.yaml&line=4",
     );
     expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expectLooksDisabled(deployButton());
     expect(reasonText()).toBe("Fix 2 errors first.");
     fireEvent.click(deployButton());
     expect(posts("/deploys")).toHaveLength(0);
@@ -657,6 +666,9 @@ describe("what stops a deploy", () => {
     await screen.findByText("This needs Admin: privileged: true.");
     expect(reasonText()).toBe("Needs Admin to use extra privileges");
     expect(deployButton().getAttribute("aria-disabled")).toBe("true");
+    expectLooksDisabled(deployButton());
+    fireEvent.click(deployButton());
+    expect(posts("/deploys")).toHaveLength(0);
   });
 
   it("joins several kinds of host access into one sentence", async () => {
@@ -1195,6 +1207,7 @@ describe("in roll back mode", () => {
       await screen.findByText("Running already matches revision #1. There's nothing to roll back."),
     ).toBeTruthy();
     expect(rollbackButton().getAttribute("aria-disabled")).toBe("true");
+    expectLooksDisabled(rollbackButton());
   });
 
   it("reads Pinned (revision #n) for every service, with no New row and no raw note", async () => {
@@ -1353,6 +1366,7 @@ describe("in restore mode", () => {
       await screen.findByText("Running already matches revision #3. There's nothing to restore."),
     ).toBeTruthy();
     expect(restoreButton().getAttribute("aria-disabled")).toBe("true");
+    expectLooksDisabled(restoreButton());
     expect(screen.getAllByText("No drift to restore.").length).toBeGreaterThan(0);
   });
 
