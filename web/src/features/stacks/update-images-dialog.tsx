@@ -376,7 +376,7 @@ export function UpdateImagesDialog({ stack, open, onOpenChange }: UpdateImagesDi
           </Button>
           <Button
             type="button"
-            className="max-md:h-11"
+            className="max-md:h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
             aria-disabled={blocked || submitting ? true : undefined}
             aria-describedby={reason && !loading && !loadFailed ? reasonId : undefined}
             onClick={() => void submit()}
