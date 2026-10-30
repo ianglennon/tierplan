@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-const IMAGE = "ghcr.io/ianglennon/bayplan";
+const IMAGE = "ghcr.io/ianglennon/coaming";
 
 // A release is exactly "1.2.3" or "v1.2.3": no pre-release suffix, and none of
 // the extra "-3-gabc1234" a build between tags carries.
@@ -16,14 +16,14 @@ export function imageTag(version: string): string {
   return match ? `${match[1]}.${match[2]}` : "edge";
 }
 
-// dockerRunSnippet is the command that starts Bayplan with a data volume and
+// dockerRunSnippet is the command that starts Coaming with a data volume and
 // the Docker socket mounted, for the "no Docker socket" screens (D-08).
 // `version` is the running build's version from GET /api/version.
 export function dockerRunSnippet(version: string): string {
   return [
-    "docker run -d --name bayplan --restart unless-stopped \\",
+    "docker run -d --name coaming --restart unless-stopped \\",
     "  -p 7480:7480 \\",
-    "  -v bayplan-data:/data \\",
+    "  -v coaming-data:/data \\",
     "  -v /var/run/docker.sock:/var/run/docker.sock \\",
     `  ${IMAGE}:${imageTag(version)}`,
   ].join("\n");

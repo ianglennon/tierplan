@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Golden path 3 (D-80): the dashboard tiles equal what the dind daemon reports,
-// and a network created behind Bayplan's back shows up in the events feed and
+// and a network created behind Coaming's back shows up in the events feed and
 // in the Networks tile without a page reload (ENV-07).
 
 import type { Page } from "@playwright/test";
@@ -32,10 +32,10 @@ function countText(n: number, noun: string): string {
 
 const envIdOf = openFirstEnvironment;
 
-// The network this spec creates behind Bayplan's back carries a name of its own
+// The network this spec creates behind Coaming's back carries a name of its own
 // per run and this label, so a run finds and removes what an earlier one left and
 // the feed row asserted below is this run's, not an older run's.
-const NETWORK_LABEL = "bayplan.e2e=dashboard";
+const NETWORK_LABEL = "coaming.e2e=dashboard";
 
 test("the tiles equal the engine's counts and a new network appears live", async ({ page }) => {
   // Something in every list, with no registry to reach: an image imported from
@@ -127,15 +127,15 @@ async function liveNetworkAppears(
   }
 }
 
-test("Bayplan reads its own container ID from inside the container", async ({ page }) => {
+test("Coaming reads its own container ID from inside the container", async ({ page }) => {
   const envId = await envIdOf(page);
   const res = await page.request.get(at(`/api/env/${envId}/summary`));
   expect(res.ok()).toBe(true);
   const summary = (await res.json()) as { selfContainerId?: string };
 
-  // What the engine hosting the stack calls Bayplan's container, against what
-  // Bayplan read from /proc/self/mountinfo inside it (coverage D5, RESEARCH A2).
-  const fullId = docker("inspect", "-f", "{{.Id}}", compose("ps", "-q", "bayplan").trim());
+  // What the engine hosting the stack calls Coaming's container, against what
+  // Coaming read from /proc/self/mountinfo inside it (coverage D5, RESEARCH A2).
+  const fullId = docker("inspect", "-f", "{{.Id}}", compose("ps", "-q", "coaming").trim());
   expect(fullId).toMatch(/^[0-9a-f]{64}$/);
   expect(summary.selfContainerId, "selfContainerId").toBeTruthy();
   expect(summary.selfContainerId?.length).toBeGreaterThanOrEqual(12);

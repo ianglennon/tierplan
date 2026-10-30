@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -19,11 +19,11 @@ import { makeMe } from "@/test-me";
 // announceBase does what the server does when it renders index.html (plan
 // 02-03): it puts the base path in a meta tag the SPA reads once.
 function announceBase(base: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
   if (base === null) return;
   const meta = document.createElement("meta");
-  meta.name = "bayplan-base";
+  meta.name = "coaming-base";
   meta.content = base;
   document.head.append(meta);
 }
@@ -148,7 +148,7 @@ beforeEach(() => {
           version: "v0.1.0",
         });
       }
-      if (path === "/third-party-notices.json" || path === "/bayplan/third-party-notices.json") {
+      if (path === "/third-party-notices.json" || path === "/coaming/third-party-notices.json") {
         return noticesAnswer();
       }
       return Response.json({}, { status: 404 });
@@ -254,26 +254,26 @@ describe("General tab", () => {
 
   it("asks before moving to a different origin and sends nothing on Cancel", async () => {
     await openGeneral();
-    fireEvent.change(urlField(), { target: { value: "https://bayplan.example" } });
+    fireEvent.change(urlField(), { target: { value: "https://coaming.example" } });
     fireEvent.click(saveButton());
 
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
-    expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
+    expect(within(dialog).getByText(new RegExp(`You're using Coaming at ${ORIGIN}`))).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(patches()).toHaveLength(0);
-    expect(urlField().value).toBe("https://bayplan.example");
+    expect(urlField().value).toBe("https://coaming.example");
   });
 
   it("names the origin plus the base path as the address in use under a base", async () => {
-    announceBase("/bayplan");
+    announceBase("/coaming");
     try {
       await openGeneral();
-      fireEvent.change(urlField(), { target: { value: "https://bayplan.example" } });
+      fireEvent.change(urlField(), { target: { value: "https://coaming.example" } });
       fireEvent.click(saveButton());
       const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
       expect(
-        within(dialog).getByText(`You're using Bayplan at ${ORIGIN}/bayplan.`, { exact: false }),
+        within(dialog).getByText(`You're using Coaming at ${ORIGIN}/coaming.`, { exact: false }),
       ).toBeTruthy();
     } finally {
       announceBase(null);
@@ -282,24 +282,24 @@ describe("General tab", () => {
 
   it("changes the public URL after the warning is confirmed", async () => {
     await openGeneral();
-    fireEvent.change(urlField(), { target: { value: "https://bayplan.example" } });
+    fireEvent.change(urlField(), { target: { value: "https://coaming.example" } });
     fireEvent.click(saveButton());
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
 
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(patches()).toHaveLength(1);
-    expect(patches()[0]?.body).toEqual({ publicUrl: "https://bayplan.example" });
+    expect(patches()[0]?.body).toEqual({ publicUrl: "https://coaming.example" });
   });
 
   it("does not ask when the new address is the one in use", async () => {
     settings.publicUrl = "https://old.example";
     await openGeneral();
-    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/bayplan` } });
+    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/coaming` } });
     fireEvent.click(saveButton());
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/bayplan` });
+    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/coaming` });
   });
 
   it("does not ask when only the name changes, even if the saved URL is not this origin", async () => {
@@ -318,7 +318,7 @@ describe("General tab", () => {
     expect(urlField().readOnly).toBe(true);
     expect(urlField().value).toBe("https://fixed.example");
     expect(screen.getByRole("img", { name: "Locked" })).toBeTruthy();
-    expect(screen.getByText("Set by the BAYPLAN_PUBLIC_URL environment variable.")).toBeTruthy();
+    expect(screen.getByText("Set by the COAMING_PUBLIC_URL environment variable.")).toBeTruthy();
 
     fireEvent.change(nameField(), { target: { value: "Renamed" } });
     fireEvent.click(saveButton());
@@ -329,11 +329,11 @@ describe("General tab", () => {
   it("shows inline field errors for an empty name or a relative URL and sends nothing", async () => {
     await openGeneral();
     fireEvent.change(nameField(), { target: { value: "   " } });
-    fireEvent.change(urlField(), { target: { value: "/bayplan" } });
+    fireEvent.change(urlField(), { target: { value: "/coaming" } });
     fireEvent.click(saveButton());
     expect(await screen.findByText("Enter a name.")).toBeTruthy();
     expect(
-      screen.getByText("Enter a full address such as https://bayplan.example.com."),
+      screen.getByText("Enter a full address such as https://coaming.example.com."),
     ).toBeTruthy();
     expect(nameField().getAttribute("aria-invalid")).toBe("true");
     expect(patches()).toHaveLength(0);
@@ -377,7 +377,7 @@ describe("General tab", () => {
     fireEvent.change(urlField(), { target: { value: `${ORIGIN}/x` } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Set by the BAYPLAN_PUBLIC_URL environment variable."),
+      await screen.findByText("Set by the COAMING_PUBLIC_URL environment variable."),
     ).toBeTruthy();
   });
 
@@ -432,16 +432,16 @@ describe("General tab", () => {
 describe("General tab: agent URL", () => {
   const CHANGE_AGENT = "Change the agent URL?";
   const TOLD =
-    "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Bayplan refuses agents that dial a different host or port: there's no fallback period.";
+    "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Coaming refuses agents that dial a different host or port: there's no fallback period.";
 
   it("shows the Agent URL field, mono, with its helper and placeholder, empty when none is set", async () => {
     await openGeneral();
     expect(agentField().value).toBe("");
-    expect(agentField().placeholder).toBe("https://bayplan.internal:7480");
+    expect(agentField().placeholder).toBe("https://coaming.internal:7480");
     expect(agentField().className).toContain("font-mono");
     expect(
       screen.getByText(
-        "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
+        "Leave empty to use the public URL. Set it if your hosts reach Coaming at a different address, such as an internal hostname.",
       ),
     ).toBeTruthy();
     expect(agentField().readOnly).toBe(false);
@@ -452,7 +452,7 @@ describe("General tab: agent URL", () => {
     await openGeneral();
     expect(
       screen.getByText(
-        "The address people use to reach Bayplan. If Bayplan runs under a path, include it, for example https://example.com/bayplan. It controls cookies and request origin checks.",
+        "The address people use to reach Coaming. If Coaming runs under a path, include it, for example https://example.com/coaming. It controls cookies and request origin checks.",
       ),
     ).toBeTruthy();
   });
@@ -476,7 +476,7 @@ describe("General tab: agent URL", () => {
         name: "Locked",
       }),
     ).toBeTruthy();
-    expect(screen.getByText("Set by the BAYPLAN_AGENT_URL environment variable.")).toBeTruthy();
+    expect(screen.getByText("Set by the COAMING_AGENT_URL environment variable.")).toBeTruthy();
 
     fireEvent.change(nameField(), { target: { value: "Renamed" } });
     fireEvent.click(saveButton());
@@ -486,10 +486,10 @@ describe("General tab: agent URL", () => {
 
   it("shows the full-address error for an invalid agent URL and sends nothing", async () => {
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "bayplan.internal" } });
+    fireEvent.change(agentField(), { target: { value: "coaming.internal" } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Enter a full address such as https://bayplan.example.com."),
+      await screen.findByText("Enter a full address such as https://coaming.example.com."),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
     expect(patches()).toHaveLength(0);
@@ -508,52 +508,52 @@ describe("General tab: agent URL", () => {
 
   it("sends only the agent URL, trimmed, and asks nothing when no agent is enrolled", async () => {
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "  https://bayplan.lan:7480  " } });
+    fireEvent.change(agentField(), { target: { value: "  https://coaming.lan:7480  " } });
     fireEvent.click(saveButton());
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(patches()[0]?.body).toEqual({ agentUrl: "https://bayplan.lan:7480" });
+    expect(patches()[0]?.body).toEqual({ agentUrl: "https://coaming.lan:7480" });
   });
 
   it("asks before changing the agent URL when agents are enrolled, says they are told and warns about the offline one", async () => {
     settings = settingsState({ enrolledAgents: 3, offlineAgents: 1 });
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
 
     const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(within(dialog).getByText(TOLD)).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "1 agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+        "1 agent is offline. It can't learn the new address, and Coaming will refuse it until you reinstall it with the new address or change the URL back.",
       ),
     ).toBeTruthy();
     // The sign-out warning is about the address a browser uses, not the agents'.
-    expect(within(dialog).queryByText(/You're using Bayplan at/)).toBeNull();
+    expect(within(dialog).queryByText(/You're using Coaming at/)).toBeNull();
     expect(patches()).toHaveLength(0);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(patches()).toHaveLength(0);
-    expect(agentField().value).toBe("https://bayplan.lan:7480");
+    expect(agentField().value).toBe("https://coaming.lan:7480");
 
     fireEvent.click(saveButton());
     const again = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     fireEvent.click(within(again).getByRole("button", { name: "Change agent URL" }));
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(patches()).toHaveLength(1);
-    expect(patches()[0]?.body).toEqual({ agentUrl: "https://bayplan.lan:7480" });
+    expect(patches()[0]?.body).toEqual({ agentUrl: "https://coaming.lan:7480" });
   });
 
   it("counts the offline agents in the plural and shows no warning when none is offline", async () => {
     settings = settingsState({ enrolledAgents: 5, offlineAgents: 2 });
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
     const dialog = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(
       within(dialog).getByText(
-        "2 agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back.",
+        "2 agents are offline. They can't learn the new address, and Coaming will refuse them until you reinstall them with the new address or change the URL back.",
       ),
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -563,7 +563,7 @@ describe("General tab: agent URL", () => {
 
     settings = settingsState({ enrolledAgents: 5, offlineAgents: 0 });
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
     const calm = await screen.findByRole("alertdialog", { name: CHANGE_AGENT });
     expect(within(calm).getByText(TOLD)).toBeTruthy();
@@ -577,27 +577,27 @@ describe("General tab: agent URL", () => {
       offlineAgents: 1,
     });
     await openGeneral();
-    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/bayplan` } });
+    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/coaming` } });
     fireEvent.click(saveButton());
 
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
-    expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
+    expect(within(dialog).getByText(new RegExp(`You're using Coaming at ${ORIGIN}`))).toBeTruthy();
     expect(within(dialog).getByText(TOLD)).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "1 agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
+        "1 agent is offline. It can't learn the new address, and Coaming will refuse it until you reinstall it with the new address or change the URL back.",
       ),
     ).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Change public URL" }));
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
-    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/bayplan` });
+    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/coaming` });
   });
 
   it("uses the public URL title when both URLs change", async () => {
     settings = settingsState({ publicUrl: "https://old.example", enrolledAgents: 1 });
     await openGeneral();
     fireEvent.change(urlField(), { target: { value: "https://new.example" } });
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
     expect(within(dialog).getByText(TOLD)).toBeTruthy();
@@ -605,30 +605,30 @@ describe("General tab: agent URL", () => {
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(patches()[0]?.body).toEqual({
       publicUrl: "https://new.example",
-      agentUrl: "https://bayplan.lan:7480",
+      agentUrl: "https://coaming.lan:7480",
     });
   });
 
   it("does not claim agents are told when the public URL changes under an agent URL: they keep dialing the agent URL", async () => {
     settings = settingsState({
       publicUrl: "https://old.example",
-      agentUrl: "https://bayplan.lan:7480",
+      agentUrl: "https://coaming.lan:7480",
       enrolledAgents: 2,
       offlineAgents: 1,
     });
     await openGeneral();
     // To the address in use: nothing to ask, nothing agents need to hear.
-    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/bayplan` } });
+    fireEvent.change(urlField(), { target: { value: `${ORIGIN}/coaming` } });
     fireEvent.click(saveButton());
     expect((await screen.findAllByText("Settings saved.")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/bayplan` });
+    expect(patches()[0]?.body).toEqual({ publicUrl: `${ORIGIN}/coaming` });
   });
 
   it("keeps the browser warning but not the agent paragraphs for a public URL change under an agent URL to another origin", async () => {
     settings = settingsState({
       publicUrl: ORIGIN,
-      agentUrl: "https://bayplan.lan:7480",
+      agentUrl: "https://coaming.lan:7480",
       enrolledAgents: 2,
       offlineAgents: 1,
     });
@@ -636,7 +636,7 @@ describe("General tab: agent URL", () => {
     fireEvent.change(urlField(), { target: { value: "https://elsewhere.example" } });
     fireEvent.click(saveButton());
     const dialog = await screen.findByRole("alertdialog", { name: "Change the public URL?" });
-    expect(within(dialog).getByText(new RegExp(`You're using Bayplan at ${ORIGIN}`))).toBeTruthy();
+    expect(within(dialog).getByText(new RegExp(`You're using Coaming at ${ORIGIN}`))).toBeTruthy();
     expect(within(dialog).queryByText(TOLD)).toBeNull();
     expect(within(dialog).queryByText(/can't learn the new address/)).toBeNull();
   });
@@ -660,15 +660,15 @@ describe("General tab: agent URL", () => {
     });
     await openGeneral();
     const note = await screen.findByText(/ws:\/\/10\.0\.0\.5:7480\/agent\/connect/);
-    expect(note.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(note.textContent).toContain("COAMING_AGENT_ALLOW_INSECURE");
     expect(note.closest('[role="alert"]')).not.toBeNull();
   });
 
   it("shows no refused-address warning when agents can use the address", async () => {
-    settings = settingsState({ agentEndpoint: "wss://bayplan.test/agent/connect" });
+    settings = settingsState({ agentEndpoint: "wss://coaming.test/agent/connect" });
     await openGeneral();
-    expect(screen.queryByText(/BAYPLAN_AGENT_ALLOW_INSECURE/)).toBeNull();
-    expect(screen.queryByText(/Agents can't connect to this Bayplan/)).toBeNull();
+    expect(screen.queryByText(/COAMING_AGENT_ALLOW_INSECURE/)).toBeNull();
+    expect(screen.queryByText(/Agents can't connect to this Coaming/)).toBeNull();
   });
 
   it("maps the server's invalid_agent_url to the same inline error", async () => {
@@ -682,10 +682,10 @@ describe("General tab: agent URL", () => {
         { status: 422, headers: { "Content-Type": "application/problem+json" } },
       );
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Enter a full address such as https://bayplan.example.com."),
+      await screen.findByText("Enter a full address such as https://coaming.example.com."),
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
   });
@@ -708,7 +708,7 @@ describe("General tab: agent URL", () => {
     ).toBeTruthy();
     expect(agentField().getAttribute("aria-invalid")).toBe("true");
     expect(
-      screen.queryByText("Enter a full address such as https://bayplan.example.com."),
+      screen.queryByText("Enter a full address such as https://coaming.example.com."),
     ).toBeNull();
   });
 
@@ -719,10 +719,10 @@ describe("General tab: agent URL", () => {
         { status: 409, headers: { "Content-Type": "application/problem+json" } },
       );
     await openGeneral();
-    fireEvent.change(agentField(), { target: { value: "https://bayplan.lan:7480" } });
+    fireEvent.change(agentField(), { target: { value: "https://coaming.lan:7480" } });
     fireEvent.click(saveButton());
     expect(
-      await screen.findByText("Set by the BAYPLAN_AGENT_URL environment variable."),
+      await screen.findByText("Set by the COAMING_AGENT_URL environment variable."),
     ).toBeTruthy();
   });
 
@@ -769,13 +769,13 @@ describe("About tab", () => {
   });
 
   it("reads the notices file under the base path the server announced (plan 02-32)", async () => {
-    announceBase("/bayplan");
+    announceBase("/coaming");
     try {
-      // Behind a proxy the file is at /bayplan/third-party-notices.json; a request
+      // Behind a proxy the file is at /coaming/third-party-notices.json; a request
       // to the root would reach whatever else the host serves there.
       renderAt("/settings/about");
       await screen.findByRole("region", { name: "Third-party notices list" });
-      expect(calls.some((c) => c.path === "/bayplan/third-party-notices.json")).toBe(true);
+      expect(calls.some((c) => c.path === "/coaming/third-party-notices.json")).toBe(true);
       expect(calls.some((c) => c.path === "/third-party-notices.json")).toBe(false);
     } finally {
       announceBase(null);

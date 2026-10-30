@@ -32,7 +32,7 @@
       "tooMany": "You already have 5 pulls running. Wait for one to finish.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "hostReadOnly": "This host is read-only (set on the host).",
-      "nodeUnreachable": "The node isn't connected to Bayplan right now. Try again when it's back.",
+      "nodeUnreachable": "The node isn't connected to Coaming right now. Try again when it's back.",
       "generic": "Couldn't start the pull. Try again.",
       "nodesUnknown": "One of the chosen nodes isn't part of this environment any more. Reload the page and choose again.",
       "nodesRequired": "Choose at least one node."
@@ -99,7 +99,7 @@
       "nodeUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only (set on the host).",
       "cancelled": "Cancelled before it finished on {{node}}.",
-      "interrupted": "Bayplan restarted before the pull finished on {{node}}. Try again.",
+      "interrupted": "Coaming restarted before the pull finished on {{node}}. Try again.",
       "generic": "The pull failed on {{node}}. Check the node and try again."
     },
     "toast": {

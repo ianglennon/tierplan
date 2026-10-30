@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # The agent image. goreleaser (dockers_v2) builds it: it puts the binary for
-# each platform at $TARGETPLATFORM/bayplan-agent in the build context and copies
+# each platform at $TARGETPLATFORM/coaming-agent in the build context and copies
 # the extra file agent/image/state/ to the same relative path. To build it by
 # hand, lay a context out the same way (`make agent-image` does).
 #
@@ -19,23 +19,23 @@ FROM gcr.io/distroless/static-debian13@sha256:58133991db06659feaabe0f4e97a35cebf
 
 ARG TARGETPLATFORM
 
-LABEL org.opencontainers.image.title="Bayplan agent" \
-      org.opencontainers.image.description="Connects one Docker host to a Bayplan server; it dials out, so the host needs no inbound port" \
-      org.opencontainers.image.source="https://github.com/ianglennon/bayplan" \
-      org.opencontainers.image.url="https://github.com/ianglennon/bayplan" \
+LABEL org.opencontainers.image.title="Coaming agent" \
+      org.opencontainers.image.description="Connects one Docker host to a Coaming server; it dials out, so the host needs no inbound port" \
+      org.opencontainers.image.source="https://github.com/ianglennon/coaming" \
+      org.opencontainers.image.url="https://github.com/ianglennon/coaming" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-      org.opencontainers.image.vendor="The Bayplan Authors"
+      org.opencontainers.image.vendor="The Coaming Authors"
 
-COPY $TARGETPLATFORM/bayplan-agent /usr/local/bin/bayplan-agent
+COPY $TARGETPLATFORM/coaming-agent /usr/local/bin/coaming-agent
 
 # The state directory is created here, owned by 1000 and private, so that a new
 # named volume mounted on it inherits that ownership and the agent needs no
 # CAP_CHOWN (RESEARCH A1, A16). The extra file only makes the directory
 # non-empty in the build context.
-COPY --chown=1000:1000 --chmod=0700 agent/image/state/ /var/lib/bayplan-agent/
-VOLUME ["/var/lib/bayplan-agent"]
+COPY --chown=1000:1000 --chmod=0700 agent/image/state/ /var/lib/coaming-agent/
+VOLUME ["/var/lib/coaming-agent"]
 
 # No HEALTHCHECK: a distroless image has no curl, and the server judges the
 # agent by its connection (heartbeats), not by a probe inside the container.
 
-ENTRYPOINT ["/usr/local/bin/bayplan-agent"]
+ENTRYPOINT ["/usr/local/bin/coaming-agent"]

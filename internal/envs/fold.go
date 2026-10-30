@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // ErrFoldNotOffered means the local host cannot be folded into that environment now:

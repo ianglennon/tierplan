@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -265,7 +265,7 @@ describe("RotateDialog step 2", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "1 service belongs to a stack, so Bayplan can't change it from here. db_password stays until it uses the new version.",
+        "1 service belongs to a stack, so Coaming can't change it from here. db_password stays until it uses the new version.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Create new version" })).toBeTruthy();
@@ -285,7 +285,7 @@ describe("RotateDialog step 2", () => {
     await toReview();
     expect(
       await screen.findByText(
-        "2 services belong to stacks, so Bayplan can't change them from here. db_password stays until they use the new version.",
+        "2 services belong to stacks, so Coaming can't change them from here. db_password stays until they use the new version.",
       ),
     ).toBeTruthy();
   });

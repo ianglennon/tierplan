@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -29,7 +29,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "acme/web:1",
   stack: "",
-  bayplanStackId: "",
+  coamingStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -140,7 +140,7 @@ describe("ScaleDialog", () => {
     expect(onOpenChange).not.toHaveBeenCalled();
   });
 
-  it("says which setting lets Bayplan change a service with host access, and never shows the code", async () => {
+  it("says which setting lets Coaming change a service with host access, and never shows the code", async () => {
     answer = () =>
       Response.json({
         results: [
@@ -158,7 +158,7 @@ describe("ScaleDialog", () => {
     fireEvent.change(field(), { target: { value: "5" } });
     fireEvent.click(confirm());
     const alert = await screen.findByText(
-      "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
+      "This swarm's manager agents don't let Coaming change services with host access. Set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
     );
     expect(alert.textContent).not.toContain("agent_host_policy");
     expect(screen.getByRole("dialog", { name: "Scale web" })).toBeTruthy();
@@ -204,8 +204,8 @@ describe("ScaleDialog", () => {
     expect(screen.queryByText(/belongs to stack/)).toBeNull();
   });
 
-  it("links the stack's name in the warning when Bayplan manages the stack, the text unchanged", () => {
-    mount({ ...web, stack: "shop", bayplanStackId: "stk-shop" });
+  it("links the stack's name in the warning when Coaming manages the stack, the text unchanged", () => {
+    mount({ ...web, stack: "shop", coamingStackId: "stk-shop" });
     const link = screen.getByRole("link", { name: "shop" });
     expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
     expect(link.closest('[role="status"]')?.textContent).toBe(
@@ -213,7 +213,7 @@ describe("ScaleDialog", () => {
     );
   });
 
-  it("keeps the stack's name as text in the warning when Bayplan does not manage the stack", () => {
+  it("keeps the stack's name as text in the warning when Coaming does not manage the stack", () => {
     mount({ ...web, stack: "shop" });
     expect(screen.queryByRole("link", { name: "shop" })).toBeNull();
   });
@@ -238,7 +238,7 @@ const worker: ServiceItem = {
 const agent: ServiceItem = {
   ...web,
   id: "id-agent",
-  name: "bayplan-agent",
+  name: "coaming-agent",
   mode: "global",
   desired: 3,
   running: 3,
@@ -301,7 +301,7 @@ describe("ScaleDialog: several services", () => {
     expect(rows.map((r) => r.querySelectorAll("td")[0]?.textContent)).toEqual([
       "web",
       "api",
-      "bayplan-agent",
+      "coaming-agent",
       "backup",
     ]);
     expect(newCount("web").value).toBe("3");
@@ -324,7 +324,7 @@ describe("ScaleDialog: several services", () => {
         .getAllByRole("row")
         .find((r) => r.querySelectorAll("td")[0]?.textContent === name) as HTMLElement;
     for (const [name, note] of [
-      ["bayplan-agent", "Global services can't be scaled."],
+      ["coaming-agent", "Global services can't be scaled."],
       ["backup", "Jobs can't be scaled here."],
     ] as const) {
       const row = rowOfName(name);
@@ -410,7 +410,7 @@ describe("ScaleDialog: several services", () => {
     expect(report.rows.map((r) => [r.name, r.result])).toEqual([
       ["web", "done"],
       ["api", "failed"],
-      ["bayplan-agent", "skipped"],
+      ["coaming-agent", "skipped"],
     ]);
     expect(report.rows[1]?.reason).toContain("changed by someone else");
     expect(report.rows[1]?.reason).not.toContain("service_changed");

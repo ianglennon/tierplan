@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync_test
 
@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Checking a repository folder before a stack exists (plan 09-12, GIT-08, D-09): the services, the problems, the

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -11,7 +11,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // What a revert does to a service or to one of its settings (D-25).
@@ -237,7 +237,7 @@ func specOf(raw json.RawMessage) json.RawMessage {
 }
 
 // causeOfRevert is the cause to name under a row: a scale explains the replica count and nothing else, any other
-// action of Bayplan's the whole service. A created or removed service has none to name.
+// action of Coaming's the whole service. A created or removed service has none to name.
 func causeOfRevert(c *DriftCause, r DriftRevert) *DriftCause {
 	if c == nil || r.Change != RevertChanged {
 		return nil
@@ -259,7 +259,7 @@ func maskReverts(rows []DriftRevert, m stacks.Masker) {
 	}
 }
 
-// rawSwarmRows are the rows of what a deploy would do to the swarm services, unmasked and with Bayplan's ownership
+// rawSwarmRows are the rows of what a deploy would do to the swarm services, unmasked and with Coaming's ownership
 // labels taken out on both sides, as drift compares them (so that the two are comparable): Current is what runs and
 // Next what the deploy sends.
 func rawSwarmRows(desired, running map[string]swarm.ServiceSpec) []stacks.ServiceChange {

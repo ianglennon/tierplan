@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -11,18 +11,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The pre-pull of a standalone deploy (plan 07-21, D-27, IMG-02, STK-09): every pinned image the host does not
-// have is pulled by Bayplan, with the credential it stores, before the Compose SDK runs, so the SDK finds the
+// have is pulled by Coaming, with the credential it stores, before the Compose SDK runs, so the SDK finds the
 // images locally and never needs a credential. Each pull is a step of the job with its progress.
 
 const (

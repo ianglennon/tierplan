@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // StackReviewRequest is the body of POST .../review.
@@ -44,11 +44,11 @@ type StackReviewSummaryBody struct {
 	Services      StackReviewCountsBody `json:"services" doc:"Services"`
 	Networks      StackReviewCountsBody `json:"networks" doc:"Networks the stack owns"`
 	Volumes       StackReviewCountsBody `json:"volumes" doc:"Volumes the stack's deploy would create on a standalone host. Always zero on a swarm: the engine of each node makes a named volume when a task first uses it"`
-	Secrets       StackReviewCountsBody `json:"secrets" doc:"Secrets Bayplan makes from the stack's files; a changed file counts as changed"`
-	Configs       StackReviewCountsBody `json:"configs" doc:"Configs Bayplan makes from the stack's files; a changed file counts as changed"`
+	Secrets       StackReviewCountsBody `json:"secrets" doc:"Secrets Coaming makes from the stack's files; a changed file counts as changed"`
+	Configs       StackReviewCountsBody `json:"configs" doc:"Configs Coaming makes from the stack's files; a changed file counts as changed"`
 	ImagesPinned  int                   `json:"imagesPinned" doc:"Services that keep or carry a digest"`
 	ImagesNew     int                   `json:"imagesNew" doc:"Services whose digest the review just looked up"`
-	OwnershipOnly int                   `json:"ownershipOnly" doc:"Services of an adopted stack's first deploy that differ from what runs in nothing but Bayplan's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review"`
+	OwnershipOnly int                   `json:"ownershipOnly" doc:"Services of an adopted stack's first deploy that differ from what runs in nothing but Coaming's ownership labels: the deploy recreates each of them (a brief restart) and changes nothing else. They are not counted in services.changed. Zero for any other review"`
 	RevertsDrift  int                   `json:"revertsDrift" doc:"How many changes made outside the stack this deploy, update or roll back would put back (revertsDrift in the answer). Zero for a restore, which is the drift itself"`
 }
 
@@ -59,7 +59,7 @@ type StackRevertsDriftBody struct {
 	Path    string               `json:"path" doc:"For changed, the setting's path in the service's settings (the keys joined with a dot, an environment entry as Env[NAME]); empty otherwise"`
 	Live    string               `json:"live" doc:"For changed, the value that runs now as text, masked as the rest of the review; empty when the setting is not there now"`
 	Desired string               `json:"desired" doc:"For changed, the value the deploy sets, masked the same way; empty when the deploy removes the setting"`
-	Cause   *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Bayplan since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Bayplan"`
+	Cause   *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the setting differs from the deployed revision, when the audit log (a scale, roll back or edit from Coaming since the revision deployed) knows; left out when it does not, which a reader says is a change made outside Coaming"`
 }
 
 // StackReviewImageBody is one service's image.
@@ -83,18 +83,18 @@ type StackReviewServiceBody struct {
 	HiddenChanges []string       `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden, such as TaskTemplate.ContainerSpec.Env[API_KEY]. The values are never sent"`
 	Settings      int            `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
 	Because       string         `json:"because,omitempty" doc:"Left out unless set: for a recreated or restarted service, the name of the recreated service that carries it"`
-	OwnershipOnly bool           `json:"ownershipOnly,omitempty" doc:"Left out unless true: true when the service differs from what runs in nothing but Bayplan's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false"`
+	OwnershipOnly bool           `json:"ownershipOnly,omitempty" doc:"Left out unless true: true when the service differs from what runs in nothing but Coaming's ownership labels, which the first deploy of an adopted stack adds. Its current and next show only those labels. A service with a real change as well is false"`
 }
 
 // StackReviewAdoptionBody is what the first deploy of an adopted stack does that the file does not say.
 type StackReviewAdoptionBody struct {
-	Pending       bool `json:"pending" doc:"True: the deploy is the stack's first since it was adopted, and adds Bayplan's ownership labels to every service"`
+	Pending       bool `json:"pending" doc:"True: the deploy is the stack's first since it was adopted, and adds Coaming's ownership labels to every service"`
 	OwnershipOnly int  `json:"ownershipOnly" doc:"How many services the deploy recreates for the ownership labels alone (they restart briefly)"`
 }
 
 // StackReviewObjectBody is a network, secret or config a deploy would add, change or remove.
 type StackReviewObjectBody struct {
-	Change string `json:"change" enum:"added,changed,removed,external" doc:"What a deploy would do; external is an object the stack only names and Bayplan never touches"`
+	Change string `json:"change" enum:"added,changed,removed,external" doc:"What a deploy would do; external is an object the stack only names and Coaming never touches"`
 	Kind   string `json:"kind" enum:"network,volume,secret,config" doc:"What it is. A volume is listed for a standalone host only: a swarm creates its volumes on the node that first uses one"`
 	Name   string `json:"name" doc:"Its name in the compose file (the swarm name for an external one)"`
 	Detail string `json:"detail" doc:"A sentence for the row, or empty"`
@@ -217,7 +217,7 @@ func registerStackReview(r *httpx.Router, d StacksDeps) {
 			"Right after a deploy, a review shows no change. yaml is the one comparison with the last deploy and not with what is running: the rendered stack against the masked rendering stored with the last good revision, as hunks computed here with 3 lines of context. " +
 			"concurrent is set when someone deployed after the draft was started, with what that deployment changed and what the draft changed, file by file; the deploy then needs acknowledgeConcurrent. Send the answer's draftVersion and pins with the deploy, and the deploy uses exactly these digests. " +
 			"For a caller below env Admin, host access (a bind of the Docker socket or of a host path outside /srv, /mnt and /media, an added capability, privileged, the host network, a device), judged on the values of the stack's variables, is a blocking needs_admin problem at its line, and needsAdmin names the kinds. " +
-			"A name that something Bayplan does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
+			"A name that something Coaming does not manage holds is a blocking stack_name_clash problem, and another stack operation running on the environment is a blocking operation_locked problem. " +
 			"On a standalone host the review pins the images the same way and compares each service with the containers that run it: the service a deploy would send, and the service rebuilt from each running container's inspect document, both with what the image or the engine fills in taken out, so that right after a deploy nothing differs. A service with no container is added; one whose containers carry another config hash than the service has now, or whose running configuration is not what the file says (a container changed by hand on the host, which keeps its labels and its hash), is changed, with the masked current and next settings as compose settings (restart, ports, environment, volumes ...); a changed secret or config is a changed service; and a service of the host's Compose project that the file no longer declares is removed. Settings the engine does not record (depends_on, secrets, configs, profiles, pull_policy) are read from the stored revision that made the container, and are the file's own when none did. A deploy that recreates a service carries others with it, as docker compose does: a service that shares its network, IPC or PID namespace or its volumes is recreated and keeps its pinned image, and one that depends on it with restart: true is stopped and started again; they follow as recreated and restarted rows with because naming the service, carry no spec, and are not counted in the summary. A container changed by hand is put right by a deploy of an unedited file. An environment that is no longer the kind of target the stack was created for is 409 target_changed. " +
 			"In mode update, only the services named in services look their tag up again and every other service keeps the digest it runs; each row of images then carries the digest it runs now in current and the one it would run in digest, and a tag that did not move reads pinned with the note Already up to date. A request that names no service, or one the stack does not have, is 422 services_invalid and nothing is looked up. " +
 			"In mode rollback, revision names the revision to restore (422 revision_required without it, 404 revision_not_found for one the stack does not hold, 409 revision_not_good for one that did not end good). " +

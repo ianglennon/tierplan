@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package proxy is the agent's policy: an allowlisting reverse proxy in front of
 // the Docker socket, served once per multiplexed stream. The server is not
@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // DeniedPrefix starts the message of every refusal. The server's Docker client
@@ -61,7 +61,7 @@ type Policy struct {
 	// through, a container create that gives the container host access, and a volume
 	// create that mounts a host path or a device or names a volume plugin, on every
 	// agent-managed host: a swarm node or a standalone host
-	// (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES). On a manager it also lets a service
+	// (COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES). On a manager it also lets a service
 	// mount a named volume whose backing gives host access.
 	AllowPrivilegedServices bool
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Check, CircleX, Copy, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -179,7 +179,7 @@ interface HostKeyChangedProps {
   onRetrust: () => void;
 }
 
-// HostKeyChanged is the hard stop: the host shows another key than the one a person trusted. Bayplan
+// HostKeyChanged is the hard stop: the host shows another key than the one a person trusted. Coaming
 // sent no credential and will not until an administrator trusts the new key on purpose. It is the
 // offline kind of Alert and role=alert, so it is announced at once.
 export function HostKeyChanged({ hostKey, host, canRetrust, onRetrust }: HostKeyChangedProps) {

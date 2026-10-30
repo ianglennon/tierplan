@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -14,13 +14,13 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/jobs"
 )
 
 const (
 	// DefaultConvergeTimeout is how long a deploy waits for one service to settle when the caller
-	// sets none (BAYPLAN_STACK_CONVERGE_TIMEOUT has the same default).
+	// sets none (COAMING_STACK_CONVERGE_TIMEOUT has the same default).
 	DefaultConvergeTimeout = 10 * time.Minute
 
 	// maxParallelWaits bounds how many services a deploy polls at once, so a stack of sixty makes

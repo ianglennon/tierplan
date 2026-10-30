@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { VersionFooter } from "@/components/version-footer";
 import "@/i18n";
 
-const SOURCE_URL = "https://github.com/ianglennon/bayplan";
+const SOURCE_URL = "https://github.com/ianglennon/coaming";
 
 function renderFooter() {
   // retry: false so a failing fetch settles into the error state at once.
@@ -42,7 +42,7 @@ describe("VersionFooter", () => {
     );
     renderFooter();
 
-    const versionLink = await screen.findByRole("link", { name: "Bayplan dev (abc1234)" });
+    const versionLink = await screen.findByRole("link", { name: "Coaming dev (abc1234)" });
     expect(versionLink.getAttribute("href")).toBe(treeUrl);
 
     const sourceLink = screen.getByRole("link", { name: "Source code (opens in a new tab)" });
@@ -69,7 +69,7 @@ describe("VersionFooter", () => {
     expect(sourceLink.getAttribute("href")).toBe(SOURCE_URL);
     expect(sourceLink.getAttribute("target")).toBe("_blank");
     expect(sourceLink.getAttribute("rel") ?? "").toContain("noopener");
-    expect(screen.getByText("Bayplan")).toBeTruthy();
+    expect(screen.getByText("Coaming")).toBeTruthy();
   });
 
   it("falls back the same way when the API answers with an error status", async () => {
@@ -83,6 +83,6 @@ describe("VersionFooter", () => {
 
     const sourceLink = await screen.findByRole("link", { name: /Source code/ });
     expect(sourceLink.getAttribute("href")).toBe(SOURCE_URL);
-    expect(screen.getByText("Bayplan")).toBeTruthy();
+    expect(screen.getByText("Coaming")).toBeTruthy();
   });
 });

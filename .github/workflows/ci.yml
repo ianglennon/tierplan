@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Blocking checks (D-74). Every job is a thin wrapper over a make target, so a
 # contributor reproduces CI locally with the same command.
@@ -23,7 +23,7 @@
 #     needs a fixed address), and it is torn down in an always step. The smokes publish
 #     on ports Docker or the kernel assigns, so a leftover process cannot block a run.
 #   - Leftovers: every container, network and volume a smoke creates carries
-#     bayplan.ci.owner=<run>-<attempt>-<job>, and each job that uses Docker directly
+#     coaming.ci.owner=<run>-<attempt>-<job>, and each job that uses Docker directly
 #     (build, proxy-smoke, upgrade) ends with make ci-clean in an if: always() step, which
 #     removes exactly that owner's resources and never another runner's on the shared
 #     daemon. The integration job's dind service is removed by the runner; the Go suites'
@@ -68,7 +68,7 @@ env:
 # Every upload below runs on `failure() || cancelled()`, so a job ended by its timeout
 # still leaves its evidence.
 concurrency:
-  group: bayplan-self-hosted-runners
+  group: coaming-self-hosted-runners
   cancel-in-progress: false
 
 jobs:
@@ -220,11 +220,11 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     env:
-      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      COAMING_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -288,11 +288,11 @@ jobs:
         ports:
           - 2375
     env:
-      BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
+      COAMING_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -320,7 +320,7 @@ jobs:
         run: make agent-image
       - run: make test-int
         env:
-          BAYPLAN_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
+          COAMING_TEST_DOCKER_HOST: tcp://localhost:${{ job.services.dind.ports['2375'] }}
       # D-21: the failing and hung tests, their packages and the shuffle seed.
       - name: Name the failing tests
         if: always()
@@ -337,7 +337,7 @@ jobs:
   # D-57, D-58: the multi-node suite on the oldest and newest Engines, on every
   # pull request. Unlike the integration job there is no dind service: every test
   # starts its own swarm of dind nodes (3 managers and a worker) on a network of
-  # its own, so the in-process Bayplan is reachable from them, and loads the agent
+  # its own, so the in-process Coaming is reachable from them, and loads the agent
   # image built here. A leg runs the swarm-tagged internal/agents suite only
   # (make test-swarm, shuffled); go test allows 60 minutes and the job 70, so a
   # hang ends in Go's goroutine dump and not in a silent kill (D-22).
@@ -358,11 +358,11 @@ jobs:
           - engine: 29
             vm: bp-b
     env:
-      BAYPLAN_TEST_ENGINE: ${{ matrix.engine }}
+      COAMING_TEST_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -428,7 +428,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -470,20 +470,20 @@ jobs:
           if-no-files-found: ignore
 
   # Plan 02-32: the same image behind Caddy, nginx and Traefik with the files in
-  # docs/proxy, at the root of a host and at /bayplan (make proxy-smoke, about
+  # docs/proxy, at the root of a host and at /coaming (make proxy-smoke, about
   # 2.5 minutes; the proxy images are pulled). The e2e job above covers Caddy at
   # a subpath through a browser and a real agent; this one covers the three
   # documented configurations, and the three deliberately broken nginx ones that
-  # Bayplan must notice.
+  # Coaming must notice.
   proxy-smoke:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
     env:
-      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      COAMING_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -521,13 +521,13 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 30
     env:
-      BAYPLAN_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      COAMING_CI_OWNER: ${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # D-23: prints the free disk and docker system df, and fails naming the
-      # filesystem when the workspace or Docker has less than BAYPLAN_CI_MIN_FREE_GB
+      # filesystem when the workspace or Docker has less than COAMING_CI_MIN_FREE_GB
       # (default 20) free.
       - name: Check the free disk
         run: make ci-preflight
@@ -582,7 +582,7 @@ jobs:
         if: always()
         run: make ci-clean
 
-  # D-75: every push to main publishes ghcr.io/ianglennon/bayplan:edge for amd64
+  # D-75: every push to main publishes ghcr.io/ianglennon/coaming:edge for amd64
   # and arm64, signed with keyless cosign. It is the only tag a push can move;
   # versioned tags come from release.yml. This job runs only on main and never
   # for a pull request, so fork code never gets the package or id-token
@@ -655,5 +655,5 @@ jobs:
             test -n "${digest}" && test "${digest}" != null
             cosign sign --yes "ghcr.io/ianglennon/${name}@${digest}"
           }
-          publish bayplan dist/edge
-          publish bayplan-agent dist/edge-agent
+          publish coaming dist/edge
+          publish coaming-agent dist/edge-agent

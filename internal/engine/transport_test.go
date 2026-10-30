@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package engine_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/coaming/internal/engine"
 )
 
 func TestParseDockerHostAcceptsOnlyUnixSockets(t *testing.T) {

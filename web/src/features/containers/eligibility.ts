@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { ContainerRow } from "@/api/resources";
 
@@ -20,7 +20,7 @@ const STATES: Record<Verb, ReadonlySet<string>> = {
 
 type Subject = Pick<ContainerRow, "state" | "selfKind" | "isSelf">;
 
-// ownKind says whether a container is one Bayplan itself depends on: the server
+// ownKind says whether a container is one Coaming itself depends on: the server
 // it runs in, or an agent. Acting on one asks for its name to be typed, one at
 // a time (D-11), and a bulk never includes one (D-12).
 export function ownKind(row: Pick<ContainerRow, "selfKind" | "isSelf">): "server" | "agent" | "" {
@@ -29,7 +29,7 @@ export function ownKind(row: Pick<ContainerRow, "selfKind" | "isSelf">): "server
 }
 
 // eligibleFor says whether the action applies to the container in its state.
-// With bulk set, one of Bayplan's own containers never does.
+// With bulk set, one of Coaming's own containers never does.
 export function eligibleFor(verb: Verb, row: Subject, opts: { bulk?: boolean } = {}): boolean {
   if (opts.bulk && ownKind(row) !== "") return false;
   return STATES[verb].has(row.state);

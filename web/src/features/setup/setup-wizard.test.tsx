@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -31,11 +31,11 @@ interface Call {
 // announceBase does what the server does when it renders index.html (plan
 // 02-03): it puts the base path in a meta tag the SPA reads once.
 function announceBase(base: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
   if (base === null) return;
   const meta = document.createElement("meta");
-  meta.name = "bayplan-base";
+  meta.name = "coaming-base";
   meta.content = base;
   document.head.append(meta);
 }
@@ -136,12 +136,12 @@ describe("SetupWizard", () => {
   it("opens on step 1 with the token field set up for a secret", async () => {
     stubApi({});
     await renderWizard();
-    expect(screen.getByText("Set up Bayplan")).toBeTruthy();
+    expect(screen.getByText("Set up Coaming")).toBeTruthy();
     const token = field("Setup token");
     expect(token.getAttribute("autocomplete")).toBe("off");
     expect(token.getAttribute("spellcheck")).toBe("false");
     expect(token.className).toContain("font-mono");
-    expect(screen.getByText("docker exec <container> bayplan setup-token").tagName).toBe("CODE");
+    expect(screen.getByText("docker exec <container> coaming setup-token").tagName).toBe("CODE");
     expect(token.getAttribute("aria-describedby")).toContain("setup-token-helper");
   });
 
@@ -199,7 +199,7 @@ describe("SetupWizard", () => {
 
     // Back to step 1 and forward again with the token unchanged: no new request.
     click("Back");
-    await screen.findByText("Set up Bayplan");
+    await screen.findByText("Set up Coaming");
     expect(field("Setup token").value).toBe("tok-123");
     click("Continue");
     await screen.findByText("Create the admin account");
@@ -258,14 +258,14 @@ describe("SetupWizard", () => {
   });
 
   it("pre-fills the public URL with the origin plus the base path under a base", async () => {
-    announceBase("/bayplan");
+    announceBase("/coaming");
     try {
       stubApi({});
       await renderWizard();
       await passToken();
       fillAdmin();
       await screen.findByText("Name this instance");
-      expect(field("Public URL").value).toBe(`${window.location.origin}/bayplan`);
+      expect(field("Public URL").value).toBe(`${window.location.origin}/coaming`);
     } finally {
       announceBase(null);
     }
@@ -276,7 +276,7 @@ describe("SetupWizard", () => {
       token: () =>
         Response.json({
           defaultInstanceName: "lab-box",
-          publicUrl: "https://bayplan.example.com",
+          publicUrl: "https://coaming.example.com",
           publicUrlLocked: true,
         }),
     });
@@ -286,8 +286,8 @@ describe("SetupWizard", () => {
     await screen.findByText("Name this instance");
     const url = field("Public URL");
     expect(url.readOnly).toBe(true);
-    expect(url.value).toBe("https://bayplan.example.com");
-    expect(screen.getByText("Set by the BAYPLAN_PUBLIC_URL environment variable.")).toBeTruthy();
+    expect(url.value).toBe("https://coaming.example.com");
+    expect(screen.getByText("Set by the COAMING_PUBLIC_URL environment variable.")).toBeTruthy();
     expect(screen.getByRole("img", { name: "Locked" })).toBeTruthy();
   });
 
@@ -299,7 +299,7 @@ describe("SetupWizard", () => {
     fillAdmin();
     await screen.findByText("Name this instance");
     type("Instance name", "  Home lab ");
-    type("Public URL", "https://bayplan.example.com");
+    type("Public URL", "https://coaming.example.com");
     click("Create admin account");
     await waitFor(() => expect(router.state.location.pathname).toBe("/welcome"));
 
@@ -312,7 +312,7 @@ describe("SetupWizard", () => {
           username: "admin",
           password: PASSWORD,
           instanceName: "Home lab",
-          publicUrl: "https://bayplan.example.com",
+          publicUrl: "https://coaming.example.com",
         },
       },
     ]);
@@ -357,7 +357,7 @@ describe("SetupWizard", () => {
     fillAdmin();
     await screen.findByText("Name this instance");
     click("Create admin account");
-    await screen.findByText("Enter a full address such as https://bayplan.example.com.");
+    await screen.findByText("Enter a full address such as https://coaming.example.com.");
     expect(screen.getByText("Name this instance")).toBeTruthy();
   });
 
@@ -382,7 +382,7 @@ describe("SetupWizard", () => {
     await renderWizard();
     type("Setup token", "tok");
     click("Continue");
-    await screen.findByText("Can't reach Bayplan. Check your connection and try again.");
+    await screen.findByText("Can't reach Coaming. Check your connection and try again.");
   });
 
   it("disables the form while pending and never sends a double submit", async () => {
@@ -433,7 +433,7 @@ describe("SetupWizard restore branch", () => {
     schema: 12,
   };
   const BACKUP_PASS = "correct horse battery";
-  const file = () => new File(["bytes"], "lab.bayplan");
+  const file = () => new File(["bytes"], "lab.coaming");
 
   interface Seen {
     method: string;
@@ -519,16 +519,16 @@ describe("SetupWizard restore branch", () => {
     click("Check backup");
   }
 
-  it("offers 'Restoring an existing Bayplan? Restore from a backup' under the admin form, the last words a link", async () => {
+  it("offers 'Restoring an existing Coaming? Restore from a backup' under the admin form, the last words a link", async () => {
     stubApi({});
     await renderRestoreWizard();
     await passToken();
     const link = screen.getByRole("button", { name: "Restore from a backup" });
     expect(link.closest("p")?.textContent).toBe(
-      "Restoring an existing Bayplan? Restore from a backup",
+      "Restoring an existing Coaming? Restore from a backup",
     );
     expect(link.textContent).toBe("Restore from a backup");
-    expect(screen.queryByText("Restoring an existing Bayplan?")).not.toBeNull();
+    expect(screen.queryByText("Restoring an existing Coaming?")).not.toBeNull();
   });
 
   it("switches step 2 to the restore form without leaving the route, reading Step 2 of 2", async () => {
@@ -537,7 +537,7 @@ describe("SetupWizard restore branch", () => {
     expect(screen.getByText("Step 2 of 2")).toBeTruthy();
     expect(
       screen.getByText(
-        "Upload a backup file and enter its passphrase. Bayplan checks it before changing anything.",
+        "Upload a backup file and enter its passphrase. Coaming checks it before changing anything.",
       ),
     ).toBeTruthy();
     expect(field("Backup file")).toBeTruthy();
@@ -627,7 +627,7 @@ describe("SetupWizard restore branch", () => {
     chooseAndCheck();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "The upload was cut off. If Bayplan runs behind a reverse proxy, check its upload size limit.",
+      "The upload was cut off. If Coaming runs behind a reverse proxy, check its upload size limit.",
     );
   });
 
@@ -671,14 +671,14 @@ describe("SetupWizard restore branch", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says Bayplan went back to the snapshot when it came back still asking for setup", async () => {
+  it("says Coaming went back to the snapshot when it came back still asking for setup", async () => {
     vi.mocked(outcome.waitForRestoreOutcome).mockResolvedValue("rolled_back");
     const { router } = await openRestore();
     chooseAndCheck();
     await screen.findByText("What's in this backup");
     click("Restore backup");
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toBe("The restore failed and Bayplan went back to the snapshot.");
+    expect(alert.textContent).toBe("The restore failed and Coaming went back to the snapshot.");
     expect(router.state.location.pathname).toBe("/setup");
   });
 

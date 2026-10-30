@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -257,15 +257,15 @@ describe("the alerts", () => {
     expect(screen.queryByText(/Stack /)).toBeNull();
   });
 
-  it("warns on Bayplan's agent service, and badges it", async () => {
-    answerWith(serviceDetail({ agent: true, name: "bayplan-agent" }));
+  it("warns on Coaming's agent service, and badges it", async () => {
+    answerWith(serviceDetail({ agent: true, name: "coaming-agent" }));
     renderAt();
     expect(
       await screen.findByText(
-        "This is Bayplan's agent service. Removing or changing it can cut Bayplan off from every node it runs on.",
+        "This is Coaming's agent service. Removing or changing it can cut Coaming off from every node it runs on.",
       ),
     ).toBeTruthy();
-    expect(screen.getAllByText("Bayplan agent").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Coaming agent").length).toBeGreaterThanOrEqual(1);
   });
 });
 

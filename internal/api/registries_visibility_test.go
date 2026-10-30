@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 )
 
 // Who sees and who manages which registry credential (plan 05-10, D-09, D-30, T-05-36). The

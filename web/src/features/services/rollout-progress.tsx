@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useIsMutating, useQuery } from "@tanstack/react-query";
 import { CircleCheck, TriangleAlert } from "lucide-react";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package selfmaint
 
@@ -16,12 +16,12 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 const (
-	ownRepo   = "ghcr.io/ianglennon/bayplan-agent"
+	ownRepo   = "ghcr.io/ianglennon/coaming-agent"
 	ownImage  = ownRepo + ":0.2.0@sha256:" + "0000000000000000000000000000000000000000000000000000000000000001"
 	newImage  = ownRepo + ":0.2.1"
 	selfLong  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -40,7 +40,7 @@ func newMaint(f *fakeEngine, mut func(*Config)) *Maint {
 
 // swarmSelf registers the agent's own container as a swarm task of service svc1.
 func swarmSelf(f *fakeEngine, labels map[string]string) {
-	l := map[string]string{"bayplan.agent": "true", "com.docker.swarm.service.id": "svc1"}
+	l := map[string]string{"coaming.agent": "true", "com.docker.swarm.service.id": "svc1"}
 	for k, v := range labels {
 		if v == "" {
 			delete(l, k)
@@ -49,7 +49,7 @@ func swarmSelf(f *fakeEngine, labels map[string]string) {
 		}
 	}
 	f.addContainer(container.InspectResponse{
-		ID: selfLong, Name: "/bayplan-agent.1.abc", State: &container.State{Running: true, Status: "running"},
+		ID: selfLong, Name: "/coaming-agent.1.abc", State: &container.State{Running: true, Status: "running"},
 		Config: &container.Config{Hostname: selfShort, Image: ownImage, Labels: l},
 	})
 }
@@ -59,7 +59,7 @@ func swarmSelf(f *fakeEngine, labels map[string]string) {
 // FutureContainerField), and a number a float cannot hold exactly.
 const serviceJSON = `{
  "ID":"svc1","Version":{"Index":42},"CreatedAt":"2026-10-01T10:00:00Z","UpdatedAt":"2026-10-02T10:00:00Z",
- "Spec":{"Name":"bayplan-agent","Labels":{"bayplan.agent":"true"},
+ "Spec":{"Name":"coaming-agent","Labels":{"coaming.agent":"true"},
   "TaskTemplate":{
    "ContainerSpec":{"Image":"` + ownImage + `","Env":["A=1"],"Mounts":[{"Type":"bind","Source":"/var/run/docker.sock","Target":"/var/run/docker.sock"}],
     "ReadOnly":true,"CapabilityDrop":["ALL"],"FutureContainerField":{"x":[1,2,3],"big":12345678901234567890123}},
@@ -67,7 +67,7 @@ const serviceJSON = `{
   "Mode":{"Global":{}},
   "UpdateConfig":{"Parallelism":1,"Delay":10000000000,"FailureAction":"pause"},
   "EndpointSpec":{"Mode":"vip"},"FutureSpecField":true},
- "PreviousSpec":{"Name":"bayplan-agent"},"Endpoint":{"Spec":{}}}`
+ "PreviousSpec":{"Name":"coaming-agent"},"Endpoint":{"Spec":{}}}`
 
 func decodeNumbers(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
@@ -152,12 +152,12 @@ func TestSwarmUpdateReadsItsOwnServiceFromItsContainerLabel(t *testing.T) {
 func TestAnUpdateOutsideTheOwnRepositoryIsRefusedWithoutADockerCall(t *testing.T) {
 	for _, image := range []string{
 		"ghcr.io/evil/agent:1",
-		"evil.example/ianglennon/bayplan-agent:0.2.1",
-		"ghcr.io/ianglennon/bayplan-agent-extra:0.2.1",
-		"ghcr.io/ianglennon/bayplan:0.2.1",
-		"ianglennon/bayplan-agent:0.2.1",
-		"ghcr.io/ianglennon/bayplan-agent/sub:0.2.1",
-		"ghcr.io:5000/ianglennon/bayplan-agent:0.2.1",
+		"evil.example/ianglennon/coaming-agent:0.2.1",
+		"ghcr.io/ianglennon/coaming-agent-extra:0.2.1",
+		"ghcr.io/ianglennon/coaming:0.2.1",
+		"ianglennon/coaming-agent:0.2.1",
+		"ghcr.io/ianglennon/coaming-agent/sub:0.2.1",
+		"ghcr.io:5000/ianglennon/coaming-agent:0.2.1",
 		"sha256:" + strings.Repeat("a", 64), // the reference grammar reads this as docker.io/library/sha256
 	} {
 		t.Run(image, func(t *testing.T) {
@@ -195,7 +195,7 @@ func TestAnUpdateOfTheOwnRepositoryInAnyOfItsFormsIsAccepted(t *testing.T) {
 func TestAnImageThatIsNotAValidReferenceIsRefusedWithoutADockerCall(t *testing.T) {
 	long := ownRepo + ":" + strings.Repeat("a", wire.MaxImageLen)
 	for name, image := range map[string]string{
-		"empty": "", "spaces": "ghcr.io/ianglennon/bayplan-agent:0.2 .1", "uppercase": "GHCR.io/x/Y:1",
+		"empty": "", "spaces": "ghcr.io/ianglennon/coaming-agent:0.2 .1", "uppercase": "GHCR.io/x/Y:1",
 		"newline": ownRepo + ":1\n", "too long": long, "scheme": "https://" + ownRepo + ":1",
 		"no tag or digest": ownRepo, "own repository with a trailing colon": ownRepo + ":",
 	} {
@@ -266,7 +266,7 @@ func TestAnAgentWhoseOwnContainerIsNotLabelledRefusesAndWritesNothing(t *testing
 	f := newFakeEngine(t)
 	f.swarmControl = true
 	f.serviceID, f.service = "svc1", serviceJSON
-	swarmSelf(f, map[string]string{"bayplan.agent": "false"})
+	swarmSelf(f, map[string]string{"coaming.agent": "false"})
 	m := newMaint(f, nil)
 
 	res := m.Update(context.Background(), wire.Update{T: wire.TypeUpdate, Image: newImage})

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -704,7 +704,7 @@ describe("what stops a deploy", () => {
       );
     mount();
     await screen.findByText("Can't reach the registry");
-    expect(reasonText()).toBe("Bayplan can't look up ghcr.io/acme/web:2 right now.");
+    expect(reasonText()).toBe("Coaming can't look up ghcr.io/acme/web:2 right now.");
     expect(deployButton().getAttribute("aria-disabled")).toBe("true");
   });
 
@@ -1381,7 +1381,7 @@ describe("in restore mode", () => {
   });
 });
 
-// The first review of an adopted stack (plan 08-16, D-16): the services that differ in nothing but Bayplan's
+// The first review of an adopted stack (plan 08-16, D-16): the services that differ in nothing but Coaming's
 // ownership labels are told apart from real changes, and the restart is announced before the summary.
 
 const STACK_ID = "stk-1";
@@ -1394,7 +1394,7 @@ const labelled = (
   extra: Record<string, unknown> = {},
 ) => ({
   Name: `s1_${short}`,
-  Labels: withId ? { "bayplan.stack.id": STACK_ID } : {},
+  Labels: withId ? { "coaming.stack.id": STACK_ID } : {},
   Mode: { Replicated: { Replicas: replicas } },
   TaskTemplate: { ContainerSpec: { Image: "nginx:1.27", ...extra } },
 });
@@ -1411,7 +1411,7 @@ const labelsOnly = (short: string, replicas = 2) => ({
 });
 
 // composeOnly is a container's service of an adopted Compose project that differs in nothing but the configuration
-// hash Bayplan's labels change: the two sides are the same, and no setting differs.
+// hash Coaming's labels change: the two sides are the same, and no setting differs.
 const composeOnly = (short: string) => {
   const service = { image: "nginx:1.27", environment: { MODE: "prod" } };
   return {
@@ -1456,7 +1456,7 @@ describe("an adopted stack's first review", () => {
     expect(alert).toBeTruthy();
     expect(
       within(alert).getByText(
-        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
+        "Adopted stacks get Coaming's ownership labels on their first deploy. A label change recreates the container, which restarts it briefly. They're listed under Ownership labels only.",
       ),
     ).toBeTruthy();
     const summary = screen.getByRole("table", { name: "Summary of changes" });
@@ -1490,7 +1490,7 @@ describe("an adopted stack's first review", () => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(
       within(group).getByText(
-        "2 services will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+        "2 services will be recreated to take Coaming ownership labels (brief restart). Nothing else about them changes.",
       ),
     ).toBeTruthy();
     fireEvent.click(toggle);
@@ -1513,7 +1513,7 @@ describe("an adopted stack's first review", () => {
     const rows = within(table).getAllByRole("row");
     // The header, the group heading and the one label row.
     expect(rows).toHaveLength(3);
-    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain("coaming.stack.id");
     expect(table.textContent).toContain(STACK_ID);
     expect(table.querySelector(".break-all")).toBeTruthy();
   });
@@ -1539,7 +1539,7 @@ describe("an adopted stack's first review", () => {
     expect(screen.getByText("Ownership labels only: 1")).toBeTruthy();
     // Its rows hold the replicas and the label.
     const table = await screen.findByRole("table", { name: "Changes to web" });
-    expect(table.textContent).toContain("bayplan.stack.id");
+    expect(table.textContent).toContain("coaming.stack.id");
     expect(table.textContent).toContain("Replicas");
   });
 
@@ -1562,7 +1562,7 @@ describe("an adopted stack's first review", () => {
     const group = screen.getByRole("region", { name: "Ownership labels only" });
     expect(
       within(group).getByText(
-        "2 containers will be recreated to take Bayplan ownership labels (brief restart). Nothing else about them changes.",
+        "2 containers will be recreated to take Coaming ownership labels (brief restart). Nothing else about them changes.",
       ),
     ).toBeTruthy();
   });
@@ -1575,7 +1575,7 @@ describe("an adopted stack's first review", () => {
     const alert = title.closest('[role="status"]') as HTMLElement;
     expect(
       within(alert).getByText(
-        "Adopted stacks get Bayplan's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only.",
+        "Adopted stacks get Coaming's ownership labels on their first deploy. A label change recreates the containers, which restarts them briefly. They're listed under Ownership labels only.",
       ),
     ).toBeTruthy();
     expect(screen.getByText("Ownership labels only: 2")).toBeTruthy();
@@ -1593,7 +1593,7 @@ describe("an adopted stack's first review", () => {
     fireEvent.click(within(item).getByRole("button"));
     expect(
       within(item).getByText(
-        "Compose recreates the container because Bayplan's labels change its configuration hash. No setting you wrote changes.",
+        "Compose recreates the container because Coaming's labels change its configuration hash. No setting you wrote changes.",
       ),
     ).toBeTruthy();
     expect(within(item).queryByText("No changes")).toBeNull();
@@ -1616,7 +1616,7 @@ describe("an adopted stack's first review", () => {
               change: "changed",
               kind: "volume",
               name: "shop_data",
-              detail: "Its settings differ from the compose file. Bayplan keeps it as it is.",
+              detail: "Its settings differ from the compose file. Coaming keeps it as it is.",
             },
           ],
           summary: {
@@ -1640,7 +1640,7 @@ describe("an adopted stack's first review", () => {
     ).toBeTruthy();
     const vol = within(other).getByText("shop_data").closest("tr") as HTMLElement;
     expect(within(vol).getByText("Volume")).toBeTruthy();
-    expect(within(vol).getByText(/Bayplan keeps it as it is\./)).toBeTruthy();
+    expect(within(vol).getByText(/Coaming keeps it as it is\./)).toBeTruthy();
     const summary = screen.getByRole("table", { name: "Summary of changes" });
     for (const row of ["Networks", "Volumes"]) {
       const cells = within(within(summary).getByRole("row", { name: new RegExp(`^${row}`) }))

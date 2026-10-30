@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 // PendingMarker is the file, in the data directory, that a restore writes right

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -8,14 +8,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/server"
+	"github.com/ianglennon/coaming/internal/server"
 )
 
-// The image HEALTHCHECK runs `bayplan healthcheck` as root every 30 seconds.
+// The image HEALTHCHECK runs `coaming healthcheck` as root every 30 seconds.
 // That command reads no data, so it must not make the privilege drop walk and
 // chown /data (WR-08).
 func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
-	t.Setenv("BAYPLAN_DATA_DIR", "/srv/bayplan-data")
+	t.Setenv("COAMING_DATA_DIR", "/srv/coaming-data")
 	root := newRoot()
 
 	for _, tc := range []struct {
@@ -24,7 +24,7 @@ func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
 	}{
 		{"healthcheck", ""},
 		{"version", ""},
-		{"serve", "/srv/bayplan-data"},
+		{"serve", "/srv/coaming-data"},
 	} {
 		cmd, _, err := root.Find([]string{tc.command})
 		if err != nil || cmd.Name() != tc.command {

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # The git server of the end-to-end run (plan 09-33): one bare repository served over
 # smart HTTP and TLS, so the From git golden path talks to a real git server with its

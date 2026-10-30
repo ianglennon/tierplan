@@ -4,17 +4,17 @@
       "label": "Step {{current}} of {{total}}"
     },
     "token": {
-      "heading": "Set up Bayplan",
-      "body": "Enter the setup token printed in the container logs when Bayplan started.",
+      "heading": "Set up Coaming",
+      "body": "Enter the setup token printed in the container logs when Coaming started.",
       "label": "Setup token",
       "helper": "Not in the logs? Run {{command}}.",
-      "command": "docker exec <container> bayplan setup-token",
+      "command": "docker exec <container> coaming setup-token",
       "continue": "Continue",
       "pending": "Checking…"
     },
     "admin": {
       "heading": "Create the admin account",
-      "body": "This account can manage everything in this Bayplan instance.",
+      "body": "This account can manage everything in this Coaming instance.",
       "username": {
         "label": "Username",
         "helper": "3 to 32 characters: letters, numbers, dot, dash or underscore. Not case-sensitive."
@@ -30,7 +30,7 @@
       "hide": "Hide password",
       "back": "Back",
       "continue": "Continue",
-      "restorePrompt": "Restoring an existing Bayplan?",
+      "restorePrompt": "Restoring an existing Coaming?",
       "restoreLink": "Restore from a backup"
     },
     "instance": {
@@ -42,8 +42,8 @@
       },
       "url": {
         "label": "Public URL",
-        "helper": "The address people use to reach Bayplan. It controls cookies and request origin checks.",
-        "locked": "Set by the BAYPLAN_PUBLIC_URL environment variable.",
+        "helper": "The address people use to reach Coaming. It controls cookies and request origin checks.",
+        "locked": "Set by the COAMING_PUBLIC_URL environment variable.",
         "lockedIcon": "Locked"
       },
       "back": "Back",
@@ -60,12 +60,12 @@
       "passwordMismatch": "The passwords don't match.",
       "instanceNameRequired": "Enter a name.",
       "instanceNameTooLong": "Use 64 characters or fewer.",
-      "publicUrl": "Enter a full address such as https://bayplan.example.com.",
+      "publicUrl": "Enter a full address such as https://coaming.example.com.",
       "server": "Something went wrong on the server. Try again, and check the container logs if it keeps happening."
     },
     "restore": {
       "heading": "Restore from a backup",
-      "body": "Upload a backup file and enter its passphrase. Bayplan checks it before changing anything.",
+      "body": "Upload a backup file and enter its passphrase. Coaming checks it before changing anything.",
       "back": "Back"
     }
   }

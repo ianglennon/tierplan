@@ -107,7 +107,7 @@
         "envRequired": "Choose an environment.",
         "fileTooLarge": "That file is over 1 MiB. Choose a smaller one.",
         "fileUnreadable": "Couldn't read that file. Choose another.",
-        "nameClash": "A stack named {{name}} already exists on this environment, not managed by Bayplan.",
+        "nameClash": "A stack named {{name}} already exists on this environment, not managed by Coaming.",
         "clashHint": "Pick another name, or adopt the existing stack.",
         "openClash": "Open {{name}}"
       }

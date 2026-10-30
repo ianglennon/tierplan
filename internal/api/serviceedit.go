@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,14 +15,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
-	"github.com/ianglennon/bayplan/internal/rbac/swarmspec"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/swarmops"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
+	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/swarmops"
 )
 
 // SpecJSON is a service spec carried as the JSON object the caller sent, byte for byte, so a
@@ -132,8 +132,8 @@ type ServiceMissingBody struct {
 
 // ServiceHostPolicyBody is what the manager's agent will forward.
 type ServiceHostPolicyBody struct {
-	ManagerAllowsPrivileged bool `json:"managerAllowsPrivileged" doc:"False when the manager's agent refuses services with host access because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way"`
-	ReadOnly                bool `json:"readOnly" doc:"True when the manager's host is read-only (BAYPLAN_AGENT_READ_ONLY): nothing can be applied"`
+	ManagerAllowsPrivileged bool `json:"managerAllowsPrivileged" doc:"False when the manager's agent refuses services with host access because its owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true; true when it allows them or there is no agent in the way"`
+	ReadOnly                bool `json:"readOnly" doc:"True when the manager's host is read-only (COAMING_AGENT_READ_ONLY): nothing can be applied"`
 }
 
 // ServiceReviewBody is the review of a spec.
@@ -183,7 +183,7 @@ type ServiceCleanupBody struct {
 type ServiceApplyBody struct {
 	Image    string                 `json:"image" doc:"The image the service now names: tag@sha256:digest when the tag was resolved"`
 	Digest   string                 `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
-	Pinned   bool                   `json:"pinned" doc:"True when Bayplan resolved the tag and wrote the digest into the spec"`
+	Pinned   bool                   `json:"pinned" doc:"True when Coaming resolved the tag and wrote the digest into the spec"`
 	Warnings []string               `json:"warnings" doc:"The manager's warnings about the update, scrubbed of masked values; empty when there are none"`
 	Steps    []ServiceApplyStepBody `json:"steps" doc:"The steps of the apply in order: the image, each object created, the service"`
 	Cleanup  ServiceCleanupBody     `json:"cleanup" doc:"Empty after a successful apply. A failed apply answers a problem whose errors carry the same lists"`
@@ -511,7 +511,7 @@ func withCleanup(problem error, verb, service string, rep swarmops.CleanupReport
 		for i, o := range rep.NotRemoved {
 			left[i] = o.Kind + " " + o.Name
 		}
-		tail = "Bayplan couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
+		tail = "Coaming couldn't remove " + strings.Join(left, ", ") + ". Remove them under Networks, Secrets or Configs."
 	}
 	reason := m.Detail
 	m.Detail = "Couldn't " + verb + " " + service + ". " + reason + " " + tail
@@ -571,7 +571,7 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		return problemStackOwned, stackOwnedProblem(owned.Stack, loadStackIDs(ctx, d.Store, envID, d.Log).confirm(owned.Stack, owned.StackID))
 	case errors.As(err, &ph) && errors.Is(err, redact.ErrPlaceholderReserved):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderReserved,
-			redact.Placeholder+" is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
+			redact.Placeholder+" is what Coaming shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
 			&huma.ErrorDetail{Location: ph.Path, Message: "reserved"})
 	case errors.As(err, &ph):
 		return problem(http.StatusUnprocessableEntity, problemPlaceholderNoMatch,

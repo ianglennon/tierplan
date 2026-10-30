@@ -36,7 +36,7 @@
       },
       "noManager": {
         "title": "No manager is connected",
-        "body": "Node changes are off until a manager node's agent reconnects. You can still look at what Bayplan last saw."
+        "body": "Node changes are off until a manager node's agent reconnects. You can still look at what Coaming last saw."
       },
       "columns": {
         "name": "Name",
@@ -74,7 +74,7 @@
     },
     "badge": {
       "leader": "Leader",
-      "runsBayplan": "Runs Bayplan"
+      "runsCoaming": "Runs Coaming"
     },
     "agent": {
       "reporting": "Reporting",
@@ -138,14 +138,14 @@
         "unknown": "Unknown"
       },
       "agent": {
-        "title": "Bayplan agent",
+        "title": "Coaming agent",
         "reporting": "Reporting",
         "version": "Version",
         "lastSeen": "Last seen"
       },
       "engineLabels": {
         "title": "Engine labels",
-        "caption": "Set in the node's Docker daemon settings. Bayplan can't change them.",
+        "caption": "Set in the node's Docker daemon settings. Coaming can't change them.",
         "empty": "No engine labels."
       },
       "yes": "Yes",
@@ -307,9 +307,9 @@
       "warning": {
         "even_count": "With {{n, number}} managers the swarm tolerates losing {{losses, number}}, the same as with {{fewer, number}}. An odd number is better.",
         "quorum_at_risk": "Only {{reachable, number}} of {{total, number}} managers are reachable. Demoting this one could leave the swarm without a majority, and it would stop accepting changes.",
-        "runs_bayplan": "Bayplan runs on {{name}}. {{doing}} it can cut Bayplan off from this swarm.",
-        "only_manager_agent": "{{name}} has the only manager agent connected to Bayplan. {{doing}} it leaves Bayplan unable to change this swarm until another manager's agent connects.",
-        "facts_unreadable": "Bayplan couldn't check the managers' state, so it can't tell whether this is safe."
+        "runs_coaming": "Coaming runs on {{name}}. {{doing}} it can cut Coaming off from this swarm.",
+        "only_manager_agent": "{{name}} has the only manager agent connected to Coaming. {{doing}} it leaves Coaming unable to change this swarm until another manager's agent connects.",
+        "facts_unreadable": "Coaming couldn't check the managers' state, so it can't tell whether this is safe."
       },
       "refusal": {
         "last_manager": "You can't demote the last manager. Promote another node first.",
@@ -321,7 +321,7 @@
     },
     "remove": {
       "title": "Remove {{name}}?",
-      "body": "{{name}} is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Bayplan also marks its agent as gone.",
+      "body": "{{name}} is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Coaming also marks its agent as gone.",
       "cancel": "Cancel",
       "confirm": "Remove node",
       "pending": "Removing…",

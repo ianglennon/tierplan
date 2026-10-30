@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -39,7 +39,7 @@ const (
 // line break an editor adds trimmed (the loader trims its text), in Go's quoting (%q, strconv's
 // errors for an integer or float cast, and the converter), and in the quoting of the compose
 // schema validator (single quotes around the Go-quoted value, with \" turned back into " and ' into
-// \'). The ASCII-only and JSON forms are not added: no path in Bayplan or compose-go writes
+// \'). The ASCII-only and JSON forms are not added: no path in Coaming or compose-go writes
 // them, and an answer is JSON-encoded after it is masked.
 //
 // A secret variable that holds several lines, such as a PEM key, is also hidden line by line, each
@@ -87,7 +87,7 @@ func NewMasker(vars []Var, files []File) Masker {
 		}
 	}
 	// A secret-like key of the repository's .env is hidden like a secret variable although it is
-	// committed (D-07): the repository holds it, but Bayplan must not echo it.
+	// committed (D-07): the repository holds it, but Coaming must not echo it.
 	for _, v := range envSecretLikeValues(files) {
 		add(v)
 	}

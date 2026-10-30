@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -10,10 +10,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // StackCheckRequest is the body of POST .../check: the working copy to check, in the save shape.
@@ -87,7 +87,7 @@ func registerStackCheck(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 		OperationID: "checkStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/check",
 		Summary: "Check a stack's working copy",
 		Description: "Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. " +
-			"The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. " +
+			"The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing, writes nothing and sends nothing to an engine. " +
 			"include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. " +
 			"The editor calls it while a person types and on Save, and the review and the deploy run the same check. " +
 			"One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. " +

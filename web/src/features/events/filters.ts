@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { EventDTO } from "@/features/dashboard/events";
 import { z } from "@/lib/zod-config";
 
-// The types the Events page filters by. A row of Bayplan's own has no chip and
+// The types the Events page filters by. A row of Coaming's own has no chip and
 // shows under "none selected" only.
 export const DOCKER_TYPES = [
   "container",
@@ -74,7 +74,7 @@ export interface EventFilters {
 
 // applyEventFilters keeps the events that match every filter that is set. The
 // search text matches the name, the image and the value of any attribute, ignoring
-// case. A row of Bayplan's own has a type no chip names, so it shows only while no
+// case. A row of Coaming's own has a type no chip names, so it shows only while no
 // type is chosen. The input is not changed.
 export function applyEventFilters(
   events: readonly EventDTO[],

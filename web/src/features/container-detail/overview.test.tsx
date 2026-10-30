@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -52,7 +52,7 @@ function detail(extra: Partial<ContainerDetail> = {}): ContainerDetail {
     selfKind: "",
     project: "",
     stack: "",
-    bayplanStackId: "",
+    coamingStackId: "",
     service: "",
     muted: false,
     ...extra,

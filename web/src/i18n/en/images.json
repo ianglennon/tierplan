@@ -209,9 +209,9 @@
       "inUse": "{{name}} is in use. Remove what uses it, then try again.",
       "errors": {
         "nodeNamedUnreachable": "{{node}} isn't reachable right now. Try again when it's back.",
-        "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+        "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Coaming can only read from it.",
         "permission": "You no longer have permission to do that. Your access may have changed.",
-        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening."
+        "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening."
       },
       "titleSwarm": "Remove {{name}} from nodes?",
       "confirmNodes": "Remove from {{selected}} of {{total}} nodes",

@@ -4,11 +4,11 @@
       "title": "Start from",
       "rebuild": {
         "label": "Rebuild from the running services",
-        "help": "Bayplan builds the compose file from what's running."
+        "help": "Coaming builds the compose file from what's running."
       },
       "paste": {
         "label": "I have the original compose file",
-        "help": "Paste it and Bayplan checks it against what's running."
+        "help": "Paste it and Coaming checks it against what's running."
       }
     },
     "file": {

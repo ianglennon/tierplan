@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { TriangleAlert } from "lucide-react";
@@ -287,7 +287,7 @@ function ScaleForm({ envId, target, onClose, onScaled }: FormProps) {
               values={{ name: target.name }}
               stack={target.stack}
               envId={envId}
-              bayplanStackId={target.bayplanStackId}
+              coamingStackId={target.coamingStackId}
             />
           </AlertDescription>
         </Alert>

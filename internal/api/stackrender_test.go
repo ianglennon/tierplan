@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Rendering a stack's working copy (plan 07-13, STK-04, D-18): the stack as it will be deployed,
@@ -167,7 +167,7 @@ func TestRenderNeverChangesTheStoredCompose(t *testing.T) {
 	if got := draftBytes(); got != written {
 		t.Errorf("after a deploy the draft = %q, want %q", got, written)
 	}
-	// Every snapshot Bayplan stored for the file, the draft and the revision, holds the same bytes.
+	// Every snapshot Coaming stored for the file, the draft and the revision, holds the same bytes.
 	stored := f.storedFiles(t, st.ID, "compose.yaml")
 	if len(stored) < 2 {
 		t.Fatalf("stored compose files = %d, want the draft and the revision", len(stored))

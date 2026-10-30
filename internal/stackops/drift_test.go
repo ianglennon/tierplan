@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -13,10 +13,10 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Drift (plan 08-19, STK-14, D-21): the deployed revision, converted with its pins, against what the fake swarm runs.
@@ -68,7 +68,7 @@ func (r *driftRig) drift(t *testing.T) stackops.DriftResult {
 	return res
 }
 
-// editLive changes a deployed service as somebody outside Bayplan would, with an update of its spec.
+// editLive changes a deployed service as somebody outside Coaming would, with an update of its spec.
 func (r *driftRig) editLive(t *testing.T, service string, edit func(*swarm.ServiceSpec)) {
 	t.Helper()
 	svc, ok := r.ownedNow(t, r.st)[r.st.Name+"_"+service]
@@ -222,7 +222,7 @@ func TestDriftIgnoresNoise(t *testing.T) {
 	t.Parallel()
 	strip := func(labels map[string]string) {
 		for k := range labels {
-			if strings.HasPrefix(k, "bayplan.") {
+			if strings.HasPrefix(k, "coaming.") {
 				delete(labels, k)
 			}
 		}
@@ -260,7 +260,7 @@ func TestDriftIgnoresNoise(t *testing.T) {
 	adopted.st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: "drift"}
 	adopted.st.Adoption = stacks.Adoption{Pending: true}
 	if res := adopted.drift(t); res.State != stackops.DriftNone {
-		t.Errorf("Bayplan's labels absent on an adopted stack that has not been deployed yet: drift = %s %v, want none: the labels say who owns a service, not how it is set up", res.State, driftNames(res))
+		t.Errorf("Coaming's labels absent on an adopted stack that has not been deployed yet: drift = %s %v, want none: the labels say who owns a service, not how it is set up", res.State, driftNames(res))
 	}
 }
 
@@ -406,7 +406,7 @@ func (r *driftRig) recordPlatforms(platforms ...swarm.Platform) {
 }
 
 // TestDriftComparesTheDeployedRevisionsRecordedPlatforms (G-08-4, D-21, T-08-112): the revision recorded the platforms it
-// deployed with, so platforms changed outside Bayplan are a difference even though the service runs the pinned digest.
+// deployed with, so platforms changed outside Coaming are a difference even though the service runs the pinned digest.
 // What the record and what runs agree on is none, and a revision from before platforms were recorded is never drift by
 // itself.
 func TestDriftComparesTheDeployedRevisionsRecordedPlatforms(t *testing.T) {
@@ -414,7 +414,7 @@ func TestDriftComparesTheDeployedRevisionsRecordedPlatforms(t *testing.T) {
 	amd := swarm.Platform{OS: "linux", Architecture: "amd64"}
 	arm := swarm.Platform{OS: "linux", Architecture: "arm64"}
 
-	t.Run("platforms changed outside Bayplan are a changed service", func(t *testing.T) {
+	t.Run("platforms changed outside Coaming are a changed service", func(t *testing.T) {
 		t.Parallel()
 		rig := newDriftRig(t)
 		rig.recordPlatforms(amd)

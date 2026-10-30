@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Trans } from "react-i18next";
 
@@ -10,7 +10,7 @@ import { useT } from "@/i18n/use-t";
 interface DriftCauseProps {
   // The cause the server named, absent when the audit log knows none.
   cause?: StackDriftCause | null;
-  // How many drifted services Bayplan's own actions explain. More than one reads as a count with the latest of them.
+  // How many drifted services Coaming's own actions explain. More than one reads as a count with the latest of them.
   count?: number;
   // The stack's name, for the sentence about an adoption.
   stackName?: string;
@@ -25,7 +25,7 @@ const FULL_KEYS = {
   edited: "stackDriftCause.edited",
 } as const;
 
-// useCauseText is the short sentence of a cause, as the badge's Tooltip reads it: who did what in Bayplan, with no time.
+// useCauseText is the short sentence of a cause, as the badge's Tooltip reads it: who did what in Coaming, with no time.
 // An empty string says there is nothing to add.
 export function useCauseText({ cause, count = 1, stackName }: DriftCauseProps): string {
   const t = useT();
@@ -40,9 +40,9 @@ export function useCauseText({ cause, count = 1, stackName }: DriftCauseProps): 
 }
 
 // DriftCause is the line that says why a stack differs from what was deployed (UI-SPEC "Cause line", D-24): a service
-// that was scaled, rolled back or edited in Bayplan, with who and when; several such changes, with the latest; a
+// that was scaled, rolled back or edited in Coaming, with who and when; several such changes, with the latest; a
 // difference that was there when the stack was adopted; or, when the audit log knows nothing, that it changed outside
-// Bayplan. Every name in it is text. The short form is for the badge's Tooltip and is empty when nothing is known.
+// Coaming. Every name in it is text. The short form is for the badge's Tooltip and is empty when nothing is known.
 export function DriftCause({ cause, count = 1, stackName, short = false }: DriftCauseProps) {
   const t = useT();
   const text = useCauseText({ cause, count, stackName });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -13,7 +13,7 @@ import (
 )
 
 // Ownership is decided in one place, Ownership in ownership.go (plan 08-18, D-16, T-08-69). An adopted stack's objects
-// carry no bayplan.stack.id until its first deploy, so a site that compares the label with a stack's ID, or asks the
+// carry no coaming.stack.id until its first deploy, so a site that compares the label with a stack's ID, or asks the
 // engine for the objects that carry it, silently skips an adopted stack and, worse, the next such site is written the
 // same way. The guard below fails on the two forms:
 //
@@ -74,7 +74,7 @@ func ownershipViolations(fset *token.FileSet, file *ast.File) []string {
 		switch x := n.(type) {
 		case *ast.BinaryExpr:
 			if (x.Op == token.EQL || x.Op == token.NEQ) && (indexesByLabelStackID(x.X) || indexesByLabelStackID(x.Y)) {
-				report(x.Pos(), "compares bayplan.stack.id with a value: ask Ownership (OwnsWorkload, OwnsNetwork, OwnsVolume, OwnsObject)")
+				report(x.Pos(), "compares coaming.stack.id with a value: ask Ownership (OwnsWorkload, OwnsNetwork, OwnsVolume, OwnsObject)")
 			}
 		case *ast.CallExpr:
 			sel, ok := x.Fun.(*ast.SelectorExpr)
@@ -83,16 +83,16 @@ func ownershipViolations(fset *token.FileSet, file *ast.File) []string {
 			}
 			for _, arg := range x.Args {
 				if labelStackID(arg) {
-					report(x.Pos(), sel.Sel.Name+" is keyed by bayplan.stack.id: read by the namespace or project label and keep what Ownership owns")
+					report(x.Pos(), sel.Sel.Name+" is keyed by coaming.stack.id: read by the namespace or project label and keep what Ownership owns")
 				}
 			}
 		case *ast.CompositeLit:
 			if t := compositeTypeName(x.Type); t == "TaskFilter" && mentionsLabelStackID(x) {
-				report(x.Pos(), "a TaskFilter is keyed by bayplan.stack.id: read by the namespace or project label and keep the tasks of the services Ownership owns")
+				report(x.Pos(), "a TaskFilter is keyed by coaming.stack.id: read by the namespace or project label and keep the tasks of the services Ownership owns")
 			}
 		case *ast.BasicLit:
-			if x.Kind == token.STRING && x.Value == `"bayplan.stack.id"` {
-				report(x.Pos(), "the bayplan.stack.id label is written out: use stacks.LabelStackID, and only in ownership.go for a comparison")
+			if x.Kind == token.STRING && x.Value == `"coaming.stack.id"` {
+				report(x.Pos(), "the coaming.stack.id label is written out: use stacks.LabelStackID, and only in ownership.go for a comparison")
 			}
 		}
 		return true
@@ -112,7 +112,7 @@ func compositeTypeName(e ast.Expr) string {
 }
 
 // TestOwnershipIsDecidedInOnePlace fails when a non-test file of internal/stackops or internal/api, ownership.go aside,
-// decides who owns an object by bayplan.stack.id.
+// decides who owns an object by coaming.stack.id.
 func TestOwnershipIsDecidedInOnePlace(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -158,7 +158,7 @@ func TestTheOwnershipGuardFlagsWhatItGuards(t *testing.T) {
 		"a volume read by the ID":    {`_, _ = c.VolumesWithLabel(ctx, stacks.LabelStackID, stack.ID)`, 1},
 		"a secret read by the ID":    {`_, _ = c.SecretsWithLabel(ctx, stacks.LabelStackID, stack.ID)`, 1},
 		"a task filter":              {`_, _ = c.Tasks(ctx, dockerx.TaskFilter{Labels: []string{stacks.LabelStackID + "=" + id}})`, 1},
-		"the label written out":      {`_ = labels["bayplan.stack.id"]`, 1},
+		"the label written out":      {`_ = labels["coaming.stack.id"]`, 1},
 		"a write":                    {`labels[stacks.LabelStackID] = id`, 0},
 		"a report of the ID":         {`id := labels[stacks.LabelStackID]; _ = id`, 0},
 		"a read by the namespace":    {`_, _ = c.ServicesWithLabel(ctx, stacks.LabelSwarmNamespace, name)`, 0},

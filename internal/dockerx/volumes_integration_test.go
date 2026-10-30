@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package dockerx_test
@@ -13,8 +13,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 )
 
 // runToExit runs a throwaway container to the end and returns its exit code, with the
@@ -178,7 +178,7 @@ func TestVolumeRemoveInUse(t *testing.T) {
 	}
 }
 
-// TestVolumeAnonymous proves against the engine BAYPLAN_TEST_ENGINE names (29 and 24)
+// TestVolumeAnonymous proves against the engine COAMING_TEST_ENGINE names (29 and 24)
 // that a volume Docker made for a container without a name is listed as anonymous, and a
 // named one is not (plan 04-17, RES-07, D-46): newer engines label such a volume and
 // older ones only give it a 64-hex name, and either is recognised.
@@ -249,7 +249,7 @@ func TestVolumeAnonymous(t *testing.T) {
 	}
 }
 
-// TestVolumeSizes proves against the engine BAYPLAN_TEST_ENGINE names (29, which answers
+// TestVolumeSizes proves against the engine COAMING_TEST_ENGINE names (29, which answers
 // the new disk usage shape, and 24, which answers the legacy one) that VolumeSizes reports a
 // real, non-zero size for a volume a container wrote 1 MiB into, none for an empty one, and
 // the container count of each (plan 04-18, RES-07, D-47).

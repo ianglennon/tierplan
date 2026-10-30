@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,10 +11,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // Field error codes of the user routes. The SPA maps each to its copy.
@@ -34,7 +34,7 @@ type UserSummaryBody struct {
 	ID                string        `json:"id" doc:"The user's ID"`
 	Username          string        `json:"username" doc:"The lower-cased username"`
 	DisplayName       string        `json:"displayName" doc:"The name shown for the user; empty when none was set"`
-	Email             string        `json:"email" doc:"The user's email address; empty when none was set. Bayplan never sends mail to it"`
+	Email             string        `json:"email" doc:"The user's email address; empty when none was set. Coaming never sends mail to it"`
 	InstanceAdmin     bool          `json:"instanceAdmin" doc:"True for an instance admin"`
 	Status            string        `json:"status" enum:"active,disabled,locked,invite_pending,invite_expired,deleted" doc:"Locked, then disabled, then invite expired, then invite pending, then active"`
 	LockedUntil       string        `json:"lockedUntil,omitempty" format:"date-time" doc:"While the account is locked: when the lock ends"`
@@ -112,7 +112,7 @@ type CreateUserInput struct {
 	Body      struct {
 		Username    string `json:"username" maxLength:"64" doc:"3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case"`
 		DisplayName string `json:"displayName,omitempty" maxLength:"256" doc:"Optional; at most 64 characters"`
-		Email       string `json:"email,omitempty" maxLength:"254" doc:"Optional; a bare address. Bayplan never sends mail"`
+		Email       string `json:"email,omitempty" maxLength:"254" doc:"Optional; a bare address. Coaming never sends mail"`
 	}
 }
 
@@ -170,7 +170,7 @@ func lifecycleError(d AccessDeps, op string, err error) error {
 		return httpx.Problem(http.StatusNotFound, problemUserNotFound, "That user doesn't exist.")
 	case errors.Is(err, access.ErrLastInstanceAdmin):
 		return httpx.Problem(http.StatusConflict, problemLastInstanceAdmin,
-			"Bayplan needs at least one active instance admin. Make someone else an instance admin first.")
+			"Coaming needs at least one active instance admin. Make someone else an instance admin first.")
 	case errors.Is(err, access.ErrUserDisabled):
 		return httpx.Problem(http.StatusConflict, problemUserDisabled,
 			"That user is disabled. Enable them first, then reset their password.")
@@ -223,8 +223,8 @@ func registerUsers(r *httpx.Router, d AccessDeps) {
 		Path:          "/api/users",
 		Summary:       "Create a user and a one-time invite link",
 		DefaultStatus: http.StatusCreated,
-		Description: "The user has no password. The response carries a link, valid for BAYPLAN_INVITE_TTL (72 hours " +
-			"by default), that opens a page where they choose one. Bayplan sends no email: the admin hands the " +
+		Description: "The user has no password. The response carries a link, valid for COAMING_INVITE_TTL (72 hours " +
+			"by default), that opens a page where they choose one. Coaming sends no email: the admin hands the " +
 			"link over. A username that belonged to a deleted user answers 409 username_reserved.",
 		Tags: []string{"users"},
 	}, rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *CreateUserInput) (*CreateUserOutput, error) {
@@ -262,7 +262,7 @@ func registerUsers(r *httpx.Router, d AccessDeps) {
 		Path:        "/api/users/{userId}/invite",
 		Summary:     "Replace a user's invite link",
 		Description: "For a user who has not yet set a password. The new link replaces the previous one, which " +
-			"stops working at once, and is valid for BAYPLAN_INVITE_TTL. A user who has already set a password " +
+			"stops working at once, and is valid for COAMING_INVITE_TTL. A user who has already set a password " +
 			"answers 409 not_invited; an unknown or deleted user answers 404 user_not_found.",
 		Tags: []string{"users"},
 	}, rbac.Requirement{Perm: rbac.PermUsersManage, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *RegenerateInviteInput) (*RegenerateInviteOutput, error) {
@@ -330,7 +330,7 @@ type UpdateUserInput struct {
 	UserID    string `path:"userId" doc:"The user's ID"`
 	Body      struct {
 		DisplayName *string   `json:"displayName,omitempty" maxLength:"256" doc:"The name shown for the user; at most 64 characters. Send an empty string to clear it; leave it out to keep it"`
-		Email       *string   `json:"email,omitempty" maxLength:"254" doc:"A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail"`
+		Email       *string   `json:"email,omitempty" maxLength:"254" doc:"A bare address, or empty to clear it; leave it out to keep it. Coaming never sends mail"`
 		UpdatedAt   time.Time `json:"updatedAt" format:"date-time" doc:"The updatedAt of the user this edit is based on. If the user changed since, the answer is 409 stale_change"`
 	}
 }
@@ -475,8 +475,8 @@ func registerUserLifecycle(r *httpx.Router, d AccessDeps) {
 		Path:        "/api/users/{userId}/reset-password",
 		Summary:     "Issue a password reset link",
 		Description: "Ends every session of the user at once, in the same step that makes the link, and answers a one-time " +
-			"link built like an invite's that lets them choose a new password. It is valid for BAYPLAN_INVITE_TTL (72 hours " +
-			"by default) and replaces any link they held. Bayplan sends no email: the admin hands the link over. " +
+			"link built like an invite's that lets them choose a new password. It is valid for COAMING_INVITE_TTL (72 hours " +
+			"by default) and replaces any link they held. Coaming sends no email: the admin hands the link over. " +
 			"A disabled user answers 409 user_disabled; an unknown or deleted user answers 404 user_not_found. " +
 			"Audited as user.password_reset_issued with the number of sessions ended.",
 		Tags: []string{"users"},

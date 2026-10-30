@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -14,13 +14,13 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
-	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/stacks/rebuild"
 )
 
-// Adoption of a stack Bayplan did not make (plan 08-13, STK-13, D-14). Pressing Adopt changes nothing on the
+// Adoption of a stack Coaming did not make (plan 08-13, STK-13, D-14). Pressing Adopt changes nothing on the
 // engine: the commit reads what runs, rebuilds the compose definition itself and stores it as the stack's draft
 // and as its first revision. The browser never supplies the definition; it only says which state of the engine it
 // looked at, by the fingerprint, so a stack that changed after it was shown is refused (T-08-46).
@@ -29,13 +29,13 @@ import (
 var ErrAdoptStale = errors.New("stackops: what runs changed since the stack was checked")
 
 // ErrUnmanagedGone means no stack of that name runs on the environment any more.
-var ErrUnmanagedGone = errors.New("stackops: no stack of that name runs here that Bayplan does not manage")
+var ErrUnmanagedGone = errors.New("stackops: no stack of that name runs here that Coaming does not manage")
 
 // ErrNotAdoptable is the cause of a *NotAdoptableError.
 var ErrNotAdoptable = errors.New("stackops: this stack cannot be adopted")
 
 // The sources an adoption starts from (plan 08-15, D-12). Rebuild is the default and is always available: the
-// definition Bayplan writes from what runs. Paste is the person's own compose file, checked against what runs and
+// definition Coaming writes from what runs. Paste is the person's own compose file, checked against what runs and
 // kept as written.
 const (
 	AdoptSourceRebuild = "rebuild"
@@ -50,7 +50,7 @@ func (e *PasteError) Error() string {
 	return "stackops: the pasted compose file does not pass the check: " + e.Reason
 }
 
-// NotAdoptableError is a refusal to adopt a stack that is Bayplan's own or its agent's, or whose name its target
+// NotAdoptableError is a refusal to adopt a stack that is Coaming's own or its agent's, or whose name its target
 // cannot hold (D-48, D-49, D-53). Found is the stack as discovery read it, whose Owner and NameReason the caller
 // words.
 type NotAdoptableError struct{ Found Discovered }
@@ -127,7 +127,7 @@ func (d Deps) AdoptFingerprint(ctx context.Context, envID string, target stacks.
 }
 
 // AdoptInput is what a commit of an adoption needs. Fingerprint is the one the page read (AdoptFingerprint),
-// Managed the stacks Bayplan holds on the environment, and Self says which objects are Bayplan's own.
+// Managed the stacks Coaming holds on the environment, and Self says which objects are Coaming's own.
 //
 // Source is AdoptSourceRebuild (or empty) or AdoptSourcePaste. With paste, Pasted is the compose file and variables the
 // person typed or pasted: untrusted text, loaded only through stacks.Check (T-08-56), stored as written when it
@@ -216,7 +216,7 @@ func (p adoptPrepared) withPasted(copy stacks.WorkingCopy, loaded *stacks.Loaded
 // adoption only records what already runs, and a later deploy is judged as any deploy (D-17).
 //
 // A name one of the managed stacks holds is ErrNameTaken, and so is the loser of two adoptions that race. A
-// stack that is Bayplan's own, its agent's, or whose name the target cannot hold is a *NotAdoptableError. A
+// stack that is Coaming's own, its agent's, or whose name the target cannot hold is a *NotAdoptableError. A
 // definition that cannot be written, or does not pass the check, is the *RebuildError of RebuildLive.
 func (d Deps) AdoptCommit(ctx context.Context, repo Repo, in AdoptInput) (Stack, error) {
 	a, err := d.AdoptWithOutcome(ctx, repo, in)
@@ -241,7 +241,7 @@ type adoptPrepared struct {
 }
 
 // prepareAdoption reads what runs and rebuilds the definition from it, reveal included because equality is decided on
-// the real values (D-15, D-47). It refuses a name Bayplan already holds (ErrNameTaken), a name nothing carries
+// the real values (D-15, D-47). It refuses a name Coaming already holds (ErrNameTaken), a name nothing carries
 // (ErrUnmanagedGone) and a stack that is not adoptable (*NotAdoptableError), and sends nothing to the engine.
 func (d Deps) prepareAdoption(ctx context.Context, in AdoptInput) (adoptPrepared, error) {
 	if _, taken := HoldingName(in.Managed, in.Target, in.Name); taken {
@@ -366,7 +366,7 @@ func gapPaths(rows []stacks.ServiceChange) map[string][]string {
 // OwnershipOnly the services that differ in nothing else, by their compose names. Clean says there is no gap. Objects
 // are the networks, volumes, secrets and configs of the stack with how each is treated (D-13, D-18), Notes what the
 // rebuild could not say plainly, and Policy the host-access settings of the definition, listed for whoever asks and
-// blocking nothing (D-17). Portainer and Orphan say the stack carries Portainer's marks or the ID of a stack Bayplan
+// blocking nothing (D-17). Portainer and Orphan say the stack carries Portainer's marks or the ID of a stack Coaming
 // made once (D-19, D-11).
 //
 // Source says which definition was checked. For a pasted file Problems and Variables are what the check found in it
@@ -442,7 +442,7 @@ func (d Deps) AdoptCheck(ctx context.Context, in AdoptInput, reveal bool) (Adopt
 }
 
 // adoptionRecordOf is what the adoption writes down about the objects of the stack: the ID some object of it
-// carried (a stack Bayplan made once, D-11), the networks and volumes it now owns, and the secrets and configs it
+// carried (a stack Coaming made once, D-11), the networks and volumes it now owns, and the secrets and configs it
 // references as external. Pending is true until the first deploy.
 func adoptionRecordOf(found Discovered, res rebuild.Result) stacks.Adoption {
 	a := stacks.Adoption{PriorID: found.OrphanID, Pending: true}

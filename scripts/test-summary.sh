@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # D-21: a red run must say what failed. This reads the results files a test run
 # leaves in .devdata/test/ and lists the failing tests, the hung tests and the

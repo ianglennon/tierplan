@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -82,7 +82,7 @@ func TestStackServicesOfAStackThatIsNotThisEnvironmentsIs404(t *testing.T) {
 	}
 }
 
-func TestStackServicesLeaveOutAServiceOfTheSameNamespaceBayplanDidNotMake(t *testing.T) {
+func TestStackServicesLeaveOutAServiceOfTheSameNamespaceCoamingDidNotMake(t *testing.T) {
 	t.Parallel()
 	f, e := stackEnv(t, nil)
 	admin := f.caller(t, e, "envadmin-1", "admin")

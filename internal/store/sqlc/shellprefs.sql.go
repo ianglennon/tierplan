@@ -57,7 +57,7 @@ func (q *Queries) TrimShellPrefs(ctx context.Context, userID string) error {
 
 const upsertShellPref = `-- name: UpsertShellPref :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 INSERT INTO user_shell_prefs (user_id, image, shell, command, run_as, working_dir, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)

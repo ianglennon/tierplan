@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -135,7 +135,7 @@ describe("RemoveStackDialog: the first phase", () => {
     expect(await screen.findByRole("heading", { name: "Remove tracer?" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Bayplan removes the stack's services, its own networks, and its own secrets and configs. External networks, secrets, configs and volumes are never touched.",
+        "Coaming removes the stack's services, its own networks, and its own secrets and configs. External networks, secrets, configs and volumes are never touched.",
       ),
     ).toBeTruthy();
     expect(await screen.findByText("2 services, 1 network, 1 secret, 0 configs")).toBeTruthy();
@@ -163,7 +163,7 @@ describe("RemoveStackDialog: the first phase", () => {
 
     expect(
       await screen.findByText(
-        "Bayplan removes the stack's containers, its own networks, and its own secrets and configs. External networks, secrets, configs and volumes are never touched.",
+        "Coaming removes the stack's containers, its own networks, and its own secrets and configs. External networks, secrets, configs and volumes are never touched.",
       ),
     ).toBeTruthy();
     expect(await screen.findByText("1 container, 1 network, 0 secrets, 0 configs")).toBeTruthy();

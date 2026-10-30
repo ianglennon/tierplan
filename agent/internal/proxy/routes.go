@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package proxy
 
@@ -348,7 +348,7 @@ var routes = []route{
 	{name: "volume remove", method: http.MethodDelete, path: pathOf(`volumes/` + volumeShape)},
 
 	// Images. Pull is the one write that takes a registry credential. Tag, push,
-	// save, load, import, build and prune are absent on purpose: nothing Bayplan
+	// save, load, import, build and prune are absent on purpose: nothing Coaming
 	// does needs them, and each one changes or exports what the host holds.
 	{
 		// fromSrc, repo, message and changes are absent on purpose: they import an
@@ -369,7 +369,7 @@ var routes = []route{
 	{name: "image history", method: http.MethodGet, path: pathOf(`images/` + imageNameShape + `/history`)},
 	{
 		// force is absent on purpose: without it the engine itself refuses to
-		// remove an image a container uses. platforms is absent because Bayplan
+		// remove an image a container uses. platforms is absent because Coaming
 		// removes whole images.
 		name: "image remove", method: http.MethodDelete, path: pathOf(`images/` + imageNameShape),
 		query: map[string]*regexp.Regexp{"noprune": boolValue},

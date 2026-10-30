@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package engine is the seam between Bayplan and a Docker engine: how bytes
+// Package engine is the seam between Coaming and a Docker engine: how bytes
 // reach it. Phase 1 has one Transport, the local unix socket. Phase 2 adds the
 // agent tunnel as another Transport behind the same interface.
 package engine
@@ -63,7 +63,7 @@ func ParseDockerHost(raw string) (string, error) {
 	path, ok := strings.CutPrefix(raw, "unix://")
 	if !ok || !strings.HasPrefix(path, "/") {
 		return "", fmt.Errorf("%w: %q is not a unix socket path; DOCKER_HOST may only be unix:///path/to/docker.sock "+
-			"(Bayplan reaches Docker through a local socket or an agent, never over tcp:// or ssh://, D-21)",
+			"(Coaming reaches Docker through a local socket or an agent, never over tcp:// or ssh://, D-21)",
 			ErrUnsupportedDockerHost, raw)
 	}
 	return path, nil

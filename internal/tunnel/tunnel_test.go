@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel_test
 
@@ -24,10 +24,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/proto/authn"
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // fakeVerifier stands in for the agents service.
@@ -148,7 +148,7 @@ type fixture struct {
 }
 
 // newFixture serves a hub. tlsOn picks HTTPS or plain HTTP, and publicURL is what
-// the hub believes Bayplan's public URL is: a function of the server's address.
+// the hub believes Coaming's public URL is: a function of the server's address.
 func newFixture(t *testing.T, tlsOn bool, publicURL func(addr string) string) *fixture {
 	t.Helper()
 	return newConfiguredFixture(t, tlsOn, publicURL, slog.New(slog.DiscardHandler), nil)
@@ -430,8 +430,8 @@ func TestTheHandshakeRefusesWhatItShould(t *testing.T) {
 		{"hello mode without a certificate", hs{mode: wire.ModeHello}, nil, wire.ReasonAuthRejected, "malformed"},
 		{"a short key", hs{pubLen: 10}, nil, wire.ReasonAuthRejected, "malformed"},
 		{"a binary frame", hs{binary: true}, nil, wire.ReasonAuthRejected, "text frame"},
-		{"a binding that does not match this TLS connection", hs{ekm: make([]byte, 32)}, nil, wire.ReasonAuthRejected, "BAYPLAN_TRUSTED_PROXIES"},
-		{"no binding at all over TLS", hs{noEKM: true}, nil, wire.ReasonAuthRejected, "BAYPLAN_TRUSTED_PROXIES"},
+		{"a binding that does not match this TLS connection", hs{ekm: make([]byte, 32)}, nil, wire.ReasonAuthRejected, "COAMING_TRUSTED_PROXIES"},
+		{"no binding at all over TLS", hs{noEKM: true}, nil, wire.ReasonAuthRejected, "COAMING_TRUSTED_PROXIES"},
 		{"a refusal from the verifier", hs{}, &tunnel.RefuseError{Code: wire.RefuseDuplicateEnvironment, Detail: "already in Production"}, wire.RefuseDuplicateEnvironment, "already in Production"},
 		{"a server fault in the verifier", hs{}, errors.New("database is locked"), wire.RefuseInternal, ""},
 	} {
@@ -538,7 +538,7 @@ func TestPlainTransportIsRefusedWhenTheAgentAddressIsPlainHTTPForAnotherHost(t *
 	if f.v.callCount() != 0 {
 		t.Error("the verifier was asked about a refused connection")
 	}
-	if got := rec.containing("BAYPLAN_AGENT_ALLOW_INSECURE"); len(got) != 1 || got[0].level != slog.LevelWarn {
+	if got := rec.containing("COAMING_AGENT_ALLOW_INSECURE"); len(got) != 1 || got[0].level != slog.LevelWarn {
 		t.Errorf("records naming the switch = %+v, want exactly one Warn", got)
 	}
 }
@@ -561,13 +561,13 @@ func TestPlainAddressRefusedOnlyForPlainAddressesToAnotherHostWithoutTheSwitch(t
 		{"http://10.0.0.5:7480", false, true},
 		{"http://10.0.0.5:7480", true, false},
 		{"ws://10.0.0.5:7480/agent/connect", false, true},
-		{"HTTP://Bayplan.Example", false, true},
+		{"HTTP://Coaming.Example", false, true},
 		{"http://localhost.example", false, true},
 		{"http://127.0.0.1:7480", false, false},
 		{"ws://[::1]:7480/agent/connect", false, false},
 		{"http://localhost:5173", false, false},
-		{"https://bayplan.example", false, false},
-		{"wss://bayplan.example/agent/connect", false, false},
+		{"https://coaming.example", false, false},
+		{"wss://coaming.example/agent/connect", false, false},
 		{"", false, false},
 		{"http://[::1", false, false}, // url.Parse refuses it
 	} {

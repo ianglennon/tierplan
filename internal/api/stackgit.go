@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -16,16 +16,16 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // problemStackNotGit is the problem type of a git route asked about a stack that is not from a repository.
@@ -60,7 +60,7 @@ type StackGitSummary struct {
 	AutoDeployPausedRevision int64                    `json:"autoDeployPausedRevision,omitempty" minimum:"1" doc:"For autoDeployPausedReason rollback: the number of the revision the stack was rolled back to. Left out otherwise"`
 	AutoDeployOwner          *StackGitAutoDeployOwner `json:"autoDeployOwner,omitempty" doc:"The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record"`
 
-	PollEnabled bool `json:"pollEnabled" doc:"True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
+	PollEnabled bool `json:"pollEnabled" doc:"True when Coaming checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says"`
 	PollMinutes int  `json:"pollMinutes" minimum:"1" maximum:"1440" doc:"How often the repository is checked, in minutes"`
 
 	Webhook *StackGitWebhookSummary `json:"webhook,omitempty" doc:"The stack's webhook; left out when it has none, and on the stack list and detail, which don't carry it. Only this route and the polling route answer it. It never holds the secret or the routing token"`
@@ -426,7 +426,7 @@ type StackGitCommitsBody struct {
 	Commits   []StackGitCommitBody `json:"commits" doc:"The commits that changed the stack's folder, newest first; commits of the same time are ordered by ID. At most 50 are named: total is how many there are"`
 	Total     int                  `json:"total" minimum:"0" doc:"How many commits changed the folder between the deployed commit and head"`
 	Capped    bool                 `json:"capped" doc:"True when the walk stopped at its limit of 2000 commits: there may be more than total"`
-	Available bool                 `json:"available" doc:"False when Bayplan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty"`
+	Available bool                 `json:"available" doc:"False when Coaming can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty"`
 }
 
 // StackGitCommitsOutput wraps StackGitCommitsBody for huma.
@@ -535,7 +535,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		OperationID: "pullStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/pull",
 		Summary: "Pull a git stack's newest commit into its draft",
 		Description: "Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. " +
-			"Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. " +
+			"Coaming's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. " +
 			"A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). " +
 			"draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; " +
 			"422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.pulled with the stack, the repository, the ref, the folder and the commit. Needs stacks.deploy (Operator).",
@@ -588,7 +588,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "updateStackGitUpdates", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/updates",
 		Summary: "Turn a git stack's polling on or off and set how often it is checked",
-		Description: "Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. " +
+		Description: "Sets whether Coaming checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. " +
 			"A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll records the new head and how far behind the stack is, and deploys nothing unless the stack has auto-deploy on. " +
 			"Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. " +
 			"A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).",
@@ -601,7 +601,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		OperationID: "setStackGitAutoDeploy", Method: http.MethodPut, Path: "/api/env/{envId}/stacks/{stackId}/git/auto-deploy",
 		Summary: "Turn a git stack's auto-deploy on or off",
 		Description: "Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. " +
-			"With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Bayplan rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, " +
+			"With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Coaming rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, " +
 			"so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. " +
 			"A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. " +
 			"A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. " +
@@ -616,7 +616,7 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 		OperationID: "createStackGitWebhook", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/webhook",
 		Summary: "Give a git stack a webhook",
 		Description: "Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. " +
-			"Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. " +
+			"Neither can be read again. Coaming keeps the token only as a hash and the secret sealed. A webhook only asks Coaming to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. " +
 			"flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. " +
 			"A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).",
 		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusCreated,
@@ -639,8 +639,8 @@ func registerStackGit(r *httpx.Router, s StacksDeps, g GitDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "detachStackGit", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/git/detach",
 		Summary: "Detach a git stack from its repository",
-		Description: "Turns the stack back into an inline stack you edit in Bayplan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. " +
-			"Bayplan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. " +
+		Description: "Turns the stack back into an inline stack you edit in Coaming (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. " +
+			"Coaming stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. " +
 			"The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. " +
 			"Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).",
 		Tags: []string{"stacks", "git"}, DefaultStatus: http.StatusNoContent,

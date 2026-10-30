@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
@@ -54,7 +54,7 @@ import { useT } from "@/i18n/use-t";
 export type StackFlow = "review" | "deploy";
 
 interface ManagedLayoutProps {
-  // Absent or "managed" is the page of a stack Bayplan manages.
+  // Absent or "managed" is the page of a stack Coaming manages.
   variant?: "managed";
   envId: string;
   stackId: string;
@@ -67,7 +67,7 @@ interface ManagedLayoutProps {
   editing?: boolean;
 }
 
-// The page of a stack Bayplan did not make (D-09): read-only, found by its label, named by its name and not an ID.
+// The page of a stack Coaming did not make (D-09): read-only, found by its label, named by its name and not an ID.
 interface UnmanagedLayoutProps {
   variant: "unmanaged";
   envId: string;
@@ -129,7 +129,7 @@ interface TabEntry {
 }
 
 // tabsOf is the tabs of a stack's page. A stack from a git repository reads Files where the others read Editor (the
-// route is the same: its files are the repository's, read-only, and Bayplan's overlay files), and has the Git tab last.
+// route is the same: its files are the repository's, read-only, and Coaming's overlay files), and has the Git tab last.
 function tabsOf(git: boolean): readonly TabEntry[] {
   if (!git) return TABS;
   return [
@@ -196,7 +196,7 @@ function DeployAction({ envId, stackId }: { envId: string; stackId: string }) {
 
 // AdoptAction is the unmanaged page's one action (UI-SPEC "Unmanaged stack page"): Adopt stack, which opens the
 // Adopt page. An Env Admin gets a link; anyone else sees it off with the role it takes, and a stack that cannot be
-// adopted (Bayplan's own, an agent's, a name its target cannot hold) with the server's reason. A user whose
+// adopted (Coaming's own, an agent's, a name its target cannot hold) with the server's reason. A user whose
 // permissions are not known yet sees nothing rather than a button that may turn off. The muted line under it says
 // what to do to remove the stack, since there is no Remove here (D-10).
 function AdoptAction({
@@ -468,7 +468,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
   );
 }
 
-// The tabs of an unmanaged stack's page: no Editor and no History, since Bayplan holds no definition of it. Each
+// The tabs of an unmanaged stack's page: no Editor and no History, since Coaming holds no definition of it. Each
 // is a child route of the page under unmanaged-stacks.$name.*.
 const UNMANAGED_TABS = [
   {
@@ -499,7 +499,7 @@ const UNMANAGED_TABS = [
 
 // UnmanagedDetailLayout is the frame of an unmanaged stack's page (UI-SPEC "Unmanaged stack page"): the
 // breadcrumb, the header (the name, its state, the target, Unmanaged, Portainer and owner badges, and the line
-// saying Bayplan does not manage it), the notes, the tab bar and the tab under it. Its one action is Adopt stack, which
+// saying Coaming does not manage it), the notes, the tab bar and the tab under it. Its one action is Adopt stack, which
 // opens the Adopt page and changes nothing by itself (D-10, D-14). A stack that is gone, or managed now, replaces the
 // page.
 function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutProps, "variant">) {
@@ -567,7 +567,7 @@ function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutPr
                 {data.portainer ? (
                   <Badge variant="outline">{t("stackUnmanaged.portainer")}</Badge>
                 ) : null}
-                {owner === "bayplan" || owner === "agent" ? (
+                {owner === "coaming" || owner === "agent" ? (
                   <Badge variant="outline">{t(`stackUnmanagedPage.owner.${owner}`)}</Badge>
                 ) : null}
               </div>
@@ -627,7 +627,7 @@ function UnmanagedDetailLayout({ envId, name, children }: Omit<UnmanagedLayoutPr
   );
 }
 
-// StackDetailLayout is the frame of a stack's page, for a stack Bayplan manages (the default) and for one it
+// StackDetailLayout is the frame of a stack's page, for a stack Coaming manages (the default) and for one it
 // found on the engine and does not manage (variant "unmanaged"). The two are separate components so that each
 // reads only its own stack.
 export function StackDetailLayout(props: StackDetailLayoutProps) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -15,12 +15,12 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Stop and Start of a swarm stack run against the fake swarm manager, over a stack the swarm deploy made.
@@ -824,7 +824,7 @@ func TestStartSendsThePlatformsTheDeployedRevisionStoredAndAsksNoRegistry(t *tes
 }
 
 // TestStandaloneStopAndStartGoAheadBesideAContainerTheHostCLIAdded: web-2, added with docker compose up --scale and
-// carrying none of Bayplan's labels, is no name clash for a stop or a start of the stack; a container with another
+// carrying none of Coaming's labels, is no name clash for a stop or a start of the stack; a container with another
 // stack's ID still is one, and nothing is stopped (G-08-6, user decision 2026-10-27).
 func TestStandaloneStopAndStartGoAheadBesideAContainerTheHostCLIAdded(t *testing.T) {
 	t.Parallel()

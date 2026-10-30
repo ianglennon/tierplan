@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { CirclePause, GitCompareArrows, RotateCcw, TriangleAlert } from "lucide-react";
@@ -141,7 +141,7 @@ function Body({ envId, stackId, name, data, target }: BodyProps) {
 }
 
 // DriftPage is the page of a stack's drift (UI-SPEC "Drift page"): what runs on the environment against the revision
-// that is deployed. It checks the stack when it opens and again when asked, and shows what Bayplan knows until the
+// that is deployed. It checks the stack when it opens and again when asked, and shows what Coaming knows until the
 // check comes back. Nothing here changes the stack: Redeploy to restore opens the review, where a person confirms it.
 export function DriftPage({ envId, stackId }: DriftPageProps) {
   const t = useT();

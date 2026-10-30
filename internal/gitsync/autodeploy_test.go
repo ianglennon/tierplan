@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync_test
 
@@ -14,13 +14,13 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // Auto-deploy (plan 09-25, GIT-07, D-18 to D-21, D-29): a check that finds a stack with auto-deploy on behind deploys
@@ -440,7 +440,7 @@ func TestAutoDeployBlockedVarsAndClash(t *testing.T) {
 		refusal gitsync.DeployRefusal
 	}{
 		"a missing variable":  {gitsync.DeployRefusal{Code: "not_deployable", Detail: "compose.yaml:4: required variable REGISTRY is missing a value"}},
-		"a name clash":        {gitsync.DeployRefusal{Code: "name_clash", Detail: "Something Bayplan doesn't manage already uses the name web."}},
+		"a name clash":        {gitsync.DeployRefusal{Code: "name_clash", Detail: "Something Coaming doesn't manage already uses the name web."}},
 		"invalid objects":     {gitsync.DeployRefusal{Code: "objects_invalid", Detail: "The secret db is not defined."}},
 		"a refusal with none": {gitsync.DeployRefusal{Code: "convert_failed"}},
 	} {

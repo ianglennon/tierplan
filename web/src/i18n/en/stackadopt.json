@@ -7,7 +7,7 @@
     },
     "page": {
       "title": "Adopt {{name}}",
-      "body": "Bayplan builds a compose definition from what's running on {{env}}, checks it, and then manages the stack. Adopting doesn't change anything that is running.",
+      "body": "Coaming builds a compose definition from what's running on {{env}}, checks it, and then manages the stack. Adopting doesn't change anything that is running.",
       "breadcrumbRoot": "Stacks",
       "breadcrumbCurrent": "Adopt"
     },
@@ -27,15 +27,15 @@
     "error": {
       "stale": "What is running on {{env}} changed since the check. Run the check again before you adopt.",
       "checkAgain": "Check again",
-      "alreadyManaged": "{{name}} is already managed by Bayplan.",
+      "alreadyManaged": "{{name}} is already managed by Coaming.",
       "openStack": "Open stack",
       "notAdoptable": "{{name}} can't be adopted.",
-      "lost": "Bayplan couldn't reach the server. Nothing was changed. Check the connection and try again.",
+      "lost": "Coaming couldn't reach the server. Nothing was changed. Check the connection and try again.",
       "permission": "You need the Admin role on {{env}} to adopt a stack."
     },
     "gone": {
       "heading": "This stack is gone",
-      "body": "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",
+      "body": "It was removed outside Coaming, or it is now managed. Go back to the list to find it.",
       "back": "Back to stacks"
     },
     "loadFailed": {

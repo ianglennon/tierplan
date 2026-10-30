@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -53,7 +53,7 @@ function stub(who: Who) {
           : undefined;
       sent.push({ method: req.method, path, query: url.search, body });
       if (path === "/api/instance") {
-        return Response.json({ instanceName: "Bayplan Home", needsSetup: false, rememberDays: 30 });
+        return Response.json({ instanceName: "Coaming Home", needsSetup: false, rememberDays: 30 });
       }
       if (path === "/api/me") {
         if (who === "signed-out") return Response.json({ status: 401 }, { status: 401 });
@@ -95,8 +95,8 @@ function stub(who: Who) {
           version: "",
           commit: "abc1234",
           display: "dev (abc1234)",
-          sourceUrl: "https://github.com/ianglennon/bayplan",
-          sourceTreeUrl: "https://github.com/ianglennon/bayplan/tree/abc1234",
+          sourceUrl: "https://github.com/ianglennon/coaming",
+          sourceTreeUrl: "https://github.com/ianglennon/coaming/tree/abc1234",
         });
       }
       return Response.json({}, { status: 404 });
@@ -166,7 +166,7 @@ describe("the shell pop-out", () => {
   it("titles the window with the container and the instance", async () => {
     stub("operator");
     visit(PATH);
-    await waitFor(() => expect(document.title).toBe("web-1 shell · Bayplan Home"));
+    await waitFor(() => expect(document.title).toBe("web-1 shell · Coaming Home"));
   });
 
   it("opens a shell in its own window on the node named, with the toolbar but no second pop-out", async () => {

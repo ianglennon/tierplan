@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -214,7 +214,7 @@ function SettingsForm({ settings }: { settings: Settings }) {
 
   function showServerError(problem: Problem) {
     if (problem.status === 409 && problem.type === "public_url_locked") {
-      // Someone set BAYPLAN_PUBLIC_URL since this page loaded: show it as locked.
+      // Someone set COAMING_PUBLIC_URL since this page loaded: show it as locked.
       form.setError("publicUrl", { type: "server", message: KEY.locked });
       void queryClient.invalidateQueries({ queryKey: settingsQuery.queryKey });
       return;
@@ -254,7 +254,7 @@ function SettingsForm({ settings }: { settings: Settings }) {
     form.setFocus(routed[0]?.field ?? "instanceName");
   }
 
-  // Moving Bayplan to an address other than the one in use can lock this very
+  // Moving Coaming to an address other than the one in use can lock this very
   // browser out (D-04), and a change to the address agents dial concerns every
   // enrolled agent (D-19), so those changes ask first.
   function onSubmit(values: SettingsValues) {

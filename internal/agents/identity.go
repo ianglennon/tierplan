@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package agents
 
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The identity rules of an agent environment (ENV-02, D-11, D-12, D-14, D-23).
@@ -75,7 +75,7 @@ func CheckIdentity(ctx context.Context, q *sqlc.Queries, envID string, f wire.Fa
 	switch {
 	case !f.EngineReachable:
 		return Decision{}, identityRefusal(wire.ReasonEngineUnreachable, "engine_unreachable",
-			"The agent could not read this host's Docker engine, so Bayplan cannot tell what the host is. Check that the Docker socket is mounted into the agent and that Docker is running.")
+			"The agent could not read this host's Docker engine, so Coaming cannot tell what the host is. Check that the Docker socket is mounted into the agent and that Docker is running.")
 	case f.EngineID == "":
 		return Decision{}, identityRefusal(wire.ReasonAuthRejected, "no_engine_id",
 			"The agent did not report an engine ID for this host.")
@@ -156,7 +156,7 @@ func clusterDecision(env sqlc.Environment, f wire.Facts) (Decision, error) {
 	}
 	return Decision{PendingCluster: f.Swarm.ClusterID, RecordChange: !env.ClusterChangedAt.Valid},
 		identityRefusal(wire.ReasonClusterChanged, "cluster_changed",
-			"This swarm is not the one %q was set up with. An administrator must adopt the new cluster in Bayplan before its managers can connect.", envLabel(env))
+			"This swarm is not the one %q was set up with. An administrator must adopt the new cluster in Coaming before its managers can connect.", envLabel(env))
 }
 
 // checkFacts refuses identity strings that are too long or outside the alphabet,

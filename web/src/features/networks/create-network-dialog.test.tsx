@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -330,7 +330,7 @@ describe("CreateNetworkDialog (Advanced)", () => {
     const subnet = await openAdvanced(dialog);
     expect(subnet.getAttribute("placeholder")).toBe("10.20.0.0/24");
     expect(dialog.textContent).toContain(
-      "In CIDR form. Bayplan warns if it overlaps another network but doesn't pick one for you.",
+      "In CIDR form. Coaming warns if it overlaps another network but doesn't pick one for you.",
     );
     expect(within(dialog).getByLabelText("Gateway")).toBeTruthy();
     expect(within(dialog).getByLabelText("IP range")).toBeTruthy();

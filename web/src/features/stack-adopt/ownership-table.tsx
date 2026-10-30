@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { AdoptCheck } from "@/api/stack-adopt";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,7 +25,7 @@ interface OwnershipTableProps {
 // OwnershipTable is the card "How the pieces are treated" of the Adopt page (UI-SPEC, D-13, D-18): the counts of the
 // networks, volumes, secrets and configs of the stack, then each piece with its treatment. A network or volume that
 // carries the stack's label is owned by the stack under its existing name; any other, and every existing secret and
-// config, is external and Bayplan never changes it. A secret or config also says it is not stack-owned and how to
+// config, is external and Coaming never changes it. A secret or config also says it is not stack-owned and how to
 // rotate it. It is a skeleton while the check runs, and says nothing when the check failed: the check card says so.
 export function OwnershipTable({ name, check, checking }: OwnershipTableProps) {
   const t = useT();

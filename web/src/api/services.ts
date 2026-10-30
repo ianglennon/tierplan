@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -423,7 +423,7 @@ export function useRollbackService(envId: string) {
 
 export interface RemoveRequest {
   serviceId: string;
-  // The service's name, typed. Sent only to remove Bayplan's own agent service.
+  // The service's name, typed. Sent only to remove Coaming's own agent service.
   confirm?: string;
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx_test
 
@@ -8,7 +8,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx"
 )
 
 // FuzzValidateURL: whatever is typed, an accepted address is https or ssh, names a host, has no

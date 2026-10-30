@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -12,29 +12,29 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/datadir"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 func newKeyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "key",
-		Short: "Work with Bayplan's master encryption key",
+		Short: "Work with Coaming's master encryption key",
 		Args:  cobra.NoArgs,
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "rotate",
-		Short: "Replace the master key, with Bayplan stopped",
+		Short: "Replace the master key, with Coaming stopped",
 		Long: "Generates a new master key, re-encrypts every stored secret under it, re-signs the whole audit log with it and " +
-			"records a key.rotated audit entry that the old key attests. Bayplan must not be running: stop it, then run this as a " +
+			"records a key.rotated audit entry that the old key attests. Coaming must not be running: stop it, then run this as a " +
 			"one-off container on the same volume, for example:\n" +
-			"  docker run --rm -v bayplan:/data ghcr.io/ianglennon/bayplan key rotate\n" +
-			"The old key is kept as bayplan.key.old so the attestation can be checked; delete it once `bayplan audit verify` passes.\n" +
-			"With a key supplied through BAYPLAN_ENCRYPTION_KEY the new key is written to bayplan.key.new instead, and you set the " +
-			"variable from that file before starting Bayplan again. The key is never printed.",
+			"  docker run --rm -v coaming:/data ghcr.io/ianglennon/coaming key rotate\n" +
+			"The old key is kept as coaming.key.old so the attestation can be checked; delete it once `coaming audit verify` passes.\n" +
+			"With a key supplied through COAMING_ENCRYPTION_KEY the new key is written to coaming.key.new instead, and you set the " +
+			"variable from that file before starting Coaming again. The key is never printed.",
 		Args: cobra.NoArgs,
 		// The lines below are the output; cobra's "Error:" prefix would only repeat them.
 		SilenceErrors: true,
@@ -63,7 +63,7 @@ func runKeyRotate(cmd *cobra.Command) error {
 	// before anything is read, so a refusal changes nothing.
 	release, err := datadir.Lock(cfg.DataDir)
 	if errors.Is(err, datadir.ErrLocked) {
-		fmt.Fprintln(stderr, "key rotate: Bayplan is running on this data directory ("+err.Error()+")")
+		fmt.Fprintln(stderr, "key rotate: Coaming is running on this data directory ("+err.Error()+")")
 		fmt.Fprintln(stderr, "Stop it, then run: docker run --rm -v <volume>:/data <same image> key rotate")
 		return fmt.Errorf("key rotate: %w", err)
 	}
@@ -88,14 +88,14 @@ func runKeyRotate(cmd *cobra.Command) error {
 	// Load never generates a key: a freshly minted one could not open anything.
 	v, err := vault.Load(cfg.EncryptionKey, cfg.DataDir)
 	if errors.Is(err, vault.ErrNoKey) {
-		return fail(fmt.Errorf("no encryption key: set BAYPLAN_ENCRYPTION_KEY (or _FILE), or point BAYPLAN_DATA_DIR at the "+
+		return fail(fmt.Errorf("no encryption key: set COAMING_ENCRYPTION_KEY (or _FILE), or point COAMING_DATA_DIR at the "+
 			"directory that holds %s (looked in %s)", vault.KeyFile, cfg.DataDir))
 	}
 	if err != nil {
 		return fail(err)
 	}
 	if _, err := os.Stat(dbPath); err != nil {
-		return fail(fmt.Errorf("no database at %s: set BAYPLAN_DATA_DIR to the directory Bayplan stores its data in", dbPath))
+		return fail(fmt.Errorf("no database at %s: set COAMING_DATA_DIR to the directory Coaming stores its data in", dbPath))
 	}
 	st, err := store.Open(ctx, cfg.DataDir)
 	if err != nil {
@@ -112,11 +112,11 @@ func runKeyRotate(cmd *cobra.Command) error {
 	fmt.Fprintf(out, "Rotated the master key: %s -> %s\n", res.OldKID, res.NewKID)
 	fmt.Fprintf(out, "Re-encrypted %d stored secret(s) and re-signed %d audit entries.\n", res.Rewrapped, res.Entries)
 	if res.KeyFileSwapped {
-		fmt.Fprintf(out, "The new key is in %s. The old key is kept as %s; delete it once `bayplan audit verify` passes.\n",
+		fmt.Fprintf(out, "The new key is in %s. The old key is kept as %s; delete it once `coaming audit verify` passes.\n",
 			vault.KeyFile, vault.OldKeyFile)
 		fmt.Fprintln(out, "Back up the new key file now: without it stored secrets cannot be decrypted.")
 	} else {
-		fmt.Fprintf(out, "Set BAYPLAN_ENCRYPTION_KEY to the contents of %s, restart Bayplan, then delete the file.\n", res.NewKeyPath)
+		fmt.Fprintf(out, "Set COAMING_ENCRYPTION_KEY to the contents of %s, restart Coaming, then delete the file.\n", res.NewKeyPath)
 	}
 	return nil
 }

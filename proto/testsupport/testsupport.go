@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package testsupport is the one set of waiting helpers every Go module of the
 // repository uses in its tests. It lives in the proto module because that is the
@@ -126,11 +126,11 @@ func pollInterval(timeout time.Duration) time.Duration {
 
 // RunQuarantinedEnv is the environment variable that makes Quarantine run the
 // tests it would otherwise skip. make test-stress (scripts/stress.sh) sets it to 1.
-const RunQuarantinedEnv = "BAYPLAN_RUN_QUARANTINED"
+const RunQuarantinedEnv = "COAMING_RUN_QUARANTINED"
 
 var quarantineReason = regexp.MustCompile(`^\d{4}-\d{2}-\d{2} \S`)
 
-// Quarantine skips the calling test unless BAYPLAN_RUN_QUARANTINED is 1, in
+// Quarantine skips the calling test unless COAMING_RUN_QUARANTINED is 1, in
 // which case it logs the reason and lets the test run. It is a last resort for
 // a test that cannot yet be made deterministic (D-12, D-13): the reason must
 // start with the date the test was quarantined, a space and a tracking

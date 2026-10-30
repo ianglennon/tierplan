@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 func newUploads(t *testing.T, max int64) (*backup.Uploads, string) {

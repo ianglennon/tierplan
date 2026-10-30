@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- What a snapshot of a git-backed stack was made from (Phase 9, D-08). A draft and every revision record the
@@ -16,8 +16,8 @@ ALTER TABLE stack_snapshots ADD COLUMN compose_files TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE stack_snapshots ADD COLUMN sync_trigger TEXT NOT NULL DEFAULT ''
     CHECK (sync_trigger IN ('', 'poll', 'webhook'));
 
--- Where a stack file came from: '' typed or uploaded into Bayplan, repo from the repository, overlay a file
--- Bayplan holds for a path the repository does not have.
+-- Where a stack file came from: '' typed or uploaded into Coaming, repo from the repository, overlay a file
+-- Coaming holds for a path the repository does not have.
 ALTER TABLE stack_snapshot_files ADD COLUMN origin TEXT NOT NULL DEFAULT ''
     CHECK (origin IN ('', 'repo', 'overlay'));
 

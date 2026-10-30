@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package config is the one place Bayplan reads its settings (D-11). Every
+// Package config is the one place Coaming reads its settings (D-11). Every
 // setting is a row in the settings table below. Precedence, highest first:
 //
 //	command-line flag (only when explicitly set)
@@ -31,8 +31,8 @@ import (
 // The two agent timing settings are named in the table and in the check that
 // ties them together.
 const (
-	envAgentHeartbeatInterval = "BAYPLAN_AGENT_HEARTBEAT_INTERVAL"
-	envAgentOfflineAfter      = "BAYPLAN_AGENT_OFFLINE_AFTER"
+	envAgentHeartbeatInterval = "COAMING_AGENT_HEARTBEAT_INTERVAL"
+	envAgentOfflineAfter      = "COAMING_AGENT_OFFLINE_AFTER"
 )
 
 // redactedMark replaces the value of a set secret in Redacted.
@@ -64,7 +64,7 @@ type Config struct {
 	AuditRetentionDays   int // 0 means keep forever
 	SkipPreMigrateBackup bool
 
-	// RestoreRestart is how Bayplan restarts after a restore from the web UI:
+	// RestoreRestart is how Coaming restarts after a restore from the web UI:
 	// "exec" replaces the process image so a container's PID 1 survives, "exit"
 	// exits 0 and leaves the restart to the container's restart policy.
 	RestoreRestart string
@@ -121,7 +121,7 @@ type setting struct {
 	apply  func(c *Config, raw string) error
 }
 
-// The two ways Bayplan restarts after a restore from the web UI.
+// The two ways Coaming restarts after a restore from the web UI.
 const (
 	RestoreRestartExec = "exec"
 	RestoreRestartExit = "exit"
@@ -142,7 +142,7 @@ const (
 	maxConvergeTimeout = 2 * time.Hour
 )
 
-// The range BAYPLAN_INVITE_TTL accepts: an hour is the shortest a person can
+// The range COAMING_INVITE_TTL accepts: an hour is the shortest a person can
 // plausibly act on a link they were handed, and 30 days the longest a bearer
 // secret should stay live.
 const (
@@ -152,7 +152,7 @@ const (
 
 // settings is the single source of truth for env names, flags, defaults and parsing.
 var settings = []setting{
-	{env: "BAYPLAN_LISTEN", flag: "listen", def: ":7480", desc: "address to listen on",
+	{env: "COAMING_LISTEN", flag: "listen", def: ":7480", desc: "address to listen on",
 		apply: func(c *Config, raw string) error {
 			_, port, err := net.SplitHostPort(raw)
 			if err != nil {
@@ -165,30 +165,30 @@ var settings = []setting{
 			c.Listen = raw
 			return nil
 		}},
-	{env: "BAYPLAN_DATA_DIR", flag: "data-dir", def: "/data", desc: "directory for the database, key and checkouts",
+	{env: "COAMING_DATA_DIR", flag: "data-dir", def: "/data", desc: "directory for the database, key and checkouts",
 		apply: func(c *Config, raw string) error { c.DataDir = raw; return nil }},
-	{env: "BAYPLAN_PUBLIC_URL", flag: "public-url", desc: "externally visible base URL; overrides and locks the stored value",
+	{env: "COAMING_PUBLIC_URL", flag: "public-url", desc: "externally visible base URL; overrides and locks the stored value",
 		apply: func(c *Config, raw string) (err error) { c.PublicURL, err = normalisePublicURL(raw); return err }},
-	{env: "BAYPLAN_AGENT_URL", flag: "agent-url", desc: "address agents dial when it differs from the public URL; overrides and locks the stored value",
+	{env: "COAMING_AGENT_URL", flag: "agent-url", desc: "address agents dial when it differs from the public URL; overrides and locks the stored value",
 		apply: func(c *Config, raw string) (err error) { c.AgentURL, err = normalisePublicURL(raw); return err }},
-	{env: "BAYPLAN_ENCRYPTION_KEY", secret: true, desc: "key for secrets at rest (also BAYPLAN_ENCRYPTION_KEY_FILE)",
+	{env: "COAMING_ENCRYPTION_KEY", secret: true, desc: "key for secrets at rest (also COAMING_ENCRYPTION_KEY_FILE)",
 		apply: func(c *Config, raw string) error { c.EncryptionKey = raw; return nil }},
-	{env: "BAYPLAN_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
+	{env: "COAMING_TRUSTED_PROXIES", flag: "trusted-proxies", desc: "comma-separated IPs or CIDRs of proxies whose forwarded headers are trusted",
 		apply: func(c *Config, raw string) (err error) { c.TrustedProxies, err = parsePrefixes(raw); return err }},
-	{env: "BAYPLAN_REGISTRY_BLOCK_CIDRS", flag: "registry-block-cidrs", desc: "comma-separated IPs or CIDRs the server refuses to connect to when it tests or browses a registry, on top of link-local, unspecified and multicast ranges; private and loopback ranges are allowed by default because self-hosted registries live there",
+	{env: "COAMING_REGISTRY_BLOCK_CIDRS", flag: "registry-block-cidrs", desc: "comma-separated IPs or CIDRs the server refuses to connect to when it tests or browses a registry, on top of link-local, unspecified and multicast ranges; private and loopback ranges are allowed by default because self-hosted registries live there",
 		apply: func(c *Config, raw string) (err error) { c.RegistryBlockCIDRs, err = parsePrefixes(raw); return err }},
-	{env: "BAYPLAN_LOGIN_MAX_FAILURES", flag: "login-max-failures", def: "5", desc: "failed sign-ins before an account locks",
+	{env: "COAMING_LOGIN_MAX_FAILURES", flag: "login-max-failures", def: "5", desc: "failed sign-ins before an account locks",
 		apply: func(c *Config, raw string) (err error) { c.LoginMaxFailures, err = parseInt(raw, 1); return err }},
-	{env: "BAYPLAN_LOGIN_LOCKOUT", flag: "login-lockout", def: "30m", desc: "how long an account stays locked",
+	{env: "COAMING_LOGIN_LOCKOUT", flag: "login-lockout", def: "30m", desc: "how long an account stays locked",
 		apply: func(c *Config, raw string) (err error) { c.LoginLockout, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_SESSION_IDLE_TIMEOUT", flag: "session-idle-timeout", def: "12h", desc: "idle time after which a session ends",
+	{env: "COAMING_SESSION_IDLE_TIMEOUT", flag: "session-idle-timeout", def: "12h", desc: "idle time after which a session ends",
 		apply: func(c *Config, raw string) (err error) { c.SessionIdleTimeout, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_SESSION_REMEMBER_LIFETIME", flag: "session-remember-lifetime", def: "720h", desc: "lifetime of a remember-me session",
+	{env: "COAMING_SESSION_REMEMBER_LIFETIME", flag: "session-remember-lifetime", def: "720h", desc: "lifetime of a remember-me session",
 		apply: func(c *Config, raw string) (err error) {
 			c.SessionRememberLifetime, err = parseDuration(raw)
 			return err
 		}},
-	{env: "BAYPLAN_INVITE_TTL", flag: "invite-ttl", def: "72h", desc: "how long an invite or password reset link works",
+	{env: "COAMING_INVITE_TTL", flag: "invite-ttl", def: "72h", desc: "how long an invite or password reset link works",
 		apply: func(c *Config, raw string) (err error) {
 			c.InviteTTL, err = parseDuration(raw)
 			if err == nil && (c.InviteTTL < minInviteTTL || c.InviteTTL > maxInviteTTL) {
@@ -196,14 +196,14 @@ var settings = []setting{
 			}
 			return err
 		}},
-	{env: "BAYPLAN_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
+	{env: "COAMING_AUDIT_RETENTION_DAYS", flag: "audit-retention-days", def: "365", desc: "days to keep audit entries, 0 for forever",
 		apply: func(c *Config, raw string) (err error) { c.AuditRetentionDays, err = parseInt(raw, 0); return err }},
-	{env: "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",
+	{env: "COAMING_SKIP_PRE_MIGRATE_BACKUP", flag: "skip-pre-migrate-backup", def: "false", desc: "do not back up the database before a migration",
 		apply: func(c *Config, raw string) (err error) {
 			c.SkipPreMigrateBackup, err = strconv.ParseBool(raw)
 			return err
 		}},
-	{env: "BAYPLAN_RESTORE_RESTART", flag: "restore-restart", def: "exec", desc: "how Bayplan restarts after a restore from the web UI: exec replaces the process so the container keeps running, exit stops with status 0 and needs a restart policy",
+	{env: "COAMING_RESTORE_RESTART", flag: "restore-restart", def: "exec", desc: "how Coaming restarts after a restore from the web UI: exec replaces the process so the container keeps running, exit stops with status 0 and needs a restart policy",
 		apply: func(c *Config, raw string) error {
 			if raw != RestoreRestartExec && raw != RestoreRestartExit {
 				return fmt.Errorf("%q is not one of %s, %s", raw, RestoreRestartExec, RestoreRestartExit)
@@ -211,17 +211,17 @@ var settings = []setting{
 			c.RestoreRestart = raw
 			return nil
 		}},
-	{env: "BAYPLAN_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1GiB", desc: "the largest backup file the web UI accepts for a restore, from 1MiB to 64GiB (bytes, or a number with KiB, MiB or GiB)",
+	{env: "COAMING_BACKUP_MAX_UPLOAD", flag: "backup-max-upload", def: "1GiB", desc: "the largest backup file the web UI accepts for a restore, from 1MiB to 64GiB (bytes, or a number with KiB, MiB or GiB)",
 		apply: func(c *Config, raw string) (err error) { c.BackupMaxUpload, err = parseUploadSize(raw); return err }},
-	{env: "BAYPLAN_BACKUP_DIR", flag: "backup-dir", desc: "folder scheduled backups are written into (default: backups inside the data directory); mount a volume or host folder here to keep them off the data volume",
+	{env: "COAMING_BACKUP_DIR", flag: "backup-dir", desc: "folder scheduled backups are written into (default: backups inside the data directory); mount a volume or host folder here to keep them off the data volume",
 		apply: func(c *Config, raw string) error { c.BackupDir = raw; return nil }},
-	{env: "BAYPLAN_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
+	{env: "COAMING_TLS_CERT_FILE", flag: "tls-cert-file", desc: "path to a TLS certificate (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSCertFile = raw; return nil }},
-	{env: "BAYPLAN_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
+	{env: "COAMING_TLS_KEY_FILE", flag: "tls-key-file", desc: "path to the TLS private key (PEM)",
 		apply: func(c *Config, raw string) error { c.TLSKeyFile = raw; return nil }},
-	{env: "BAYPLAN_TLS_SELF_SIGNED", flag: "tls-self-signed", def: "false", desc: "serve a generated self-signed certificate",
+	{env: "COAMING_TLS_SELF_SIGNED", flag: "tls-self-signed", def: "false", desc: "serve a generated self-signed certificate",
 		apply: func(c *Config, raw string) (err error) { c.TLSSelfSigned, err = strconv.ParseBool(raw); return err }},
-	{env: "BAYPLAN_DOCKER_GID", flag: "docker-gid", desc: "group ID of the Docker socket, overriding detection",
+	{env: "COAMING_DOCKER_GID", flag: "docker-gid", desc: "group ID of the Docker socket, overriding detection",
 		apply: func(c *Config, raw string) error {
 			if raw == "" {
 				c.DockerGID = nil
@@ -241,11 +241,11 @@ var settings = []setting{
 		}},
 	{env: envAgentOfflineAfter, flag: "agent-offline-after", def: "30s", desc: "silence after which an agent connection is closed and the agent counts as offline; at least twice the heartbeat interval",
 		apply: func(c *Config, raw string) (err error) { c.AgentOfflineAfter, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_AGENT_RECONNECT_GRACE", flag: "agent-reconnect-grace", def: "60s", desc: "after a start, how long an environment shows Reconnecting instead of offline while its agents come back",
+	{env: "COAMING_AGENT_RECONNECT_GRACE", flag: "agent-reconnect-grace", def: "60s", desc: "after a start, how long an environment shows Reconnecting instead of offline while its agents come back",
 		apply: func(c *Config, raw string) (err error) { c.AgentReconnectGrace, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_FAILING_SERVICE_GRACE", flag: "failing-service-grace", def: "2m", desc: "how long after a swarm service was updated it is not counted as failing",
+	{env: "COAMING_FAILING_SERVICE_GRACE", flag: "failing-service-grace", def: "2m", desc: "how long after a swarm service was updated it is not counted as failing",
 		apply: func(c *Config, raw string) (err error) { c.FailingServiceGrace, err = parseDuration(raw); return err }},
-	{env: "BAYPLAN_STACK_CONVERGE_TIMEOUT", flag: "stack-converge-timeout", def: "10m", desc: "how long a swarm stack deploy waits for each service to settle, from 1m to 2h; a service that has not settled by then reads Timed out and the deploy stops",
+	{env: "COAMING_STACK_CONVERGE_TIMEOUT", flag: "stack-converge-timeout", def: "10m", desc: "how long a swarm stack deploy waits for each service to settle, from 1m to 2h; a service that has not settled by then reads Timed out and the deploy stops",
 		apply: func(c *Config, raw string) (err error) {
 			c.StackConvergeTimeout, err = parseDuration(raw)
 			if err == nil && (c.StackConvergeTimeout < minConvergeTimeout || c.StackConvergeTimeout > maxConvergeTimeout) {
@@ -253,14 +253,14 @@ var settings = []setting{
 			}
 			return err
 		}},
-	{env: "BAYPLAN_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
+	{env: "COAMING_AGENT_ALLOW_INSECURE", flag: "agent-allow-insecure", def: "false", desc: "development only: let agents connect over plain ws:// to an agent address that is not this machine, which sends join tokens and Docker answers unencrypted; install commands for a plain address then set it on the agent too",
 		apply: func(c *Config, raw string) (err error) {
 			c.AgentAllowInsecure, err = strconv.ParseBool(raw)
 			return err
 		}},
-	{env: "BAYPLAN_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
+	{env: "COAMING_AGENT_CONNECT_BURST", flag: "agent-connect-burst", def: "200", desc: "how many connection attempts one client address may make at once on the agent endpoint; sized so a whole swarm behind one NAT can reconnect together",
 		apply: func(c *Config, raw string) (err error) { c.AgentConnectBurst, err = parseInt(raw, 1); return err }},
-	{env: "BAYPLAN_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
+	{env: "COAMING_LOG_LEVEL", flag: "log-level", def: "info", desc: "log level: debug, info, warn or error",
 		apply: func(c *Config, raw string) error {
 			switch strings.ToLower(raw) {
 			case "debug":
@@ -353,12 +353,12 @@ func resolve(s setting, flags *pflag.FlagSet, env func(string) string, readFile 
 func (c Config) crossCheck() error {
 	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
 		if c.TLSCertFile == "" {
-			return errors.New("BAYPLAN_TLS_KEY_FILE is set without BAYPLAN_TLS_CERT_FILE; set both or neither")
+			return errors.New("COAMING_TLS_KEY_FILE is set without COAMING_TLS_CERT_FILE; set both or neither")
 		}
-		return errors.New("BAYPLAN_TLS_CERT_FILE is set without BAYPLAN_TLS_KEY_FILE; set both or neither")
+		return errors.New("COAMING_TLS_CERT_FILE is set without COAMING_TLS_KEY_FILE; set both or neither")
 	}
 	if c.TLSSelfSigned && c.TLSCertFile != "" {
-		return errors.New("BAYPLAN_TLS_SELF_SIGNED conflicts with BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE; use one or the other")
+		return errors.New("COAMING_TLS_SELF_SIGNED conflicts with COAMING_TLS_CERT_FILE and COAMING_TLS_KEY_FILE; use one or the other")
 	}
 	// A window shorter than two heartbeats would call an agent offline after one
 	// late or lost heartbeat.
@@ -466,7 +466,7 @@ func parsePrefixes(raw string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
-// reservedSegments are the first path segments Bayplan serves itself: its API,
+// reservedSegments are the first path segments Coaming serves itself: its API,
 // assets, agent endpoint, probes and the SPA's own routes. A public URL whose
 // path started with one would make the base path shadow a route (D-50, T-02-14).
 var reservedSegments = map[string]bool{
@@ -476,8 +476,8 @@ var reservedSegments = map[string]bool{
 }
 
 // reservedSegment returns the first segment of the decoded URL path when
-// Bayplan serves it itself, and "" otherwise. Only the first segment is
-// Bayplan's to claim: /tools/api is a fine base. A name such as openapi.json is
+// Coaming serves it itself, and "" otherwise. Only the first segment is
+// Coaming's to claim: /tools/api is a fine base. A name such as openapi.json is
 // treated as the openapi segment, as the router does.
 func reservedSegment(p string) string {
 	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
@@ -490,7 +490,7 @@ func reservedSegment(p string) string {
 	return ""
 }
 
-// NormalisePublicURL validates a public URL the same way BAYPLAN_PUBLIC_URL is
+// NormalisePublicURL validates a public URL the same way COAMING_PUBLIC_URL is
 // validated, so a value entered in the setup wizard and one set in the
 // environment are held to one rule. Empty stays empty.
 func NormalisePublicURL(raw string) (string, error) { return normalisePublicURL(raw) }
@@ -531,7 +531,7 @@ func normalisePublicURL(raw string) (string, error) {
 		return "", fmt.Errorf("must be an absolute http or https URL: %w", err)
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", errors.New("must be an absolute http or https URL, for example https://bayplan.example.com")
+		return "", errors.New("must be an absolute http or https URL, for example https://coaming.example.com")
 	}
 	if u.User != nil {
 		return "", errors.New("must not contain a user name or password")
@@ -540,7 +540,7 @@ func normalisePublicURL(raw string) (string, error) {
 		return "", errors.New("must not contain a query or fragment")
 	}
 	if seg := reservedSegment(u.Path); seg != "" {
-		return "", fmt.Errorf("must not start with /%s, which Bayplan serves itself", seg)
+		return "", fmt.Errorf("must not start with /%s, which Coaming serves itself", seg)
 	}
 	path := strings.TrimRight(u.EscapedPath(), "/")
 	return u.Scheme + "://" + strings.ToLower(u.Host) + path, nil

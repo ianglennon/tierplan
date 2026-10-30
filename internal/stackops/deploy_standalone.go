@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
 )
 
 // The items of a standalone deploy job, in order. The check, lookup, services and cleanup items are the
@@ -455,9 +455,9 @@ func standaloneAction(diff standaloneDiff, name string) string {
 }
 
 // foreignLive reports whether the host holds a container, network or volume under the stack's Compose
-// project that the stack does not own: a Compose project of that name that Bayplan does not manage (D-12). A
+// project that the stack does not own: a Compose project of that name that Coaming does not manage (D-12). A
 // container is the stack's own, one the host CLI added to its project, or foreign (SplitProject): the CLI's has no
-// bayplan.stack.id and counts only beside a container the stack owns of the same service, so a stack scaled with
+// coaming.stack.id and counts only beside a container the stack owns of the same service, so a stack scaled with
 // `docker compose up --scale` is no name clash, while another stack's container, a same-named project the stack holds
 // nothing of, or a service the stack runs nothing of, still is (G-08-6, WR-03, P7 D-12). An adopted stack owns the containers of its project that carry no ID of its own until
 // its first deploy, and the networks and volumes recorded when it was adopted for good (D-11, D-18), so a project it

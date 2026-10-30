@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -13,21 +13,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/server/servertest"
 )
 
-// The swarm suites (D-57, D-58) run against the engine BAYPLAN_TEST_ENGINE names,
+// The swarm suites (D-57, D-58) run against the engine COAMING_TEST_ENGINE names,
 // one real dind swarm per test function. Every command an admin would paste is run
 // exactly as the server generated it; the harness only loads the agent image on
 // the nodes, so no registry is contacted.
 
 const (
 	installWait = 90 * time.Second
-	agentName   = "bayplan-agent"
+	agentName   = "coaming-agent"
 )
 
-// swarmFix is one swarm, one in-process Bayplan reachable from it, and one agent
+// swarmFix is one swarm, one in-process Coaming reachable from it, and one agent
 // environment that nothing has been installed for yet.
 type swarmFix struct {
 	sw  *dockertest.Swarm
@@ -51,7 +51,7 @@ func (f *swarmFix) install(t *testing.T) {
 }
 
 // installPrivileged runs the generated swarm command with the one setting a host owner adds to let the manager's
-// agent forward services that give tasks host access (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36). The
+// agent forward services that give tasks host access (COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36). The
 // setting is put in the text the server generated, before the first update flag of the service, so everything
 // else in the command runs exactly as an admin would paste it.
 func (f *swarmFix) installPrivileged(t *testing.T) {
@@ -61,7 +61,7 @@ func (f *swarmFix) installPrivileged(t *testing.T) {
 	if !strings.Contains(cmd, anchor) {
 		t.Fatalf("the generated swarm command has no %q to put the setting before:\n%s", anchor, cmd)
 	}
-	cmd = strings.Replace(cmd, anchor, "--env BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+anchor, 1)
+	cmd = strings.Replace(cmd, anchor, "--env COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+anchor, 1)
 	t.Logf("swarm install with the privileged-services opt-in on %s:\n%s", f.sw.Managers[0].Hostname, quiet(sh(t, f.sw.Managers[0], cmd)))
 }
 
@@ -355,8 +355,8 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 	if spec.UpdateConfig.Parallelism != 1 || spec.UpdateConfig.Delay != 10*time.Second {
 		t.Errorf("update config = %+v, want parallelism 1 and delay 10s", spec.UpdateConfig)
 	}
-	if spec.Labels["bayplan.agent"] != "true" || ct.Labels["bayplan.agent"] != "true" {
-		t.Errorf("labels = service %v container %v, want bayplan.agent=true on both (--label and --container-label)", spec.Labels, ct.Labels)
+	if spec.Labels["coaming.agent"] != "true" || ct.Labels["coaming.agent"] != "true" {
+		t.Errorf("labels = service %v container %v, want coaming.agent=true on both (--label and --container-label)", spec.Labels, ct.Labels)
 	}
 	if !ct.ReadOnly {
 		t.Error("the service's root filesystem is not read-only")
@@ -364,8 +364,8 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 	if !slices.Equal(sorted(ct.CapabilityDrop), []string{"ALL"}) || !slices.Equal(sorted(stripCap(ct.CapabilityAdd)), []string{"SETGID", "SETUID"}) {
 		t.Errorf("capabilities = drop %v add %v, want drop ALL and add SETUID, SETGID", ct.CapabilityDrop, ct.CapabilityAdd)
 	}
-	if len(ct.Secrets) != 1 || ct.Secrets[0].SecretName != f.env.Install.SecretName || ct.Secrets[0].File.Name != "bayplan-agent-token" || ct.Secrets[0].File.Mode != 0o400 {
-		t.Errorf("secrets = %+v, want %s mounted as bayplan-agent-token, mode 0400", ct.Secrets, f.env.Install.SecretName)
+	if len(ct.Secrets) != 1 || ct.Secrets[0].SecretName != f.env.Install.SecretName || ct.Secrets[0].File.Name != "coaming-agent-token" || ct.Secrets[0].File.Mode != 0o400 {
+		t.Errorf("secrets = %+v, want %s mounted as coaming-agent-token, mode 0400", ct.Secrets, f.env.Install.SecretName)
 	}
 	if spec.EndpointSpec != nil && len(spec.EndpointSpec.Ports) != 0 {
 		t.Errorf("the service publishes ports %v", spec.EndpointSpec.Ports)
@@ -374,13 +374,13 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 	// On every node: one agent container, no published port, UID 1000 with no
 	// capability left, and a state volume holding the agent's identity.
 	for _, n := range f.sw.Nodes() {
-		if ports := strings.TrimSpace(sh(t, n, "docker ps --filter label=bayplan.agent=true --format '{{.Ports}}'")); ports != "" {
+		if ports := strings.TrimSpace(sh(t, n, "docker ps --filter label=coaming.agent=true --format '{{.Ports}}'")); ports != "" {
 			t.Errorf("%s: the agent container publishes %q, want no port (ENV-03)", n.Hostname, ports)
 		}
-		if names := strings.Fields(sh(t, n, "docker ps --filter label=bayplan.agent=true --format '{{.Names}}'")); len(names) != 1 {
+		if names := strings.Fields(sh(t, n, "docker ps --filter label=coaming.agent=true --format '{{.Names}}'")); len(names) != 1 {
 			t.Errorf("%s: agent containers = %v, want one", n.Hostname, names)
 		}
-		pid := strings.TrimSpace(sh(t, n, "docker inspect -f '{{.State.Pid}}' $(docker ps -q --filter label=bayplan.agent=true)"))
+		pid := strings.TrimSpace(sh(t, n, "docker inspect -f '{{.State.Pid}}' $(docker ps -q --filter label=coaming.agent=true)"))
 		status := sh(t, n, "cat /proc/"+pid+"/status")
 		if uid := fieldOf(status, "Uid:"); uid != "1000 1000 1000 1000" {
 			t.Errorf("%s: agent Uid = %q, want 1000", n.Hostname, uid)
@@ -388,7 +388,7 @@ func sharedEnrol(t *testing.T, f *swarmFix) {
 		if caps := fieldOf(status, "CapEff:"); strings.Trim(caps, "0") != "" {
 			t.Errorf("%s: agent effective capabilities = %s, want none after the privilege drop", n.Hostname, caps)
 		}
-		if files := sh(t, n, "ls -ln $(docker volume inspect -f '{{.Mountpoint}}' bayplan-agent)"); !strings.Contains(files, " 1000 ") {
+		if files := sh(t, n, "ls -ln $(docker volume inspect -f '{{.Mountpoint}}' coaming-agent)"); !strings.Contains(files, " 1000 ") {
 			t.Errorf("%s: the state volume holds nothing owned by 1000:\n%s", n.Hostname, files)
 		}
 	}

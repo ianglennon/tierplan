@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -10,9 +10,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
 )
 
 // StackContainerBody is one container of a standalone service.
@@ -56,7 +56,7 @@ func registerStackOverview(r *httpx.Router, d StacksDeps) {
 		OperationID: "listStackServices", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/services",
 		Summary: "What a stack runs now",
 		Description: "The services the stack owns on the engine, read now: on a swarm each service with its task counts, its image as written and as pinned and its published ports; " +
-			"on a standalone host each service with its containers. A service the engine holds under the stack's name that Bayplan did not make is not listed. " +
+			"on a standalone host each service with its containers. A service the engine holds under the stack's name that Coaming did not make is not listed. " +
 			"A stack that was never deployed answers an empty list. A stack ID of another environment is 404 stack_not_found. An environment that cannot be read is the environment's own problem answer. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},

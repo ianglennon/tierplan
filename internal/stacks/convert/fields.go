@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package convert
 
@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/stacks/fieldclass"
+	"github.com/ianglennon/coaming/internal/stacks/fieldclass"
 )
 
 // FieldClass says what the converter does with one compose service field on a swarm. The table

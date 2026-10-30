@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -12,11 +12,11 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
 )
 
-// env_file (plan 07-12, D-05, Pitfall 4): Bayplan reads an env_file once, from the stack's own
+// env_file (plan 07-12, D-05, Pitfall 4): Coaming reads an env_file once, from the stack's own
 // files, with compose-go's .env parser and the variable table as the lookup. Nothing else reads it,
 // so a swarm and a standalone host can never see different values.
 
@@ -96,9 +96,9 @@ func TestResolveEnvFilesFillsAValueFromTheTable(t *testing.T) {
 
 func TestResolveEnvFilesNeverReadsTheServersEnvironment(t *testing.T) {
 	// Not parallel: t.Setenv changes the test process's environment.
-	t.Setenv("BAYPLAN_ENVFILE_PROBE", "leaked")
+	t.Setenv("COAMING_ENVFILE_PROBE", "leaked")
 	const compose = "services:\n  web:\n    image: nginx:1.27\n    env_file: app.env\n"
-	p, err := resolve(t, stackWith(compose, nil, file("app.env", "P=${BAYPLAN_ENVFILE_PROBE}\nQ=${BAYPLAN_ENVFILE_PROBE:-fallback}\n")))
+	p, err := resolve(t, stackWith(compose, nil, file("app.env", "P=${COAMING_ENVFILE_PROBE}\nQ=${COAMING_ENVFILE_PROBE:-fallback}\n")))
 	if err != nil {
 		t.Fatalf("ResolveEnvFiles: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestCheckPutsAnUnreadableEnvFileAtItsKeyWithoutQuotingIt(t *testing.T) {
 	if p.Severity != stacks.SeverityError || p.File != stacks.ComposeFile || p.Line != 4 {
 		t.Errorf("problem = %+v, want an error at line 4 of compose.yaml", p)
 	}
-	if want := "env_file “app.env” has a line Bayplan can't read (line 2). Write each line as NAME=value."; p.Message != want {
+	if want := "env_file “app.env” has a line Coaming can't read (line 2). Write each line as NAME=value."; p.Message != want {
 		t.Errorf("message = %q, want %q", p.Message, want)
 	}
 	if strings.Contains(p.Message, "hunter2") {

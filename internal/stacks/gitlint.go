@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -156,14 +156,14 @@ func repoFileMissingProblems(c WorkingCopy) Problems {
 }
 
 // lfsPointerProblems are the blocking problems of the repository files that are Git LFS pointers, in
-// path order. An overlay file is Bayplan's own and is not judged.
+// path order. An overlay file is Coaming's own and is not judged.
 func lfsPointerProblems(files []File) Problems {
 	var out Problems
 	for _, f := range files {
 		if f.Origin == OriginRepo && IsLFSPointer(f.Content) {
 			out = append(out, Problem{
 				Severity: SeverityError, Code: CodeLFSPointer, File: f.Path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-				Message: f.Path + " is a Git LFS pointer. Bayplan doesn't support Git LFS.",
+				Message: f.Path + " is a Git LFS pointer. Coaming doesn't support Git LFS.",
 			})
 		}
 	}
@@ -299,7 +299,7 @@ func IsLFSPointer(content []byte) bool {
 func SubmoduleProblem(path string) Problem {
 	return Problem{
 		Severity: SeverityError, Code: CodeSubmodule, File: path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		Message: path + " is a submodule. Bayplan doesn't support submodules.",
+		Message: path + " is a submodule. Coaming doesn't support submodules.",
 	}
 }
 
@@ -318,6 +318,6 @@ func SymlinkOutsideProblem(path string) Problem {
 func SymlinkUnsupportedProblem(path string) Problem {
 	return Problem{
 		Severity: SeverityError, Code: CodeSymlinkOutside, File: path, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		Message: path + " is a link that doesn't lead to a file in the stack folder. Bayplan follows a link to a file only.",
+		Message: path + " is a link that doesn't lead to a file in the stack folder. Coaming follows a link to a file only.",
 	}
 }

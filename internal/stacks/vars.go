@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -151,7 +151,7 @@ func collectRefs(n *yaml.Node, file string, acc map[string]*VarRef, path []strin
 
 // collectEnvironment reads the environment of a service. Besides the references in its values, a
 // bare entry ("- FOO", or "FOO:" with nothing after it) is a reference to the variable FOO: the
-// Compose spec passes it through from the environment of the host, and Bayplan takes it from the
+// Compose spec passes it through from the environment of the host, and Coaming takes it from the
 // table instead.
 func collectEnvironment(n *yaml.Node, file string, acc map[string]*VarRef, depth int) {
 	switch n.Kind {
@@ -274,7 +274,7 @@ func lineOf(n *yaml.Node, name string) int {
 
 // ResolveVars computes the row of every variable the files refer to and every variable of the
 // table, sorted by name. The precedence is the stack's table, then the default written in the
-// compose file (D-01); the Bayplan server's own environment never takes part. A table entry with
+// compose file (D-01); the Coaming server's own environment never takes part. A table entry with
 // no value counts as no value, so the default is used and, with no default, the variable is
 // required. A secret's value is Hidden. It is ResolveVarsLayered with no repository .env.
 func ResolveVars(refs []VarRef, vars []Var) []ResolvedVar {

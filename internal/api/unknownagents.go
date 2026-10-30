@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -13,10 +13,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 // UnknownAgentsDeps are the dependencies of the unknown-agents route.
@@ -31,7 +31,7 @@ type UnknownAgentsDeps struct {
 	Log *slog.Logger
 }
 
-// UnknownAgentBody is one agent Bayplan does not know.
+// UnknownAgentBody is one agent Coaming does not know.
 type UnknownAgentBody struct {
 	EnvID       string `json:"envId" doc:"The environment whose CA signed the agent's certificate"`
 	EnvName     string `json:"envName" doc:"That environment's name"`
@@ -40,7 +40,7 @@ type UnknownAgentBody struct {
 	LastAttempt string `json:"lastAttempt" format:"date-time" doc:"When the agent last tried to connect"`
 }
 
-// UnknownAgentsBody lists the agents Bayplan does not know.
+// UnknownAgentsBody lists the agents Coaming does not know.
 type UnknownAgentsBody struct {
 	Items []UnknownAgentBody `json:"items" doc:"Newest attempt first; empty when there are none"`
 }
@@ -87,7 +87,7 @@ func unknownAgentItems(ctx context.Context, d UnknownAgentsDeps) ([]UnknownAgent
 	return items, nil
 }
 
-// RegisterUnknownAgents registers the list of agents Bayplan does not know, which
+// RegisterUnknownAgents registers the list of agents Coaming does not know, which
 // an instance admin reads after a restore (D-31).
 func RegisterUnknownAgents(r *httpx.Router, d UnknownAgentsDeps) {
 	if d.Log == nil {
@@ -97,7 +97,7 @@ func RegisterUnknownAgents(r *httpx.Router, d UnknownAgentsDeps) {
 		OperationID: "listUnknownAgents",
 		Method:      http.MethodGet,
 		Path:        "/api/environments/unknown-agents",
-		Summary:     "List the agents Bayplan does not know",
+		Summary:     "List the agents Coaming does not know",
 		Description: "After a restore from a backup, agents that were installed after the backup was taken present a certificate the " +
 			"environment issued but are not in the restored database, and are refused unknown_agent. This lists the ones that tried in " +
 			"the last 24 hours, newest first, from memory: it is empty after a restart until they try again, and an agent drops off " +

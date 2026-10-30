@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -379,7 +379,7 @@ describe("NodeTable badges", () => {
     });
     expect(
       screen.getAllByText(
-        "BAYPLAN_AGENT_READ_ONLY is set on this host. The agent refuses every change Bayplan asks for.",
+        "COAMING_AGENT_READ_ONLY is set on this host. The agent refuses every change Coaming asks for.",
       ).length,
     ).toBeGreaterThan(0);
     expect(within(cells(rowFor("mgr-1"))[0] as HTMLElement).queryByText(/Read-only/)).toBeNull();
@@ -421,7 +421,7 @@ describe("NodeTable local socket", () => {
 });
 
 describe("NodeTable folded local host", () => {
-  // The server's row for the Bayplan host folded into the swarm: no agent, no
+  // The server's row for the Coaming host folded into the swarm: no agent, no
   // certificate, no clock, no version.
   const FOLDED = {
     id: "socket:e2",

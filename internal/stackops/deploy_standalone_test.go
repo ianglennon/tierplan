@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -12,14 +12,14 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The console of a standalone deploy (plan 07-20 task 3, D-13): the SDK's events become rows, and decide
@@ -481,7 +481,7 @@ func (a *adopted) standaloneDeployInput(t *testing.T, rv stackops.Review) stacko
 // TestFirstDeployOfAnAdoptedStandaloneStack: the first deploy of an adopted docker compose project is not refused as
 // a foreign project, and hands the SDK the project's network and volume under the names recorded at adoption with the
 // config hashes the host's labels hold, so the SDK recreates the containers for their labels and keeps the network
-// and the volume. Bayplan itself creates, removes and writes nothing but what the SDK does (D-16, D-18, T-08-65).
+// and the volume. Coaming itself creates, removes and writes nothing but what the SDK does (D-16, D-18, T-08-65).
 func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
 	t.Parallel()
 	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
@@ -506,7 +506,7 @@ func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
 		t.Errorf("updated = %d, want both services recreated for the ownership labels", res.Updated)
 	}
 	if got := a.rig.fake.Writes()[before:]; len(got) != 0 {
-		t.Errorf("Bayplan wrote %v, want everything left to the SDK", got)
+		t.Errorf("Coaming wrote %v, want everything left to the SDK", got)
 	}
 	p := stand.project
 	if p == nil || stand.calls != 1 {
@@ -535,20 +535,20 @@ func TestFirstDeployOfAnAdoptedStandaloneStack(t *testing.T) {
 	}
 	for name, svc := range p.Services {
 		if svc.CustomLabels[stacks.LabelStackID] != a.stack.ID {
-			t.Errorf("service %s is sent without Bayplan's ID: %v", name, svc.CustomLabels)
+			t.Errorf("service %s is sent without Coaming's ID: %v", name, svc.CustomLabels)
 		}
 	}
 }
 
 // cliShaped is the container docker compose up --scale adds to a deployed container's project from the host: the
-// same project and service, the next number, and none of Bayplan's labels (G-08-6).
+// same project and service, the next number, and none of Coaming's labels (G-08-6).
 func cliShaped(from dockertest.FakeContainer, n int) dockertest.FakeContainer {
 	c := from
 	c.ID = fmt.Sprintf("%s-%d", from.ID, n)
 	c.Names = []string{fmt.Sprintf("/%s-%d", strings.TrimSuffix(strings.TrimPrefix(from.Names[0], "/"), "-1"), n)}
 	c.Labels = maps.Clone(from.Labels)
 	for key := range c.Labels {
-		if strings.HasPrefix(key, "bayplan.") {
+		if strings.HasPrefix(key, "coaming.") {
 			delete(c.Labels, key)
 		}
 	}
@@ -558,7 +558,7 @@ func cliShaped(from dockertest.FakeContainer, n int) dockertest.FakeContainer {
 
 // TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded: the deploy that puts the revision back (the D-25
 // revert, a roll back deploy) is not refused as a name clash by web-2, which docker compose up --scale added without
-// Bayplan's labels; a container with another stack's ID still refuses it (G-08-6, user decision 2026-10-27).
+// Coaming's labels; a container with another stack's ID still refuses it (G-08-6, user decision 2026-10-27).
 func TestStandaloneRestoreDeployGoesAheadBesideAContainerTheHostCLIAdded(t *testing.T) {
 	t.Parallel()
 	pin := "nginx:1.27-alpine@sha256:" + strings.Repeat("a", 64)

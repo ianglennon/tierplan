@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,11 +40,11 @@ function ev(id: string, time: string, over: Partial<EventDTO> = {}): EventDTO {
 // announceBase does what the server does when it renders index.html (plan
 // 02-03): it puts the base path in a meta tag the SPA reads once.
 function announceBase(base: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
   if (base === null) return;
   const meta = document.createElement("meta");
-  meta.name = "bayplan-base";
+  meta.name = "coaming-base";
   meta.content = base;
   document.head.append(meta);
 }
@@ -181,8 +181,8 @@ describe("invalidationKeys", () => {
     expect(invalidationKeys("image", "e1")).toEqual([summary, list("images")]);
   });
 
-  it("makes only the summary stale for a row of Bayplan's own", () => {
-    expect(invalidationKeys("bayplan", "e1")).toEqual([summary]);
+  it("makes only the summary stale for a row of Coaming's own", () => {
+    expect(invalidationKeys("coaming", "e1")).toEqual([summary]);
   });
 
   it("maps a config event to the summary and the configs list, which an open config page extends", () => {
@@ -228,8 +228,8 @@ describe("invalidationKeys", () => {
     }
     expect(stackServicesKey("e1", "s1").slice(0, 3)).toEqual(list("stacks"));
     expect(stackKey("e1", "s1").slice(0, 3)).toEqual(list("stacks"));
-    // An image, node or Bayplan event is about no stack.
-    for (const type of ["image", "node", "bayplan"] as const) {
+    // An image, node or Coaming event is about no stack.
+    for (const type of ["image", "node", "coaming"] as const) {
       expect(invalidationKeys(type, "e1", true).some((k) => k[2] === "stacks")).toBe(false);
     }
   });
@@ -252,11 +252,11 @@ describe("invalidationKeys", () => {
 
 describe("createEventsConnection", () => {
   it("opens the stream under the base path the server announced", async () => {
-    announceBase("/bayplan");
+    announceBase("/coaming");
     try {
       const c = connect(() => Promise.resolve([]));
       c.connection.start();
-      expect(c.source()?.url).toBe("/bayplan/api/env/e1/events/stream");
+      expect(c.source()?.url).toBe("/coaming/api/env/e1/events/stream");
       c.connection.close();
     } finally {
       announceBase(null);

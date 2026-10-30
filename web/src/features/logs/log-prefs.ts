@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { z } from "@/lib/zod-config";
 
@@ -14,7 +14,7 @@ export interface LogPrefs {
 
 export const DEFAULT_LOG_PREFS: LogPrefs = { wrap: false, timestamps: false, utc: false };
 
-const PREFS_KEY = "bayplan.logs.view";
+const PREFS_KEY = "coaming.logs.view";
 
 // loadLogPrefs reads the saved choices. Anything missing, unreadable or of the wrong
 // type falls back to the default, and storage that is off (private windows) is fine.

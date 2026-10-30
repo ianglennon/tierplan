@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { defineConfig, devices } from "@playwright/test";
 
@@ -12,7 +12,7 @@ import { ORIGIN as baseURL } from "./tests/env";
 // setup deserves.
 // `make e2e` runs the browser in a container that cannot see the host's network
 // change (see the browser service in compose.yaml) and names its server here.
-const wsEndpoint = process.env.BAYPLAN_E2E_BROWSER_WS;
+const wsEndpoint = process.env.COAMING_E2E_BROWSER_WS;
 const chromium = {
   ...devices["Desktop Chrome"],
   baseURL,
@@ -26,18 +26,18 @@ const chromium = {
 // The agent project adds a second environment and revokes it, so the specs before
 // it assume the one environment they started with. The access project follows it
 // because it needs that second, revoked environment as the one a new user must not
-// see. The services project turns the engine Bayplan manages into a one-node swarm,
+// see. The services project turns the engine Coaming manages into a one-node swarm,
 // runs one service on it and leaves the swarm again, so it comes after every spec
 // that assumes a standalone host and before the restore. It finds the local
 // environment by what it is, not by its position, because the agent spec left a
 // second one. The backup project runs last: its restore replaces the state of the shared
 // server, which signs everyone out and drops everything made after the backup.
-// The stacks project deploys compose stacks to the engine Bayplan manages and to an agent host of
+// The stacks project deploys compose stacks to the engine Coaming manages and to an agent host of
 // its own. It enrols that host afresh, because the agent spec leaves its host revoked, and it
 // leaves the engine as it found it. It sits before the services project because it assumes a
 // standalone host, as the specs before it do.
 // The git-stacks project makes a stack from a repository on the git service of this topology and
-// deploys it to the engine Bayplan manages, so it follows the stacks project and, like it, comes
+// deploys it to the engine Coaming manages, so it follows the stacks project and, like it, comes
 // before the services project, which turns that engine into a swarm.
 const order = [
   "setup-and-login",

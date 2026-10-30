@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package httpx
 
@@ -21,15 +21,15 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
-const publicOrigin = "https://bayplan.example"
+const publicOrigin = "https://coaming.example"
 
 // fakeAuth maps the X-Test-User header to a principal: empty is anonymous.
 type fakeAuth struct{}
@@ -473,11 +473,11 @@ func TestAMatchingOriginPassesAndNoOriginFollowsSecFetchSite(t *testing.T) {
 		want int
 	}{
 		{"matching origin", []func(*http.Request){header("Origin", publicOrigin)}, http.StatusOK},
-		{"matching origin, other case", []func(*http.Request){header("Origin", "HTTPS://Bayplan.Example")}, http.StatusOK},
-		{"matching origin with default port", []func(*http.Request){header("Origin", "https://bayplan.example:443")}, http.StatusOK},
-		{"wrong scheme", []func(*http.Request){header("Origin", "http://bayplan.example")}, http.StatusForbidden},
+		{"matching origin, other case", []func(*http.Request){header("Origin", "HTTPS://Coaming.Example")}, http.StatusOK},
+		{"matching origin with default port", []func(*http.Request){header("Origin", "https://coaming.example:443")}, http.StatusOK},
+		{"wrong scheme", []func(*http.Request){header("Origin", "http://coaming.example")}, http.StatusForbidden},
 		{"origin null", []func(*http.Request){header("Origin", "null")}, http.StatusForbidden},
-		{"origin with a path", []func(*http.Request){header("Origin", "https://evil.example/https://bayplan.example")}, http.StatusForbidden},
+		{"origin with a path", []func(*http.Request){header("Origin", "https://evil.example/https://coaming.example")}, http.StatusForbidden},
 		{"no origin, no fetch metadata", nil, http.StatusOK},
 		{"no origin, same-origin", []func(*http.Request){header("Sec-Fetch-Site", "same-origin")}, http.StatusOK},
 		{"no origin, none", []func(*http.Request){header("Sec-Fetch-Site", "none")}, http.StatusOK},
@@ -512,8 +512,8 @@ func TestBeforeAPublicURLIsSetAnHTTPSProxyIsBelievedOnlyWhenTrusted(t *testing.T
 	h := f.r.Handler()
 	via := func(peer string) []func(*http.Request) {
 		return []func(*http.Request){
-			func(r *http.Request) { r.Host = "bayplan.example"; r.RemoteAddr = peer },
-			header("X-Forwarded-Proto", "https"), header("Origin", "https://bayplan.example"),
+			func(r *http.Request) { r.Host = "coaming.example"; r.RemoteAddr = peer },
+			header("X-Forwarded-Proto", "https"), header("Origin", "https://coaming.example"),
 		}
 	}
 	if rec := do(h, http.MethodPost, "/api/public", via("10.1.2.3:4000")...); rec.Code != http.StatusOK {
@@ -793,7 +793,7 @@ func TestVerifyAllGuardedAllowsTheSetupPageRoutes(t *testing.T) {
 
 func TestOriginOf(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://Bayplan.example/base": "https://bayplan.example",
+		"https://Coaming.example/base": "https://coaming.example",
 		"http://localhost:5173":        "http://localhost:5173",
 		"":                             "",
 		"not a url":                    "",

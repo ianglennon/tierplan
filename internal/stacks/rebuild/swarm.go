@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rebuild
 
@@ -19,7 +19,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // SwarmService is one service of the stack as the engine holds it. Name is the swarm name (<namespace>_web) and
@@ -44,7 +44,7 @@ type NetworkInfo struct {
 type Pool struct{ Subnet, Gateway, IPRange string }
 
 // ObjectInfo is a secret or a config of the swarm: its ID and its name, never its content. Labels are its labels,
-// which tell a secret or a config the stack made from one of its files (bayplan.stack.object) from one it only uses.
+// which tell a secret or a config the stack made from one of its files (coaming.stack.object) from one it only uses.
 type ObjectInfo struct {
 	ID, Name string
 	Labels   map[string]string
@@ -63,7 +63,7 @@ type SwarmInput struct {
 }
 
 // Swarm rebuilds the compose project of a swarm stack from its services' specs, the reverse of convert.Convert:
-// converting the result gives the specs back, apart from Bayplan's own labels, once the pins and the platforms are
+// converting the result gives the specs back, apart from Coaming's own labels, once the pins and the platforms are
 // applied: the image of a service is its pin (Result.Pins) and its Placement.Platforms are Result.Platforms, both
 // kept out of the file. Services come out in name order and so does everything else, so the same input always gives
 // the same file.
@@ -224,9 +224,9 @@ func (b *builder) sortedNotes() []Note { return sortNotes(b.notes) }
 
 func (b *builder) sortedObjects() []Object { return sortObjects(b.objects) }
 
-// ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of Bayplan's.
+// ownLabel is a label of the stack's own bookkeeping: the namespace, the image text and anything of Coaming's.
 func ownLabel(key string) bool {
-	return key == stacks.LabelSwarmNamespace || key == stacks.LabelSwarmImage || strings.HasPrefix(key, "bayplan.")
+	return key == stacks.LabelSwarmNamespace || key == stacks.LabelSwarmImage || strings.HasPrefix(key, "coaming.")
 }
 
 // userLabels are the labels a person put on an object, without the stack's own.
@@ -814,7 +814,7 @@ func duration(d time.Duration) *types.Duration {
 }
 
 // secretRefs rebuilds a service's secrets as references to external top-level secrets, named as the swarm names
-// them (D-13). Only the name is ever read; the value is not Bayplan's to know.
+// them (D-13). Only the name is ever read; the value is not Coaming's to know.
 func (b *builder) secretRefs(refs []*swarm.SecretReference) []types.ServiceSecretConfig {
 	var out []types.ServiceSecretConfig
 	for _, r := range refs {
@@ -1002,7 +1002,7 @@ func cpusOf(nano int64) (types.NanoCPUs, bool) {
 }
 
 // baseKey is the key a secret or config that the stack made from one of its files has in the base's file, "" for
-// any other object and when there is no base. The object says it in its bayplan.stack.object label.
+// any other object and when there is no base. The object says it in its coaming.stack.object label.
 func (b *builder) baseKey(rows []ObjectInfo, name string) string {
 	if b.in.Base == nil {
 		return ""

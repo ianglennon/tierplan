@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -10,7 +10,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 func TestStripOwnership(t *testing.T) {
@@ -43,7 +43,7 @@ func TestStripOwnership(t *testing.T) {
 }
 
 // TestStripOwnershipStripsTheLabelsOfVolumeMounts: the stack's ID the converter puts on a named volume's mount is
-// Bayplan's too, and drift never reports it (D-11). Every other label and mount field stays, and the spec given is
+// Coaming's too, and drift never reports it (D-11). Every other label and mount field stays, and the spec given is
 // not changed.
 func TestStripOwnershipStripsTheLabelsOfVolumeMounts(t *testing.T) {
 	t.Parallel()

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -27,12 +27,12 @@ function status(extra: Record<string, unknown> = {}) {
 
 function install() {
   return {
-    agentUrl: "wss://bayplan.example.com/agent/connect",
+    agentUrl: "wss://coaming.example.com/agent/connect",
     generation: 4,
-    image: "ghcr.io/ianglennon/bayplan-agent:0.1.0",
+    image: "ghcr.io/ianglennon/coaming-agent:0.1.0",
     joinToken: "bpjt_E1_s3cr3tvalue",
-    manualCleanup: { standalone: " docker rm -f bayplan-agent", swarm: " docker service rm x" },
-    secretName: "bayplan-agent-token-g4",
+    manualCleanup: { standalone: " docker rm -f coaming-agent", swarm: " docker service rm x" },
+    secretName: "coaming-agent-token-g4",
     standalone: { command: " docker run x", composeFile: "services: {}\n" },
     swarm: { command: " docker service create x", stackFile: "services: {}\n" },
   };

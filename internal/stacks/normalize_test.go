@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -9,7 +9,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // The engine fills in defaults when it stores a service, so a review is only empty right after a
@@ -50,7 +50,7 @@ func TestNormalizeSpecAppliesTheDefaultsAnEngineStoresSoBothSidesCompareEqual(t 
 		"the order of ports":      {`{"Name":"a","EndpointSpec":{"Ports":[{"TargetPort":81},{"TargetPort":80}]}}`, `{"Name":"a","EndpointSpec":{"Ports":[{"TargetPort":80},{"TargetPort":81}]}}`},
 		"the order of env":        {`{"Name":"a","TaskTemplate":{"ContainerSpec":{"Env":["B=2","A=1"]}}}`, `{"Name":"a","TaskTemplate":{"ContainerSpec":{"Env":["A=1","B=2"]}}}`},
 		"the order of networks":   {`{"Name":"a","TaskTemplate":{"Networks":[{"Target":"b"},{"Target":"a"}]}}`, `{"Name":"a","TaskTemplate":{"Networks":[{"Target":"a"},{"Target":"b"}]}}`},
-		"the stop bookkeeping":    {`{"Name":"a","Labels":{"bayplan.stack.stopped-replicas":"3","x":"1"}}`, `{"Name":"a","Labels":{"x":"1"}}`},
+		"the stop bookkeeping":    {`{"Name":"a","Labels":{"coaming.stack.stopped-replicas":"3","x":"1"}}`, `{"Name":"a","Labels":{"x":"1"}}`},
 		"empty versus absent":     {`{"Name":"a","TaskTemplate":{"ContainerSpec":{"Env":[],"Labels":{}}}}`, `{"Name":"a","TaskTemplate":{"ContainerSpec":{}}}`},
 		"the order of platforms":  {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"arm64","OS":"linux"},{"Architecture":"amd64","OS":"linux"},{"OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"OS":"linux"},{"Architecture":"amd64","OS":"linux"},{"Architecture":"arm64","OS":"linux"}]}}}`},
 		"a repeated platform":     {`{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"},{"Architecture":"amd64","OS":"linux"}]}}}`, `{"Name":"a","TaskTemplate":{"Placement":{"Platforms":[{"Architecture":"amd64","OS":"linux"}]}}}`},

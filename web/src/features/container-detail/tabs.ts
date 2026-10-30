@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // The tabs of the container detail page, in the order they show: Overview, Logs,
 // Stats, Shell, Inspect (UI-SPEC "Container detail"). Each later plan adds its own entry

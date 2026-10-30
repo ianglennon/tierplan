@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx
 
@@ -86,7 +86,7 @@ func (g *GoGit) mirrorPath(m MirrorID) (string, error) {
 
 // originFile is the file in a mirror that holds the digest of the destination it was filled from (see
 // originOf).
-const originFile = "bayplan-origin"
+const originFile = "coaming-origin"
 
 // originOf is a digest of what a mirror's contents come from: the address, the certificate authority
 // and who signs in (the user name of a token, the public key of a deploy key; never a secret). A mirror
@@ -172,7 +172,7 @@ var errMirrorMissing = errors.New("gitx: the mirror is not there")
 
 // lastUsedFile is the file in a mirror whose modification time says when it was last fetched or read, so the
 // answer survives a restart.
-const lastUsedFile = "bayplan-last-used"
+const lastUsedFile = "coaming-last-used"
 
 // usedWriteEvery is how often a busy mirror's lastUsedFile is written again; the in-memory time is always current.
 const usedWriteEvery = time.Hour

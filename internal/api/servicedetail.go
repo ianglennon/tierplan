@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,12 +15,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 const (
@@ -120,8 +120,8 @@ type ServiceDetailBody struct {
 	Running        uint64 `json:"running" doc:"Tasks that are running now, from the last cluster read"`
 	Desired        uint64 `json:"desired" doc:"Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count"`
 	Stack          string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
-	BayplanStackID string `json:"bayplanStackId" doc:"The ID of the Bayplan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
-	Agent          bool   `json:"agent" doc:"True for a Bayplan agent service"`
+	CoamingStackID string `json:"coamingStackId" doc:"The ID of the Coaming stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
+	Agent          bool   `json:"agent" doc:"True for a Coaming agent service"`
 	CreatedAt      string `json:"createdAt" format:"date-time" doc:"When the service was created"`
 	UpdatedAt      string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
@@ -260,7 +260,7 @@ func getServiceSpec(ctx context.Context, d ServicesDeps, p *rbac.Principal, envI
 	previous, _ := doc["PreviousSpec"].(map[string]any)
 	return ServiceSpecBody{
 		Version: detail.Version, Name: detail.Name, Mode: detail.Mode, Stack: detail.Stack,
-		BayplanStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent,
+		CoamingStackID: loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels), Agent: detail.Agent,
 		Masked: masked, Spec: spec, PreviousSpec: previous,
 	}, nil
 }
@@ -306,7 +306,7 @@ func getService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID, s
 
 	row, loop, muted, haveRow := serviceRow(ctx, d, envID, detail.ID)
 	body := serviceDetailBody(detail, shown, nets, row, haveRow, reveal)
-	body.BayplanStackID = loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels)
+	body.CoamingStackID = loadStackIDs(ctx, d.Store, envID, d.Log).confirmedFor(detail.Stack, detail.Labels)
 	if loop != nil {
 		body.RestartLoop = restartLoopBody(*loop)
 	}

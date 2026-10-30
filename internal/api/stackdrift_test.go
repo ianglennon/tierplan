@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -17,10 +17,10 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The drift route (plan 08-19, STK-14): what runs against the deployed revision, read by anyone who may read stacks,
@@ -48,7 +48,7 @@ type driftAnswer struct {
 	} `json:"services"`
 }
 
-// editLiveService changes a deployed service of the stack as somebody outside Bayplan would.
+// editLiveService changes a deployed service of the stack as somebody outside Coaming would.
 func (f *envFix) editLiveService(t *testing.T, e envBody, stack, service string, edit func(*swarm.ServiceSpec)) {
 	t.Helper()
 	ctx := testsupport.Context(t)
@@ -389,7 +389,7 @@ func TestStackDriftStandalone(t *testing.T) {
 	}
 }
 
-// A drift caused inside Bayplan names who did it and when; one found with no such action says nothing of a cause, and
+// A drift caused inside Coaming names who did it and when; one found with no such action says nothing of a cause, and
 // nothing of an audit row but the action, the name, the time and the replica counts leaves (plan 08-22, D-24, T-08-78).
 func TestStackDriftCarriesTheCause(t *testing.T) {
 	t.Parallel()
@@ -424,10 +424,10 @@ func TestStackDriftCarriesTheCause(t *testing.T) {
 	})
 	got, _ := read()
 	if len(got.Services) != 1 || got.Services[0].Cause != nil || got.Cause != nil || got.Causes != 0 {
-		t.Fatalf("a change from outside = %+v, want no cause: the reader says it was made outside Bayplan", got)
+		t.Fatalf("a change from outside = %+v, want no cause: the reader says it was made outside Coaming", got)
 	}
 
-	// A scale from the service page is Bayplan's own action and drift as well.
+	// A scale from the service page is Coaming's own action and drift as well.
 	var webID string
 	for _, s := range answerOf[stackServicesAnswer](t, operator.do(http.MethodGet, "stacks/"+st.ID+"/services", "")).Items {
 		if s.Short == "web" {
@@ -496,7 +496,7 @@ func TestAcceptLiveRoute(t *testing.T) {
 	}](t, operator.deploy(st.ID, `{"draftVersion":`+itoaT(v)+`}`)).JobID); job.State != "done" {
 		t.Fatalf("deploy = %+v, want it done", job)
 	}
-	// Somebody scales the service outside Bayplan.
+	// Somebody scales the service outside Coaming.
 	f.editLiveService(t, e, "accepted", "web", scaleTo(3))
 	seen := draftVersion(t, operator, st.ID)
 	writes := len(f.fake.Writes())

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package agents_test
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/agents"
+	"github.com/ianglennon/coaming/internal/agents"
 )
 
 // update rewrites the golden files: go test ./internal/agents/ -run InstallCommand -update-golden.
@@ -26,7 +26,7 @@ var update = flag.Bool("update-golden", false, "rewrite the install golden files
 
 const (
 	goldenToken    = "bpjt_E_S" //nolint:gosec // a made-up token for the golden files
-	goldenEndpoint = "wss://example.com/bayplan/agent/connect"
+	goldenEndpoint = "wss://example.com/coaming/agent/connect"
 	goldenPin      = "sha256/P"
 )
 
@@ -87,38 +87,38 @@ func TestInstallCommandCarriesTheNamesTheAgentIdentifiesItselfBy(t *testing.T) {
 	if in.JoinToken != goldenToken || in.AgentURL != goldenEndpoint || in.Pin != goldenPin || in.Generation != 1 {
 		t.Fatalf("install = %+v, want the parameters echoed", in)
 	}
-	if in.SecretName != "bayplan-agent-token-g1" {
-		t.Errorf("SecretName = %q, want bayplan-agent-token-g1", in.SecretName)
+	if in.SecretName != "coaming-agent-token-g1" {
+		t.Errorf("SecretName = %q, want coaming-agent-token-g1", in.SecretName)
 	}
-	if in.Image != "ghcr.io/ianglennon/bayplan-agent:0.2.0" {
+	if in.Image != "ghcr.io/ianglennon/coaming-agent:0.2.0" {
 		t.Errorf("Image = %q, want the exact server version, never latest", in.Image)
 	}
 
 	for _, want := range []string{
-		"docker service create", "--name bayplan-agent", "--mode global", "--constraint node.platform.os==linux",
-		"--secret source=bayplan-agent-token-g1,target=bayplan-agent-token,mode=0400",
+		"docker service create", "--name coaming-agent", "--mode global", "--constraint node.platform.os==linux",
+		"--secret source=coaming-agent-token-g1,target=coaming-agent-token,mode=0400",
 		"--mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
-		"--mount type=volume,src=bayplan-agent,dst=/var/lib/bayplan-agent",
+		"--mount type=volume,src=coaming-agent,dst=/var/lib/coaming-agent",
 		"--read-only", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID",
-		"--label bayplan.agent=true", "--container-label bayplan.agent=true",
-		"BAYPLAN_AGENT_URL=" + goldenEndpoint, "BAYPLAN_AGENT_PIN=" + goldenPin,
-		"BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token",
-		"docker secret create bayplan-agent-token-g1 -",
+		"--label coaming.agent=true", "--container-label coaming.agent=true",
+		"COAMING_AGENT_URL=" + goldenEndpoint, "COAMING_AGENT_PIN=" + goldenPin,
+		"COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/coaming-agent-token",
+		"docker secret create coaming-agent-token-g1 -",
 	} {
 		if !strings.Contains(in.SwarmCommand, want) {
 			t.Errorf("swarm command lacks %q:\n%s", want, in.SwarmCommand)
 		}
 	}
-	if strings.Contains(in.SwarmCommand, "BAYPLAN_AGENT_JOIN_TOKEN=") {
+	if strings.Contains(in.SwarmCommand, "COAMING_AGENT_JOIN_TOKEN=") {
 		t.Errorf("the swarm command passes the token as an env var instead of the secret file:\n%s", in.SwarmCommand)
 	}
 
 	for _, want := range []string{
-		"docker run -d", "--name bayplan-agent", "--restart unless-stopped", "--read-only", "--cap-drop ALL",
+		"docker run -d", "--name coaming-agent", "--restart unless-stopped", "--read-only", "--cap-drop ALL",
 		"--cap-add SETUID", "--cap-add SETGID", "--security-opt no-new-privileges",
-		"-v /var/run/docker.sock:/var/run/docker.sock", "-v bayplan-agent:/var/lib/bayplan-agent",
-		"--label bayplan.agent=true", "BAYPLAN_AGENT_URL=" + goldenEndpoint, "BAYPLAN_AGENT_PIN=" + goldenPin,
-		"BAYPLAN_AGENT_JOIN_TOKEN=" + goldenToken,
+		"-v /var/run/docker.sock:/var/run/docker.sock", "-v coaming-agent:/var/lib/coaming-agent",
+		"--label coaming.agent=true", "COAMING_AGENT_URL=" + goldenEndpoint, "COAMING_AGENT_PIN=" + goldenPin,
+		"COAMING_AGENT_JOIN_TOKEN=" + goldenToken,
 	} {
 		if !strings.Contains(in.StandaloneCommand, want) {
 			t.Errorf("standalone command lacks %q:\n%s", want, in.StandaloneCommand)
@@ -134,7 +134,7 @@ func TestInstallCommandWithoutAPinNamesNone(t *testing.T) {
 	p.Pin = ""
 	in := mustBuild(t, p)
 	for name, text := range allInstallText(in) {
-		if strings.Contains(text, "BAYPLAN_AGENT_PIN") || strings.Contains(text, "sha256/") {
+		if strings.Contains(text, "COAMING_AGENT_PIN") || strings.Contains(text, "sha256/") {
 			t.Errorf("%s mentions a pin although there is none:\n%s", name, text)
 		}
 	}
@@ -158,20 +158,20 @@ func allInstallText(in agents.Install) map[string]string {
 
 func TestInstallCommandAgentImageTagFollowsTheServer(t *testing.T) {
 	for server, want := range map[string]string{
-		"v0.2.0":             "ghcr.io/ianglennon/bayplan-agent:0.2.0",
-		"0.2.0":              "ghcr.io/ianglennon/bayplan-agent:0.2.0",
-		"v0.2.0-rc.1":        "ghcr.io/ianglennon/bayplan-agent:0.2.0-rc.1",
-		"v1.10.3":            "ghcr.io/ianglennon/bayplan-agent:1.10.3",
-		"v0.2.0+build.5":     "ghcr.io/ianglennon/bayplan-agent:0.2.0",
-		"dev (abc123)":       "ghcr.io/ianglennon/bayplan-agent:edge",
-		"edge":               "ghcr.io/ianglennon/bayplan-agent:edge",
-		"":                   "ghcr.io/ianglennon/bayplan-agent:edge",
-		"v0.2":               "ghcr.io/ianglennon/bayplan-agent:edge",
-		"v0.2.0; rm -rf /":   "ghcr.io/ianglennon/bayplan-agent:edge",
-		"v0.2.0-rc.1 --x":    "ghcr.io/ianglennon/bayplan-agent:edge",
-		"vv0.2.0":            "ghcr.io/ianglennon/bayplan-agent:edge",
-		"v0.2.0-$(id)":       "ghcr.io/ianglennon/bayplan-agent:edge",
-		"v0.2.0-rc.1\nextra": "ghcr.io/ianglennon/bayplan-agent:edge",
+		"v0.2.0":             "ghcr.io/ianglennon/coaming-agent:0.2.0",
+		"0.2.0":              "ghcr.io/ianglennon/coaming-agent:0.2.0",
+		"v0.2.0-rc.1":        "ghcr.io/ianglennon/coaming-agent:0.2.0-rc.1",
+		"v1.10.3":            "ghcr.io/ianglennon/coaming-agent:1.10.3",
+		"v0.2.0+build.5":     "ghcr.io/ianglennon/coaming-agent:0.2.0",
+		"dev (abc123)":       "ghcr.io/ianglennon/coaming-agent:edge",
+		"edge":               "ghcr.io/ianglennon/coaming-agent:edge",
+		"":                   "ghcr.io/ianglennon/coaming-agent:edge",
+		"v0.2":               "ghcr.io/ianglennon/coaming-agent:edge",
+		"v0.2.0; rm -rf /":   "ghcr.io/ianglennon/coaming-agent:edge",
+		"v0.2.0-rc.1 --x":    "ghcr.io/ianglennon/coaming-agent:edge",
+		"vv0.2.0":            "ghcr.io/ianglennon/coaming-agent:edge",
+		"v0.2.0-$(id)":       "ghcr.io/ianglennon/coaming-agent:edge",
+		"v0.2.0-rc.1\nextra": "ghcr.io/ianglennon/coaming-agent:edge",
 	} {
 		if got := agents.AgentImage(server); got != want {
 			t.Errorf("AgentImage(%q) = %q, want %q", server, got, want)
@@ -278,27 +278,27 @@ func TestInstallCommandStackFileKeepsTheTokenOutOfTheYAMLBody(t *testing.T) {
 	in := mustBuild(t, goldenParams())
 
 	first, rest, _ := strings.Cut(in.SwarmStackFile, "\n")
-	want := "# Create the secret first:  printf %s '" + goldenToken + "' | docker secret create bayplan-agent-token-g1 -"
+	want := "# Create the secret first:  printf %s '" + goldenToken + "' | docker secret create coaming-agent-token-g1 -"
 	if first != want {
 		t.Errorf("first line = %q, want the one-line docker secret create command %q", first, want)
 	}
 	if strings.Contains(rest, goldenToken) {
 		t.Errorf("the stack file has the token below its first comment line:\n%s", rest)
 	}
-	if strings.Count(in.SwarmStackFile, "external: true") != 1 || !strings.Contains(in.SwarmStackFile, "bayplan-agent-token-g1:") {
-		t.Errorf("the stack file must declare bayplan-agent-token-g1 as external exactly once:\n%s", in.SwarmStackFile)
+	if strings.Count(in.SwarmStackFile, "external: true") != 1 || !strings.Contains(in.SwarmStackFile, "coaming-agent-token-g1:") {
+		t.Errorf("the stack file must declare coaming-agent-token-g1 as external exactly once:\n%s", in.SwarmStackFile)
 	}
 	for _, want := range []string{
 		"mode: global", "node.platform.os == linux", "read_only: true", "- ALL", "- SETUID", "- SETGID",
-		"bayplan.agent: \"true\"", "target: bayplan-agent-token", "mode: 0400",
-		"BAYPLAN_AGENT_JOIN_TOKEN_FILE: /run/secrets/bayplan-agent-token", "/var/run/docker.sock:/var/run/docker.sock",
-		"bayplan-agent:/var/lib/bayplan-agent",
+		"coaming.agent: \"true\"", "target: coaming-agent-token", "mode: 0400",
+		"COAMING_AGENT_JOIN_TOKEN_FILE: /run/secrets/coaming-agent-token", "/var/run/docker.sock:/var/run/docker.sock",
+		"coaming-agent:/var/lib/coaming-agent",
 	} {
 		if !strings.Contains(in.SwarmStackFile, want) {
 			t.Errorf("the stack file lacks %q:\n%s", want, in.SwarmStackFile)
 		}
 	}
-	if strings.Count(in.SwarmStackFile, "bayplan.agent:") != 2 {
+	if strings.Count(in.SwarmStackFile, "coaming.agent:") != 2 {
 		t.Errorf("the stack file must label both the service (deploy.labels) and its containers (labels):\n%s", in.SwarmStackFile)
 	}
 }
@@ -307,10 +307,10 @@ func TestInstallCommandComposeFileCarriesTheSameEnvironmentAsTheCommand(t *testi
 	in := mustBuild(t, goldenParams())
 	for _, want := range []string{
 		"restart: unless-stopped", "no-new-privileges:true", "read_only: true", "- SETUID", "- SETGID",
-		"BAYPLAN_AGENT_URL: \"" + goldenEndpoint + "\"", "BAYPLAN_AGENT_PIN: \"" + goldenPin + "\"",
-		"BAYPLAN_AGENT_JOIN_TOKEN: \"" + goldenToken + "\"",
-		"/var/run/docker.sock:/var/run/docker.sock", "bayplan-agent:/var/lib/bayplan-agent", "bayplan.agent: \"true\"",
-		"container_name: bayplan-agent",
+		"COAMING_AGENT_URL: \"" + goldenEndpoint + "\"", "COAMING_AGENT_PIN: \"" + goldenPin + "\"",
+		"COAMING_AGENT_JOIN_TOKEN: \"" + goldenToken + "\"",
+		"/var/run/docker.sock:/var/run/docker.sock", "coaming-agent:/var/lib/coaming-agent", "coaming.agent: \"true\"",
+		"container_name: coaming-agent",
 	} {
 		if !strings.Contains(in.StandaloneComposeFile, want) {
 			t.Errorf("the compose file lacks %q:\n%s", want, in.StandaloneComposeFile)
@@ -325,13 +325,13 @@ func TestInstallCommandRotationSwapsTheSecretInPlace(t *testing.T) {
 	p := goldenParams()
 	p.Generation = 2
 	in := mustBuild(t, p)
-	if in.SecretName != "bayplan-agent-token-g2" {
-		t.Fatalf("SecretName = %q, want bayplan-agent-token-g2", in.SecretName)
+	if in.SecretName != "coaming-agent-token-g2" {
+		t.Fatalf("SecretName = %q, want coaming-agent-token-g2", in.SecretName)
 	}
 	for _, want := range []string{
-		`OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' bayplan-agent)`,
-		"docker secret create bayplan-agent-token-g2 -",
-		`docker service update --secret-rm "$OLD" --secret-add source=bayplan-agent-token-g2,target=bayplan-agent-token,mode=0400 bayplan-agent`,
+		`OLD=$(docker service inspect -f '{{(index .Spec.TaskTemplate.ContainerSpec.Secrets 0).SecretName}}' coaming-agent)`,
+		"docker secret create coaming-agent-token-g2 -",
+		`docker service update --secret-rm "$OLD" --secret-add source=coaming-agent-token-g2,target=coaming-agent-token,mode=0400 coaming-agent`,
 		`docker secret rm "$OLD"`,
 	} {
 		if !strings.Contains(in.SwarmRotateCommand, want) {
@@ -349,12 +349,12 @@ func TestInstallCommandRotationSwapsTheSecretInPlace(t *testing.T) {
 
 func TestInstallCommandCleanupNamesWhatTheInstallCreated(t *testing.T) {
 	in := mustBuild(t, goldenParams())
-	for _, want := range []string{"docker service rm bayplan-agent", "docker secret rm bayplan-agent-token-g1", "docker volume rm bayplan-agent"} {
+	for _, want := range []string{"docker service rm coaming-agent", "docker secret rm coaming-agent-token-g1", "docker volume rm coaming-agent"} {
 		if !strings.Contains(in.SwarmCleanup, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, in.SwarmCleanup)
 		}
 	}
-	for _, want := range []string{"docker rm -f bayplan-agent", "docker volume rm bayplan-agent"} {
+	for _, want := range []string{"docker rm -f coaming-agent", "docker volume rm coaming-agent"} {
 		if !strings.Contains(in.StandaloneCleanup, want) {
 			t.Errorf("the standalone cleanup lacks %q:\n%s", want, in.StandaloneCleanup)
 		}
@@ -395,15 +395,15 @@ func TestManualUpdateCommandTargetsTheAgentOfTheEnvironmentType(t *testing.T) {
 	p := goldenParams()
 	image := agents.AgentImage(p.ServerVersion)
 
-	if got, want := agents.ManualUpdateCommand("swarm", image, p), " docker service update --image ghcr.io/ianglennon/bayplan-agent:0.2.0 bayplan-agent"; got != want {
+	if got, want := agents.ManualUpdateCommand("swarm", image, p), " docker service update --image ghcr.io/ianglennon/coaming-agent:0.2.0 coaming-agent"; got != want {
 		t.Errorf("swarm update = %q, want %q", got, want)
 	}
 
 	got := agents.ManualUpdateCommand("standalone", image, p)
 	for _, want := range []string{
-		"docker pull ghcr.io/ianglennon/bayplan-agent:0.2.0", "docker rm -f bayplan-agent", "docker run -d --name bayplan-agent",
+		"docker pull ghcr.io/ianglennon/coaming-agent:0.2.0", "docker rm -f coaming-agent", "docker run -d --name coaming-agent",
 		"--restart unless-stopped", "--read-only", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID", "--security-opt no-new-privileges",
-		"-v bayplan-agent:/var/lib/bayplan-agent", "BAYPLAN_AGENT_URL=" + goldenEndpoint, "BAYPLAN_AGENT_PIN=" + goldenPin,
+		"-v coaming-agent:/var/lib/coaming-agent", "COAMING_AGENT_URL=" + goldenEndpoint, "COAMING_AGENT_PIN=" + goldenPin,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("standalone update lacks %q:\n%s", want, got)
@@ -413,7 +413,7 @@ func TestManualUpdateCommandTargetsTheAgentOfTheEnvironmentType(t *testing.T) {
 	if strings.Contains(got, "JOIN_TOKEN") || strings.Contains(got, goldenToken) {
 		t.Errorf("the standalone update carries a join token:\n%s", got)
 	}
-	if !strings.HasSuffix(got, " ghcr.io/ianglennon/bayplan-agent:0.2.0") {
+	if !strings.HasSuffix(got, " ghcr.io/ianglennon/coaming-agent:0.2.0") {
 		t.Errorf("the image must come last: %s", got)
 	}
 
@@ -429,11 +429,11 @@ func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *
 	p := goldenParams()
 	p.Token = "" // a refusal has no join token to give
 	swarm := agents.UpdateHint(true, "swarm", p)
-	if want := "docker service update --image ghcr.io/ianglennon/bayplan-agent:0.2.0 bayplan-agent"; !strings.Contains(swarm, want) {
+	if want := "docker service update --image ghcr.io/ianglennon/coaming-agent:0.2.0 coaming-agent"; !strings.Contains(swarm, want) {
 		t.Errorf("swarm hint = %q, want it to hold %q", swarm, want)
 	}
 	standalone := agents.UpdateHint(true, "standalone", p)
-	if !strings.Contains(standalone, "docker run -d --name bayplan-agent") || strings.Contains(standalone, "JOIN_TOKEN") {
+	if !strings.Contains(standalone, "docker run -d --name coaming-agent") || strings.Contains(standalone, "JOIN_TOKEN") {
 		t.Errorf("standalone hint = %q, want a recreate with no join token", standalone)
 	}
 	for _, h := range []string{swarm, standalone} {
@@ -452,7 +452,7 @@ func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *
 }
 
 func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration(t *testing.T) {
-	in, err := agents.BuildInstall(agents.InstallParams{Token: "bpjt_x", Endpoint: "wss://bayplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
+	in, err := agents.BuildInstall(agents.InstallParams{Token: "bpjt_x", Endpoint: "wss://coaming.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,13 +469,13 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration
 }
 
 // TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSwitch
-// pins T-02-31: the agent's BAYPLAN_AGENT_ALLOW_INSECURE is in an install only when
+// pins T-02-31: the agent's COAMING_AGENT_ALLOW_INSECURE is in an install only when
 // the server's own switch is on and the endpoint is ws://. Every production text
 // (wss://, or no server switch) is free of it, the manual update included.
 func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSwitch(t *testing.T) {
 	const plain = "ws://10.0.0.5:7480/agent/connect"
 	const loopback = "ws://127.0.0.1:7480/agent/connect"
-	const name = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	const name = "COAMING_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label    string
 		allow    bool
@@ -512,10 +512,10 @@ func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSw
 			}
 			if tc.want {
 				for label, want := range map[string]string{
-					"swarm command":      "--env 'BAYPLAN_AGENT_URL=" + plain + "' --env '" + name + "=true'",
-					"standalone command": "-e 'BAYPLAN_AGENT_URL=" + plain + "' -e '" + name + "=true'",
-					"stack file":         "BAYPLAN_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
-					"compose file":       "BAYPLAN_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
+					"swarm command":      "--env 'COAMING_AGENT_URL=" + plain + "' --env '" + name + "=true'",
+					"standalone command": "-e 'COAMING_AGENT_URL=" + plain + "' -e '" + name + "=true'",
+					"stack file":         "COAMING_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
+					"compose file":       "COAMING_AGENT_URL: \"" + plain + "\"\n      " + name + ": \"true\"\n",
 				} {
 					text := map[string]string{"swarm command": in.SwarmCommand, "standalone command": in.StandaloneCommand,
 						"stack file": in.SwarmStackFile, "compose file": in.StandaloneComposeFile}[label]
@@ -532,7 +532,7 @@ func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSw
 			if got := strings.Contains(standalone, "-e '"+name+"=true'"); got != tc.want {
 				t.Errorf("standalone manual update carries the switch = %v, want %v:\n%s", got, tc.want, standalone)
 			}
-			if tc.want && !strings.Contains(standalone, "-e 'BAYPLAN_AGENT_URL="+plain+"' -e '"+name+"=true'") {
+			if tc.want && !strings.Contains(standalone, "-e 'COAMING_AGENT_URL="+plain+"' -e '"+name+"=true'") {
 				t.Errorf("standalone manual update lacks the switch right after the address:\n%s", standalone)
 			}
 			if swarm := agents.ManualUpdateCommand("swarm", image, p); strings.Contains(swarm, name) {
@@ -561,7 +561,7 @@ func TestInstallCommandCarriesTheAgentSwitchOnlyForAPlainEndpointWithTheServerSw
 }
 
 // A plain ws:// endpoint for a host that is not this machine is one agents refuse at
-// start (plan 02-41) unless the server's development switch is on, so Bayplan builds
+// start (plan 02-41) unless the server's development switch is on, so Coaming builds
 // no text for it: BuildInstall refuses, and the standalone manual update and the
 // update hint built on it are empty. The swarm manual update carries no address (a
 // service update keeps the service's environment), so it stays. G-02-R4-3, T-02-144.
@@ -580,7 +580,7 @@ func TestBuildInstallRefusesAPlainEndpointForAnotherHostWithoutTheServerSwitch(t
 	if got := agents.UpdateHint(true, "standalone", p); got != "" {
 		t.Errorf("the update hint for a refused endpoint = %q, want none", got)
 	}
-	if got := agents.ManualUpdateCommand("swarm", image, p); got != " docker service update --image "+image+" bayplan-agent" {
+	if got := agents.ManualUpdateCommand("swarm", image, p); got != " docker service update --image "+image+" coaming-agent" {
 		t.Errorf("the swarm manual update = %q, want the service update", got)
 	}
 	if got := agents.UpdateHint(true, "swarm", p); !strings.Contains(got, "docker service update") {
@@ -590,7 +590,7 @@ func TestBuildInstallRefusesAPlainEndpointForAnotherHostWithoutTheServerSwitch(t
 	// The same endpoint builds with the development switch, and carries the agent's.
 	p.AllowInsecure = true
 	in := mustBuild(t, p)
-	if !strings.Contains(in.StandaloneCommand, "-e 'BAYPLAN_AGENT_ALLOW_INSECURE=true'") {
+	if !strings.Contains(in.StandaloneCommand, "-e 'COAMING_AGENT_ALLOW_INSECURE=true'") {
 		t.Errorf("the development install lacks the agent's switch:\n%s", in.StandaloneCommand)
 	}
 	if got := agents.ManualUpdateCommand("standalone", image, p); !strings.Contains(got, "docker run") {
@@ -603,7 +603,7 @@ func TestBuildInstallRefusesAPlainEndpointForAnotherHostWithoutTheServerSwitch(t
 		p.Endpoint = endpoint
 		in := mustBuild(t, p)
 		for label, text := range allInstallText(in) {
-			if strings.Contains(text, "BAYPLAN_AGENT_ALLOW_INSECURE") {
+			if strings.Contains(text, "COAMING_AGENT_ALLOW_INSECURE") {
 				t.Errorf("%s for %s carries the agent's switch", label, endpoint)
 			}
 		}

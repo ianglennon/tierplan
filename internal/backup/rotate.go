@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -15,29 +15,29 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 var (
-	// ErrOldKeyPresent means bayplan.key.old already exists. A rotation would
+	// ErrOldKeyPresent means coaming.key.old already exists. A rotation would
 	// replace it, and it may be the only copy of a previous key, so the admin
 	// moves it first.
-	ErrOldKeyPresent = errors.New("bayplan.key.old already exists")
-	// ErrNewKeyPresent means bayplan.key.new already exists: a rotation for a key
-	// supplied through BAYPLAN_ENCRYPTION_KEY has not been finished, or its file
+	ErrOldKeyPresent = errors.New("coaming.key.old already exists")
+	// ErrNewKeyPresent means coaming.key.new already exists: a rotation for a key
+	// supplied through COAMING_ENCRYPTION_KEY has not been finished, or its file
 	// has not been deleted.
-	ErrNewKeyPresent = errors.New("bayplan.key.new already exists")
+	ErrNewKeyPresent = errors.New("coaming.key.new already exists")
 	// ErrKeyMismatch means the key in use is not the one the database says it was
 	// last rotated to, so its sealed values cannot be opened with it.
 	ErrKeyMismatch = errors.New("the key in use is not the database's active key")
 )
 
 // RotateResult is what RotateKey did. KeyFileSwapped is true when the new key
-// is now bayplan.key and the old one bayplan.key.old; it is false for a key
-// supplied through BAYPLAN_ENCRYPTION_KEY, where the new key waits in NewKeyPath
+// is now coaming.key and the old one coaming.key.old; it is false for a key
+// supplied through COAMING_ENCRYPTION_KEY, where the new key waits in NewKeyPath
 // for the operator to put it into the variable.
 type RotateResult struct {
 	OldKID, NewKID string
@@ -91,17 +91,17 @@ func StoredActiveKeyID(ctx context.Context, dataDir string) (string, error) {
 	return ActiveKeyID(ctx, st)
 }
 
-// RotateKey replaces the master key (D-33). Bayplan must be stopped: the caller
+// RotateKey replaces the master key (D-33). Coaming must be stopped: the caller
 // holds the data-directory lock for the whole call. old is the vault the
 // instance runs on.
 //
-// In order: the new key is generated and written to bayplan.key.new, fsynced;
+// In order: the new key is generated and written to coaming.key.new, fsynced;
 // then one write transaction re-wraps every sealed value from old to the new
 // key, re-signs the whole audit chain under it, appends a key.rotated entry
 // carrying an attestation made with the old key, and records the new key's ID
 // in app_meta. The commit is the point of no return. A key from a file is then
-// swapped into place (bayplan.key becomes bayplan.key.old, bayplan.key.new
-// becomes bayplan.key); a key from the environment is left in bayplan.key.new.
+// swapped into place (coaming.key becomes coaming.key.old, coaming.key.new
+// becomes coaming.key); a key from the environment is left in coaming.key.new.
 // A crash at any point is repaired at the next start by vault.RecoverRotation.
 //
 // The new key is never returned or logged, only written to a 0600 file.
@@ -114,7 +114,7 @@ func RotateKey(ctx context.Context, st *store.Store, dataDir string, old *vault.
 		return res, fmt.Errorf("look for %s: %w", oldPath, err)
 	}
 	if _, err := os.Stat(newPath); err == nil {
-		return res, fmt.Errorf("%w: if BAYPLAN_ENCRYPTION_KEY is already set from it, delete %s, then run this again", ErrNewKeyPresent, newPath)
+		return res, fmt.Errorf("%w: if COAMING_ENCRYPTION_KEY is already set from it, delete %s, then run this again", ErrNewKeyPresent, newPath)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return res, fmt.Errorf("look for %s: %w", newPath, err)
 	}

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Info, TriangleAlert } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useT } from "@/i18n/use-t";
 
-// UnmanagedNote is the note every unmanaged stack's page opens with (UI-SPEC "Unmanaged stack page"): Bayplan
+// UnmanagedNote is the note every unmanaged stack's page opens with (UI-SPEC "Unmanaged stack page"): Coaming
 // does not manage the stack, what the page is for and what adopting does. It is static content on load, so it is
 // a status and not announced as an alert.
 export function UnmanagedNote() {
@@ -20,7 +20,7 @@ export function UnmanagedNote() {
   );
 }
 
-// OrphanIdNote is shown only when an object of the stack carries a Bayplan ID this instance has no record of
+// OrphanIdNote is shown only when an object of the stack carries a Coaming ID this instance has no record of
 // (D-11). The ID itself is never sent to the browser, so the note cannot show it.
 export function OrphanIdNote() {
   const t = useT();
@@ -46,7 +46,7 @@ export function PortainerAdvice() {
   );
 }
 
-// NotAdoptableNote says why a stack cannot be adopted when the server says it cannot: Bayplan's own stack, its
+// NotAdoptableNote says why a stack cannot be adopted when the server says it cannot: Coaming's own stack, its
 // agent's, or a name the stack-name rule of the environment's target refuses (D-49, D-53). The reason is the
 // server's own sentence, worded from the same rule text as the Create stack refusal, and is shown as given.
 export function NotAdoptableNote({ reason }: { reason: string }) {

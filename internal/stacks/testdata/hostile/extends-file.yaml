@@ -1,4 +1,4 @@
-# Hostile: extends.file reads a file of the Bayplan server's own disk.
+# Hostile: extends.file reads a file of the Coaming server's own disk.
 services:
   web:
     image: nginx:1.27-alpine

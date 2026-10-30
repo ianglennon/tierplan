@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -18,7 +18,7 @@ import (
 // Compose SDK. The SDK delivers a secret from an environment variable by writing it into the container
 // (CopyToContainer) and by that alone; a secret that names a file is bind-mounted from the server's disk
 // (RESEARCH Pitfall 4).
-const SecretEnvPrefix = "BAYPLAN_SECRET_"
+const SecretEnvPrefix = "COAMING_SECRET_"
 
 var (
 	// ErrPinMissing means a service that has an image was given no pin: a standalone deploy never sends
@@ -29,7 +29,7 @@ var (
 	// host-access rules, which judge a socket that is written as a bind.
 	ErrUseAPISocket = errors.New("stacks: use_api_socket is not supported on a standalone host")
 	// ErrUnsupportedKey means a service asks for something the Compose SDK would do by running a program
-	// of the Bayplan server (a provider service, a model) or a command in the container through exec (a
+	// of the Coaming server (a provider service, a model) or a command in the container through exec (a
 	// lifecycle hook). A standalone deploy does none of those.
 	ErrUnsupportedKey = errors.New("stacks: the stack uses a key a standalone deploy does not run")
 	// ErrExternalFileObject means a service uses an external secret or config. A standalone host writes
@@ -43,22 +43,22 @@ var (
 //   - every service's image becomes its pin (pins, by the name in the compose file), and the image as
 //     written, the stack's ID, the project, the service and the neutral working directory and config file
 //     labels go on the service as custom labels, which the SDK keeps out of its config hash (the labels
-//     the SDK's own loader would have set, and bayplan.stack.id and bayplan.stack.image beside them);
+//     the SDK's own loader would have set, and coaming.stack.id and coaming.stack.image beside them);
 //   - every secret and config a service uses puts the short hash of its content on the service as a label
 //     (LabelSecretPrefix, LabelConfigPrefix), which is in the SDK's config hash: new content recreates the
 //     container, unchanged content does not;
-//   - every secret the services use gets no file: it names the variable BAYPLAN_SECRET_<name> and the
+//   - every secret the services use gets no file: it names the variable COAMING_SECRET_<name> and the
 //     value goes in the project's environment, from where the SDK writes it into the container; every
 //     config the services use carries its content. An object no service uses is dropped;
 //   - the networks and volumes the project creates carry the stack's ID, so a later look for a project
-//     that Bayplan does not manage finds them to be its own.
+//     that Coaming does not manage finds them to be its own.
 //
 // Nothing here is per deploy: no time, no job and no ID of one reaches a service, so a redeploy of a stack
 // nobody edited builds the same services and the SDK recreates nothing (Pitfall 5).
 //
 // It refuses what the SDK cannot deliver or what would read the server: a service with an image and no
 // pin (ErrPinMissing), a service with use_api_socket (ErrUseAPISocket), a provider, a model or a lifecycle hook
-// (ErrUnsupportedKey: the SDK would run a program of the Bayplan server, or a command through exec), an external secret or config
+// (ErrUnsupportedKey: the SDK would run a program of the Coaming server, or a command through exec), an external secret or config
 // (ErrExternalFileObject), and, after the work, a
 // build, a file-backed secret or config, an env_file or a relative bind mount that is still there
 // (ErrNotSandboxed). The first error is returned.

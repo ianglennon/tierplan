@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -43,7 +43,7 @@ var (
 )
 
 // InitCompose prepares the process for the Compose SDK, once, at startup. It creates the SDK's private
-// Docker CLI configuration directory under dataDir (mode 0700, empty: Bayplan passes registry credentials
+// Docker CLI configuration directory under dataDir (mode 0700, empty: Coaming passes registry credentials
 // itself and the SDK never reads a login), points the CLI library's process-wide configuration directory at
 // it, and sends the SDK's logging (logrus, which the SDK and compose-go write to) to log. All three are
 // process-global state, which is why they are set here and never per deploy (RESEARCH Pitfall 11).
@@ -251,7 +251,7 @@ func isDigits(s string) bool {
 // SDK's logging, which InitCompose sends to slog, so the operator can see which volume was left alone.
 // Changing a volume's settings needs the volume removed by hand and the stack deployed again.
 func keepVolumes(message string, _ bool) (bool, error) {
-	logrus.Info(message + " Bayplan answers no and keeps the volume as it is.")
+	logrus.Info(message + " Coaming answers no and keeps the volume as it is.")
 	return false, nil
 }
 
@@ -457,7 +457,7 @@ func ServiceHash(svc types.ServiceConfig) (string, error) { return compose.Servi
 // ComposeNetworkHash is the configuration hash the Compose SDK stamps on a network it creates
 // (com.docker.compose.config-hash), computed the same way: the next Up recreates a network whose label
 // differs from the hash of the network as the project declares it now. cfg is the network as a deploy loads
-// and prepares it, so its name is the engine's. Bayplan's own labels (CustomLabels) are not in it.
+// and prepares it, so its name is the engine's. Coaming's own labels (CustomLabels) are not in it.
 func ComposeNetworkHash(cfg *types.NetworkConfig) (string, error) { return compose.NetworkHash(cfg) }
 
 // ComposeVolumeHash is ComposeNetworkHash for a volume. A volume whose label differs from the hash of the

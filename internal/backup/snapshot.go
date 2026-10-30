@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 	backupsDir = "backups"
 	// preRestorePrefix and preRestoreSuffix name the snapshot a restore takes of
 	// the database it replaces. The prefix is distinct from the migration
-	// snapshots' "bayplan-", so neither pruner can delete the other's files
+	// snapshots' "coaming-", so neither pruner can delete the other's files
 	// (RESEARCH Pitfall 9).
 	preRestorePrefix = "prerestore-"
 	preRestoreSuffix = ".db"

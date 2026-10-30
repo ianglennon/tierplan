@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -55,7 +55,7 @@ describe("OtherResourcesTable", () => {
             change: "external",
             kind: "network",
             name: "proxy",
-            detail: "External. Bayplan doesn't touch it.",
+            detail: "External. Coaming doesn't touch it.",
           }),
           object({
             change: "removed",
@@ -69,7 +69,7 @@ describe("OtherResourcesTable", () => {
     const ext = screen.getByText("proxy").closest("tr") as HTMLElement;
     expect(within(ext).getByText("External")).toBeTruthy();
     expect(within(ext).getByText("Network")).toBeTruthy();
-    expect(within(ext).getByText("External. Bayplan doesn't touch it.")).toBeTruthy();
+    expect(within(ext).getByText("External. Coaming doesn't touch it.")).toBeTruthy();
     const gone = screen.getByText("old_conf").closest("tr") as HTMLElement;
     expect(within(gone).getByText("Removed")).toBeTruthy();
     expect(within(gone).getByText("Config")).toBeTruthy();
@@ -86,14 +86,14 @@ describe("OtherResourcesTable", () => {
         ]}
       />,
     );
-    expect(screen.getByText("External. Bayplan doesn't touch it.")).toBeTruthy();
+    expect(screen.getByText("External. Coaming doesn't touch it.")).toBeTruthy();
     expect(screen.getByText("Removed from the stack. Deleted with the deploy.")).toBeTruthy();
     // A new object with nothing to add reads as a dash, never blank.
     const added = screen.getByText("front").closest("tr") as HTMLElement;
     expect(within(added).getByText("—")).toBeTruthy();
   });
 
-  it("words a network the deploy recreates and a volume Bayplan keeps with the server's sentences (D-46, D-56)", () => {
+  it("words a network the deploy recreates and a volume Coaming keeps with the server's sentences (D-46, D-56)", () => {
     render(
       <OtherResourcesTable
         objects={[
@@ -108,7 +108,7 @@ describe("OtherResourcesTable", () => {
             change: "changed",
             kind: "volume",
             name: "demo_data",
-            detail: "Its settings differ from the compose file. Bayplan keeps it as it is.",
+            detail: "Its settings differ from the compose file. Coaming keeps it as it is.",
           }),
         ]}
       />,
@@ -127,7 +127,7 @@ describe("OtherResourcesTable", () => {
     expect(within(vol).getByText("Volume")).toBeTruthy();
     expect(
       within(vol).getByText(
-        "Its settings differ from the compose file. Bayplan keeps it as it is.",
+        "Its settings differ from the compose file. Coaming keeps it as it is.",
       ),
     ).toBeTruthy();
     // The glyph is only for scanning: the word carries the meaning, and the glyph is hidden from a reader.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -249,7 +249,7 @@ type ImageDetail struct {
 }
 
 // ImageDetail reads one image by ID with the engine's own raw inspect document, which is
-// the Inspect tab's. Bayplan asks for no manifests and no platform: the image the engine
+// the Inspect tab's. Coaming asks for no manifests and no platform: the image the engine
 // holds for the ID is the one answered. An image the engine does not have is an error
 // IsNotFound reports.
 func (c *Client) ImageDetail(ctx context.Context, id string) (ImageDetail, []byte, error) {

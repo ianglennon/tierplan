@@ -1,5 +1,5 @@
 {
-  "name": "Bayplan",
+  "name": "Coaming",
   "image": "mcr.microsoft.com/devcontainers/go:2-1.27-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/node:1": {
@@ -11,7 +11,7 @@
   "forwardPorts": [5173, 7480],
   "portsAttributes": {
     "5173": { "label": "Vite dev server (open this one)" },
-    "7480": { "label": "Bayplan server" }
+    "7480": { "label": "Coaming server" }
   },
   "customizations": {
     "vscode": {

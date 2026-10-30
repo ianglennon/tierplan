@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -17,8 +17,8 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The tunnel judges every agent connection against the address agents are told
@@ -42,7 +42,7 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	}
 	build := func(env map[string]string) *Server {
 		t.Helper()
-		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
@@ -52,23 +52,23 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 	}
 
 	// https public URL, no agent URL: a plain connection is refused as insecure.
-	if code := upgrade(build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test"})); code != http.StatusForbidden {
+	if code := upgrade(build(map[string]string{"COAMING_PUBLIC_URL": "https://coaming.test"})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https public URL = %d, want 403", code)
 	}
 	// A plain agent URL on this machine is where agents dial, so plain transport
 	// is acceptable there and the request gets past the preflight to the
 	// WebSocket accept, although the public URL is https.
 	if code := upgrade(build(map[string]string{
-		"BAYPLAN_PUBLIC_URL": "https://bayplan.test",
-		"BAYPLAN_AGENT_URL":  "http://127.0.0.1:7480",
+		"COAMING_PUBLIC_URL": "https://coaming.test",
+		"COAMING_AGENT_URL":  "http://127.0.0.1:7480",
 	})); code == http.StatusForbidden || code == http.StatusServiceUnavailable {
 		t.Fatalf("a plain connection with an http agent URL on this machine = %d, want it past the preflight", code)
 	}
 	// An https agent URL is where agents dial, so a plain connection is refused
 	// although the public URL is plain http on this machine.
 	if code := upgrade(build(map[string]string{
-		"BAYPLAN_PUBLIC_URL": "http://127.0.0.1:7480",
-		"BAYPLAN_AGENT_URL":  "https://bayplan.test",
+		"COAMING_PUBLIC_URL": "http://127.0.0.1:7480",
+		"COAMING_AGENT_URL":  "https://coaming.test",
 	})); code != http.StatusForbidden {
 		t.Fatalf("a plain connection with an https agent URL = %d, want 403", code)
 	}
@@ -80,7 +80,7 @@ func TestTunnelFollowsTheAgentURLNotThePublicURL(t *testing.T) {
 func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.T) {
 	build := func(env map[string]string) *Server {
 		t.Helper()
-		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
@@ -88,10 +88,10 @@ func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.
 		t.Cleanup(func() { _ = srv.Close() })
 		return srv
 	}
-	if got := build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test/bp"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://bayplan.test/bp/agent/connect" {
+	if got := build(map[string]string{"COAMING_PUBLIC_URL": "https://coaming.test/bp"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://coaming.test/bp/agent/connect" {
 		t.Errorf("public URL only: %v", got)
 	}
-	if got := build(map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test", "BAYPLAN_AGENT_URL": "https://10.0.0.5:7480"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://10.0.0.5:7480/agent/connect" {
+	if got := build(map[string]string{"COAMING_PUBLIC_URL": "https://coaming.test", "COAMING_AGENT_URL": "https://10.0.0.5:7480"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://10.0.0.5:7480/agent/connect" {
 		t.Errorf("agent URL set: %v", got)
 	}
 	if got := build(map[string]string{}).tunnel.URLs(); len(got) != 0 {
@@ -99,7 +99,7 @@ func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.
 	}
 }
 
-// Bayplan accepts plain ws:// for an agent address that is not this machine only
+// Coaming accepts plain ws:// for an agent address that is not this machine only
 // while its own development switch is on, the rule the agent applies to itself
 // since 02-41. Loopback is exempt on both ends, and an http public URL stays
 // legal for the UI: the refusal is keyed on the address agents are told to dial
@@ -112,11 +112,11 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 		env      map[string]string
 		admitted bool
 	}{
-		{name: "plain to another host, switch off", env: map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480"}},
-		{name: "plain to another host, switch on", env: map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}, admitted: true},
+		{name: "plain to another host, switch off", env: map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480"}},
+		{name: "plain to another host, switch on", env: map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480", "COAMING_AGENT_ALLOW_INSECURE": "true"}, admitted: true},
 		{name: "plain on this machine by address", env: map[string]string{}, admitted: true},
-		{name: "plain on this machine by name", env: map[string]string{"BAYPLAN_AGENT_URL": "http://localhost:7480"}, admitted: true},
-		{name: "https agent address, switch off", env: map[string]string{"BAYPLAN_AGENT_URL": "https://bayplan.test"}},
+		{name: "plain on this machine by name", env: map[string]string{"COAMING_AGENT_URL": "http://localhost:7480"}, admitted: true},
+		{name: "https agent address, switch off", env: map[string]string{"COAMING_AGENT_URL": "https://coaming.test"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,8 +129,8 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 			ts.Listener = ln
 			addr := ln.Addr().String()
 			env := map[string]string{
-				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"BAYPLAN_PUBLIC_URL": "http://" + addr,
+				"COAMING_DATA_DIR":   t.TempDir() + "/data",
+				"COAMING_PUBLIC_URL": "http://" + addr,
 			}
 			for k, v := range tc.env {
 				env[k] = v
@@ -186,22 +186,22 @@ func TestAPlainAgentURLForAnotherHostIsRefusedUnlessTheSwitchIsOn(t *testing.T) 
 	}
 }
 
-// Bayplan says at start when the address agents are given is plain http for a
+// Coaming says at start when the address agents are given is plain http for a
 // host that is not this machine and its switch is off: agents refuse such an
-// address and so does Bayplan, so nothing could connect (G-02-R4-3).
+// address and so does Coaming, so nothing could connect (G-02-R4-3).
 func TestBuildWarnsWhenAgentsWouldBeGivenAPlainAddressForAnotherHost(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		env  map[string]string
 		want int
 	}{
-		{"plain public URL for another host, switch off", map[string]string{"BAYPLAN_PUBLIC_URL": "http://bayplan.test"}, 1},
-		{"plain public URL for another host, switch on", map[string]string{"BAYPLAN_PUBLIC_URL": "http://bayplan.test", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"}, 0},
-		{"https public URL", map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test"}, 0},
-		{"https public URL, plain agent URL on this machine", map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.test", "BAYPLAN_AGENT_URL": "http://127.0.0.1:7480"}, 0},
+		{"plain public URL for another host, switch off", map[string]string{"COAMING_PUBLIC_URL": "http://coaming.test"}, 1},
+		{"plain public URL for another host, switch on", map[string]string{"COAMING_PUBLIC_URL": "http://coaming.test", "COAMING_AGENT_ALLOW_INSECURE": "true"}, 0},
+		{"https public URL", map[string]string{"COAMING_PUBLIC_URL": "https://coaming.test"}, 0},
+		{"https public URL, plain agent URL on this machine", map[string]string{"COAMING_PUBLIC_URL": "https://coaming.test", "COAMING_AGENT_URL": "http://127.0.0.1:7480"}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+			tc.env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 			var logs bytes.Buffer
 			srv, err := Build(context.Background(), testConfig(t, tc.env), slog.New(slog.NewJSONHandler(&logs, nil)))
 			if err != nil {

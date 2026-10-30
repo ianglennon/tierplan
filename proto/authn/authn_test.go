@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package authn
 
@@ -16,7 +16,7 @@ import (
 )
 
 func inputs() (mode string, proto int, sn, an []byte, aud string, pub, ekm []byte) {
-	return "enrol", 1, bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), "bayplan.example:443",
+	return "enrol", 1, bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32), "coaming.example:443",
 		bytes.Repeat([]byte{3}, 32), bytes.Repeat([]byte{4}, 32)
 }
 
@@ -74,7 +74,7 @@ func TestASignatureMadeForOneAudienceDoesNotVerifyForAnother(t *testing.T) {
 		t.Fatal(err)
 	}
 	mode, proto, sn, an, _, _, ekm := inputs()
-	good := Transcript(mode, proto, sn, an, "bayplan.example:443", pub, ekm)
+	good := Transcript(mode, proto, sn, an, "coaming.example:443", pub, ekm)
 	sig := Sign(priv, good)
 	if !Verify(pub, good, sig) {
 		t.Fatal("a signature does not verify over its own transcript")
@@ -105,7 +105,7 @@ func TestSPKIPinHasTheDocumentedShapeAndFollowsTheKeyNotTheCertificate(t *testin
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	issue := func(serial int64) *x509.Certificate {
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "bayplan"},
+			SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "coaming"},
 			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
@@ -149,10 +149,10 @@ func TestEKMEqualNeverMatchesAbsentMaterial(t *testing.T) {
 
 func TestAudienceIsTheSameForAWebSocketURLAndThePublicURLItCameFrom(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
-		{"wss://Bayplan.Example/agent/connect", "bayplan.example"},
-		{"wss://bayplan.example:443/base/agent/connect", "bayplan.example"},
-		{"https://bayplan.example", "bayplan.example"},
-		{"https://bayplan.example:8443/base", "bayplan.example:8443"},
+		{"wss://Coaming.Example/agent/connect", "coaming.example"},
+		{"wss://coaming.example:443/base/agent/connect", "coaming.example"},
+		{"https://coaming.example", "coaming.example"},
+		{"https://coaming.example:8443/base", "coaming.example:8443"},
 		{"ws://127.0.0.1:7480/agent/connect", "127.0.0.1:7480"},
 		{"http://127.0.0.1:80", "127.0.0.1"},
 		{"https://[::1]:8443", "[::1]:8443"},
@@ -173,7 +173,7 @@ func TestAudienceIsTheSameForAWebSocketURLAndThePublicURLItCameFrom(t *testing.T
 func TestTheExporterLabelAndLengthAreFixedByTheProtocol(t *testing.T) {
 	// Deployed agents compute the binding with these two values; changing either
 	// is a new transcript version, not an edit (D-05).
-	if EKMLabel != "EXPORTER-bayplan-agent-auth-v1" || EKMLength != 32 {
+	if EKMLabel != "EXPORTER-coaming-agent-auth-v1" || EKMLength != 32 {
 		t.Fatalf("EKMLabel %q, EKMLength %d", EKMLabel, EKMLength)
 	}
 }

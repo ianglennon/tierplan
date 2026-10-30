@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -11,16 +11,16 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The Resources tab of a stack (plan 07-25, STK-10, D-22): what the stack owns on its environment, found by
-// Bayplan's labels. Docker is a fake engine behind the real aggregator and cluster reader.
+// Coaming's labels. Docker is a fake engine behind the real aggregator and cluster reader.
 
 var resourcesT0 = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 
@@ -34,7 +34,7 @@ func resourcesTask(id, service, node string, slot int, state, desired string, ag
 }
 
 func ownedBy(ns, id string) map[string]string {
-	return map[string]string{"com.docker.stack.namespace": ns, "bayplan.stack.id": id}
+	return map[string]string{"com.docker.stack.namespace": ns, "coaming.stack.id": id}
 }
 
 func TestResourcesOfASwarmStackListTheCurrentTaskOfEachSlot(t *testing.T) {
@@ -138,13 +138,13 @@ func TestResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing.T) {
 	h := hostStack(t, "demo", hostedCompose, nil)
 	h.Containers = append(h.Containers, dockertest.FakeContainer{
 		ID: "oneoff-1", Names: []string{"/demo-web-run-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "web", "bayplan.stack.id": "stack-demo", "com.docker.compose.oneoff": "True"},
+		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "web", "coaming.stack.id": "stack-demo", "com.docker.compose.oneoff": "True"},
 	}, dockertest.FakeContainer{
 		ID: "other-1", Names: []string{"/other-web-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{"com.docker.compose.project": "other", "com.docker.compose.service": "web", "bayplan.stack.id": "stack-other"},
+		Labels: map[string]string{"com.docker.compose.project": "other", "com.docker.compose.service": "web", "coaming.stack.id": "stack-other"},
 	}, dockertest.FakeContainer{
 		ID: "foreign-1", Names: []string{"/demo-foreign-1"}, Image: "nginx", State: "running",
-		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "foreign", "bayplan.stack.id": "stack-stranger"},
+		Labels: map[string]string{"com.docker.compose.project": "demo", "com.docker.compose.service": "foreign", "coaming.stack.id": "stack-stranger"},
 	})
 	h.Networks = append(h.Networks, dockertest.FakeNetwork{ID: "n-foreign", Name: "demo_hand", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "demo"}})
 	rig := hostRig(t, h)
@@ -170,7 +170,7 @@ func TestResourcesOfAStandaloneStackListItsContainersAndNetworks(t *testing.T) {
 }
 
 // TestResourcesOfAStandaloneStackListAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the
-// project with none of Bayplan's labels. Beside web-1, which carries the stack's ID, the Resources tab lists it
+// project with none of Coaming's labels. Beside web-1, which carries the stack's ID, the Resources tab lists it
 // (G-08-6, user decision 2026-10-27). A container with another stack's ID, and the containers of a project the stack
 // owns none of, stay out (P7 D-12, T-08-47).
 func TestResourcesOfAStandaloneStackListAContainerTheHostCLIAdded(t *testing.T) {
@@ -365,7 +365,7 @@ func TestResourcesOfASwarmStackReadAHashedSecretAsItsNameAndVersionWithItsUsers(
 	t.Parallel()
 	hashed := func(name, hash string) map[string]string {
 		l := ownedBy("web", "stack-web")
-		l["bayplan.stack.object"], l["bayplan.stack.object.hash"] = name, hash
+		l["coaming.stack.object"], l["coaming.stack.object.hash"] = name, hash
 		return l
 	}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
@@ -433,7 +433,7 @@ func TestResourcesOfASwarmStackListAConfigTheSameWay(t *testing.T) {
 		c.TasksFollowWrites = false
 		c.Configs = []dockertest.FakeConfigObject{
 			{ID: "cfg-site", Name: "web_site_9f8e7d6c", Labels: map[string]string{
-				"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web", "bayplan.stack.object": "site", "bayplan.stack.object.hash": "9f8e7d6c",
+				"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web", "coaming.stack.object": "site", "coaming.stack.object.hash": "9f8e7d6c",
 			}},
 			{ID: "cfg-other", Name: "other"},
 		}
@@ -607,7 +607,7 @@ func TestResourcesOfAStandaloneStackListTheVolumesOfItsProjectOnTheHost(t *testi
 	}
 }
 
-// The Resources of a stack Bayplan did not make (plan 08-09, STK-12, D-13, D-18): the same cards over what its
+// The Resources of a stack Coaming did not make (plan 08-09, STK-12, D-13, D-18): the same cards over what its
 // labels and its services find, with the ownership badges previewing what adopting would own.
 
 func legacyNS(ns string) map[string]string {
@@ -773,7 +773,7 @@ func TestResourcesOfADiscoveredStandaloneStackPreviewWhatAdoptingWouldOwn(t *tes
 
 func TestManagedResourcesUnchanged(t *testing.T) {
 	t.Parallel()
-	// A stack of Bayplan's is its objects by ID: what carries its namespace without its ID is somebody else's, and
+	// A stack of Coaming's is its objects by ID: what carries its namespace without its ID is somebody else's, and
 	// what a service of its own mentions without declaring it is not listed.
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.TasksFollowWrites = false

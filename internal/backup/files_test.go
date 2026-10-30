@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/backup"
+	"github.com/ianglennon/coaming/internal/backup"
 )
 
 // The scheduled backups on disk: what is listed and what can be opened (plan
@@ -30,13 +30,13 @@ func writeFile(t *testing.T, dir, name, body string) {
 
 func TestTheBackupsFolderListsOnlyScheduledBackupsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "bayplan-backup-20261001-0300.bayplan", "one")
-	writeFile(t, dir, "bayplan-backup-20261003-0300.bayplan", "three")
-	writeFile(t, dir, "bayplan-backup-20261002-0300.bayplan", "two22")
-	writeFile(t, dir, "bayplan-20261001T030000Z.db", "migration snapshot")
+	writeFile(t, dir, "coaming-backup-20261001-0300.coaming", "one")
+	writeFile(t, dir, "coaming-backup-20261003-0300.coaming", "three")
+	writeFile(t, dir, "coaming-backup-20261002-0300.coaming", "two22")
+	writeFile(t, dir, "coaming-20261001T030000Z.db", "migration snapshot")
 	writeFile(t, dir, "prerestore-20261001T030000Z.db", "pre-restore snapshot")
 	writeFile(t, dir, "notes.txt", "x")
-	if err := os.Mkdir(filepath.Join(dir, "bayplan-backup-20261004-0300.bayplan"), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "coaming-backup-20261004-0300.coaming"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -44,7 +44,7 @@ func TestTheBackupsFolderListsOnlyScheduledBackupsNewestFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].Name != "bayplan-backup-20261003-0300.bayplan" || got[2].Name != "bayplan-backup-20261001-0300.bayplan" {
+	if len(got) != 3 || got[0].Name != "coaming-backup-20261003-0300.coaming" || got[2].Name != "coaming-backup-20261001-0300.coaming" {
 		t.Fatalf("listed %+v", got)
 	}
 	if got[1].Size != 5 || got[1].Created.Format("2006-01-02T15:04Z") != "2026-10-02T03:00Z" {
@@ -61,8 +61,8 @@ func TestAFolderThatDoesNotExistYetHoldsNoBackups(t *testing.T) {
 
 func TestAScheduledBackupOpensByItsName(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "bayplan-backup-20261001-0300.bayplan", "the bytes")
-	f, info, err := backup.OpenBackupFile(dir, "bayplan-backup-20261001-0300.bayplan")
+	writeFile(t, dir, "coaming-backup-20261001-0300.coaming", "the bytes")
+	f, info, err := backup.OpenBackupFile(dir, "coaming-backup-20261001-0300.coaming")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,19 +75,19 @@ func TestAScheduledBackupOpensByItsName(t *testing.T) {
 
 func TestFilePatternAcceptsOnlyTheNameOfAScheduledBackup(t *testing.T) {
 	for name, want := range map[string]bool{
-		"bayplan-backup-20261008-0300.bayplan":     true,
-		"bayplan-backup-20261008-0300.bayplan.bak": false,
-		"bayplan-backup-20261008-300.bayplan":      false,
-		"bayplan-backup-2026-10-08-0300.bayplan":   false,
-		"Bayplan-backup-20261008-0300.bayplan":     false,
-		"x.bayplan":                                false,
-		"bayplan.db":                               false,
-		"bayplan.key":                              false,
-		"bayplan-20261008T030000Z.db":              false,
+		"coaming-backup-20261008-0300.coaming":     true,
+		"coaming-backup-20261008-0300.coaming.bak": false,
+		"coaming-backup-20261008-300.coaming":      false,
+		"coaming-backup-2026-10-08-0300.coaming":   false,
+		"Coaming-backup-20261008-0300.coaming":     false,
+		"x.coaming":                                false,
+		"coaming.db":                               false,
+		"coaming.key":                              false,
+		"coaming-20261008T030000Z.db":              false,
 		"prerestore-20261008T030000Z.db":           false,
-		"../bayplan-backup-20261008-0300.bayplan":  false,
-		"sub/bayplan-backup-20261008-0300.bayplan": false,
-		"bayplan-backup-20261008-0300.bayplan\n":   false,
+		"../coaming-backup-20261008-0300.coaming":  false,
+		"sub/coaming-backup-20261008-0300.coaming": false,
+		"coaming-backup-20261008-0300.coaming\n":   false,
 		"":                                         false,
 	} {
 		if got := backup.IsScheduledName(name); got != want {
@@ -99,13 +99,13 @@ func TestFilePatternAcceptsOnlyTheNameOfAScheduledBackup(t *testing.T) {
 func TestFilePatternKeepsEveryOtherNameAwayFromTheFileSystem(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "backups")
-	writeFile(t, parent, "bayplan.db", "the database")
-	writeFile(t, parent, "bayplan.key", "the master key")
-	writeFile(t, dir, "x.bayplan", "not a scheduled name")
-	writeFile(t, dir, "bayplan-backup-20261008-0300.bayplan.bak", "x")
+	writeFile(t, parent, "coaming.db", "the database")
+	writeFile(t, parent, "coaming.key", "the master key")
+	writeFile(t, dir, "x.coaming", "not a scheduled name")
+	writeFile(t, dir, "coaming-backup-20261008-0300.coaming.bak", "x")
 	for _, name := range []string{
-		"../bayplan.db", "../bayplan.key", "x.bayplan", "bayplan-backup-20261008-0300.bayplan.bak",
-		"..%2Fbayplan.db", "/etc/passwd", "bayplan-backup-20261008-0300.bayplan/../../bayplan.key",
+		"../coaming.db", "../coaming.key", "x.coaming", "coaming-backup-20261008-0300.coaming.bak",
+		"..%2Fcoaming.db", "/etc/passwd", "coaming-backup-20261008-0300.coaming/../../coaming.key",
 	} {
 		f, _, err := backup.OpenBackupFile(dir, name)
 		if f != nil {
@@ -120,12 +120,12 @@ func TestFilePatternKeepsEveryOtherNameAwayFromTheFileSystem(t *testing.T) {
 func TestAFileNameThatIsALinkOutOfTheFolderIsNotServed(t *testing.T) {
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "backups")
-	writeFile(t, parent, "bayplan.key", "the master key")
+	writeFile(t, parent, "coaming.key", "the master key")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	const name = "bayplan-backup-20261008-0300.bayplan"
-	if err := os.Symlink(filepath.Join(parent, "bayplan.key"), filepath.Join(dir, name)); err != nil {
+	const name = "coaming-backup-20261008-0300.coaming"
+	if err := os.Symlink(filepath.Join(parent, "coaming.key"), filepath.Join(dir, name)); err != nil {
 		t.Skipf("no symbolic links here: %v", err)
 	}
 	f, _, err := backup.OpenBackupFile(dir, name)
@@ -143,7 +143,7 @@ func TestAFileNameThatIsALinkOutOfTheFolderIsNotServed(t *testing.T) {
 
 func TestADirectoryWithABackupsNameIsNotABackup(t *testing.T) {
 	dir := t.TempDir()
-	const name = "bayplan-backup-20261008-0300.bayplan"
+	const name = "coaming-backup-20261008-0300.coaming"
 	writeFile(t, filepath.Join(dir, name), "inner", "x")
 	if f, _, err := backup.OpenBackupFile(dir, name); !errors.Is(err, backup.ErrNoSuchBackup) {
 		if f != nil {
@@ -174,16 +174,16 @@ func TestStaleWorkFilesOfAKilledExportAreSweptAndNothingElseIs(t *testing.T) {
 		}
 		return p
 	}
-	staleDir := mk(data, ".bayplan-backup-123", true, old)
-	staleTmp := mk(data, ".bayplan-export-456.tmp", false, old)
-	staleSched := mk(dir, ".bayplan-schedule-789.tmp", false, old)
-	freshDir := mk(data, ".bayplan-backup-live", true, fresh)
-	freshTmp := mk(data, ".bayplan-export-live.tmp", false, fresh)
-	db := mk(data, "bayplan.db", false, old)
-	key := mk(data, "bayplan.key", false, old)
-	saved := mk(dir, "bayplan-backup-20261001-0300.bayplan", false, old)
-	snap := mk(dir, "bayplan-20261001T030000Z.db", false, old)
-	otherHidden := mk(data, ".bayplan-something-else", false, old)
+	staleDir := mk(data, ".coaming-backup-123", true, old)
+	staleTmp := mk(data, ".coaming-export-456.tmp", false, old)
+	staleSched := mk(dir, ".coaming-schedule-789.tmp", false, old)
+	freshDir := mk(data, ".coaming-backup-live", true, fresh)
+	freshTmp := mk(data, ".coaming-export-live.tmp", false, fresh)
+	db := mk(data, "coaming.db", false, old)
+	key := mk(data, "coaming.key", false, old)
+	saved := mk(dir, "coaming-backup-20261001-0300.coaming", false, old)
+	snap := mk(dir, "coaming-20261001T030000Z.db", false, old)
+	otherHidden := mk(data, ".coaming-something-else", false, old)
 
 	backup.SweepWorkFiles(data, dir, now, slog.New(slog.DiscardHandler))
 
@@ -201,13 +201,13 @@ func TestStaleWorkFilesOfAKilledExportAreSweptAndNothingElseIs(t *testing.T) {
 
 func TestManualBackupNamesHaveSecondsAreNeverScheduledNamesAndAreNeitherListedNorServed(t *testing.T) {
 	at := time.Date(2026, 10, 8, 14, 5, 9, 0, time.UTC)
-	if got := backup.ManualName(at, 1); got != "bayplan-manual-20261008-140509.bayplan" {
+	if got := backup.ManualName(at, 1); got != "coaming-manual-20261008-140509.coaming" {
 		t.Fatalf("ManualName = %q", got)
 	}
 	if got := backup.ManualName(at, 0); got != backup.ManualName(at, 1) {
 		t.Fatalf("attempt 0 = %q, want the plain name", got)
 	}
-	if got := backup.ManualName(at, 2); got != "bayplan-manual-20261008-140509-2.bayplan" {
+	if got := backup.ManualName(at, 2); got != "coaming-manual-20261008-140509-2.coaming" {
 		t.Fatalf("attempt 2 = %q", got)
 	}
 	dir := t.TempDir()

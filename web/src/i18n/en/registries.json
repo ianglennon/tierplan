@@ -1,7 +1,7 @@
 {
   "registries": {
     "title": "Registries",
-    "caption": "Credentials Bayplan uses to pull images and browse tags. Pulls pick the most specific match automatically.",
+    "caption": "Credentials Coaming uses to pull images and browse tags. Pulls pick the most specific match automatically.",
     "add": "Add credential",
     "needsInstance": "Needs an instance administrator",
     "needsOnEnvironment": "{{need}} on {{name}}",
@@ -133,7 +133,7 @@
       },
       "host": {
         "label": "Registry",
-        "helper": "To browse a registry mirror, add it here as a generic registry. Bayplan never uses the mirrors set on your nodes.",
+        "helper": "To browse a registry mirror, add it here as a generic registry. Coaming never uses the mirrors set on your nodes.",
         "readOnly": "This host is read-only (set on the host)"
       },
       "prefix": {
@@ -159,7 +159,7 @@
       },
       "expires": {
         "label": "Expires (optional)",
-        "helper": "Bayplan warns 7 days before. It doesn't renew anything."
+        "helper": "Coaming warns 7 days before. It doesn't renew anything."
       },
       "view": {
         "description": "You can see this credential but not change it.",
@@ -174,9 +174,9 @@
         "hubFallback": "All Docker Hub pulls",
         "hubFallbackYes": "Used when no more specific credential matches",
         "customCa": "Custom CA",
-        "customCaYes": "Used for Bayplan's tests and tag browsing",
+        "customCaYes": "Used for Coaming's tests and tag browsing",
         "insecure": "TLS verification",
-        "insecureYes": "Skipped for Bayplan's tests and tag browsing; plain HTTP allowed",
+        "insecureYes": "Skipped for Coaming's tests and tag browsing; plain HTTP allowed",
         "expires": "Expires",
         "lastTest": "Last test",
         "missing": "—"
@@ -214,13 +214,13 @@
         "ca": {
           "label": "Custom CA certificate (PEM)",
           "placeholder": "-----BEGIN CERTIFICATE-----",
-          "helper": "For a registry with its own certificate authority. Used for Bayplan's tests and tag browsing."
+          "helper": "For a registry with its own certificate authority. Used for Coaming's tests and tag browsing."
         },
         "insecure": {
           "label": "Allow plain HTTP or skip TLS verification",
-          "warning": "Bayplan will use this credential over a connection that isn't verified. Anyone on the network path could read it. Only use this on a network you trust."
+          "warning": "Coaming will use this credential over a connection that isn't verified. Anyone on the network path could read it. Only use this on a network you trust."
         },
-        "nodeNote": "These settings only affect Bayplan's own tests and tag browsing. Each node's Docker daemon still needs its own insecure-registries or certs.d setup to pull from this registry. Bayplan never changes daemon settings.",
+        "nodeNote": "These settings only affect Coaming's own tests and tag browsing. Each node's Docker daemon still needs its own insecure-registries or certs.d setup to pull from this registry. Coaming never changes daemon settings.",
         "docsLink": "Self-hosted registry docs"
       }
     },
@@ -325,11 +325,11 @@
         "tag": {
           "label": "Tag (optional)",
           "placeholder": "latest",
-          "helper": "Left empty, Bayplan reads latest, or the newest tag the registry lists when it has no latest.",
+          "helper": "Left empty, Coaming reads latest, or the newest tag the registry lists when it has no latest.",
           "invalid": "A tag is 1 to 128 letters, digits, underscores, dots or dashes, and doesn't start with a dot or dash."
         },
         "noEnvironment": "There is no environment to run the test from.",
-        "caption": "Runs on {{where}} through its agent, so it also catches firewall, DNS and CA problems that Bayplan's own server can't see.",
+        "caption": "Runs on {{where}} through its agent, so it also catches firewall, DNS and CA problems that Coaming's own server can't see.",
         "whereBefore": "a node of {{environment}}",
         "run": "Run test from {{environment}}",
         "pending": "Testing…",
@@ -339,7 +339,7 @@
           "pull_denied": "{{host}} refused this credential for that repository. Check its scopes.",
           "pull_unauthorized": "{{host}} refused this username and secret.",
           "image_not_found": "{{host}} has no such repository, or no tag {{tag}} in it. Check both.",
-          "pull_failed": "Docker on {{node}} gave an answer Bayplan doesn't recognise. The server log has it.",
+          "pull_failed": "Docker on {{node}} gave an answer Coaming doesn't recognise. The server log has it.",
           "registry_http_fallback": "Docker on {{node}} retried {{host}} over plain HTTP, because the name resolves to a loopback address or is listed in insecure-registries, and that answer hid the real one. Check that the tag {{tag}} exists and that the sign-in works."
         }
       },

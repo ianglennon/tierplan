@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Removes the Docker containers, networks and volumes a CI job (or a local smoke run)
 # created, so a failed or cancelled job leaves nothing on the VM's shared daemon (D-23).
-# Every smoke script labels what it creates with bayplan.ci.owner=$BAYPLAN_CI_OWNER; this
+# Every smoke script labels what it creates with coaming.ci.owner=$COAMING_CI_OWNER; this
 # removes exactly the resources that carry that label value, in the order containers,
 # networks, volumes, and prints each one it removed.
 #
-# BAYPLAN_CI_OWNER is required and the script exits 2 without it, so it can never be
+# COAMING_CI_OWNER is required and the script exits 2 without it, so it can never be
 # run in a way that removes another job's resources or a person's own. In ci.yml it is
 # <run id>-<attempt>-<job>, built only from GitHub-generated values.
 set -euo pipefail
 
-OWNER="${BAYPLAN_CI_OWNER:-}"
+OWNER="${COAMING_CI_OWNER:-}"
 if [ -z "${OWNER}" ]; then
-  echo "ci-clean: BAYPLAN_CI_OWNER is not set; refusing to remove anything" >&2
+  echo "ci-clean: COAMING_CI_OWNER is not set; refusing to remove anything" >&2
   exit 2
 fi
 command -v docker >/dev/null || { echo "ci-clean: docker is required" >&2; exit 1; }
 
-FILTER="label=bayplan.ci.owner=${OWNER}"
+FILTER="label=coaming.ci.owner=${OWNER}"
 removed=0
 
 # remove KIND NAME-FIELD [RM-FLAG...]: lists the resources of KIND with the owner label

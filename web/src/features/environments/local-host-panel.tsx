@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldAlert, TriangleAlert } from "lucide-react";
@@ -59,7 +59,7 @@ interface LocalHostPanelProps {
   onDone?: () => void;
 }
 
-// LocalHostPanel is the opt-in for the Docker host Bayplan runs on (D-02 step
+// LocalHostPanel is the opt-in for the Docker host Coaming runs on (D-02 step
 // 4, D-19). It never adds anything by itself: the only request that changes
 // anything is the POST in the click handlers below, so no effect, loader or
 // page load can turn the Docker socket into a managed environment.
@@ -226,7 +226,7 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
     );
   }
 
-  // A socket exists but nothing answers on it (stopped Docker, or Bayplan is not
+  // A socket exists but nothing answers on it (stopped Docker, or Coaming is not
   // allowed to open it). The server refuses to add it in this state.
   if (view === "unreachable") {
     return (
@@ -248,7 +248,7 @@ export function LocalHostPanel({ mode, onDone }: LocalHostPanelProps) {
   const engine = probe?.engineName || "Docker";
   const engineVersion = probe?.engineVersion || MISSING;
 
-  // An engine Bayplan cannot manage: say why, and let the admin add it anyway
+  // An engine Coaming cannot manage: say why, and let the admin add it anyway
   // so it shows up as unsupported (D-25).
   if (view === "unsupported" && probe) {
     const podman = probe.reason === "podman";

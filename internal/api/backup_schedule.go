@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // ScheduleRunBody is one scheduled backup run.
@@ -32,13 +32,13 @@ type ScheduleRunBody struct {
 
 // BackupScheduleBody is the backup schedule. The passphrase is never in it.
 type BackupScheduleBody struct {
-	Enabled         bool             `json:"enabled" doc:"Whether Bayplan makes a backup by itself"`
+	Enabled         bool             `json:"enabled" doc:"Whether Coaming makes a backup by itself"`
 	Frequency       string           `json:"frequency" enum:"daily,weekly" doc:"How often"`
 	Weekday         int              `json:"weekday" minimum:"0" maximum:"6" doc:"For a weekly schedule: the day, 0 for Sunday to 6 for Saturday"`
 	TimeUTC         string           `json:"timeUtc" pattern:"^([01][0-9]|2[0-3]):[0-5][0-9]$" doc:"The time of day in UTC, as 24-hour HH:MM"`
 	Keep            int              `json:"keep" minimum:"1" maximum:"365" doc:"How many scheduled backups are kept; older ones are deleted"`
 	PassphraseSaved bool             `json:"passphraseSaved" doc:"Whether a passphrase is saved. The passphrase itself is never returned"`
-	Dir             string           `json:"dir" doc:"The folder the backups are written into on the Bayplan host"`
+	Dir             string           `json:"dir" doc:"The folder the backups are written into on the Coaming host"`
 	NextRun         *time.Time       `json:"nextRun,omitempty" doc:"When the next backup is due; absent while the schedule is off"`
 	LastRun         *ScheduleRunBody `json:"lastRun,omitempty" doc:"The newest scheduled run, successful or not"`
 	LastSuccess     *ScheduleRunBody `json:"lastSuccess,omitempty" doc:"The newest scheduled run that wrote a backup"`
@@ -66,7 +66,7 @@ type PutBackupScheduleInput struct {
 
 // BackupFileBody is one scheduled backup on disk.
 type BackupFileBody struct {
-	Name    string    `json:"name" doc:"The file name, bayplan-backup-YYYYMMDD-HHMM.bayplan"`
+	Name    string    `json:"name" doc:"The file name, coaming-backup-YYYYMMDD-HHMM.coaming"`
 	Size    int64     `json:"size" doc:"Size in bytes"`
 	Created time.Time `json:"created" doc:"When it was made, from its name (UTC, to the minute)"`
 }
@@ -83,7 +83,7 @@ type BackupFilesOutput struct {
 type DownloadBackupFileInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
-	Name      string `path:"name" doc:"A file name from the list; only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served"`
+	Name      string `path:"name" doc:"A file name from the list; only names of the form coaming-backup-YYYYMMDD-HHMM.coaming are served"`
 }
 
 func runBody(run sqlc.BackupRun) *ScheduleRunBody {
@@ -126,7 +126,7 @@ func registerBackupSchedule(r *httpx.Router, d BackupDeps, need rbac.Requirement
 		Method:      http.MethodGet,
 		Path:        "/api/backup/schedule",
 		Summary:     "Get the backup schedule",
-		Description: "Whether Bayplan makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due " +
+		Description: "Whether Coaming makes a backup by itself, when, how many it keeps, where it writes them, when the next one is due " +
 			"and how the last runs went. Whether a passphrase is saved is reported; the passphrase never is. Needs backup.manage.",
 		Tags: []string{"backup"},
 	}, need, func(ctx context.Context, _ *struct{}) (*BackupScheduleOutput, error) {
@@ -212,7 +212,7 @@ func registerBackupSchedule(r *httpx.Router, d BackupDeps, need rbac.Requirement
 		Method:      http.MethodGet,
 		Path:        "/api/backup/files/{name}",
 		Summary:     "Download a scheduled backup",
-		Description: "The encrypted backup file as it is on disk. Only names of the form bayplan-backup-YYYYMMDD-HHMM.bayplan are served; any other " +
+		Description: "The encrypted backup file as it is on disk. Only names of the form coaming-backup-YYYYMMDD-HHMM.coaming are served; any other " +
 			"name is 404 and is never looked up in the file system. Audited as backup.exported with source saved. Needs backup.manage.",
 		Tags: []string{"backup"},
 		Responses: map[string]*huma.Response{"200": {

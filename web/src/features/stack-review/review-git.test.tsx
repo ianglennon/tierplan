@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -243,7 +243,7 @@ describe("the review of a git stack", () => {
     expect(await screen.findByRole("heading", { name: "Pull and redeploy web" })).toBeTruthy();
     expect(
       await screen.findByText(
-        "Bayplan fetched main just now and rendered stacks/web at commit fedcba9. This shows what would change on Prod.",
+        "Coaming fetched main just now and rendered stacks/web at commit fedcba9. This shows what would change on Prod.",
       ),
     ).toBeTruthy();
   });
@@ -253,7 +253,7 @@ describe("the review of a git stack", () => {
     mount();
     expect(
       await screen.findByText(
-        "Bayplan fetched main just now and rendered the repository root at commit fedcba9. This shows what would change on Prod.",
+        "Coaming fetched main just now and rendered the repository root at commit fedcba9. This shows what would change on Prod.",
       ),
     ).toBeTruthy();
   });
@@ -469,11 +469,11 @@ describe("the Commits card of a git review", () => {
     expect(await screen.findByText("Showing the newest 3 of 80.")).toBeTruthy();
   });
 
-  it("says Bayplan can't list the commits when the route can't, and the review goes on", async () => {
+  it("says Coaming can't list the commits when the route can't, and the review goes on", async () => {
     commits = { commits: [], total: 0, capped: false, available: false };
     mount();
     expect(
-      await screen.findByText("Bayplan can't list the commits, so only the changes are shown."),
+      await screen.findByText("Coaming can't list the commits, so only the changes are shown."),
     ).toBeTruthy();
     expect(screen.getByRole("table", { name: "Summary of changes" })).toBeTruthy();
   });
@@ -482,7 +482,7 @@ describe("the Commits card of a git review", () => {
     commits = undefined;
     mount();
     expect(
-      await screen.findByText("Bayplan can't list the commits, so only the changes are shown."),
+      await screen.findByText("Coaming can't list the commits, so only the changes are shown."),
     ).toBeTruthy();
   });
 
@@ -589,7 +589,7 @@ describe("the moved-head note of a git review", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Review 1111111" }));
     expect(
       await screen.findByText(
-        "Bayplan fetched main just now and rendered stacks/web at commit 1111111. This shows what would change on Prod.",
+        "Coaming fetched main just now and rendered stacks/web at commit 1111111. This shows what would change on Prod.",
       ),
     ).toBeTruthy();
     expect(sent.filter((r) => r.path.endsWith("/git/pull"))).toHaveLength(1);

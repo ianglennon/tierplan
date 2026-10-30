@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Ellipsis } from "lucide-react";
@@ -58,7 +58,7 @@ const isRevoked = (a: AgentItem) => a.status === "revoked" || a.blocked;
 // server started reports 0, which is not a measurement.
 const clockKnown = (a: AgentItem) => a.connected || a.clockOffsetSeconds !== 0;
 
-// The Bayplan host folded into a swarm (D-48): reached through the Docker socket, so it has
+// The Coaming host folded into a swarm (D-48): reached through the Docker socket, so it has
 // no agent, certificate or clock, and none of the agent actions apply to it.
 const isLocalNode = (a: AgentItem) => a.role === "local";
 
@@ -427,7 +427,7 @@ function NodeRow({
   );
 }
 
-// LocalNodeRow is the folded Bayplan host in a swarm's node list. Like the local-socket
+// LocalNodeRow is the folded Coaming host in a swarm's node list. Like the local-socket
 // row it has dashes for everything an agent has, and no menu: there is nothing to revoke,
 // unblock or update, because there is no agent on it.
 function LocalNodeRow({ agent }: { agent: AgentItem }) {
@@ -461,7 +461,7 @@ function LocalNodeRow({ agent }: { agent: AgentItem }) {
   );
 }
 
-// LocalRow is the one row of a local-socket environment: the host Bayplan runs
+// LocalRow is the one row of a local-socket environment: the host Coaming runs
 // on has no agent, no certificate and no clock, and nothing to revoke.
 function LocalRow({ env }: { env: EnvironmentItem }) {
   const t = useT();
@@ -538,7 +538,7 @@ export function NodeTable({ envId, onRotateToken }: NodeTableProps) {
   const failed = !loading && !isLocal && agents.isError;
   const list = isLocal ? [] : (agents.data?.items ?? []);
   // Update agent is for an environment whose automatic updates are off: with them
-  // on, Bayplan updates the agents by itself (D-28).
+  // on, Coaming updates the agents by itself (D-28).
   const canUpdate = canConfigure && env?.kind === "agent" && env.autoUpdate === false;
 
   const update = useMutation({

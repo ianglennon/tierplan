@@ -1,7 +1,7 @@
 {
   "stackRendered": {
     "title": "Rendered stack",
-    "helper": "The compose file after variables are filled in and images are pinned, as it will be deployed. Hidden values show as <hidden>. Bayplan never changes your compose file.",
+    "helper": "The compose file after variables are filled in and images are pinned, as it will be deployed. Hidden values show as <hidden>. Coaming never changes your compose file.",
     "label": "Rendered stack, read only",
     "loading": "Rendering…",
     "refreshing": "Updating…",

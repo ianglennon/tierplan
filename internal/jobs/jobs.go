@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package jobs is a small in-memory hub for long-running work that a browser watches
 // but does not own: an image pull on every node of an environment today, a stack deploy

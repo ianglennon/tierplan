@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
--- Git connections (GIT-01, Phase 9 D-01, D-02): the sign-in Bayplan uses to read a repository,
+-- Git connections (GIT-01, Phase 9 D-01, D-02): the sign-in Coaming uses to read a repository,
 -- and the repository itself, as two separate objects. A credential is an HTTPS token (username
 -- and token) or an SSH deploy key. A repository is an address, an optional credential picked
 -- explicitly (there is no matching by address) and an optional custom certificate authority.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Link } from "@tanstack/react-router";
 import { Info } from "lucide-react";
@@ -14,8 +14,8 @@ interface AdoptedBannerProps {
   stack: StackDetail;
 }
 
-// AdoptedBanner is the notice on the Overview of a stack Bayplan adopted until its first deploy (UI-SPEC "Adopted
-// banner", D-16): the stack is Bayplan's to manage but its services do not carry Bayplan's ownership labels yet,
+// AdoptedBanner is the notice on the Overview of a stack Coaming adopted until its first deploy (UI-SPEC "Adopted
+// banner", D-16): the stack is Coaming's to manage but its services do not carry Coaming's ownership labels yet,
 // and the first deploy adds them, which recreates each service (a brief restart). It says how many services that
 // is and points at the review, which shows exactly what changes, and at the history. It draws nothing for a stack
 // that was not adopted, and goes once the first deploy has ended good (the server stops saying it is pending).

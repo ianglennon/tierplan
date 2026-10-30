@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -183,14 +183,14 @@ describe("HealthBell", () => {
   });
 
   it("counts and lists the key backup reminder", async () => {
-    items = [{ id: "key_backup", keyPath: "/data/bayplan.key" }];
+    items = [{ id: "key_backup", keyPath: "/data/coaming.key" }];
     renderWarnings();
     const bell = await screen.findByRole("button", { name: "Warnings, 1 item" });
     expect(bell.textContent).toBe("1");
     await openBell("Warnings, 1 item");
     expect(await screen.findByText("Back up your encryption key.")).toBeTruthy();
     expect(
-      screen.getByText("Stored secrets can't be recovered without /data/bayplan.key."),
+      screen.getByText("Stored secrets can't be recovered without /data/coaming.key."),
     ).toBeTruthy();
     expect(screen.queryByText("No warnings")).toBeNull();
   });
@@ -199,22 +199,22 @@ describe("HealthBell", () => {
     plainHttp = true;
     renderWarnings();
     await openBell("Warnings, 1 item");
-    expect(await screen.findByText("You're using Bayplan over plain HTTP.")).toBeTruthy();
+    expect(await screen.findByText("You're using Coaming over plain HTTP.")).toBeTruthy();
     const fix = screen.getByRole("link", {
-      name: "Serve Bayplan over HTTPS or put it behind a reverse proxy",
+      name: "Serve Coaming over HTTPS or put it behind a reverse proxy",
     });
     expect(fix.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
   it("counts both items together", async () => {
     plainHttp = true;
-    items = [{ id: "key_backup", keyPath: "/data/bayplan.key" }];
+    items = [{ id: "key_backup", keyPath: "/data/coaming.key" }];
     renderWarnings();
     expect(await screen.findByRole("button", { name: "Warnings, 2 items" })).toBeTruthy();
   });
 
   it("acknowledges the key backup once and the item disappears", async () => {
-    items = [{ id: "key_backup", keyPath: "/data/bayplan.key" }];
+    items = [{ id: "key_backup", keyPath: "/data/coaming.key" }];
     renderWarnings();
     await openBell("Warnings, 1 item");
     fireEvent.click(await screen.findByRole("button", { name: "I've backed it up" }));
@@ -228,7 +228,7 @@ describe("HealthBell", () => {
   });
 
   it("toasts a failure and keeps the reminder when the acknowledgement fails", async () => {
-    items = [{ id: "key_backup", keyPath: "/data/bayplan.key" }];
+    items = [{ id: "key_backup", keyPath: "/data/coaming.key" }];
     ackStatus = 500;
     renderWarnings();
     await openBell("Warnings, 1 item");
@@ -246,7 +246,7 @@ describe("HealthBell", () => {
 });
 
 describe("HealthBell reverse proxy items", () => {
-  const DOCS = "https://github.com/ianglennon/bayplan/blob/main/docs/reverse-proxy.md";
+  const DOCS = "https://github.com/ianglennon/coaming/blob/main/docs/reverse-proxy.md";
 
   it("lists untrusted forwarded headers with the address and a docs link that opens in a new tab", async () => {
     items = [{ id: "proxy_untrusted_forwarded", ip: "10.0.0.5" }];
@@ -255,7 +255,7 @@ describe("HealthBell reverse proxy items", () => {
     expect(await screen.findByText("Forwarded headers from an untrusted address")).toBeTruthy();
     expect(
       screen.getByText(
-        "Bayplan got X-Forwarded headers from 10.0.0.5, which isn't in BAYPLAN_TRUSTED_PROXIES. They were ignored.",
+        "Coaming got X-Forwarded headers from 10.0.0.5, which isn't in COAMING_TRUSTED_PROXIES. They were ignored.",
       ),
     ).toBeTruthy();
     const link = screen.getByRole("link", { name: "Reverse proxy docs" });
@@ -268,9 +268,9 @@ describe("HealthBell reverse proxy items", () => {
     items = [
       {
         id: "proxy_url_mismatch",
-        host: "bayplan:7480",
+        host: "coaming:7480",
         scheme: "http",
-        url: "https://bayplan.example.com",
+        url: "https://coaming.example.com",
       },
     ];
     renderWarnings();
@@ -278,7 +278,7 @@ describe("HealthBell reverse proxy items", () => {
     expect(await screen.findByText("Requests don't match the public URL")).toBeTruthy();
     expect(
       screen.getByText(
-        "Requests arrive for bayplan:7480 over http, but the public URL is https://bayplan.example.com. Sign-in and agent connections may fail.",
+        "Requests arrive for coaming:7480 over http, but the public URL is https://coaming.example.com. Sign-in and agent connections may fail.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Reverse proxy docs" }).getAttribute("href")).toBe(
@@ -301,7 +301,7 @@ describe("HealthBell reverse proxy items", () => {
   it("counts every proxy item with the others and lists them all", async () => {
     plainHttp = true;
     items = [
-      { id: "key_backup", keyPath: "/data/bayplan.key" },
+      { id: "key_backup", keyPath: "/data/coaming.key" },
       { id: "proxy_untrusted_forwarded", ip: "10.0.0.5" },
       { id: "proxy_websocket_failing", ip: "203.0.113.9" },
     ];
@@ -427,7 +427,7 @@ describe("HealthBell environment items", () => {
 
   it("orders errors before warnings and then newest first, with the instance items after the dated ones", async () => {
     plainHttp = true;
-    items = [{ id: "key_backup", keyPath: "/data/bayplan.key" }];
+    items = [{ id: "key_backup", keyPath: "/data/coaming.key" }];
     envItems = [
       { id: "fold_offered", severity: "warning", envId: "s1", envName: "Prod swarm" },
       offline("old", "Older", "2026-10-04T10:00:00Z"),
@@ -451,7 +451,7 @@ describe("HealthBell environment items", () => {
       "Older is offline",
       "The clock is off on node-a",
       "This host is part of Prod swarm",
-      "You're using Bayplan over plain HTTP.",
+      "You're using Coaming over plain HTTP.",
       "Back up your encryption key.",
     ]);
   });
@@ -505,7 +505,7 @@ describe("HealthBell environment items", () => {
     expect(await screen.findByText("An agent certificate isn't renewing")).toBeTruthy();
     expect(
       screen.getByText(
-        "node-a on Edge: the certificate expires in 6 days. Check that the agent can reach Bayplan.",
+        "node-a on Edge: the certificate expires in 6 days. Check that the agent can reach Coaming.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "View nodes" }).getAttribute("href")).toBe(
@@ -573,7 +573,7 @@ describe("HealthBell environment items", () => {
     expect(await screen.findByText("The clock is off on node-a")).toBeTruthy();
     expect(
       screen.getByText(
-        "node-a on Edge is 45 s out of step. Bayplan refuses agents beyond 5 minutes.",
+        "node-a on Edge is 45 s out of step. Coaming refuses agents beyond 5 minutes.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "View nodes" }).getAttribute("href")).toBe(
@@ -1056,7 +1056,7 @@ describe("HealthBell failed scheduled backups", () => {
   it("counts with the other items", async () => {
     items = [
       { id: "backup_failed", subject: "boom" },
-      { id: "key_backup", keyPath: "/data/bayplan.key" },
+      { id: "key_backup", keyPath: "/data/coaming.key" },
     ];
     renderWarnings();
     expect(await screen.findByRole("button", { name: "Warnings, 2 items" })).toBeTruthy();
@@ -1077,7 +1077,7 @@ describe("HealthBell agents not known after a restore", () => {
     items = [{ id: "unknown_agents", count: 3 }];
     renderWarnings();
     await openBell("Warnings, 1 item");
-    expect(await screen.findByText("3 agents aren't known to this Bayplan")).toBeTruthy();
+    expect(await screen.findByText("3 agents aren't known to this Coaming")).toBeTruthy();
     expect(screen.getByText("They were installed after the backup you restored.")).toBeTruthy();
     const link = screen.getByRole("link", { name: "View" });
     expect(link.getAttribute("href")).toContain("/settings/environments");
@@ -1089,7 +1089,7 @@ describe("HealthBell agents not known after a restore", () => {
     items = [{ id: "unknown_agents", count: 1 }];
     renderWarnings();
     await openBell("Warnings, 1 item");
-    expect(await screen.findByText("1 agent isn't known to this Bayplan")).toBeTruthy();
+    expect(await screen.findByText("1 agent isn't known to this Coaming")).toBeTruthy();
     expect(screen.getByText("It was installed after the backup you restored.")).toBeTruthy();
   });
 
@@ -1100,7 +1100,7 @@ describe("HealthBell agents not known after a restore", () => {
     fireEvent.click(await screen.findByRole("link", { name: "View" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings/environments"));
     await waitFor(() =>
-      expect(screen.queryByText("2 agents aren't known to this Bayplan")).toBeNull(),
+      expect(screen.queryByText("2 agents aren't known to this Coaming")).toBeNull(),
     );
   });
 
@@ -1110,7 +1110,7 @@ describe("HealthBell agents not known after a restore", () => {
     renderWarnings();
     await openBell();
     expect(await screen.findByText("No warnings")).toBeTruthy();
-    expect(screen.queryByText(/aren't known to this Bayplan/)).toBeNull();
+    expect(screen.queryByText(/aren't known to this Coaming/)).toBeNull();
   });
 });
 

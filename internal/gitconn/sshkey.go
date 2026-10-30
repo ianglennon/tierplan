@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitconn
 
@@ -15,11 +15,11 @@ const MaxPrivateKeyBytes = 16 << 10
 
 // What a private key is refused with. None carries any part of the key.
 var (
-	// ErrKeyPassphrase means the key is encrypted with a passphrase, which Bayplan cannot use: a
+	// ErrKeyPassphrase means the key is encrypted with a passphrase, which Coaming cannot use: a
 	// deploy key is a key without one.
 	ErrKeyPassphrase = errors.New("gitconn: the key needs a passphrase")
-	// ErrKeyInvalid means the text is not a private key Bayplan can read.
-	ErrKeyInvalid = errors.New("gitconn: not a private key Bayplan can read")
+	// ErrKeyInvalid means the text is not a private key Coaming can read.
+	ErrKeyInvalid = errors.New("gitconn: not a private key Coaming can read")
 	// ErrKeyTooLarge means the text is over MaxPrivateKeyBytes.
 	ErrKeyTooLarge = errors.New("gitconn: the private key is larger than 16 KiB")
 )

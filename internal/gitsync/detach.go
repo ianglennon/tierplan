@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
@@ -8,7 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // DetachResult is what a Detach made the draft from.
@@ -20,7 +20,7 @@ type DetachResult struct {
 	Commit string
 }
 
-// Detach turns a git stack back into an inline stack you edit in Bayplan (D-25), without touching what runs. The files of
+// Detach turns a git stack back into an inline stack you edit in Coaming (D-25), without touching what runs. The files of
 // the deployed revision become the draft (a stack never deployed keeps the draft it has), as inline files: the overlay
 // files are inline files that stay secret. The variables and the ordered compose file list are kept. The stack's git
 // settings and sync state are deleted, so the poller no longer lists it and its webhook address answers 404, and the

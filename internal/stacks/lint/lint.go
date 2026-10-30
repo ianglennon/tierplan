@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package lint is the target-aware part of a stack check (STK-03, D-10): what a compose file
 // asks for that the stack's target will ignore or refuse. It is pure. It reads a loaded project
@@ -112,11 +112,11 @@ var messages = map[string]string{
 	// service
 	CodeBuildWithoutImage: "%s has build but no image. Build and push the image, then set image.",
 	// image
-	CodeMovingTag: "“%s” can move: it has no tag or uses :latest. Bayplan keeps the running digest on redeploys, but picks one when the service is new or the reference changes.",
+	CodeMovingTag: "“%s” can move: it has no tag or uses :latest. Coaming keeps the running digest on redeploys, but picks one when the service is new or the reference changes.",
 	// service, kind ("secret" or "config"), name
 	CodeReadOnlyFileObject: "%s is read_only, but a standalone host has to write the %s “%s” into the container. Remove read_only from the service.",
 	// key, kind ("secret" or "config")
-	CodeFileObjectOwner: "`%s` can't be set on a standalone host. Bayplan writes the %s into the container as the user the container starts as, and its owner can't be changed. Remove the key, or deploy this stack to a Swarm.",
+	CodeFileObjectOwner: "`%s` can't be set on a standalone host. Coaming writes the %s into the container as the user the container starts as, and its owner can't be changed. Remove the key, or deploy this stack to a Swarm.",
 	// service, kind, name, path
 	CodeFileObjectName: "The path %[4]s of the %[2]s “%[3]s” in %[1]s is too long to write into a container. Use a shorter target.",
 	// kind, name
@@ -125,9 +125,9 @@ var messages = map[string]string{
 	// key, why
 	CodeStandaloneUnsupported: "`%s` can't be used on a standalone host. %s",
 	// key
-	CodeNetworkOptionUnsupported: "`%s` isn't supported on a stack network. Bayplan creates networks without it. Remove it, or create the network yourself and use it as an external network.",
+	CodeNetworkOptionUnsupported: "`%s` isn't supported on a stack network. Coaming creates networks without it. Remove it, or create the network yourself and use it as an external network.",
 	// A build key that is ignored because the image is set (A5); the swarm table words it for Swarm.
-	"build_with_image": "`build` is ignored. Bayplan doesn't build images; it deploys the image named in `image`.",
+	"build_with_image": "`build` is ignored. Coaming doesn't build images; it deploys the image named in `image`.",
 }
 
 // ignoredMessage is the warning for a key a target ignores: "`{key}` is ignored on {target}. {what to do}".

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -245,13 +245,13 @@ describe("NodeActionDialog drain", () => {
 });
 
 describe("NodeActionDialog warnings and the typed name", () => {
-  it("warns that Bayplan runs on the node, and asks for the name before a drain", async () => {
-    answerImpact = () => Response.json(impact({ warnings: ["runs_bayplan"], needsConfirm: true }));
+  it("warns that Coaming runs on the node, and asks for the name before a drain", async () => {
+    answerImpact = () => Response.json(impact({ warnings: ["runs_coaming"], needsConfirm: true }));
     const { onClose } = mount("drain");
     const dialog = await dialogOf("Drain wkr-1?");
     expect(
       within(dialog).getByText(
-        "Bayplan runs on wkr-1. Draining it can cut Bayplan off from this swarm.",
+        "Coaming runs on wkr-1. Draining it can cut Coaming off from this swarm.",
       ),
     ).toBeTruthy();
     expect(within(dialog).getByLabelText("Type wkr-1 to confirm")).toBeTruthy();
@@ -279,7 +279,7 @@ describe("NodeActionDialog warnings and the typed name", () => {
     const dialog = await dialogOf("Drain wkr-1?");
     expect(
       within(dialog).getByText(
-        "wkr-1 has the only manager agent connected to Bayplan. Draining it leaves Bayplan unable to change this swarm until another manager's agent connects.",
+        "wkr-1 has the only manager agent connected to Coaming. Draining it leaves Coaming unable to change this swarm until another manager's agent connects.",
       ),
     ).toBeTruthy();
   });
@@ -461,19 +461,19 @@ describe("NodeActionDialog promote and demote", () => {
     const dialog = await dialogOf("Demote wkr-1 to worker?");
     expect(
       within(dialog).getByText(
-        "Bayplan couldn't check the managers' state, so it can't tell whether this is safe.",
+        "Coaming couldn't check the managers' state, so it can't tell whether this is safe.",
       ),
     ).toBeTruthy();
     expect(within(dialog).getByLabelText("Type wkr-1 to confirm")).toBeTruthy();
   });
 
-  it("warns that Bayplan runs on the node being demoted", async () => {
+  it("warns that Coaming runs on the node being demoted", async () => {
     answerImpact = () =>
       Response.json(
         impact({
           action: "demote",
           managers: { total: 4, reachable: 4, after: 3 },
-          warnings: ["runs_bayplan"],
+          warnings: ["runs_coaming"],
           needsConfirm: true,
         }),
       );
@@ -481,7 +481,7 @@ describe("NodeActionDialog promote and demote", () => {
     const dialog = await dialogOf("Demote wkr-1 to worker?");
     expect(
       within(dialog).getByText(
-        "Bayplan runs on wkr-1. Demoting it can cut Bayplan off from this swarm.",
+        "Coaming runs on wkr-1. Demoting it can cut Coaming off from this swarm.",
       ),
     ).toBeTruthy();
   });
@@ -552,7 +552,7 @@ describe("NodeActionDialog refusals", () => {
     });
     expect(
       await within(dialog).findByText(
-        "The connection dropped before Bayplan answered. The list shows whether it happened.",
+        "The connection dropped before Coaming answered. The list shows whether it happened.",
       ),
     ).toBeTruthy();
   });

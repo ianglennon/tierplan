@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -124,11 +124,11 @@ beforeEach(() => {
       if (path === "/api/environments") return Response.json({ items });
       if (path === "/api/settings") {
         return Response.json({
-          agentEndpoint: "wss://bayplan.example.com/agent/connect",
+          agentEndpoint: "wss://coaming.example.com/agent/connect",
           agentUrl: "",
           agentUrlLocked: false,
           instanceName: "Lab",
-          publicUrl: "https://bayplan.example.com",
+          publicUrl: "https://coaming.example.com",
           publicUrlLocked: false,
         });
       }
@@ -277,7 +277,7 @@ describe("/settings/environments/$envId", () => {
     expect(screen.queryByRole("heading", { name: "Remove environment" })).toBeNull();
     cleanup();
 
-    // The host Bayplan runs on has no agents to update.
+    // The host Coaming runs on has no agents to update.
     current = me(ALL);
     renderAt("/settings/environments/e1");
     await screen.findByRole("heading", { level: 3, name: "Remove environment" });
@@ -335,7 +335,7 @@ describe("/settings/environments/$envId", () => {
     const within_ = within(card as HTMLElement);
     expect(within_.getByText("Online")).toBeTruthy();
     expect(within_.getByText("Connects to")).toBeTruthy();
-    expect(await within_.findByText("wss://bayplan.example.com/agent/connect")).toBeTruthy();
+    expect(await within_.findByText("wss://coaming.example.com/agent/connect")).toBeTruthy();
     // Nothing to explain while it is online.
     expect(within_.queryByText(/isn't connected/)).toBeNull();
   });
@@ -399,8 +399,8 @@ describe("/settings/environments/$envId", () => {
     renderAt("/settings/environments/e2");
     const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
     const within_ = within(card as HTMLElement);
-    expect(await within_.findByText("docker service ps bayplan-agent")).toBeTruthy();
-    expect(within_.queryByText("docker ps --filter name=bayplan-agent")).toBeNull();
+    expect(await within_.findByText("docker service ps coaming-agent")).toBeTruthy();
+    expect(within_.queryByText("docker ps --filter name=coaming-agent")).toBeNull();
   });
 
   it("explains why the local Docker socket is offline in words", async () => {
@@ -415,7 +415,7 @@ describe("/settings/environments/$envId", () => {
     const card = (await screen.findByRole("heading", { name: "Connection" })).closest("section");
     const within_ = within(card as HTMLElement);
     expect(await within_.findByText(/Docker isn't answering on the local socket\./)).toBeTruthy();
-    expect(within_.getByText(/mounted into Bayplan/)).toBeTruthy();
+    expect(within_.getByText(/mounted into Coaming/)).toBeTruthy();
   });
 
   it("hides the Join token card and never reads the token without environments.token", async () => {

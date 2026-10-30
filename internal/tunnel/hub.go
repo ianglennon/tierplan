@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package tunnel is the server end of the agent connection: the /agent/connect
 // WebSocket, the handshake inside it, the registry of live sessions, and the
@@ -27,9 +27,9 @@ import (
 	"github.com/hashicorp/yamux"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // ErrAgentGone means the agent's session is closed or closing. A Docker call
@@ -419,7 +419,7 @@ func (h *Hub) WithNotifier(n Notifier) *Hub {
 	return h
 }
 
-// WithPublicURL tells the hub the URL agents are told to dial: Bayplan's public
+// WithPublicURL tells the hub the URL agents are told to dial: Coaming's public
 // URL, or the agent URL when an admin set one (D-18). The audience of every
 // handshake is checked against its host, and plain transport is accepted only
 // when that URL itself is plain http. It is read on every

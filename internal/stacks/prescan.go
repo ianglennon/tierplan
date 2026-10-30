@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -414,7 +414,7 @@ func (w *walker) envFile(v val) {
 }
 
 // envFileMap checks the path of a long-form entry. With required: false the file may be absent
-// (Bayplan skips it when it resolves the env_file), so a missing one is not an error; a path that
+// (Coaming skips it when it resolves the env_file), so a missing one is not an error; a path that
 // is not allowed still is.
 func (w *walker) envFileMap(v val) {
 	entries := w.entries(v, 0)

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Golden path 4 (Phase 4): containers, logs, a shell, the event feed, networks and
-// volumes, in a real browser behind the proxy at /bayplan, against the dind
-// engine Bayplan manages. Containers are started on the engine behind Bayplan's
+// volumes, in a real browser behind the proxy at /coaming, against the dind
+// engine Coaming manages. Containers are started on the engine behind Coaming's
 // back, so every change the page shows arrives the way a person's own `docker
 // run` would, not through a click of the page's.
 
@@ -37,7 +37,7 @@ function rowOf(page: Page, name: string) {
 async function openContainerTab(page: Page, name: string, tab: string): Promise<void> {
   await page.goto(at(`/env/${envId}/containers`));
   await page.getByRole("link", { name, exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/containers/[^/]+`));
+  await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}/containers/[^/]+`));
   await page.getByRole("tab", { name: tab, exact: true }).click();
 }
 
@@ -111,7 +111,7 @@ test.afterAll(() => {
   clearEngine();
 });
 
-test("a container started behind Bayplan's back appears live, is stopped and started from its row, and two are restarted together", async ({
+test("a container started behind Coaming's back appears live, is stopped and started from its row, and two are restarted together", async ({
   page,
 }) => {
   envId = await openFirstEnvironment(page);
@@ -235,7 +235,7 @@ test("the Logs tab streams stdout and stderr, searches, downloads, and pops out 
   const popup = await popupEvent;
   const popupProbe = await probeNetwork(popup);
   await popup.waitForLoadState("domcontentloaded");
-  expect(new URL(popup.url()).pathname).toMatch(/^\/bayplan\/popout\/.+\/logs$/);
+  expect(new URL(popup.url()).pathname).toMatch(/^\/coaming\/popout\/.+\/logs$/);
   const popLog = popup.getByRole("log", { name: "Logs for e2e-web" });
   await expect(
     popLog.locator('[data-stream="stdout"]').filter({ hasText: "line-" }).first(),
@@ -302,7 +302,7 @@ test("a shell from the Shell tab runs a command in the container, over a WebSock
   await expect.poll(() => received, { timeout: 10_000 }).toContain("out-42");
 
   // The upgrade was answered 101 at the subpath, over TLS, and is still open.
-  const shell = probe.handshakes().filter((h) => /\/bayplan\/api\/.+shell/i.test(h.url));
+  const shell = probe.handshakes().filter((h) => /\/coaming\/api\/.+shell/i.test(h.url));
   console.log(`A4 shell handshakes: ${JSON.stringify(shell)}`);
   expect(shell.length, "the shell's WebSocket upgrade").toBeGreaterThanOrEqual(1);
   expect(shell.every((h) => h.status === 101 && h.url.startsWith("wss://127.0.0.1"))).toBe(true);

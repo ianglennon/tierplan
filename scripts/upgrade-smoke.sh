@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # The upgrade proof an operator would run by hand (D-34, PLAT-02): put real state
 # into the PREVIOUS build's image, replace the container with the CURRENT image on
@@ -11,46 +11,46 @@
 # nothing is pulled from a registry.
 #
 # What it does:
-#   1. runs BASE_IMAGE on a new volume and network (alias "bayplan"), completes
+#   1. runs BASE_IMAGE on a new volume and network (alias "coaming"), completes
 #      setup through the API, adds an agent environment and connects a real agent
-#      (AGENT_IMAGE) that dials Bayplan by that alias, and waits until the
+#      (AGENT_IMAGE) that dials Coaming by that alias, and waits until the
 #      environment is online;
 #   2. when the base answers POST /api/users with 201 it also seeds a user (who
 #      accepts the invite and chooses a password), a team with that user in it and
 #      a Viewer grant on the environment; a base without the users API (404 or
 #      405) is reported as SKIP, any other answer fails;
-#   3. runs `bayplan audit verify` in the base container, then `docker rm -f`s the
+#   3. runs `coaming audit verify` in the base container, then `docker rm -f`s the
 #      server and keeps the volume and the agent;
 #   4. runs HEAD_IMAGE with the same name, alias, volume and settings and checks:
 #      /readyz is 200, the first admin signs in and /api/me reports instanceAdmin
 #      true, the agent environment is online again by itself within
 #      RECONNECT_WAIT seconds, the seeded user signs in with the grant, team and
-#      membership intact, and `bayplan audit verify` prints "audit chain OK".
+#      membership intact, and `coaming audit verify` prints "audit chain OK".
 #
 # One PASS or FAIL line per check. A failing check prints "UPGRADE SMOKE FAIL: ..."
 # with the last 50 log lines of the server and the agent and exits 1; a clean run
 # ends with the line "UPGRADE SMOKE PASS". Every container, network and volume
 # created here is removed on exit, whatever happens.
 #
-# Environment: BASE_IMAGE (default bayplan:base), HEAD_IMAGE (bayplan:e2e),
-# AGENT_IMAGE (bayplan-agent:dev), SMOKE_PORT (published on 127.0.0.1; by default Docker
+# Environment: BASE_IMAGE (default coaming:base), HEAD_IMAGE (coaming:e2e),
+# AGENT_IMAGE (coaming-agent:dev), SMOKE_PORT (published on 127.0.0.1; by default Docker
 # assigns it and it is read back after every server start) and RECONNECT_WAIT (120).
 # Every container, network and volume carries the label
-# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so `make ci-clean`
+# coaming.ci.owner=$COAMING_CI_OWNER (local-<pid> when unset) so `make ci-clean`
 # removes what a cancelled CI job left (D-23). Needs Docker, curl and jq.
 #
 # The throwaway containers talk plain HTTP on a private network, so both the
-# server and the agent get BAYPLAN_AGENT_ALLOW_INSECURE=true, the development
+# server and the agent get COAMING_AGENT_ALLOW_INSECURE=true, the development
 # switch (docs/agent.md). The passwords and tokens belong to containers that are
 # destroyed at the end; no repository secret is involved.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-BASE_IMAGE="${BASE_IMAGE:-bayplan:base}"
-HEAD_IMAGE="${HEAD_IMAGE:-bayplan:e2e}"
-AGENT_IMAGE="${AGENT_IMAGE:-bayplan-agent:dev}"
-OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
+BASE_IMAGE="${BASE_IMAGE:-coaming:base}"
+HEAD_IMAGE="${HEAD_IMAGE:-coaming:e2e}"
+AGENT_IMAGE="${AGENT_IMAGE:-coaming-agent:dev}"
+OWNER_LABEL="coaming.ci.owner=${COAMING_CI_OWNER:-local-$$}"
 RECONNECT_WAIT="${RECONNECT_WAIT:-120}"
 
 for tool in docker curl jq; do
@@ -62,12 +62,12 @@ for image in "${BASE_IMAGE}" "${HEAD_IMAGE}" "${AGENT_IMAGE}"; do
 done
 
 RUN_ID="$$"
-NET="bayplan-upgrade-${RUN_ID}"
-VOLUME="bayplan-upgrade-${RUN_ID}"
-AGENT_VOLUME="bayplan-upgrade-agent-${RUN_ID}"
-SERVER="bayplan-upgrade-server-${RUN_ID}"
-AGENT="bayplan-upgrade-agent-${RUN_ID}"
-ALIAS="bayplan"
+NET="coaming-upgrade-${RUN_ID}"
+VOLUME="coaming-upgrade-${RUN_ID}"
+AGENT_VOLUME="coaming-upgrade-agent-${RUN_ID}"
+SERVER="coaming-upgrade-server-${RUN_ID}"
+AGENT="coaming-upgrade-agent-${RUN_ID}"
+ALIAS="coaming"
 PUBLIC="http://${ALIAS}:7480"
 HOST_URL="" # set by start_server from the port Docker assigned
 WORK="$(mktemp -d)"
@@ -112,8 +112,8 @@ start_server() {
     -p "127.0.0.1:${SMOKE_PORT:-}:7480" \
     -v "${VOLUME}:/data" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" \
-    -e BAYPLAN_AGENT_ALLOW_INSECURE=true \
+    -e "COAMING_PUBLIC_URL=${PUBLIC}" \
+    -e COAMING_AGENT_ALLOW_INSECURE=true \
     --health-interval 3s --health-start-period 0s --health-retries 5 \
     "$1" >/dev/null || return 1
   # Docker assigned the host port (unless SMOKE_PORT is set); read it back, because
@@ -170,7 +170,7 @@ wait_online() {
 }
 
 audit_ok() {
-  docker exec "${SERVER}" /usr/local/bin/bayplan audit verify 2>&1 | tee "${WORK}/audit.out" \
+  docker exec "${SERVER}" /usr/local/bin/coaming audit verify 2>&1 | tee "${WORK}/audit.out" \
     | grep -Eq '^audit chain OK: [0-9]+ entries$'
 }
 
@@ -180,7 +180,7 @@ start_server "${BASE_IMAGE}" || fail "base starts" "docker run failed"
 wait_healthy || fail "base healthy" "the container did not become healthy within 90 seconds"
 pass "base healthy (${BASE_IMAGE})"
 
-TOKEN="$(docker exec "${SERVER}" /usr/local/bin/bayplan setup-token)" || fail "setup token" "docker exec bayplan setup-token failed"
+TOKEN="$(docker exec "${SERVER}" /usr/local/bin/coaming setup-token)" || fail "setup token" "docker exec coaming setup-token failed"
 code="$(curl -sS -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' -H "${JSON_H}" -H "Origin: ${PUBLIC}" \
   -d "{\"token\":\"${TOKEN}\",\"username\":\"admin\",\"password\":\"${ADMIN_PW}\",\"instanceName\":\"Upgrade smoke\",\"publicUrl\":\"${PUBLIC}\"}" \
   "${HOST_URL}/api/setup/complete")" || code="curl-failed"
@@ -199,13 +199,13 @@ AGENT_URL="$(printf '%s' "${API_BODY}" | jq -r .install.agentUrl)"
   || fail "agent environment added" "the answer carries no environment, join token or agent URL"
 
 # The agent runs the way the standalone install command runs it, on the same
-# network so that it reaches Bayplan by its alias.
+# network so that it reaches Coaming by its alias.
 docker run -d --name "${AGENT}" --network "${NET}" --label "${OWNER_LABEL}" \
   --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
-  -v /var/run/docker.sock:/var/run/docker.sock -v "${AGENT_VOLUME}:/var/lib/bayplan-agent" \
-  --label bayplan.agent=true \
-  -e "BAYPLAN_AGENT_URL=${AGENT_URL}" -e "BAYPLAN_AGENT_JOIN_TOKEN=${JOIN_TOKEN}" \
-  -e BAYPLAN_AGENT_ALLOW_INSECURE=true \
+  -v /var/run/docker.sock:/var/run/docker.sock -v "${AGENT_VOLUME}:/var/lib/coaming-agent" \
+  --label coaming.agent=true \
+  -e "COAMING_AGENT_URL=${AGENT_URL}" -e "COAMING_AGENT_JOIN_TOKEN=${JOIN_TOKEN}" \
+  -e COAMING_AGENT_ALLOW_INSECURE=true \
   "${AGENT_IMAGE}" >/dev/null || fail "agent starts" "docker run failed"
 wait_online "${ENV_ID}" || fail "agent environment online on base" "state ${LAST_STATE} after ${RECONNECT_WAIT} seconds"
 pass "agent environment online on base"

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import {
@@ -99,7 +99,7 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // config event does the same for the configs list and the config pages. A node event refreshes
 // the nodes list, the node pages (their keys extend the list's) and the services list, whose key
 // the placement view extends, since a node going down or being drained moves tasks. A row of
-// Bayplan's own has no list and refreshes the summary only.
+// Coaming's own has no list and refreshes the summary only.
 //
 // An event about an object of a stack (touchesStack: it carries the stack's swarm namespace or
 // Compose project label) also refreshes the stacks list and every stack page under it, the

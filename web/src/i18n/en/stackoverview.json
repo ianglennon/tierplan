@@ -73,7 +73,7 @@
       "degradedTooltip_other": "{{running}} of {{count}} services running",
       "deployFailedTooltip": "The last deploy stopped at {{service}}. What is running is shown below.",
       "deployFailedTooltipNoService": "The last deploy stopped. What is running is shown below.",
-      "unknownTooltip": "Bayplan couldn't read what is running on this environment."
+      "unknownTooltip": "Coaming couldn't read what is running on this environment."
     },
     "deployBanner": {
       "title": {

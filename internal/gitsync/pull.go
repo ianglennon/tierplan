@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
 import (
 	"context"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // PullResult is what a pull did to a stack's draft.
@@ -28,7 +28,7 @@ type PullResult struct {
 }
 
 // Pull fetches the head of the ref the stack follows and refreshes the stack's draft from it: the draft's repository
-// files become those of the commit (only the files the compose files name), Bayplan's own files and the variables stay,
+// files become those of the commit (only the files the compose files name), Coaming's own files and the variables stay,
 // and the draft records the commit, the folder's tree hash and the source. It deploys nothing and changes nothing that
 // runs; the only way from a pull to a deploy is the review and the deploy that follow (D-17). A stack that follows a
 // fixed commit imports that commit again, without any fetch of a moving ref.

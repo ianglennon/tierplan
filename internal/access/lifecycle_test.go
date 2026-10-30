@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package access_test
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/access"
+	"github.com/ianglennon/coaming/internal/access"
 )
 
 // The account lifecycle (plan 03-14, AUTH-04, D-22c, D-02). Negative cases are

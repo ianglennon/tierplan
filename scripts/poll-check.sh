@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Keeps D-09 true: polling in a test is for a condition outside the test's control
 # (a real engine, an OS lock, a child process). A condition that code in the same

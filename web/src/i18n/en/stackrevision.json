@@ -86,7 +86,7 @@
         "tree": "Folder tree",
         "folder": "Folder",
         "composeFiles": "Compose files",
-        "helper": "A roll back restores this revision from what Bayplan stored. It never needs the repository."
+        "helper": "A roll back restores this revision from what Coaming stored. It never needs the repository."
       }
     },
     "error": {
@@ -97,7 +97,7 @@
     },
     "gone": {
       "title": "That revision is gone",
-      "body": "Bayplan keeps the last {{count, number}} revisions of each stack, and this one was deleted.",
+      "body": "Coaming keeps the last {{count, number}} revisions of each stack, and this one was deleted.",
       "back": "Back to history"
     }
   }

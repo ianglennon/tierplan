@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx_test
 
@@ -9,14 +9,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 )
 
 func actionFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
 	t.Helper()
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Containers: []dockertest.FakeContainer{
-		{ID: "web-id", Names: []string{"/web"}, Image: "nginx", State: "running", Status: "Up 3 hours", Labels: map[string]string{"bayplan.agent": "true"}},
+		{ID: "web-id", Names: []string{"/web"}, Image: "nginx", State: "running", Status: "Up 3 hours", Labels: map[string]string{"coaming.agent": "true"}},
 		{ID: "db-id", Names: []string{"/db"}, Image: "postgres", State: "exited", Status: "Exited (0) 1 hour ago"},
 	}})
 	return newClient(t, fake), fake
@@ -95,7 +95,7 @@ func TestContainerOwnershipReadsLabelsAndStateFromAFreshInspect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != "web-id" || got.Name != "web" || !got.Running || got.Labels["bayplan.agent"] != "true" {
+	if got.ID != "web-id" || got.Name != "web" || !got.Running || got.Labels["coaming.agent"] != "true" {
 		t.Fatalf("ownership = %+v", got)
 	}
 	if got.Image == "" {

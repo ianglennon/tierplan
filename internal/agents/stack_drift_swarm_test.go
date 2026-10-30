@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -16,8 +16,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // driftWait is how long the background drift worker gets to see an outside change and store it: its debounce is a
@@ -162,17 +162,17 @@ func envOf(spec map[string]any) []string {
 }
 
 // sharedStackDrift is the real-engine oracle of drift (STK-14, D-21 to D-24, ROADMAP SC4, RESEARCH assumption A5): a
-// stack deployed through Bayplan is changed on a manager with the docker CLI, and
+// stack deployed through Coaming is changed on a manager with the docker CLI, and
 //
 //   - a force update, which only bumps the counter that makes new tasks, is not drift;
 //   - a scale and an added environment variable are, and the background worker stores them for the list without
 //     anyone opening the stack, off the service events of the engine;
 //   - the drift lists the services with the replicas and the environment as what the revision deployed against what
-//     runs, with no cause, since Bayplan did none of it;
+//     runs, with no cause, since Coaming did none of it;
 //   - detecting drift, reviewing it and accepting it change no service: only a person's restore does (the
 //     prohibition of STK-14);
 //   - a restore puts the deployed revision back and the drift clears;
-//   - a scale from Bayplan's own service route is drift whose cause names the user, with the replica counts;
+//   - a scale from Coaming's own service route is drift whose cause names the user, with the replica counts;
 //   - accepting what runs writes the new replica count into the draft, and deploying that draft records a revision
 //     with no drift left.
 //
@@ -189,11 +189,11 @@ func sharedStackDrift(t *testing.T, f *swarmFix) {
 	service := func(name string) string {
 		return "  " + name + ":\n    image: " + ref + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n      replicas: 1\n"
 	}
-	id := f.createStackBayplan(t, stack, "services:\n"+service("web")+service("api"))
-	// Cleanups run last in, first out: Bayplan removes the stack; the docker CLI only sweeps up what a failure left.
+	id := f.createStackCoaming(t, stack, "services:\n"+service("web")+service("api"))
+	// Cleanups run last in, first out: Coaming removes the stack; the docker CLI only sweeps up what a failure left.
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	t.Cleanup(func() { removeStackBayplan(t, f, id, stack, engineObjects{}) })
-	f.deployStackBayplan(t, id)
+	t.Cleanup(func() { removeStackCoaming(t, f, id, stack, engineObjects{}) })
+	f.deployStackCoaming(t, id)
 	waitStackConverged(t, f, stack)
 
 	if a := driftOf(t, f, id, true); a.State != "none" || a.Revision != 1 || len(a.Services) != 0 {
@@ -228,7 +228,7 @@ func sharedStackDrift(t *testing.T, f *swarmFix) {
 		t.Errorf("web replicas = %v then %v, want the deployed 1 as current and the running 3 as next", replicasOf(w.Current), replicasOf(w.Next))
 	}
 	if w.Cause != nil || a.Cause != nil || a.Causes != 0 {
-		t.Errorf("an outside scale has the cause %+v / %+v (%d), want none: Bayplan did not do it", w.Cause, a.Cause, a.Causes)
+		t.Errorf("an outside scale has the cause %+v / %+v (%d), want none: Coaming did not do it", w.Cause, a.Cause, a.Causes)
 	}
 
 	// An outside environment variable on the other service, seen by the worker the same way.
@@ -335,11 +335,11 @@ func sharedStackDrift(t *testing.T, f *swarmFix) {
 	}
 	waitListedDrift(t, f, id, "none")
 
-	// A scale from Bayplan's own service route is drift too, and the audit log says who did it.
+	// A scale from Coaming's own service route is drift too, and the audit log says who did it.
 	f.srv.RefreshCluster(f.env.ID)
 	svc, ok := f.service(t, web)
 	if !ok {
-		t.Fatalf("Bayplan lists no service %s", web)
+		t.Fatalf("Coaming lists no service %s", web)
 	}
 	code, body = f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/services/scale", map[string]any{"targets": []map[string]any{{"serviceId": svc.ID, "replicas": 2}}})
 	if code != http.StatusOK {
@@ -348,7 +348,7 @@ func sharedStackDrift(t *testing.T, f *swarmFix) {
 	waitStackConverged(t, f, stack)
 	a = driftOf(t, f, id, true)
 	if a.State != "drifted" || !slices.Equal(a.names(), []string{"web"}) {
-		t.Fatalf("drift after a scale from Bayplan = %+v, want drifted with web alone", a)
+		t.Fatalf("drift after a scale from Coaming = %+v, want drifted with web alone", a)
 	}
 	c := a.service("web").Cause
 	if c == nil || c.Action != "scaled" || c.Service != "web" || c.From != "1" || c.To != "2" || c.By == "" || c.At == "" {
@@ -419,7 +419,7 @@ func sharedStackDrift(t *testing.T, f *swarmFix) {
 	}
 
 	// Deploying that draft records a revision, and nothing is left to drift from.
-	f.deployStackBayplan(t, id)
+	f.deployStackCoaming(t, id)
 	waitStackConverged(t, f, stack)
 	testsupport.Poll(t, driftWait, "a fresh drift check to read none against the new revision", func() (bool, string) {
 		got := driftOf(t, f, id, true)

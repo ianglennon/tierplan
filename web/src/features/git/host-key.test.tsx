@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -249,7 +249,7 @@ describe("the host key confirm", () => {
     expect(within(alert).getByRole("button", { name: "Don't trust it" })).toBeTruthy();
     expect(
       within(alert).getByText(
-        "Bayplan keeps this key with the repository and stops if it ever changes.",
+        "Coaming keeps this key with the repository and stops if it ever changes.",
       ),
     ).toBeTruthy();
     // It moves no focus: the Alert and its buttons are not the active element.
@@ -409,7 +409,7 @@ describe("a changed host key in the sheet", () => {
     expect(alert.getAttribute("role")).toBe("alert");
     expect(
       within(alert).getByText(
-        /Bayplan stopped, because this can mean someone is intercepting the connection\./,
+        /Coaming stopped, because this can mean someone is intercepting the connection\./,
       ),
     ).toBeTruthy();
     expect(within(alert).getByText(SAVED_FINGERPRINT).className).toContain("font-mono");
@@ -432,7 +432,7 @@ describe("a changed host key in the sheet", () => {
     ).toBeTruthy();
     expect(within(dialog).getByText(SAVED_FINGERPRINT)).toBeTruthy();
     expect(within(dialog).getByText(FINGERPRINT)).toBeTruthy();
-    expect(within(dialog).getByText(/Bayplan will record who trusted it\./)).toBeTruthy();
+    expect(within(dialog).getByText(/Coaming will record who trusted it\./)).toBeTruthy();
     await waitFor(() =>
       expect(document.activeElement).toBe(
         within(dialog).getByRole("button", { name: "Keep the old key" }),

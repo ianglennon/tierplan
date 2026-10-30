@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // repoOf is the repository of an image reference: the text without its tag or digest, which is
 // how a registry is asked about it. A port in the host (localhost:5000/app) is not a tag.

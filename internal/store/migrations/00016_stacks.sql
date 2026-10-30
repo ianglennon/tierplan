@@ -1,10 +1,10 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- Compose stacks (Phase 7, STK-01, STK-02, STK-05). Timestamps are UTC unix nanoseconds.
 
--- One row per stack Bayplan manages. target is fixed at creation from the environment kind. source_kind
+-- One row per stack Coaming manages. target is fixed at creation from the environment kind. source_kind
 -- is the source abstraction: inline now, adopted (Phase 8) and git (Phase 9) later; source_ref names the
 -- adopted project or the git source. stopped is 1 while the stack is stopped (Phase 7, STK-11).
 CREATE TABLE stacks (

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,24 +11,24 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/rebuild"
 )
 
-// Adopting a stack Bayplan did not make (plan 08-13, STK-13, D-14). Nothing is sent to an engine: the server
+// Adopting a stack Coaming did not make (plan 08-13, STK-13, D-14). Nothing is sent to an engine: the server
 // rebuilds the definition from what runs and stores it as the stack's draft and first revision.
 
 const (
 	// problemAdoptStale is the type of the 409 for a stack that changed after the page showed it.
 	problemAdoptStale = "adopt_stale"
-	// problemStackAlreadyManaged is the type of the 409 for a stack Bayplan already manages under that name.
+	// problemStackAlreadyManaged is the type of the 409 for a stack Coaming already manages under that name.
 	problemStackAlreadyManaged = "stack_already_managed"
-	// problemStackNotAdoptable is the type of the 409 for Bayplan's own stack, its agent's and a name the target cannot hold.
+	// problemStackNotAdoptable is the type of the 409 for Coaming's own stack, its agent's and a name the target cannot hold.
 	problemStackNotAdoptable = "stack_not_adoptable"
 	// problemPastedFileInvalid is the type of the 422 for a pasted compose file that does not pass the check at the commit.
 	problemPastedFileInvalid = "pasted_file_invalid"
@@ -40,14 +40,14 @@ const (
 // AdoptStackRequest is the body of the adopt route.
 type AdoptStackRequest struct {
 	Fingerprint string         `json:"fingerprint" required:"true" maxLength:"65536" doc:"The fingerprint the unmanaged stack's page read. When what runs has changed since, the adoption is refused 409 adopt_stale and nothing is stored"`
-	Source      string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written"`
+	Source      string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Coaming writes the definition from what runs. paste: the definition is the compose file in compose, checked again here and stored exactly as written"`
 	Compose     string         `json:"compose,omitempty" maxLength:"1048576" doc:"For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB). Never rewritten"`
 	Vars        []DraftVarBody `json:"vars,omitempty" maxItems:"500" doc:"For source paste, the values of the variables the pasted file uses. A secret one is stored sealed, like any secret variable"`
 }
 
 // AdoptCheckRequest is the body of the adopt check route. It may be left out, which is the rebuild.
 type AdoptCheckRequest struct {
-	Source  string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Bayplan writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values"`
+	Source  string         `json:"source,omitempty" enum:"rebuild,paste" default:"rebuild" doc:"rebuild: Coaming writes the definition from what runs. paste: check the compose file in compose against what runs; needs secrets.reveal on the environment, because the comparison is made on the real values"`
 	Compose string         `json:"compose,omitempty" maxLength:"1048576" doc:"For source paste, the original compose file. Untrusted: it goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB)"`
 	Vars    []DraftVarBody `json:"vars,omitempty" maxItems:"500" doc:"For source paste, the values of the variables the pasted file uses"`
 }
@@ -94,14 +94,14 @@ func registerStackAdopt(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 	registerStackAdoptCheck(r, d, checkLimiter)
 	httpx.Register(r, huma.Operation{
 		OperationID: "adoptStack", Method: http.MethodPost, Path: "/api/env/{envId}/unmanaged-stacks/{name}/adopt",
-		Summary: "Adopt a stack Bayplan did not make",
-		Description: "Takes over a swarm namespace or a Compose project that Bayplan does not manage. Bayplan reads what runs, rebuilds the compose definition itself (the body carries none), " +
-			"and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Bayplan's labels on its first deploy. " +
+		Summary: "Adopt a stack Coaming did not make",
+		Description: "Takes over a swarm namespace or a Compose project that Coaming does not manage. Coaming reads what runs, rebuilds the compose definition itself (the body carries none), " +
+			"and in one transaction stores the stack (source adopted), its draft and revision 1 (origin adopted, good, pinned to the images that run). Nothing is sent to any engine: the stack's objects get Coaming's labels on its first deploy. " +
 			"The definition holds the environment values as literals. The fingerprint is the one the stack's page read; when what runs has changed since, the answer is 409 adopt_stale and nothing is stored. " +
 			"Adopting never fails on the host-access policy: it only records what already runs. " +
 			"With source paste the definition is the original compose file in compose instead (the person still has it): it is checked again here by the same check as any draft and never trusted from the page, " +
 			"stored exactly as written (comments and key order kept) as the draft and revision 1 together with vars (a secret one sealed), pinned to the digests that run for the services that run; a file that does not pass is 422 pasted_file_invalid. " +
-			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
+			"A stack that is Coaming's own, runs Coaming's agent, or has a name its target cannot hold is 409 stack_not_adoptable with the reason; a name Coaming already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked and nothing is stored. Answers the stack, as the stack route does. Audited as stack.adopted. Needs stacks.create (Env Admin).",
 		Tags: []string{"stacks"}, DefaultStatus: http.StatusCreated, MaxBodyBytes: maxStackSaveBody,
@@ -111,11 +111,11 @@ func registerStackAdopt(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 		})
 }
 
-// stackAlreadyManaged is the 409 for a name a stack of Bayplan's holds, with that stack's ID.
+// stackAlreadyManaged is the 409 for a name a stack of Coaming's holds, with that stack's ID.
 func stackAlreadyManaged(name, stackID string) error {
 	return &huma.ErrorModel{
 		Type: problemStackAlreadyManaged, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-		Detail: name + " is already managed by Bayplan.",
+		Detail: name + " is already managed by Coaming.",
 		Errors: []*huma.ErrorDetail{{Location: "stackId", Message: stackID}},
 	}
 }
@@ -182,7 +182,7 @@ func adoptStack(ctx context.Context, d StacksDeps, in *AdoptStackInput) (*StackD
 	return &StackDetailOutput{CacheControl: "no-store", Body: body}, nil
 }
 
-// adoptProblem is the answer for the refusals an adoption and its check share: a name Bayplan holds, a stack that
+// adoptProblem is the answer for the refusals an adoption and its check share: a name Coaming holds, a stack that
 // cannot be adopted, one that is gone, and one that cannot be written as a compose file. Anything else is the
 // engine's failure.
 func adoptProblem(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, name string, err error) error {
@@ -216,7 +216,7 @@ func adoptProblem(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, 
 	case errors.As(err, &failed):
 		return httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, failed.Reason)
 	case errors.Is(err, stackops.ErrRebuildTarget):
-		return httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, "Bayplan can't rebuild this kind of stack.")
+		return httpx.Problem(http.StatusUnprocessableEntity, problemRebuildFailed, "Coaming can't rebuild this kind of stack.")
 	}
 	return snapshotProblem(d.Log, envID, err)
 }
@@ -225,20 +225,20 @@ func adoptProblem(ctx context.Context, d StacksDeps, repo stackops.Repo, envID, 
 // stored.
 type AdoptCheckBody struct {
 	Fingerprint   string                   `json:"fingerprint" doc:"The state of the engine the check was made of. Adopt sends it back; when what runs has changed since, the adoption is refused 409 adopt_stale"`
-	Clean         bool                     `json:"clean" doc:"True when nothing will change on the first deploy except Bayplan's ownership labels"`
+	Clean         bool                     `json:"clean" doc:"True when nothing will change on the first deploy except Coaming's ownership labels"`
 	Gaps          []StackReviewServiceBody `json:"gaps" doc:"The services the first deploy would change in more than an ownership label, as the review lists services. For a caller without secrets.reveal every environment value, command, argument, health check command and log option reads <hidden>, and a setting that differs only in such a value is listed by its path in hiddenChanges"`
 	GapCount      int                      `json:"gapCount" doc:"How many services are in gaps"`
-	OwnershipOnly []string                 `json:"ownershipOnly" doc:"The names, in the compose file, of the services that differ from what runs in nothing but Bayplan's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else"`
+	OwnershipOnly []string                 `json:"ownershipOnly" doc:"The names, in the compose file, of the services that differ from what runs in nothing but Coaming's ownership labels: the first deploy recreates each of them (a brief restart) and changes nothing else"`
 	Objects       []AdoptCheckObjectBody   `json:"objects" doc:"The networks, volumes, secrets and configs of the stack and how each is treated, by kind then name"`
 	Counts        AdoptCheckCountsBody     `json:"counts" doc:"How many objects of each kind there are"`
 	Policy        AdoptCheckPolicyBody     `json:"policy" doc:"The host-access settings of the stack, listed for every caller whatever their role. They block nothing here: they say what a later deploy needs an Admin for"`
 	Portainer     bool                     `json:"portainer" doc:"True when the stack carries a mark of Portainer. The advice is to remove it from Portainer without deleting it"`
-	Orphan        bool                     `json:"orphan" doc:"True when an object of the stack carries the ID of a Bayplan stack this instance does not hold"`
+	Orphan        bool                     `json:"orphan" doc:"True when an object of the stack carries the ID of a Coaming stack this instance does not hold"`
 	Notes         []GeneratedNoteBody      `json:"notes" doc:"What the rebuild could not say plainly, by service then code. Empty for a pasted file"`
 	Source        string                   `json:"source" enum:"rebuild,paste" doc:"Which definition was checked: the rebuild from what runs, or the pasted file"`
 	Problems      []StackProblemBody       `json:"problems" doc:"For a pasted file, what the check found in it, as the editor's check lists problems. Always empty for the rebuild"`
 	Variables     []StackVariableBody      `json:"variables" doc:"For a pasted file, the variables it uses with the value a deploy would use; a secret one reads <hidden>. Always empty for the rebuild"`
-	Matches       bool                     `json:"matches" doc:"True when a pasted file differs from what runs in nothing but Bayplan's ownership labels. Always false for the rebuild"`
+	Matches       bool                     `json:"matches" doc:"True when a pasted file differs from what runs in nothing but Coaming's ownership labels. Always false for the rebuild"`
 	Blocked       bool                     `json:"blocked" doc:"True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty"`
 }
 
@@ -246,7 +246,7 @@ type AdoptCheckBody struct {
 type AdoptCheckObjectBody struct {
 	Kind      string `json:"kind" enum:"network,volume,secret,config" doc:"What it is"`
 	Name      string `json:"name" doc:"Its name on the engine"`
-	Treatment string `json:"treatment" enum:"owned,external" doc:"owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Bayplan never changes it (any other network or volume, and every existing secret and config)"`
+	Treatment string `json:"treatment" enum:"owned,external" doc:"owned: the stack owns it, under this name, and removes it with the stack (a network or volume that carries the stack's label). external: the stack only names it and Coaming never changes it (any other network or volume, and every existing secret and config)"`
 }
 
 // AdoptCheckCountsBody is how many objects of each kind a stack has.
@@ -278,14 +278,14 @@ func registerStackAdoptCheck(r *httpx.Router, d StacksDeps, lim *streamLimiter) 
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkAdoption", Method: http.MethodPost, Path: "/api/env/{envId}/unmanaged-stacks/{name}/adopt-check",
 		Summary: "Check what adopting a stack would change on its first deploy",
-		Description: "Rebuilds the compose definition of a stack Bayplan does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Bayplan's ownership labels is a gap, " +
+		Description: "Rebuilds the compose definition of a stack Coaming does not manage from what runs, as adopting does, and reviews it against what runs: every difference that is not one of Coaming's ownership labels is a gap, " +
 			"a change the first deploy would make, and the services that differ only in an ownership label are listed apart. It reads the engine and changes nothing, on the engine or in the store, and a gap never blocks adopting. " +
 			"The fingerprint it answers is the one to send with the adoption. " +
 			"With source paste the body carries the original compose file and its variables instead: the file goes through the same check as any draft (no include, no extends, no file read from the server, at most 1 MiB) and is compared with what runs; " +
 			"a file with an error answers blocked true with its problems and nothing compared, and matches says it differs from what runs in nothing but the ownership labels. The body may be left out, which is the rebuild. " +
 			"The comparison is made on the real values, so a pasted file is compared only for a caller who holds secrets.reveal on the environment (Env Admin, or an Operator granted it): any other caller is 403 secret_reveal_required with nothing compared, because the answer would tell whether a guessed value is the running one. The rebuild stays open to every caller with stacks.read. " +
 			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>. " +
-			"A stack that is Bayplan's own, runs Bayplan's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Bayplan already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
+			"A stack that is Coaming's own, runs Coaming's agent, or has a name its target cannot hold is 409 stack_not_adoptable; a name Coaming already manages (on a swarm regardless of case, as for creating a stack) is 409 stack_already_managed with the stack's ID in errors as stackId; " +
 			"a name nothing carries is 404 unmanaged_stack_not_found; a stack that cannot be written as a compose file that passes the check is 422 rebuild_failed. " +
 			"One user may have two checks running; a third is 429 check_busy. Needs stacks.read (Viewer); source paste also needs secrets.reveal.",
 		Tags: []string{"stacks"}, MaxBodyBytes: maxStackSaveBody,

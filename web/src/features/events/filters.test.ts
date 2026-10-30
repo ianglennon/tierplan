@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -37,7 +37,7 @@ const EVENTS: EventDTO[] = [
     attributes: { container: "WEB-1" },
   }),
   ev("4", { type: "volume", name: "data", action: "create", node: "n2" }),
-  ev("5", { type: "bayplan", name: "Manager moved to mgr-2", action: "", node: "mgr-2" }),
+  ev("5", { type: "coaming", name: "Manager moved to mgr-2", action: "", node: "mgr-2" }),
 ];
 
 const ids = (list: EventDTO[]) => list.map((e) => e.id);
@@ -54,7 +54,7 @@ describe("applyEventFilters", () => {
     ]);
   });
 
-  it("keeps the chosen types, and a row of Bayplan's own only while none is chosen", () => {
+  it("keeps the chosen types, and a row of Coaming's own only while none is chosen", () => {
     expect(ids(applyEventFilters(EVENTS, { types: ["container"] }))).toEqual(["1", "2"]);
     expect(ids(applyEventFilters(EVENTS, { types: ["network", "volume"] }))).toEqual(["3", "4"]);
   });
@@ -124,7 +124,7 @@ describe("eventsSearchSchema", () => {
     });
     const bad = eventsSearchSchema.parse({
       since: "3d",
-      type: ["container", "bayplan"],
+      type: ["container", "coaming"],
       action: [""],
       node: "",
       q: "x".repeat(500),

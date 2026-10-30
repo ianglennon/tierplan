@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -186,7 +186,7 @@ describe("/environments", () => {
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(
       screen.getByText(
-        "Add a swarm or a standalone Docker host. Bayplan gives you one command that installs a small agent on it. The host needs no open inbound port.",
+        "Add a swarm or a standalone Docker host. Coaming gives you one command that installs a small agent on it. The host needs no open inbound port.",
       ),
     ).toBeTruthy();
     // One primary button per view: the header's gives way to the empty state's.

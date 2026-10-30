@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # commit-change <mode>: sets MODE in stacks/web/compose.yaml, commits it and pushes it to
 # the bare repository the server serves, as a person pushing from a clone would, and prints the
@@ -16,8 +16,8 @@ case "$mode" in
     ;;
 esac
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=/work
-export GIT_AUTHOR_NAME="Bayplan E2E" GIT_AUTHOR_EMAIL=e2e@bayplan.invalid
-export GIT_COMMITTER_NAME="Bayplan E2E" GIT_COMMITTER_EMAIL=e2e@bayplan.invalid
+export GIT_AUTHOR_NAME="Coaming E2E" GIT_AUTHOR_EMAIL=e2e@coaming.invalid
+export GIT_COMMITTER_NAME="Coaming E2E" GIT_COMMITTER_EMAIL=e2e@coaming.invalid
 cd /work/stacks
 sed -i "s/^      MODE: .*/      MODE: ${mode}/" stacks/web/compose.yaml
 # Already at that mode: nothing to commit, and the head is what it was.

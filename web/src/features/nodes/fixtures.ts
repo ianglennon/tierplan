@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { components } from "@/api/schema";
 
@@ -19,7 +19,7 @@ export function nodeDetail(extra: Partial<NodeDetailBody> = {}): NodeDetailBody 
     hostname: "mgr-1",
     role: "manager",
     leader: true,
-    runsBayplan: true,
+    runsCoaming: true,
     state: "ready",
     availability: "active",
     reachability: "reachable",

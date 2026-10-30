@@ -139,8 +139,8 @@
       "Hostname": "",
       "Image": "localhost:5000/bp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "bayplan.stack.id": "stack-replay",
-        "bayplan.stack.image": "localhost:5000/bp/web:1",
+        "coaming.stack.id": "stack-replay",
+        "coaming.stack.image": "localhost:5000/bp/web:1",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "db:service_healthy:false",
@@ -148,7 +148,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/bayplan-stack",
+        "com.docker.compose.project.working_dir": "/coaming-stack",
         "com.docker.compose.service": "web"
       },
       "NetworkingConfig": {
@@ -309,10 +309,10 @@
       "Hostname": "",
       "Image": "localhost:5000/bp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "bayplan.stack.config.nginxconf": "a705e199",
-        "bayplan.stack.id": "stack-replay",
-        "bayplan.stack.image": "localhost:5000/bp/web:1",
-        "bayplan.stack.secret.tok": "f119db9b",
+        "coaming.stack.config.nginxconf": "a705e199",
+        "coaming.stack.id": "stack-replay",
+        "coaming.stack.image": "localhost:5000/bp/web:1",
+        "coaming.stack.secret.tok": "f119db9b",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "",
@@ -320,7 +320,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/bayplan-stack",
+        "com.docker.compose.project.working_dir": "/coaming-stack",
         "com.docker.compose.service": "db"
       },
       "NetworkingConfig": {
@@ -450,8 +450,8 @@
       "Hostname": "",
       "Image": "localhost:5000/bp/web:1@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "Labels": {
-        "bayplan.stack.id": "stack-replay",
-        "bayplan.stack.image": "localhost:5000/bp/web:1",
+        "coaming.stack.id": "stack-replay",
+        "coaming.stack.image": "localhost:5000/bp/web:1",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.container-number": "1",
         "com.docker.compose.depends_on": "db:service_healthy:false",
@@ -459,7 +459,7 @@
         "com.docker.compose.oneoff": "False",
         "com.docker.compose.project": "replay",
         "com.docker.compose.project.config_files": "compose.yaml",
-        "com.docker.compose.project.working_dir": "/bayplan-stack",
+        "com.docker.compose.project.working_dir": "/coaming-stack",
         "com.docker.compose.service": "web"
       },
       "NetworkingConfig": {
@@ -592,7 +592,7 @@
       "Ingress": false,
       "Internal": false,
       "Labels": {
-        "bayplan.stack.id": "stack-replay",
+        "coaming.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.network": "back",
         "com.docker.compose.project": "replay",
@@ -616,7 +616,7 @@
       "Ingress": false,
       "Internal": false,
       "Labels": {
-        "bayplan.stack.id": "stack-replay",
+        "coaming.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.network": "front",
         "com.docker.compose.project": "replay",
@@ -677,7 +677,7 @@
     "hasBody": true,
     "json": {
       "Labels": {
-        "bayplan.stack.id": "stack-replay",
+        "coaming.stack.id": "stack-replay",
         "com.docker.compose.config-hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "com.docker.compose.project": "replay",
         "com.docker.compose.version": "",

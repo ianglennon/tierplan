@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
@@ -178,7 +178,7 @@ describe("GitTab Updates card", () => {
   it("shows the switch, the number field, the helper and the buttons of a git stack", async () => {
     mount();
     const c = await card();
-    expect(within(c).getByText("How Bayplan learns that the repository changed.")).toBeTruthy();
+    expect(within(c).getByText("How Coaming learns that the repository changed.")).toBeTruthy();
     expect(toggle(c).getAttribute("aria-checked")).toBe("true");
     expect(field(c).value).toBe("5");
     expect(field(c).min).toBe("1");

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -34,8 +34,8 @@ import { formatClock, formatRelative } from "@/lib/format";
 import { toastError } from "@/lib/toast";
 
 // Build-time source URL (Vite define). The plain-HTTP fix link points at the
-// project's own pages, which say how to serve Bayplan over HTTPS.
-declare const __BAYPLAN_SOURCE_URL__: string;
+// project's own pages, which say how to serve Coaming over HTTPS.
+declare const __COAMING_SOURCE_URL__: string;
 
 export type Warning = components["schemas"]["WarningBody"];
 
@@ -454,7 +454,7 @@ function BackupFailedEntry({ w, close }: { w: Warning; close: () => void }) {
   );
 }
 
-// Agents that were installed after the backup this Bayplan was restored from keep
+// Agents that were installed after the backup this Coaming was restored from keep
 // trying and are refused (D-31). The server derives it from what agents tried in the
 // last 24 hours, so there is nothing to dismiss: it ends when they are reinstalled.
 function UnknownAgentsEntry({ w, close }: { w: Warning; close: () => void }) {
@@ -1106,7 +1106,7 @@ export function HealthBell() {
                             <ItemTitle>{t("shell.warnings.plainHttp.title")}</ItemTitle>
                             <ItemDescription>
                               <a
-                                href={__BAYPLAN_SOURCE_URL__}
+                                href={__COAMING_SOURCE_URL__}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className={linkClass}
@@ -1139,7 +1139,7 @@ export function HealthBell() {
                               })}
                             </ItemDescription>
                             <a
-                              href={`${__BAYPLAN_SOURCE_URL__}${PROXY_DOCS_PATH}`}
+                              href={`${__COAMING_SOURCE_URL__}${PROXY_DOCS_PATH}`}
                               target="_blank"
                               rel="noopener noreferrer"
                               className={`${linkClass} text-sm`}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -16,9 +16,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
 )
 
 // Review and apply a full service spec (plan 06-18, RES-03, D-03, D-08, D-09, D-13). Docker is a
@@ -651,7 +651,7 @@ func TestApplyCleanupThatCouldNotFinishNamesWhatIsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.HasPrefix(prob.Detail, "Couldn't update api. Docker rejected these settings: ") ||
-		!strings.HasSuffix(prob.Detail, " Bayplan couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.") {
+		!strings.HasSuffix(prob.Detail, " Coaming couldn't remove secret db-pass. Remove them under Networks, Secrets or Configs.") {
 		t.Errorf("detail = %q, want the reason followed by what could not be removed", prob.Detail)
 	}
 	if !strings.HasPrefix(prob.at("notRemoved"), "secret:db-pass") {

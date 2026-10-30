@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rebuild
 
@@ -14,7 +14,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Marshal writes a project as the compose file a person would have written, and the file is deployed later, so
@@ -24,7 +24,7 @@ import (
 //     every load (RESEARCH Pitfall 2): pa$word would come back as pa. A key is not interpolated by compose-go
 //     (a label key com.example.$$k loads as written, with both signs), so a key is left as it is;
 //   - the ports are written in the short form where it says everything the long one does;
-//   - the top-level name is dropped, because the stack's name is Bayplan's, not the file's;
+//   - the top-level name is dropped, because the stack's name is Coaming's, not the file's;
 //   - a depends_on that asks for nothing but the start of its services is a plain list, and one that asks for more
 //     says only what it asks for (the condition, and restart when it is true);
 //   - a list of networks that carry nothing is a plain list, a secret or a config reference that carries only its

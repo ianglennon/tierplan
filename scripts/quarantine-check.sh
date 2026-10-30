@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Keeps D-12 and D-13 true: a quarantined test is never silent, and the phase exits
 # with none. The call sites of testsupport.Quarantine( in *_test.go files must match

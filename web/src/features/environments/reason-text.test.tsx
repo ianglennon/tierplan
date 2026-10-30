@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { cleanup, render, renderHook, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -46,7 +46,7 @@ const ALL_PARAMS: ReasonParams = {
   environment: "prod",
   hostType: "standalone host",
   envType: "swarm",
-  command: " docker service update --image x bayplan-agent",
+  command: " docker service update --image x coaming-agent",
 };
 
 function localClock(hours: number, minutes: number) {
@@ -63,7 +63,7 @@ describe("ReasonText", () => {
     expect(screen.getByText("The clock on edge-1 is 6 min out of step.")).toBeTruthy();
     expect(
       screen.getByText(
-        "Sync the host's clock (NTP). Bayplan accepts up to 5 minutes of difference.",
+        "Sync the host's clock (NTP). Coaming accepts up to 5 minutes of difference.",
       ),
     ).toBeTruthy();
   });
@@ -86,17 +86,17 @@ describe("ReasonText", () => {
         params={{ version: "0.0.9", command: ALL_PARAMS.command, direction: "older" }}
       />,
     );
-    expect(screen.getByText("Agent 0.0.9 can't talk to this Bayplan.")).toBeTruthy();
-    expect(screen.getByText("The agent is older than Bayplan supports.")).toBeTruthy();
+    expect(screen.getByText("Agent 0.0.9 can't talk to this Coaming.")).toBeTruthy();
+    expect(screen.getByText("The agent is older than Coaming supports.")).toBeTruthy();
     expect(screen.getByText("Update the agent by hand:")).toBeTruthy();
     const block = screen.getByRole("region", { name: "the agent update command" });
-    expect(within(block).getByText(/docker service update --image x bayplan-agent/)).toBeTruthy();
+    expect(within(block).getByText(/docker service update --image x coaming-agent/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy the agent update command" })).toBeTruthy();
   });
 
   it("says the agent is newer when it is", () => {
     render(<ReasonText code="version_incompatible" params={{ direction: "newer" }} />);
-    expect(screen.getByText("The agent is newer than this Bayplan.")).toBeTruthy();
+    expect(screen.getByText("The agent is newer than this Coaming.")).toBeTruthy();
     // No command to show, so the hint does not promise one.
     expect(screen.getByText("Update the agent by hand.")).toBeTruthy();
     expect(screen.queryByRole("region")).toBeNull();
@@ -126,12 +126,12 @@ describe("ReasonText", () => {
     render(<ReasonText code="agent_offline" params={{ node: "edge-1" }} />);
     expect(
       within(screen.getByRole("region", { name: "the standalone check command" })).getByText(
-        "docker ps --filter name=bayplan-agent",
+        "docker ps --filter name=coaming-agent",
       ),
     ).toBeTruthy();
     expect(
       within(screen.getByRole("region", { name: "the swarm check command" })).getByText(
-        "docker service ps bayplan-agent",
+        "docker service ps coaming-agent",
       ),
     ).toBeTruthy();
   });
@@ -235,8 +235,8 @@ describe("ReasonText", () => {
   });
 
   describe("the type of the environment", () => {
-    const STANDALONE = "docker ps --filter name=bayplan-agent";
-    const SWARM = "docker service ps bayplan-agent";
+    const STANDALONE = "docker ps --filter name=coaming-agent";
+    const SWARM = "docker service ps coaming-agent";
 
     it("shows only the swarm check for a swarm and only the standalone check for a standalone host", () => {
       render(<ReasonText code="agent_offline" params={{ envType: "swarm" }} />);
@@ -276,7 +276,7 @@ describe("ReasonText", () => {
       const lines = Array.from(container.querySelectorAll("p")).map((p) => p.textContent);
       expect(lines).toEqual([
         "The agent on edge-1 isn't connected.",
-        "Check that it's running. It reconnects by itself when it can reach Bayplan.",
+        "Check that it's running. It reconnects by itself when it can reach Coaming.",
       ]);
       expect(screen.queryByRole("region")).toBeNull();
       expect(screen.queryByRole("button")).toBeNull();
@@ -290,7 +290,7 @@ describe("ReasonText", () => {
           variant="tooltip"
         />,
       );
-      expect(container.textContent).toContain("The agent can't talk to this Bayplan.");
+      expect(container.textContent).toContain("The agent can't talk to this Coaming.");
       expect(container.textContent).toContain("Update the agent by hand.");
       expect(container.textContent).not.toContain("docker service update");
       expect(screen.queryByRole("button")).toBeNull();
@@ -298,7 +298,7 @@ describe("ReasonText", () => {
 
     it("full puts a lead before the text when given one", () => {
       render(<ReasonText code="auth_rejected" lead="Refused:" />);
-      expect(screen.getByText("Refused: Bayplan rejected the agent's credentials.")).toBeTruthy();
+      expect(screen.getByText("Refused: Coaming rejected the agent's credentials.")).toBeTruthy();
     });
   });
 
@@ -306,7 +306,7 @@ describe("ReasonText", () => {
     it("returns the text and the hint for a code", () => {
       const { result } = renderHook(() => useReasonText());
       const described = result.current("tls_untrusted");
-      expect(described.text).toBe("The agent doesn't trust Bayplan's certificate.");
+      expect(described.text).toBe("The agent doesn't trust Coaming's certificate.");
       expect(described.hint).toContain("Use a certificate from a public CA");
       expect(described.commands).toEqual([]);
     });

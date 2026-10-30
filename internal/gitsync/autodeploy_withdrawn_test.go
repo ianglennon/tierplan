@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync_test
 
@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops"
 )
 
 // Auto-deploy turned off, or paused by a roll back, while the pull of an automatic deploy runs is not deployed over:

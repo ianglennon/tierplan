@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { ScrollText } from "lucide-react";
@@ -201,7 +201,7 @@ export function StackLogs({ envId, stackId, params, onParamsChange, popout }: St
 
 interface StackLogViewProps {
   envId: string;
-  // The stack's log: a stack of Bayplan's by its ID, or one it did not make by its name.
+  // The stack's log: a stack of Coaming's by its ID, or one it did not make by its name.
   source: Extract<LogSource, { kind: "stack" }>;
   name: string;
   // The stack's services, by name, for the Services filter.
@@ -216,7 +216,7 @@ interface StackLogViewProps {
 }
 
 // StackLogView is the viewer of a stack's merged log with its filter bar: the services, and the tasks and nodes of a
-// swarm or the containers of a host. It is shared by the Logs tab of a stack Bayplan manages and of one it found.
+// swarm or the containers of a host. It is shared by the Logs tab of a stack Coaming manages and of one it found.
 export function StackLogView({
   envId,
   source,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import type { ReactNode } from "react";
@@ -71,7 +71,7 @@ export interface TableGroup<T> {
     summary?: ReactNode;
     badge?: ReactNode;
     checkbox?: ReactNode;
-    // The name as a link, for a group that is a stack Bayplan manages.
+    // The name as a link, for a group that is a stack Coaming manages.
     nameLink?: ReactNode;
   };
   // A line across every column, drawn under the header while the group is open: what stands in the
@@ -268,7 +268,7 @@ interface SelectCheckboxProps {
   // gone or waiting on an action.
   disabled?: boolean;
   // Off with a reason: the checkbox stays in the tab order, aria-disabled, and
-  // says why (Bayplan's own containers).
+  // says why (Coaming's own containers).
   reason?: string;
 }
 

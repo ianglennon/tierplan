@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 const CodeRemoveFailed = "remove_failed"
 
 func init() {
-	codeMessages[CodeRemoveFailed] = "Bayplan couldn't remove this. It is still there."
+	codeMessages[CodeRemoveFailed] = "Coaming couldn't remove this. It is still there."
 }
 
 // write runs one write on a manager, once, on a context the job's cancel cannot reach: the deploy

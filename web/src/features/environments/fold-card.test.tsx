@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -99,7 +99,7 @@ describe("FoldCard", () => {
     const card = screen.getByRole("region", { name: "Local host" });
     expect(
       within(card).getByText(
-        "This Bayplan host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
+        "This Coaming host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
       ),
     ).toBeTruthy();
     expect(within(card).getByRole("button", { name: "Fold into edge swarm" })).toBeTruthy();
@@ -122,7 +122,7 @@ describe("FoldCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));
     const dialog = await screen.findByRole("dialog", { name: "Fold this host into edge swarm?" });
     expect(dialog.textContent).toContain(
-      "Bayplan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "Coaming will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
     );
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Fold into edge swarm" })).toBeTruthy();
@@ -169,7 +169,7 @@ describe("FoldCard", () => {
     show(LOCAL);
     expect(
       screen.getByText(
-        "This Bayplan host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
+        "This Coaming host is a manager of edge swarm. It can be reached through the Docker socket, so it needs no agent.",
       ),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Fold into edge swarm" }));

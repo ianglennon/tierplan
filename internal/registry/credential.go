@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry
 
@@ -79,10 +79,10 @@ type CreateInput struct {
 	HubFallback bool
 	// Expires is an optional day, YYYY-MM-DD (D-07).
 	Expires string
-	// CAPEM is an optional certificate authority, in PEM, that Bayplan's own calls to this
+	// CAPEM is an optional certificate authority, in PEM, that Coaming's own calls to this
 	// registry trust. It is public material and never joins the server's own trust store.
 	CAPEM string
-	// Insecure lets Bayplan's own calls to this registry skip TLS verification and fall back
+	// Insecure lets Coaming's own calls to this registry skip TLS verification and fall back
 	// to plain HTTP when the server answers plain HTTP (D-14). It affects nothing on a node.
 	Insecure bool
 }

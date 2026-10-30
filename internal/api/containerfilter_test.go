@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The container list's server-side search, status filter and counts (plan 04-06,
@@ -139,10 +139,10 @@ func TestContainerFilterFindsALabelValueButNeverSendsItBack(t *testing.T) {
 }
 
 // statusEngine is one container in each state, plus an unhealthy one and a container of
-// Bayplan's own agent.
+// Coaming's own agent.
 func statusEngine() dockertest.FakeConfig {
 	return dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", Containers: []dockertest.FakeContainer{
-		{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/bayplan"}, Image: "bayplan:edge", State: "running", Status: "Up 1 hour", Health: "healthy"},
+		{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/coaming"}, Image: "coaming:edge", State: "running", Status: "Up 1 hour", Health: "healthy"},
 		{ID: "a1", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours (unhealthy)",
 			Labels: map[string]string{"com.docker.compose.project": "shop"}},
 		{ID: "a2", Names: []string{"/cache"}, Image: "redis:8", State: "running", Status: "Up 2 hours", Health: "unhealthy"},
@@ -150,8 +150,8 @@ func statusEngine() dockertest.FakeConfig {
 		{ID: "a4", Names: []string{"/paused"}, Image: "busybox", State: "paused", Status: "Up 1 hour (Paused)"},
 		{ID: "a5", Names: []string{"/loop"}, Image: "busybox", State: "restarting", Status: "Restarting (1) 5 seconds ago"},
 		{ID: "a6", Names: []string{"/starting"}, Image: "busybox", State: "running", Status: "Up 3 seconds (health: starting)"},
-		{ID: "a7", Names: []string{"/agent"}, Image: "ghcr.io/ianglennon/bayplan-agent:0.1.0", State: "running", Status: "Up 1 hour",
-			Labels: map[string]string{"bayplan.agent": "true"}},
+		{ID: "a7", Names: []string{"/agent"}, Image: "ghcr.io/ianglennon/coaming-agent:0.1.0", State: "running", Status: "Up 1 hour",
+			Labels: map[string]string{"coaming.agent": "true"}},
 		{ID: "a8", Names: []string{"/api_1"}, Image: "api:1", State: "running", Status: "Up 1 hour",
 			Labels: map[string]string{"com.docker.stack.namespace": "blog", "com.docker.swarm.service.name": "blog_api"}},
 	}}
@@ -222,7 +222,7 @@ func TestContainerFilterHealthShowsUnhealthyOnEveryEngine(t *testing.T) {
 		health[it.Name] = it.Health
 	}
 	for name, want := range map[string]string{
-		"web": "unhealthy", "cache": "unhealthy", "starting": "starting", "bayplan": "healthy", "db": "none",
+		"web": "unhealthy", "cache": "unhealthy", "starting": "starting", "coaming": "healthy", "db": "none",
 	} {
 		if health[name] != want {
 			t.Errorf("health of %s = %q, want %q", name, health[name], want)
@@ -237,8 +237,8 @@ func TestContainerFilterSelfKindNamesTheServerAndTheAgent(t *testing.T) {
 	for _, it := range listContainersFor(t, f, e, "").Items {
 		kinds[it.Name] = it
 	}
-	if k := kinds["bayplan"]; k.SelfKind != "server" || !k.IsSelf {
-		t.Errorf("bayplan = %+v, want selfKind server and isSelf", k)
+	if k := kinds["coaming"]; k.SelfKind != "server" || !k.IsSelf {
+		t.Errorf("coaming = %+v, want selfKind server and isSelf", k)
 	}
 	if k := kinds["agent"]; k.SelfKind != "agent" || k.IsSelf {
 		t.Errorf("agent = %+v, want selfKind agent and not isSelf", k)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import {
   createMemoryHistory,
@@ -248,7 +248,7 @@ describe("GitSourcePage", () => {
             {
               severity: "error",
               code: "git_submodule",
-              message: "vendor is a submodule. Bayplan doesn't support submodules.",
+              message: "vendor is a submodule. Coaming doesn't support submodules.",
               file: "compose.yaml",
               line: 4,
               col: 1,

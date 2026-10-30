@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -9,21 +9,21 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
-// Who a discovered stack belongs to when it is Bayplan's own (D-49). The empty string is a stack that is
+// Who a discovered stack belongs to when it is Coaming's own (D-49). The empty string is a stack that is
 // nobody's in particular.
 const (
-	// OwnerBayplan is the Compose project or the swarm namespace the Bayplan server itself runs in.
-	OwnerBayplan = "bayplan"
-	// OwnerAgent is a group that holds a Bayplan agent service or container.
+	// OwnerCoaming is the Compose project or the swarm namespace the Coaming server itself runs in.
+	OwnerCoaming = "coaming"
+	// OwnerAgent is a group that holds a Coaming agent service or container.
 	OwnerAgent = "agent"
 )
 
-// agentLabel marks a Bayplan agent container (and service); the agent install puts it on both.
-const agentLabel = "bayplan.agent"
+// agentLabel marks a Coaming agent container (and service); the agent install puts it on both.
+const agentLabel = "coaming.agent"
 
 // portainerPrefix starts the label key of every label Portainer puts on what it deploys, and
 // portainerComposeDir is where it keeps the compose files of the stacks it makes on a standalone host.
@@ -32,17 +32,17 @@ const (
 	portainerComposeDir = "/data/compose/"
 )
 
-// minSelfIDLen is the shortest prefix of a container ID taken to be Bayplan's own.
+// minSelfIDLen is the shortest prefix of a container ID taken to be Coaming's own.
 const minSelfIDLen = 12
 
-// SelfMarks says which objects of an environment are Bayplan's own: the container the server runs in and
-// the swarm namespace of that container. Either may be empty when Bayplan cannot tell.
+// SelfMarks says which objects of an environment are Coaming's own: the container the server runs in and
+// the swarm namespace of that container. Either may be empty when Coaming cannot tell.
 type SelfMarks struct {
 	ContainerID string
 	Namespace   string
 }
 
-// Discovered is a stack the environment holds that Bayplan did not make: a swarm namespace or a Compose
+// Discovered is a stack the environment holds that Coaming did not make: a swarm namespace or a Compose
 // project, found by its labels alone (D-07). Nothing about it is stored; Docker is the source of truth.
 type Discovered struct {
 	// Name is the namespace or the project, and Target where it runs.
@@ -54,12 +54,12 @@ type Discovered struct {
 	Running, Total int
 	// State is StateRunning, StateDegraded or StateNotRunning, counted from the services.
 	State StackState
-	// OrphanID is the smallest bayplan.stack.id some object of the group carries, empty for none: a stack
-	// Bayplan made once, for a record this instance does not hold (D-11). It is never linked to a record.
+	// OrphanID is the smallest coaming.stack.id some object of the group carries, empty for none: a stack
+	// Coaming made once, for a record this instance does not hold (D-11). It is never linked to a record.
 	OrphanID string
 	// Portainer is true when the group carries a Portainer marker (D-19).
 	Portainer bool
-	// Owner is OwnerBayplan, OwnerAgent or empty (D-49).
+	// Owner is OwnerCoaming, OwnerAgent or empty (D-49).
 	Owner string
 	// NameReason is why the name cannot be a stack name on Target, empty when it can: the stack is listed
 	// but not adoptable (D-53). The owner reasons (D-49) come before it, and the caller words them.
@@ -89,7 +89,7 @@ func HoldingName(own []Stack, target stacks.Target, name string) (Stack, bool) {
 // nameClashReason is the sentence for an outside stack whose name is a case variant of a managed one on a swarm: it
 // is listed, not adoptable.
 func nameClashReason(name, managed string) string {
-	return "Bayplan can't adopt " + name + ": the stack " + managed + " is already managed here, and a swarm treats names that differ only in case as the same."
+	return "Coaming can't adopt " + name + ": the stack " + managed + " is already managed here, and a swarm treats names that differ only in case as the same."
 }
 
 // NameNotAdoptableReason is the sentence for a stack whose name breaks the stack-name rule of target, built from
@@ -103,7 +103,7 @@ func NameNotAdoptableReason(target stacks.Target, name string) string {
 	if target != stacks.TargetSwarm {
 		where = "a standalone host"
 	}
-	return "Bayplan can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
+	return "Coaming can't adopt " + name + ": a stack name on " + where + " takes only " + stacks.NameRuleText(target) + "."
 }
 
 // PortainerMarked says whether labels carry a mark of Portainer: a key that starts io.portainer., or a
@@ -123,11 +123,11 @@ type group struct {
 	containers []dockerx.ContainerRow
 }
 
-// Discover lists the stacks the environment holds that Bayplan does not manage, from what the lists already
+// Discover lists the stacks the environment holds that Coaming does not manage, from what the lists already
 // hold. On a swarm a stack is the services that share a com.docker.stack.namespace, on a standalone host the
 // containers that share a com.docker.compose.project, one-off containers (docker compose run) left out;
 // unlabelled services and loose containers are not stacks. A group named like one of managed is that stack,
-// not a second one, which also keeps a stack Bayplan is deploying for the first time out of the list. On a swarm a
+// not a second one, which also keeps a stack Coaming is deploying for the first time out of the list. On a swarm a
 // group whose name differs from a managed one only in case is not that stack (swarm tells them apart by their labels)
 // but cannot be adopted beside it: it stays in the list, read-only, with the reason (T-08-95).
 //
@@ -197,8 +197,8 @@ func Discover(h Held, managed []Stack, target stacks.Target, self SelfMarks) []D
 	return out
 }
 
-// flagsOf reads what a group's labels say about it: the smallest Bayplan stack ID, whether Portainer made it
-// and whether it is Bayplan's own or its agent's.
+// flagsOf reads what a group's labels say about it: the smallest Coaming stack ID, whether Portainer made it
+// and whether it is Coaming's own or its agent's.
 func flagsOf(name string, g *group, self SelfMarks) (orphan string, portainer bool, owner string) {
 	note := func(labels map[string]string) {
 		if id := labels[stacks.LabelStackID]; id != "" && (orphan == "" || id < orphan) {
@@ -222,14 +222,14 @@ func flagsOf(name string, g *group, self SelfMarks) (orphan string, portainer bo
 	case agent:
 		owner = OwnerAgent
 	case own:
-		owner = OwnerBayplan
+		owner = OwnerCoaming
 	}
 	return orphan, portainer, owner
 }
 
-// DiscoverNamed looks for one stack the environment holds that Bayplan did not make, live: one read of the
+// DiscoverNamed looks for one stack the environment holds that Coaming did not make, live: one read of the
 // cluster for a swarm, one list of the project's containers for a standalone host, never the lists' cache.
-// The bool is false when nothing carries the name. A name that a stack of Bayplan's holds exactly is that stack's
+// The bool is false when nothing carries the name. A name that a stack of Coaming's holds exactly is that stack's
 // and the caller says so before it asks; managed is only used for what Discover does with it: on a swarm a case
 // variant of a managed name is found, with the reason it cannot be adopted. It is a read.
 func (d Deps) DiscoverNamed(ctx context.Context, envID string, target stacks.Target, name string, managed []Stack, self SelfMarks) (Discovered, bool, error) {

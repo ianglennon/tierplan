@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Go durations as the Form's Delay, Window and Monitor fields take them (5s, 30s, 2m, 1h30m),
 // and the integer nanoseconds a swarm spec stores them as. Like the other field values, a

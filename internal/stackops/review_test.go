@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -15,14 +15,14 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
-	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/stacks/stackstest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The review (plan 07-14, STK-06): what a deploy would do against what the fake swarm holds.
@@ -192,7 +192,7 @@ func TestReviewNamesAnExternalNetworkAndBlocksOnOneThatIsMissing(t *testing.T) {
 
 func TestReviewReportsAStackNetworkThatDiffersFromTheFile(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
+	owned := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "web_backend", Driver: "overlay", Scope: "swarm", Labels: owned, Subnets: []string{"10.99.0.0/24"}}}
 	})
@@ -463,7 +463,7 @@ func TestReviewBlocksOnAStackThatAnotherOwnerHoldsAndOnATargetThatChanged(t *tes
 	rv := rig.review(t, "web", stacks.StarterCompose, nil)
 	var clash bool
 	for _, p := range rv.Problems {
-		if p.Code == stackops.CodeNameClash && p.Severity == stacks.SeverityError && p.Message == "A stack named web already exists on this environment, not managed by Bayplan." {
+		if p.Code == stackops.CodeNameClash && p.Severity == stacks.SeverityError && p.Message == "A stack named web already exists on this environment, not managed by Coaming." {
 			clash = true
 		}
 	}
@@ -471,7 +471,7 @@ func TestReviewBlocksOnAStackThatAnotherOwnerHoldsAndOnATargetThatChanged(t *tes
 		t.Errorf("problems = %+v, want the name clash", rv.Problems)
 	}
 	if len(rv.Services) != 1 || rv.Services[0].Change != "added" {
-		t.Errorf("services = %+v: a service Bayplan does not own is not Bayplan's to remove", rv.Services)
+		t.Errorf("services = %+v: a service Coaming does not own is not Coaming's to remove", rv.Services)
 	}
 
 	ri := rig.reviewInput(t, "web", stacks.StarterCompose, nil)
@@ -919,7 +919,7 @@ func TestReviewInUpdateModeMarksOnlyTheRowWhoseRegistryIsDownAndBlocksOnlyForIt(
 }
 
 // TestReviewAdoptedSwarmStackShowsOwnershipOnly: the first review of an adopted stack that docker stack deploy made
-// is not refused as a name clash, shows every service as differing only in Bayplan's labels, counts them apart from
+// is not refused as a name clash, shows every service as differing only in Coaming's labels, counts them apart from
 // the changed ones and leaves the stack's networks and secrets alone (D-16, D-20, ROADMAP SC3).
 func TestReviewAdoptedSwarmStackShowsOwnershipOnly(t *testing.T) {
 	t.Parallel()

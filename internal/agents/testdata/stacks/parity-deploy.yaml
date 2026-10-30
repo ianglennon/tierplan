@@ -1,6 +1,6 @@
 # The deploy section of the parity corpus (plan 07-11): resources, restart, update and rollback
 # policy, placement, a global service, a healthcheck, logging, ulimits and capabilities. Everything
-# here is a key docker stack deploy converts, so a difference is Bayplan's.
+# here is a key docker stack deploy converts, so a difference is Coaming's.
 services:
   app:
     image: {{IMAGE}}

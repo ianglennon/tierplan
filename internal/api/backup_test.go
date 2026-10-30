@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
 // Backups: the download route and the facts the Backup page needs (plan 03-09,
@@ -44,7 +44,7 @@ func TestBackupDownloadByAnInstanceAdminOpensWithThePassphrase(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="bayplan-backup-20260101-0000.bayplan"` {
+	if cd := rec.Header().Get("Content-Disposition"); cd != `attachment; filename="coaming-backup-20260101-0000.coaming"` {
 		t.Errorf("Content-Disposition = %q", cd)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
@@ -119,7 +119,7 @@ func TestBackupDownloadWithARelativeDataDirectoryOpensWithThePassphrase(t *testi
 		t.Fatalf("the database entry starts %q, %v", head, err)
 	}
 	for _, n := range f.leftovers(t) {
-		if strings.HasPrefix(n, ".bayplan-backup-") || strings.HasPrefix(n, ".bayplan-export-") {
+		if strings.HasPrefix(n, ".coaming-backup-") || strings.HasPrefix(n, ".coaming-export-") {
 			t.Errorf("the data directory kept %q", n)
 		}
 	}
@@ -165,7 +165,7 @@ func TestBackupInfoReportsThePassphraseRuleAndTheExtension(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.MinPassphraseLength != 16 || got.FileExtension != ".bayplan" {
+	if got.MinPassphraseLength != 16 || got.FileExtension != ".coaming" {
 		t.Fatalf("info = %+v", got)
 	}
 	if rec := f.call(t, authReq{method: http.MethodGet, path: "/api/backup/info"}); rec.Code != http.StatusUnauthorized {
@@ -187,7 +187,7 @@ func TestBackupDownloadIsAuditedWithoutThePassphrase(t *testing.T) {
 		t.Fatalf("backup.exported entries = %d, want 1", len(got))
 	}
 	d := got[0]
-	if d["file"] != "bayplan-backup-20260101-0000.bayplan" || d["source"] != "ui" || d["size"] == "" {
+	if d["file"] != "coaming-backup-20260101-0000.coaming" || d["source"] != "ui" || d["size"] == "" {
 		t.Fatalf("details = %v", d)
 	}
 	if e := f.audits(t, "backup.exported"); e[0].ActorID != "id-admin" || e[0].ActorType != "user" {

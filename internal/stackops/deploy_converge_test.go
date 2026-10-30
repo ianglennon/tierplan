@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // runningDeploy is a deploy that has started and that a test follows item by item.
@@ -573,7 +573,7 @@ func TestDeploySwarmDoesNotFailAServiceWhoseOnlyDeadSlotIsAboveItsReplicaCount(t
 
 func TestDeploySwarmStopsWhenTheSwarmRollsTheUpdateBack(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": "stack-tracer"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
 	}, dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned, Desired: 1, Running: 1})
@@ -599,7 +599,7 @@ func TestDeploySwarmStopsWhenTheSwarmRollsTheUpdateBack(t *testing.T) {
 
 func TestDeploySwarmIgnoresTheUpdateStatusAnEarlierDeployLeft(t *testing.T) {
 	t.Parallel()
-	owned := map[string]string{"com.docker.stack.namespace": "tracer", "bayplan.stack.id": "stack-tracer"}
+	owned := map[string]string{"com.docker.stack.namespace": "tracer", "coaming.stack.id": "stack-tracer"}
 	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		c.Networks = []dockertest.FakeNetwork{{ID: "n1", Name: "tracer_default", Driver: "overlay", Scope: "swarm", Labels: owned}}
 	}, dockertest.FakeService{ID: "svc-web", Name: "tracer_web", Mode: "replicated", Image: "nginx:1.26", Version: 7, Labels: owned,

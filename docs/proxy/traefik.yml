@@ -1,41 +1,41 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
-# Traefik in front of Bayplan. See docs/reverse-proxy.md. This is Traefik's
+# Traefik in front of Coaming. See docs/reverse-proxy.md. This is Traefik's
 # dynamic configuration for the file provider:
 #
 #   traefik --entrypoints.web.address=:80 \
-#           --providers.file.filename=/etc/traefik/bayplan.yml
+#           --providers.file.filename=/etc/traefik/coaming.yml
 #
 # It uses an entry point called "web". To end TLS in Traefik, add an entry point
 # for port 443 with a certificate resolver and name it in each router's
 # entryPoints. Traefik passes WebSocket upgrades through by itself, flushes
 # text/event-stream responses at once, and sets X-Forwarded-For, X-Forwarded-Proto
-# and Host. It also adds X-Forwarded-Prefix when it strips a prefix; Bayplan
+# and Host. It also adds X-Forwarded-Prefix when it strips a prefix; Coaming
 # ignores that header, so the public URL stays the only source of the base path.
 
 http:
   routers:
-    # A dedicated host name (recommended). Set BAYPLAN_PUBLIC_URL=https://bayplan.example.com.
-    bayplan-root:
-      rule: "Host(`bayplan.example.com`)"
+    # A dedicated host name (recommended). Set COAMING_PUBLIC_URL=https://coaming.example.com.
+    coaming-root:
+      rule: "Host(`coaming.example.com`)"
       entryPoints: [web]
-      service: bayplan
+      service: coaming
 
-    # A subpath on a host you share. Set BAYPLAN_PUBLIC_URL=https://example.com/bayplan.
-    bayplan-sub:
-      rule: "Host(`example.com`) && (Path(`/bayplan`) || PathPrefix(`/bayplan/`))"
+    # A subpath on a host you share. Set COAMING_PUBLIC_URL=https://example.com/coaming.
+    coaming-sub:
+      rule: "Host(`example.com`) && (Path(`/coaming`) || PathPrefix(`/coaming/`))"
       entryPoints: [web]
-      middlewares: [bayplan-strip]
-      service: bayplan
+      middlewares: [coaming-strip]
+      service: coaming
 
   middlewares:
-    bayplan-strip:
+    coaming-strip:
       stripPrefix:
-        prefixes: ["/bayplan"]
+        prefixes: ["/coaming"]
 
   services:
-    bayplan:
+    coaming:
       loadBalancer:
         servers:
-          - url: "http://bayplan:7480"
+          - url: "http://coaming:7480"

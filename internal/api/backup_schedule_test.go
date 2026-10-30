@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
 // The backup schedule and the scheduled backups on disk (plan 03-27, D-32,
@@ -132,7 +132,7 @@ func TestTheScheduleRoutesNeedBackupManage(t *testing.T) {
 		{method: http.MethodGet, path: "/api/backup/schedule", cookie: cookie},
 		{method: http.MethodPut, path: "/api/backup/schedule", body: scheduleJSON(true, schedulePass), cookie: cookie, csrf: csrf},
 		{method: http.MethodGet, path: "/api/backup/files", cookie: cookie},
-		{method: http.MethodGet, path: "/api/backup/files/bayplan-backup-20261001-0300.bayplan", cookie: cookie},
+		{method: http.MethodGet, path: "/api/backup/files/coaming-backup-20261001-0300.coaming", cookie: cookie},
 	} {
 		if rec := f.call(t, r); rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s = %d, want 403", r.method, r.path, rec.Code)
@@ -150,12 +150,12 @@ func TestSavedBackupsAreListedAndDownloadedByAnInstanceAdmin(t *testing.T) {
 	if err := os.MkdirAll(f.backupDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	const name = "bayplan-backup-20260101-0300.bayplan"
+	const name = "coaming-backup-20260101-0300.coaming"
 	content := bytes.Repeat([]byte("x"), 1234)
 	if err := os.WriteFile(filepath.Join(f.backupDir, name), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.backupDir, "bayplan-20260101T030000Z.db"), []byte("snapshot"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.backupDir, "coaming-20260101T030000Z.db"), []byte("snapshot"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -318,25 +318,25 @@ func TestAFileNameThatIsNotABackupAnswers404WithoutTouchingTheFileSystem(t *test
 	cookie, _ := f.signIn(t, "admin", false)
 	// Files the route must never serve: the database and the key sit in the data
 	// directory, and a decoy with the wrong name sits in the backups folder.
-	if err := os.WriteFile(filepath.Join(f.dataInfo.Path, "bayplan.db"), []byte("the database"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.dataInfo.Path, "coaming.db"), []byte("the database"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.dataInfo.Path, "bayplan.key"), []byte("the master key"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.dataInfo.Path, "coaming.key"), []byte("the master key"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(f.backupDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.backupDir, "x.bayplan"), []byte("decoy"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(f.backupDir, "x.coaming"), []byte("decoy"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
-		"/api/backup/files/../bayplan.db",
-		"/api/backup/files/..%2Fbayplan.db",
-		"/api/backup/files/%2e%2e%2fbayplan.key",
-		"/api/backup/files/bayplan.key",
-		"/api/backup/files/x.bayplan",
-		"/api/backup/files/bayplan-backup-20261001-0300.bayplan",
+		"/api/backup/files/../coaming.db",
+		"/api/backup/files/..%2Fcoaming.db",
+		"/api/backup/files/%2e%2e%2fcoaming.key",
+		"/api/backup/files/coaming.key",
+		"/api/backup/files/x.coaming",
+		"/api/backup/files/coaming-backup-20261001-0300.coaming",
 	} {
 		rec := f.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie})
 		if rec.Code != http.StatusNotFound {
@@ -385,7 +385,7 @@ func (f *authFixture) addRun(t *testing.T, id string, ok bool, finished time.Tim
 		okInt = 1
 	}
 	if _, err := f.st.Write.Exec(`INSERT INTO backup_runs (id, source, started_at, finished_at, ok, file_name, error) VALUES (?, 'schedule', ?, ?, ?, ?, ?)`,
-		id, finished.UnixNano(), finished.UnixNano(), okInt, map[bool]string{true: "bayplan-backup-x.bayplan", false: ""}[ok], reason); err != nil {
+		id, finished.UnixNano(), finished.UnixNano(), okInt, map[bool]string{true: "coaming-backup-x.coaming", false: ""}[ok], reason); err != nil {
 		t.Fatal(err)
 	}
 }

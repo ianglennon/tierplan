@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package selfmaint
 
@@ -13,7 +13,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // updateStandalone updates an agent that runs as a plain container. The agent
@@ -56,14 +56,14 @@ func (m *Maint) updateStandalone(ctx context.Context, cli *client.Client, self c
 	if _, err := rand.Read(suffix); err != nil {
 		return wire.UpdateErrFailed
 	}
-	env := []string{"BAYPLAN_AGENT_SOCKET=" + m.cfg.SocketPath, "BAYPLAN_AGENT_STATE_DIR=" + m.cfg.StateDir}
+	env := []string{"COAMING_AGENT_SOCKET=" + m.cfg.SocketPath, "COAMING_AGENT_STATE_DIR=" + m.cfg.StateDir}
 	for _, e := range self.Config.Env {
-		if strings.HasPrefix(e, "BAYPLAN_AGENT_DOCKER_GID=") {
+		if strings.HasPrefix(e, "COAMING_AGENT_DOCKER_GID=") {
 			env = append(env, e)
 		}
 	}
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: "bayplan-agent-helper-" + hex.EncodeToString(suffix),
+		Name: "coaming-agent-helper-" + hex.EncodeToString(suffix),
 		Config: &container.Config{
 			Image:  image,
 			Cmd:    []string{"helper", "recreate", "--target", self.ID},

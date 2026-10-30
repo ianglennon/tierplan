@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 // The timing of the background drift check (D-22). A stack is checked about every five minutes, with jitter so the
@@ -573,7 +573,7 @@ func (w *driftWorker) check(ctx context.Context, st Stack, held *heldCache, time
 		print = heldFingerprint(h, st, info.Seq)
 	}
 	if timed && print != "" && w.prints[st.ID] == print {
-		// A drift whose cause is not known is looked at again: Bayplan writes the audit row of a scale after the
+		// A drift whose cause is not known is looked at again: Coaming writes the audit row of a scale after the
 		// engine has changed, so an early look can miss it, and nothing else would give it a second chance.
 		if cur, ok := m.d.Store.Get(st.ID); ok && DriftCurrent(cur, st, info.Seq) && (cur.State != DriftDrifted || cur.Latest != nil) {
 			return DriftOutcomeSkipped
@@ -644,7 +644,7 @@ func (w *driftWorker) logFailure(ctx context.Context, st Stack, what string, err
 // deployed and whether it is running: a service of a swarm by its ID, when it last changed, how many replicas it wants
 // and its image, a container of a host by its ID, state and image. It changes whenever the stack does. A host
 // container counts when it is the stack's or was added to one of its services from the host CLI, with no
-// bayplan.stack.id (SplitProject), so docker compose up --scale moves it; another stack's container does not.
+// coaming.stack.id (SplitProject), so docker compose up --scale moves it; another stack's container does not.
 func heldFingerprint(h Held, st Stack, seq int64) string {
 	own := OwnershipOf(st)
 	var parts []string

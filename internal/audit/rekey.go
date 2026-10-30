@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package audit
 
@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // rekeyBatch is how many rows Rekey reads per query.
@@ -112,7 +112,7 @@ func (w *Writer) AppendReanchorTx(ctx context.Context, tx *sql.Tx, res RekeyResu
 
 // attestationDomain is the first field of every rotation attestation, so an
 // HMAC made for another purpose with the same key can never be mistaken for one.
-const attestationDomain = "bayplan/audit-attestation/v1"
+const attestationDomain = "coaming/audit-attestation/v1"
 
 // RotationAttestation is the hex HMAC-SHA256, under the old key's audit subkey,
 // that a key.rotated entry carries: it vouches that the holder of the old key

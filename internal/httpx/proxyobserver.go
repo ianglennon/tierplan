@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package httpx
 
@@ -17,8 +17,8 @@ import (
 // Kinds of proxy problem the observer records (D-53). The warning IDs of
 // GET /api/warnings are these with a "proxy_" prefix.
 const (
-	// SignalUntrustedForwarded: a peer outside BAYPLAN_TRUSTED_PROXIES sent
-	// forwarded headers, which Bayplan ignored.
+	// SignalUntrustedForwarded: a peer outside COAMING_TRUSTED_PROXIES sent
+	// forwarded headers, which Coaming ignored.
 	SignalUntrustedForwarded = "untrusted_forwarded"
 	// SignalURLMismatch: a request arrived for a host, or over a scheme, that is
 	// not the public URL's.
@@ -54,7 +54,7 @@ type Signal struct {
 type signalKey struct{ kind, peer, host, scheme string }
 
 // ProxyObserver notices a reverse proxy that is misconfigured, from what reaches
-// Bayplan, and remembers it in memory for an hour. It reads no forwarded header
+// Coaming, and remembers it in memory for an hour. It reads no forwarded header
 // for its value: the peer it records is the TCP peer, the host is the request's
 // own Host, and the scheme is EffectiveScheme (D-51, D-53). It is safe for
 // concurrent use.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -12,11 +12,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // StackRevisionImageChange is one service whose image differs from the previous good revision's.
@@ -46,7 +46,7 @@ type StackRevisionItem struct {
 	CreatedAt     string                     `json:"createdAt" format:"date-time" doc:"When the revision was taken, RFC 3339 UTC"`
 	FailedService string                     `json:"failedService" doc:"The service a failed deploy stopped at; empty when it did not fail or the failure names none"`
 	Code          string                     `json:"code" doc:"The code of the failure; empty when the revision did not fail"`
-	Reason        string                     `json:"reason" doc:"The sentence of the failure code; empty when there is no code or Bayplan has no sentence for it"`
+	Reason        string                     `json:"reason" doc:"The sentence of the failure code; empty when there is no code or Coaming has no sentence for it"`
 	Deployed      bool                       `json:"deployed" doc:"True for the newest good revision, the one the stack stands at"`
 	Images        []StackRevisionImageChange `json:"images" doc:"The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with"`
 	Pinned        int                        `json:"pinned" doc:"How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise"`
@@ -61,7 +61,7 @@ type StackRevisionItem struct {
 type StackRevisionListBody struct {
 	Items  []StackRevisionItem `json:"items" doc:"The revisions of the stack, newest first by revision number. A pruned revision is gone from the list"`
 	Capped bool                `json:"capped" doc:"True when the stack has more revisions than the 500 the list holds; the oldest are left out"`
-	Kept   int                 `json:"kept" doc:"How many revisions of each stack Bayplan keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides"`
+	Kept   int                 `json:"kept" doc:"How many revisions of each stack Coaming keeps (the instance setting, 5 to 200). The deployed revision and any still deploying are kept besides"`
 }
 
 // StackRevisionListOutput wraps StackRevisionListBody for huma.

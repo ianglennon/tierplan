@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,14 +15,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 const (
@@ -35,7 +35,7 @@ const (
 
 // GitStackCreateRequest is the body of the create-from-repository route.
 type GitStackCreateRequest struct {
-	Name         string                `json:"name" maxLength:"255" doc:"The stack's name, held to the rule of the environment's target, as for a stack made in Bayplan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash)"`
+	Name         string                `json:"name" maxLength:"255" doc:"The stack's name, held to the rule of the environment's target, as for a stack made in Coaming (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash)"`
 	RepoID       string                `json:"repoId" maxLength:"64" doc:"The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found"`
 	RefKind      string                `json:"refKind" enum:"branch,tag,commit" doc:"What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters"`
 	Ref          string                `json:"ref" maxLength:"2048" doc:"The branch, tag or commit. 422 ref_invalid for a name git would refuse"`
@@ -43,7 +43,7 @@ type GitStackCreateRequest struct {
 	Folder       string                `json:"folder,omitempty" maxLength:"4096" doc:"The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository)"`
 	ComposeFiles []string              `json:"composeFiles" minItems:"1" maxItems:"50" doc:"The compose files, relative to the folder, in merge order: a key of a later file wins over the same key of an earlier one. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit"`
 	Vars         []DraftVarBody        `json:"vars,omitempty" maxItems:"500" doc:"The stack's variables. A value here beats the same name in the folder's .env"`
-	Overlays     []GitStackOverlayBody `json:"overlays,omitempty" maxItems:"50" doc:"Files Bayplan holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB"`
+	Overlays     []GitStackOverlayBody `json:"overlays,omitempty" maxItems:"50" doc:"Files Coaming holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB"`
 }
 
 // GitStackCheckRequest is the body of the check route: where a stack would come from, and what the person has chosen,
@@ -103,7 +103,7 @@ type GitStackCheckInput struct {
 	Body GitStackCheckRequest
 }
 
-// GitStackOverlayBody is an overlay file of a create: a file Bayplan holds for a path the repository does not have.
+// GitStackOverlayBody is an overlay file of a create: a file Coaming holds for a path the repository does not have.
 type GitStackOverlayBody struct {
 	Path    string `json:"path" doc:"The file's path inside the stack folder, as a path in a compose file writes it: relative, no .. or . name, no leading or doubled slash, no backslash or colon. 422 file_path_invalid otherwise. A path the repository holds is not stored: it is the blocking problem overlay_clash and the repository's file stands"`
 	Content string `json:"content" writeOnly:"true" doc:"The file's text, at most 1 MiB (422 file_too_large). It is stored sealed as a secret file and never shown again"`
@@ -162,7 +162,7 @@ func RegisterGitStacks(r *httpx.Router, s StacksDeps, g GitDeps) {
 		Description: "Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, " +
 			"and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. " +
 			"The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. " +
-			"The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). " +
+			"The name follows the rules of creating a stack in Coaming (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). " +
 			"422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; " +
 			"422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. " +
 			"When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).",

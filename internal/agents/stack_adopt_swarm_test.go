@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The adoption oracle (plan 08-26, STK-13, D-20, ROADMAP SC2 and SC3): a stack made by the real
-// `docker stack deploy` is listed by Bayplan as unmanaged, adopted without a write to the engine, and
-// then deployed and removed by Bayplan with nothing but its ownership labels changed.
+// `docker stack deploy` is listed by Coaming as unmanaged, adopted without a write to the engine, and
+// then deployed and removed by Coaming with nothing but its ownership labels changed.
 
 // adoptCheckBody is the part of the answer of POST .../unmanaged-stacks/{name}/adopt-check these tests read.
 type adoptCheckBody struct {
@@ -46,7 +46,7 @@ func adoptCheck(t *testing.T, f *swarmFix, name string) adoptCheckBody {
 	return out
 }
 
-// adopt adopts the unmanaged stack as the check read it and returns the ID of the stack Bayplan holds now.
+// adopt adopts the unmanaged stack as the check read it and returns the ID of the stack Coaming holds now.
 func adopt(t *testing.T, f *swarmFix, name, fingerprint string) string {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, "/api/env/"+f.env.ID+"/unmanaged-stacks/"+name+"/adopt", map[string]any{"fingerprint": fingerprint})
@@ -64,11 +64,11 @@ func adopt(t *testing.T, f *swarmFix, name, fingerprint string) string {
 	return st.ID
 }
 
-// waitUnmanaged waits until the environment's stack list shows the stack as one Bayplan did not make, and
+// waitUnmanaged waits until the environment's stack list shows the stack as one Coaming did not make, and
 // returns once it does. The list reads the engine through the environment's cache, so it is refreshed first.
 func waitUnmanaged(t *testing.T, f *swarmFix, name string) {
 	t.Helper()
-	testsupport.Poll(t, stackGoneWait, "Bayplan to list "+name+" as unmanaged", func() (bool, string) {
+	testsupport.Poll(t, stackGoneWait, "Coaming to list "+name+" as unmanaged", func() (bool, string) {
 		f.srv.RefreshCluster(f.env.ID)
 		code, body := f.srv.Do(http.MethodGet, f.stackAPI()+"?kind=unmanaged", nil)
 		var list struct {
@@ -255,7 +255,7 @@ func waitJob(t *testing.T, f *swarmFix, stackID, jobID, what string) {
 
 // waitNamespaceEmpty waits until nothing carries the stack's namespace label on the engine but the secrets and
 // configs in kept: no service, no network and no container on any node. A secret or config an adopted stack only
-// referenced is external to it (D-13, T-08-62): Bayplan never removes it, so kept names those, by name and ID, and
+// referenced is external to it (D-13, T-08-62): Coaming never removes it, so kept names those, by name and ID, and
 // the wait ends only when exactly they are left.
 func waitNamespaceEmpty(t *testing.T, f *swarmFix, stack string, kept engineObjects) {
 	t.Helper()
@@ -300,10 +300,10 @@ func waitNamespaceEmpty(t *testing.T, f *swarmFix, stack string, kept engineObje
 	})
 }
 
-// removeStackBayplan removes the stack through the API with no volume ticked, waits for the job and then until
+// removeStackCoaming removes the stack through the API with no volume ticked, waits for the job and then until
 // nothing is left under the stack's namespace but the secrets and configs in kept (see waitNamespaceEmpty), and
-// shows that Bayplan no longer holds the stack.
-func removeStackBayplan(t *testing.T, f *swarmFix, stackID, stack string, kept engineObjects) {
+// shows that Coaming no longer holds the stack.
+func removeStackCoaming(t *testing.T, f *swarmFix, stackID, stack string, kept engineObjects) {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+stackID+"/remove", map[string]any{
 		"confirmName": stack, "volumes": []map[string]string{}, "keepDefinition": false,
@@ -325,14 +325,14 @@ func removeStackBayplan(t *testing.T, f *swarmFix, stackID, stack string, kept e
 // STK-13: adopting never changes a service version, a network ID or a secret ID before the first deploy).
 // Each file of the parity corpus is deployed by the real docker stack deploy, then, on a real swarm:
 //
-//   - Bayplan lists it as a stack it did not make;
+//   - Coaming lists it as a stack it did not make;
 //   - its adopt check finds no difference but the ownership labels, in every service;
 //   - adopting writes nothing to the engine: the service versions and the network, secret and config IDs are
 //     the same as before;
 //   - the first review shows the ownership labels and nothing else;
-//   - the first deploy keeps every network, secret and config ID and gives every service Bayplan's label;
+//   - the first deploy keeps every network, secret and config ID and gives every service Coaming's label;
 //   - the second review lists no change at all;
-//   - removing the stack through Bayplan takes its services and the networks it owns and leaves nothing under
+//   - removing the stack through Coaming takes its services and the networks it owns and leaves nothing under
 //     its namespace but the secrets and configs it only referenced, which are external to it (D-13, T-08-62):
 //     those are untouched, with the IDs they had, and the case then removes them itself.
 func sharedStackAdoptRoundTrip(t *testing.T, f *swarmFix) {
@@ -367,7 +367,7 @@ func sharedStackAdoptRoundTrip(t *testing.T, f *swarmFix) {
 
 			waitUnmanaged(t, f, stack)
 
-			// The check: the first deploy changes nothing but Bayplan's ownership labels, in every service.
+			// The check: the first deploy changes nothing but Coaming's ownership labels, in every service.
 			chk := adoptCheck(t, f, stack)
 			if !chk.Clean || chk.GapCount != 0 || len(chk.Gaps) != 0 {
 				for _, g := range chk.Gaps {
@@ -423,14 +423,14 @@ func sharedStackAdoptRoundTrip(t *testing.T, f *swarmFix) {
 				}
 			}
 
-			// The first deploy: Bayplan takes ownership. The networks, secrets and configs are the very objects
-			// that were there, and every service carries Bayplan's label.
-			f.deployStackBayplan(t, id)
+			// The first deploy: Coaming takes ownership. The networks, secrets and configs are the very objects
+			// that were there, and every service carries Coaming's label.
+			f.deployStackCoaming(t, id)
 			waitStackConverged(t, f, stack)
 			readEngineObjects(t, mgr, stack).requireSame(t, "after the first deploy", before, false)
 			for name := range before.versions {
-				if got := serviceField(t, f, name, `{{index .Spec.Labels "bayplan.stack.id"}}`); got != id {
-					t.Errorf("%s carries bayplan.stack.id %q after the first deploy, want %s", name, got, id)
+				if got := serviceField(t, f, name, `{{index .Spec.Labels "coaming.stack.id"}}`); got != id {
+					t.Errorf("%s carries coaming.stack.id %q after the first deploy, want %s", name, got, id)
 				}
 			}
 
@@ -461,9 +461,9 @@ func sharedStackAdoptRoundTrip(t *testing.T, f *swarmFix) {
 				t.Errorf("the second review counts %d ownership-only services, want none", rv.Summary.OwnershipOnly)
 			}
 
-			// Removal through Bayplan takes the services and the networks the stack owns. The secrets and configs it
+			// Removal through Coaming takes the services and the networks the stack owns. The secrets and configs it
 			// referenced are external (D-13), so they stay as they were; a network the file only names stays too.
-			removeStackBayplan(t, f, id, stack, engineObjects{secrets: before.secrets, configs: before.configs})
+			removeStackCoaming(t, f, id, stack, engineObjects{secrets: before.secrets, configs: before.configs})
 			for noun, ids := range map[string]map[string]string{"secret": before.secrets, "config": before.configs} {
 				for name := range ids {
 					sh(t, mgr, "docker "+noun+" rm "+name)
@@ -527,15 +527,15 @@ func removeVolumeOn(t *testing.T, node *dockertest.Node, name string) {
 // options. On a real swarm:
 //
 //   - the precondition holds, or the case fails: the CLI wrote platforms on every service, and no label of
-//     Bayplan's is on the volume mount;
+//     Coaming's is on the volume mount;
 //   - the adopt check (rebuild) is clean, with every service ownership-only;
 //   - the stack's own file, pasted with ${TAG} in the image, matches what runs;
 //   - adopting writes nothing to the engine and drift reads none;
 //   - the first review lists the ownership labels alone, nothing under the placement;
 //   - the first deploy keeps every service's platforms and the volume (its CreatedAt does not move), gives every
-//     service and the volume's mount Bayplan's stack ID, and the second review is empty;
+//     service and the volume's mount Coaming's stack ID, and the second review is empty;
 //   - a roll back to the adopted revision keeps the platforms;
-//   - removal through Bayplan leaves nothing under the namespace, and the case removes the volume.
+//   - removal through Coaming leaves nothing under the namespace, and the case removes the volume.
 func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 	f.stackEnvReady(t)
 	mgr := f.sw.Managers[0]
@@ -559,7 +559,7 @@ func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 	}
 	waitStackConverged(t, f, stack)
 
-	// The precondition the oracle stands on: the CLI wrote platforms, and Bayplan has written nothing on the mount.
+	// The precondition the oracle stands on: the CLI wrote platforms, and Coaming has written nothing on the mount.
 	platforms := map[string]string{}
 	for _, svc := range services {
 		if platforms[svc] = servicePlatforms(t, f, svc); platforms[svc] == "" {
@@ -569,7 +569,7 @@ func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 	}
 	for target, labels := range mountLabels(t, f, "adoptr_api") {
 		for k := range labels {
-			if strings.HasPrefix(k, "bayplan.") {
+			if strings.HasPrefix(k, "coaming.") {
 				t.Fatalf("the CLI-made mount %s carries %s before adoption", target, k)
 			}
 		}
@@ -620,7 +620,7 @@ func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 	removed := false
 	t.Cleanup(func() {
 		if !removed {
-			removeStackBayplan(t, f, id, stack, engineObjects{})
+			removeStackCoaming(t, f, id, stack, engineObjects{})
 		}
 	})
 	readEngineObjects(t, mgr, stack).requireSame(t, "after adopting", before, true)
@@ -650,20 +650,20 @@ func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 	}
 
 	// The first deploy keeps the platforms and the volume, and takes ownership of both.
-	f.deployStackBayplan(t, id)
+	f.deployStackCoaming(t, id)
 	waitStackConverged(t, f, stack)
 	readEngineObjects(t, mgr, stack).requireSame(t, "after the first deploy", before, false)
 	for _, svc := range services {
 		if got := servicePlatforms(t, f, svc); got != platforms[svc] {
 			t.Errorf("%s has the platforms %s after the first deploy, want %s", svc, got, platforms[svc])
 		}
-		if got := serviceField(t, f, svc, `{{index .Spec.Labels "bayplan.stack.id"}}`); got != id {
-			t.Errorf("%s carries bayplan.stack.id %q after the first deploy, want %s", svc, got, id)
+		if got := serviceField(t, f, svc, `{{index .Spec.Labels "coaming.stack.id"}}`); got != id {
+			t.Errorf("%s carries coaming.stack.id %q after the first deploy, want %s", svc, got, id)
 		}
 	}
 	for target, labels := range mountLabels(t, f, "adoptr_api") {
-		if labels["bayplan.stack.id"] != id {
-			t.Errorf("the mount %s has the labels %v after the first deploy, want bayplan.stack.id %s", target, labels, id)
+		if labels["coaming.stack.id"] != id {
+			t.Errorf("the mount %s has the labels %v after the first deploy, want coaming.stack.id %s", target, labels, id)
 		}
 	}
 	if got := strings.TrimSpace(sh(t, mgr, "docker volume inspect "+volume+" --format '{{.CreatedAt}}'")); got != createdAt {
@@ -704,6 +704,6 @@ func sharedStackAdoptResolvedRoundTrip(t *testing.T, f *swarmFix) {
 
 	// Removal leaves nothing under the namespace; the named volume is the case's to remove.
 	removed = true
-	removeStackBayplan(t, f, id, stack, engineObjects{})
+	removeStackCoaming(t, f, id, stack, engineObjects{})
 	removeVolumeOn(t, mgr, volume)
 }

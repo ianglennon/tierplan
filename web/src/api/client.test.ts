@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,7 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
   vi.resetModules();
 });
@@ -120,7 +120,7 @@ describe("401 handling", () => {
   });
 });
 
-describe("suspending the reactions to refusals (a restore restarting Bayplan)", () => {
+describe("suspending the reactions to refusals (a restore restarting Coaming)", () => {
   it("holds back the 401 and the access-change handlers until released, and still returns the answer", async () => {
     const unauthorized = vi.fn();
     const access = vi.fn();
@@ -243,7 +243,7 @@ describe("access changes (D-10)", () => {
 describe("under a base path", () => {
   async function loadUnderBase(base: string) {
     const meta = document.createElement("meta");
-    meta.name = "bayplan-base";
+    meta.name = "coaming-base";
     meta.content = base;
     document.head.append(meta);
     resetBasePathForTests();
@@ -253,14 +253,14 @@ describe("under a base path", () => {
 
   it("sends requests to the origin plus the base", async () => {
     const fetchMock = stubFetch(200, { instanceName: "x", needsSetup: false, rememberDays: 30 });
-    const client = await loadUnderBase("/bayplan");
+    const client = await loadUnderBase("/coaming");
     await client.api.GET("/api/instance");
-    expect(sentRequest(fetchMock).url).toBe(`${window.location.origin}/bayplan/api/instance`);
+    expect(sentRequest(fetchMock).url).toBe(`${window.location.origin}/coaming/api/instance`);
   });
 
   it("treats a 401 from the prefixed login URL as an answer", async () => {
     stubFetch(401, { status: 401, type: "invalid_credentials" });
-    const client = await loadUnderBase("/bayplan");
+    const client = await loadUnderBase("/coaming");
     const handler = vi.fn();
     client.setUnauthorizedHandler(handler);
     await client.api.POST("/api/auth/login", { body: { username: "a", password: "b" } });
@@ -269,7 +269,7 @@ describe("under a base path", () => {
 
   it("treats a 401 from the prefixed setup URLs as an answer", async () => {
     stubFetch(401, { status: 401 });
-    const client = await loadUnderBase("/bayplan");
+    const client = await loadUnderBase("/coaming");
     const handler = vi.fn();
     client.setUnauthorizedHandler(handler);
     await client.api.POST("/api/setup/token", { body: { token: "x" } });
@@ -278,8 +278,8 @@ describe("under a base path", () => {
 
   it("tells the handler the path without the base", async () => {
     stubFetch(401, { status: 401 });
-    window.history.pushState({}, "", "/bayplan/environments/e1?tab=x");
-    const client = await loadUnderBase("/bayplan");
+    window.history.pushState({}, "", "/coaming/environments/e1?tab=x");
+    const client = await loadUnderBase("/coaming");
     const handler = vi.fn();
     client.setUnauthorizedHandler(handler);
     await client.api.GET("/api/me");

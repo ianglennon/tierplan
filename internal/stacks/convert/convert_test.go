@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package convert_test
 
@@ -18,9 +18,9 @@ import (
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
-	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/stacks/stackstest"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -143,7 +143,7 @@ func TestConvertNamesTheServiceAndLabelsItAndItsDefaultNetwork(t *testing.T) {
 		t.Errorf("service = %s / %s / %s", svc.Name, svc.Short, svc.ImageAsWritten)
 	}
 	for k, v := range map[string]string{
-		"com.docker.stack.namespace": "shop", "bayplan.stack.id": "id-shop", "com.docker.stack.image": "nginx:1.27-alpine",
+		"com.docker.stack.namespace": "shop", "coaming.stack.id": "id-shop", "com.docker.stack.image": "nginx:1.27-alpine",
 	} {
 		if svc.Spec.Labels[k] != v {
 			t.Errorf("service label %s = %q, want %q", k, svc.Spec.Labels[k], v)
@@ -153,7 +153,7 @@ func TestConvertNamesTheServiceAndLabelsItAndItsDefaultNetwork(t *testing.T) {
 	if net.Name != "shop_default" || net.Driver != "overlay" || net.Attachable || net.External {
 		t.Errorf("network = %+v, want overlay shop_default that is not attachable, as docker stack deploy makes it", net)
 	}
-	if net.Labels["com.docker.stack.namespace"] != "shop" || net.Labels["bayplan.stack.id"] != "id-shop" {
+	if net.Labels["com.docker.stack.namespace"] != "shop" || net.Labels["coaming.stack.id"] != "id-shop" {
 		t.Errorf("network labels = %v", net.Labels)
 	}
 	att := svc.Spec.TaskTemplate.Networks
@@ -294,15 +294,15 @@ func TestConvertOverwritesAnOwnershipLabelTheFileTriesToSet(t *testing.T) {
     image: nginx:1
     labels:
       com.docker.stack.namespace: someone-elses
-      bayplan.stack.id: not-mine
+      coaming.stack.id: not-mine
     deploy:
       labels:
         com.docker.stack.namespace: someone-elses
-        bayplan.stack.id: not-mine
+        coaming.stack.id: not-mine
 networks:
   default:
     labels:
-      bayplan.stack.id: not-mine
+      coaming.stack.id: not-mine
 `
 	got, err := plan(t, "mine", compose)
 	if err != nil {
@@ -312,8 +312,8 @@ networks:
 	for name, labels := range map[string]map[string]string{
 		"service": svc.Labels, "container": svc.TaskTemplate.ContainerSpec.Labels, "network": got.Networks[0].Labels,
 	} {
-		if labels["bayplan.stack.id"] != "id-mine" {
-			t.Errorf("%s label bayplan.stack.id = %q, want the stack's own", name, labels["bayplan.stack.id"])
+		if labels["coaming.stack.id"] != "id-mine" {
+			t.Errorf("%s label coaming.stack.id = %q, want the stack's own", name, labels["coaming.stack.id"])
 		}
 		if ns, ok := labels["com.docker.stack.namespace"]; ok && ns != "mine" {
 			t.Errorf("%s label com.docker.stack.namespace = %q, want mine", name, ns)
@@ -398,7 +398,7 @@ volumes:
       type: tmpfs
     labels:
       purpose: cache
-      bayplan.stack.id: not-mine
+      coaming.stack.id: not-mine
 `
 	mounts := onlyService(t, compose, nil).Spec.TaskTemplate.ContainerSpec.Mounts
 	if len(mounts) != 2 {
@@ -409,13 +409,13 @@ volumes:
 		t.Errorf("data mount = %+v, want a volume s_data at /data", data)
 	}
 	if data.VolumeOptions == nil || data.VolumeOptions.Labels["com.docker.stack.namespace"] != "s" ||
-		data.VolumeOptions.Labels["bayplan.stack.id"] != "id-s" || data.VolumeOptions.DriverConfig != nil {
+		data.VolumeOptions.Labels["coaming.stack.id"] != "id-s" || data.VolumeOptions.DriverConfig != nil {
 		t.Errorf("data volume options = %+v, want the stack's labels and no driver", data.VolumeOptions)
 	}
 	if cache.Source != "s_cache" || cache.VolumeOptions == nil {
 		t.Fatalf("cache mount = %+v", cache)
 	}
-	if cache.VolumeOptions.Labels["purpose"] != "cache" || cache.VolumeOptions.Labels["bayplan.stack.id"] != "id-s" {
+	if cache.VolumeOptions.Labels["purpose"] != "cache" || cache.VolumeOptions.Labels["coaming.stack.id"] != "id-s" {
 		t.Errorf("cache labels = %v, want the file's label and the stack's own ID", cache.VolumeOptions.Labels)
 	}
 	if d := cache.VolumeOptions.DriverConfig; d == nil || d.Name != "local" || d.Options["type"] != "tmpfs" {

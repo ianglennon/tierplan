@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// G-02-1a: Bayplan opened over plain http by a LAN host name has no
+// G-02-1a: Coaming opened over plain http by a LAN host name has no
 // navigator.clipboard, so Copy uses the legacy textarea fallback. Inside a
 // modal Dialog the focus trap used to steal the textarea's focus and nothing
-// was copied. These tests run on http://bayplan.test (an insecure context) and
+// was copied. These tests run on http://coaming.test (an insecure context) and
 // read the clipboard back from a localhost page.
 
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 // Copied from web/harness/copy/main.tsx.
 const TOKEN = "bpjt_harness_S3CRET";
-const COMMAND = ` docker run -d --name bayplan-agent -e BAYPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e BAYPLAN_AGENT_URL='wss://bayplan.test/agent/connect' ghcr.io/ianglennon/bayplan-agent:edge`;
+const COMMAND = ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://coaming.test/agent/connect' ghcr.io/ianglennon/coaming-agent:edge`;
 const SENTINEL = "SENTINEL-not-the-command";
 const COPY = "Copy the install command";
 const COPIED = "Copied the install command";

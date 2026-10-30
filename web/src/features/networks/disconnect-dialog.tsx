@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useEffect, useRef, useState } from "react";
 
@@ -30,7 +30,7 @@ export interface DisconnectDialogTarget {
   containerId: string;
   containerName: string;
   nodeId: string;
-  // server or agent for one of Bayplan's own containers, when the page knows it. The
+  // server or agent for one of Coaming's own containers, when the page knows it. The
   // server decides in the end: a container the page did not know to be its own is asked
   // for by name when the server answers confirmation_required.
   selfKind?: string;
@@ -53,7 +53,7 @@ export function DisconnectDialog({ envId, target, onClose }: DisconnectDialogPro
   const t = useT();
   const mutation = useDisconnectContainer(envId);
   const [error, setError] = useState<string | null>(null);
-  // Bayplan's own server and agent containers are disconnected only with their name typed.
+  // Coaming's own server and agent containers are disconnected only with their name typed.
   const [typed, setTyped] = useState("");
   const [asked, setAsked] = useState(false);
   useEffect(() => {

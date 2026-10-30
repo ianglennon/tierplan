@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -17,11 +17,11 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 const (
@@ -59,7 +59,7 @@ type NetworksDeps struct {
 	// Clusters reads the services of a swarm live before a delete.
 	Clusters *envs.Clusters
 	Audit    *audit.Writer
-	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell. A
+	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A
 	// connect or disconnect of that container, or of an agent's, needs its name typed.
 	SelfContainerID string
 	// Log receives server-side failures. Nil means slog.Default().
@@ -111,7 +111,7 @@ type NetworkConnectRequest struct {
 	Alias       string `json:"alias,omitempty" maxLength:"253" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]*$" doc:"Another name other containers on the network can use to reach this one"`
 	IPv4        string `json:"ipv4,omitempty" maxLength:"45" doc:"An IPv4 address to give the container on the network, inside one of its subnets"`
 	IPv6        string `json:"ipv6,omitempty" maxLength:"45" doc:"An IPv6 address to give the container on the network, inside one of its subnets"`
-	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to connect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to connect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkConnectInput is the path and body of the connect route.
@@ -128,7 +128,7 @@ type NetworkConnectInput struct {
 type NetworkDisconnectRequest struct {
 	NodeID      string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node"`
 	ContainerID string `json:"containerId" minLength:"1" maxLength:"128" doc:"The container ID"`
-	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to disconnect Bayplan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to disconnect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkDisconnectInput is the path and body of the disconnect route.
@@ -303,7 +303,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); " +
 			"an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. " +
 			"A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. " +
-			"Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). " +
+			"Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). " +
 			"404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -322,7 +322,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 		Description: "Disconnects one container from one network, once, never retried and never forced. " +
 			"The call goes to the node the container is on, named by nodeId. " +
 			"A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, " +
-			"Bayplan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Bayplan off its own network does, is answered 204 and audited as stage connection_lost with result success. " +
+			"Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Coaming off its own network does, is answered 204 and audited as stage connection_lost with result success. " +
 			"409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -470,9 +470,9 @@ func networkWriteProblem(log *slog.Logger, envID string, err error) (string, err
 	switch {
 	case errors.Is(err, envs.ErrHostReadOnly):
 		return codeHostReadOnly, httpx.Problem(http.StatusConflict, codeHostReadOnly,
-			"This host is read-only. Its owner turned changes off on the host itself, so Bayplan can only read from it.")
+			"This host is read-only. Its owner turned changes off on the host itself, so Coaming can only read from it.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return problemNodeUnavailable, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return problemNodeUnavailable, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	}
 	var denied *envs.AgentPolicyDeniedError
 	if errors.As(envs.ClassifyDockerError(err), &denied) {
@@ -825,7 +825,7 @@ func (d NetworksDeps) readNetwork(ctx context.Context, envID string, in *Network
 	case dockerx.IsNotFound(err):
 		return agg, row, detail, nil, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return agg, row, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return agg, row, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	}
 	return agg, row, detail, nil, snapshotProblem(d.Log, envID, err)
 }
@@ -1029,7 +1029,7 @@ func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envI
 	recordNetwork(ctx, d, p, envID, userAgent, action, row.ID, row.Name, rec, details)
 }
 
-// ownedAttempt says that a connect or disconnect is of one of Bayplan's own containers,
+// ownedAttempt says that a connect or disconnect is of one of Coaming's own containers,
 // and at which stage of its audit trail the row is. The zero value is an ordinary
 // container, whose rows carry neither.
 type ownedAttempt struct {
@@ -1049,13 +1049,13 @@ func (o ownedAttempt) addTo(details map[string]string) {
 	}
 }
 
-// isSelfContainer says whether id is Bayplan's own container: the ID, or a prefix of
-// it of at least minSelfIDLen characters, starts with the one Bayplan found for itself.
+// isSelfContainer says whether id is Coaming's own container: the ID, or a prefix of
+// it of at least minSelfIDLen characters, starts with the one Coaming found for itself.
 func isSelfContainer(selfID, id string) bool {
 	return len(selfID) >= minSelfIDLen && strings.HasPrefix(id, selfID)
 }
 
-// ownContainerGate decides whether a connect or disconnect of ct is of one of Bayplan's
+// ownContainerGate decides whether a connect or disconnect of ct is of one of Coaming's
 // own containers, from a fresh inspect of it: the list can be seconds old, and neither
 // its flag nor anything the client sent is trusted (D-11). For the server's own container
 // or an agent's, it requires the container's name typed (422 confirmation_required, so

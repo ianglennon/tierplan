@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package agents_test
@@ -16,25 +16,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/server/servertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// The standalone stack suite of plan 07-21 (STK-02, D-17, D-27): Bayplan's API deploys a compose file to a
+// The standalone stack suite of plan 07-21 (STK-02, D-17, D-27): Coaming's API deploys a compose file to a
 // standalone host through a real agent, so the Compose SDK's requests cross the tunnel and the agent's route
 // table and body rules, and the host's engine does what they ask.
 
 const (
-	// standaloneDeployWait is how long a Bayplan deploy job gets to end, pulls and health waits included.
+	// standaloneDeployWait is how long a Coaming deploy job gets to end, pulls and health waits included.
 	standaloneDeployWait = 5 * time.Minute
 	// standaloneToken is the content of the stack's secret file; standaloneConfText is its config's.
 	standaloneToken    = "s3cret-token-0123456789"
 	standaloneConfText = "worker_processes 1;\n"
 )
 
-// saFix is a standalone host with a real agent, a Bayplan server it is enrolled in, and a registry of the
+// saFix is a standalone host with a real agent, a Coaming server it is enrolled in, and a registry of the
 // host's own that the images of the stacks come from.
 type saFix struct {
 	host *dockertest.Node
@@ -52,7 +52,7 @@ func startSAFix(t *testing.T, o dockertest.RegistryOptions) *saFix {
 }
 
 // startSAFixWith is startSAFix with the one setting a host owner adds to let containers that share another
-// container's namespaces or volumes through (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36), put in the
+// container's namespaces or volumes through (COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, D-36), put in the
 // command the server generated and nothing else changed. A stack whose service has network_mode, ipc or pid
 // service:X, or volumes_from X, creates a container with a container:<id> mode or VolumesFrom, which the
 // agent refuses as host access without it (docs/agent.md, "Container creates and host access").
@@ -66,7 +66,7 @@ func startSAFixWith(t *testing.T, o dockertest.RegistryOptions, shareNamespaces 
 	f.env = srv.CreateAgentEnvironment("")
 	cmd := f.env.Install.Standalone.Command
 	if shareNamespaces {
-		cmd = strings.Replace(cmd, " "+f.env.Install.Image, " -e BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+f.env.Install.Image, 1)
+		cmd = strings.Replace(cmd, " "+f.env.Install.Image, " -e COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true "+f.env.Install.Image, 1)
 		if cmd == f.env.Install.Standalone.Command {
 			t.Fatalf("the generated standalone command has no image to put the setting before:\n%s", cmd)
 		}
@@ -344,7 +344,7 @@ func TestStandaloneStackThroughAnAgent(t *testing.T) {
 }
 
 // TestStandalonePrivateImageThroughAnAgent deploys a stack whose image is in a registry that requires a sign-in,
-// to a standalone host through a real agent (plan 07-21, IMG-02 for stacks, D-27): Bayplan pulls the image with
+// to a standalone host through a real agent (plan 07-21, IMG-02 for stacks, D-27): Coaming pulls the image with
 // the credential it stores, as a step of the deploy, and the Compose SDK finds it on the host and needs no
 // credential. The host is never signed in and holds no Docker client configuration. A wrong password stops the
 // deploy at the pull step with pull_unauthorized, records the failure on the credential and creates nothing; a
@@ -430,7 +430,7 @@ func TestStandalonePrivateImageThroughAnAgent(t *testing.T) {
 		t.Errorf("credential failure = %+v, want it cleared by a pull that worked", fl)
 	}
 	if dockertest.HasClientConfig(t, f.host) {
-		t.Errorf("the host has a Docker client configuration after the deploy: Bayplan must not log in")
+		t.Errorf("the host has a Docker client configuration after the deploy: Coaming must not log in")
 	}
 	f.noDenials(t)
 }

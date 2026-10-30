@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package privdrop
 
@@ -173,7 +173,7 @@ func TestDropLogsNothingSecret(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	t.Setenv("BAYPLAN_AGENT_JOIN_TOKEN", secret)
+	t.Setenv("COAMING_AGENT_JOIN_TOKEN", secret)
 	r := newRig()
 	r.socketGID = 998
 	if _, err := Drop(r.options("/var/run/docker.sock")); err != nil {

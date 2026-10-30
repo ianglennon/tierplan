@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -14,12 +14,12 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	mobycontainer "github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Drift of a standalone stack (plan 08-20, STK-14, D-21, RESEARCH Pattern 6): the deployed revision, prepared with its
@@ -47,7 +47,7 @@ type standaloneDriftRig struct {
 }
 
 // hostedDrift stands the stack up on a fake host after edit has changed what the host holds (a document, a container),
-// as somebody outside Bayplan would. The Compose SDK is a stand-in that fails the test if it is asked for anything.
+// as somebody outside Coaming would. The Compose SDK is a stand-in that fails the test if it is asked for anything.
 func hostedDrift(t *testing.T, compose string, edit func(*stackopstest.Hosted)) *standaloneDriftRig {
 	t.Helper()
 	h := hostStack(t, "demo", compose, nil)
@@ -114,14 +114,14 @@ func cloneContainer(h *stackopstest.Hosted, from, service string, n int) dockert
 
 // cliContainer is the container `docker compose -f <the person's file> up -d --scale <service>=n --no-recreate` adds
 // to a stack's project from the host: a clone of the service's first container with number n, and what the CLI makes
-// of it: no label of Bayplan's, the CLI's own config hash of the file as written (stackopstest.Foreign), the CLI's
+// of it: no label of Coaming's, the CLI's own config hash of the file as written (stackopstest.Foreign), the CLI's
 // version and the image as the file wrote it (G-08-6, the debug session standalone-cli-scale-not-drift).
 func cliContainer(t *testing.T, h *stackopstest.Hosted, compose, service string, n int) dockertest.FakeContainer {
 	t.Helper()
 	c := cloneContainer(h, service, service, n)
 	for _, labels := range []map[string]string{c.Labels, c.Inspect.Document.Config.Labels} {
 		for key := range labels {
-			if strings.HasPrefix(key, "bayplan.") {
+			if strings.HasPrefix(key, "coaming.") {
 				delete(labels, key)
 			}
 		}
@@ -272,7 +272,7 @@ func TestStandaloneDriftScaleMissingExtra(t *testing.T) {
 	})
 }
 
-// adoptedPastPending is the stack as an adopted one is once its first deploy has put Bayplan's labels on what it runs.
+// adoptedPastPending is the stack as an adopted one is once its first deploy has put Coaming's labels on what it runs.
 func adoptedPastPending(name string) stackops.Stack {
 	st := standaloneStackOf(name)
 	st.Source = stacks.Source{Kind: stacks.SourceAdopted, Ref: name}
@@ -281,7 +281,7 @@ func adoptedPastPending(name string) stackops.Stack {
 }
 
 // TestStandaloneDriftSeesContainersFromTheHostCLI: a container the person adds with the docker compose command under
-// the stack's project carries no label of Bayplan's, and is still the stack's: drift counts it (G-08-6, D-21). A
+// the stack's project carries no label of Coaming's, and is still the stack's: drift counts it (G-08-6, D-21). A
 // container with another stack's ID never is (T-08-103), and a project the stack holds nothing of is not taken over
 // (T-08-104, P7 D-12).
 func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
@@ -307,7 +307,7 @@ func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
 			t.Errorf("fingerprint = %q, want it to move when the CLI adds a container", res.Fingerprint)
 		}
 	}
-	t.Run("a stack Bayplan created", func(t *testing.T) {
+	t.Run("a stack Coaming created", func(t *testing.T) {
 		t.Parallel()
 		scaled(t, hostedDrift(t, driftHostedCompose, withWeb2))
 	})
@@ -357,7 +357,7 @@ func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
 		})
 		res := rig.drift(t)
 		if res.State != stackops.DriftDrifted || !slices.Equal(driftNames(res), []string{"missing web", "missing worker"}) {
-			t.Fatalf("drift = %s %v, want every service missing: a project made without Bayplan is not the stack's", res.State, driftNames(res))
+			t.Fatalf("drift = %s %v, want every service missing: a project made without Coaming is not the stack's", res.State, driftNames(res))
 		}
 		if res.Fingerprint != "rev1" {
 			t.Errorf("fingerprint = %q, want the revision alone: no container of the project is the stack's", res.Fingerprint)
@@ -367,8 +367,8 @@ func TestStandaloneDriftSeesContainersFromTheHostCLI(t *testing.T) {
 
 func TestStandaloneDriftIgnoresOwnershipLabels(t *testing.T) {
 	t.Parallel()
-	// A project somebody ran with the docker compose command and Bayplan adopted: its containers carry no label of
-	// Bayplan's, so every config hash differs from the one the prepared revision has, and nothing the person wrote differs.
+	// A project somebody ran with the docker compose command and Coaming adopted: its containers carry no label of
+	// Coaming's, so every config hash differs from the one the prepared revision has, and nothing the person wrote differs.
 	h := stackopstest.Foreign(t, "shop", foreignAdoptable)
 	// What the labels change is the config hash: here the web container's hash is not the prepared service's, and
 	// nothing the person wrote differs.
@@ -387,7 +387,7 @@ func TestStandaloneDriftIgnoresOwnershipLabels(t *testing.T) {
 	res, err := rig.deps.Drift(testsupport.Context(t), in)
 
 	if err != nil || res.State != stackops.DriftNone || len(res.Services) != 0 || res.Count != 0 {
-		t.Fatalf("drift = %+v, %v, want none: Bayplan's labels say who owns a container, not how it is set up", res, err)
+		t.Fatalf("drift = %+v, %v, want none: Coaming's labels say who owns a container, not how it is set up", res, err)
 	}
 
 	// A real change on the same host still shows.

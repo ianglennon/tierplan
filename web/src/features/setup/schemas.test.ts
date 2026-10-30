@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { describe, expect, it } from "vitest";
 import type { ZodType } from "zod";
@@ -122,9 +122,9 @@ describe("instanceSchema", () => {
 
   it("accepts an https address, an http address with a port and a sub-path", () => {
     for (const ok of [
-      "https://bayplan.example.com",
+      "https://coaming.example.com",
       "http://192.168.1.10:7480",
-      "https://example.com/bayplan",
+      "https://example.com/coaming",
     ]) {
       expect(issues(instanceSchema, { instanceName: "Lab", publicUrl: ok })).toEqual([]);
     }

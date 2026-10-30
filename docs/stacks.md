@@ -1,26 +1,26 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
-<!-- SPDX-FileCopyrightText: 2026 The Bayplan Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The Coaming Authors -->
 
 # Compose stacks
 
-A stack is a compose file that Bayplan deploys and keeps tidy: its services, networks, secrets and configs go
+A stack is a compose file that Coaming deploys and keeps tidy: its services, networks, secrets and configs go
 together, and nothing is left behind when you remove it. This page explains how to write one, what the review
 shows before anything changes, what a deploy does on a swarm and on a standalone host, how it stops, starts and
 goes away again, how to see its history and roll back, how to take over a stack that something else made (for
-instance Portainer), how Bayplan spots changes made behind its back, how a stack can follow a folder of a git repository, and what
-Bayplan writes on your hosts. It
+instance Portainer), how Coaming spots changes made behind its back, how a stack can follow a folder of a git repository, and what
+Coaming writes on your hosts. It
 also says plainly what is not in this version, and a few behaviours that are open decisions, not oversights.
 
 The workflow is always the same: **edit, save, review, deploy**. Nothing is sent to any engine until you press
 **Deploy stack** on the review, and the review shows what that will change on the environment as it is now.
 
 Every stack is made for one kind of environment and stays on it: a **swarm** stack goes to a Docker Swarm through
-one of its managers, a **standalone** stack goes to a single Docker host (the one Bayplan runs on, through its
+one of its managers, a **standalone** stack goes to a single Docker host (the one Coaming runs on, through its
 socket, or a remote one through its agent). The kind is fixed when the stack is created, from the environment.
 
 The exact list of what each role may do is in [permissions.md](permissions.md), which is generated from the code.
 [agent.md](agent.md) explains what the agent on a remote host will and will not forward, and
-[threat-model.md](threat-model.md) says what stacks add to the risks of running Bayplan.
+[threat-model.md](threat-model.md) says what stacks add to the risks of running Coaming.
 
 - [Create a stack](#create-a-stack)
 - [The editor](#the-editor)
@@ -40,7 +40,7 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 - [Drift](#drift)
 - [Git stacks](#git-stacks)
 - [One operation at a time](#one-operation-at-a-time)
-- [What Bayplan writes on your hosts](#what-bayplan-writes-on-your-hosts)
+- [What Coaming writes on your hosts](#what-coaming-writes-on-your-hosts)
 - [Host access and who may do what](#host-access-and-who-may-do-what)
 - [The other tabs and the links from other pages](#the-other-tabs-and-the-links-from-other-pages)
 - [Limits](#limits)
@@ -56,19 +56,19 @@ the Admin role on the environment (`stacks.create`).
 
 **Create stack** asks for a name and a starting point (the starter example, an empty file, or a compose file you
 upload). The name starts with a letter or number and **can't change later**: it is the swarm namespace or the
-Compose project name on the host. The rule for it is under [Stack names](#stack-names). Bayplan checks it as you
+Compose project name on the host. The rule for it is under [Stack names](#stack-names). Coaming checks it as you
 type, against the environment you create the stack on.
 
-A stack whose name a stack on that environment already has, that Bayplan does not manage, is refused: *a stack
-named X already exists on this environment, not managed by Bayplan*, with the advice to pick another name or
-[adopt the existing stack](#adopting-a-stack). Bayplan never silently takes over a stack. The same check runs
+A stack whose name a stack on that environment already has, that Coaming does not manage, is refused: *a stack
+named X already exists on this environment, not managed by Coaming*, with the advice to pick another name or
+[adopt the existing stack](#adopting-a-stack). Coaming never silently takes over a stack. The same check runs
 again at the review and at the deploy.
 
 Creating a stack sends nothing to any engine. It reads **Not deployed** until you deploy it.
 
 ### Stack names
 
-One rule decides a stack's name, whether you create the stack in Bayplan or adopt one that something else made.
+One rule decides a stack's name, whether you create the stack in Coaming or adopt one that something else made.
 There is no second, stricter rule for creating.
 
 | Target | A name is | Longest |
@@ -104,7 +104,7 @@ A stack page has five tabs: **Overview**, **Editor**, **History**, **Resources**
 - **Variables**: the [variables table](#variables).
 - **Rendered**: the stack as it will be deployed, with variables filled in, short-form ports, every image as the
   last deployed `tag@sha256:...` (or as written, with a "will be pinned" comment) and hidden values shown as
-  `<hidden>`. It is read only. **Bayplan never changes your compose file**: pins and rendering are Bayplan's own
+  `<hidden>`. It is read only. **Coaming never changes your compose file**: pins and rendering are Coaming's own
   state, shown beside your file.
 
 **There is no autosave.** Your edits are kept in the editor until you press **Save draft** (or Ctrl+S, or
@@ -123,11 +123,11 @@ the target that ignores it.
 ## Stack files
 
 A stack holds extra files beside `compose.yaml`: an `.env`, a `nginx.conf`, a secret. They are stored **in
-Bayplan, as part of the stack**, and edited in the same editor. Add them with **Add file** (or **Upload files**).
+Coaming, as part of the stack**, and edited in the same editor. Add them with **Add file** (or **Upload files**).
 
 An `env_file:`, a `secrets: ... file:` and a `configs: ... file:` in the compose file are resolved **only against
-these files**. Nothing is ever read from the Bayplan server's own file system, so a compose file cannot make
-Bayplan read `/etc/passwd`, `/data` or anything else on the machine it runs on, and the path rules below have no
+these files**. Nothing is ever read from the Coaming server's own file system, so a compose file cannot make
+Coaming read `/etc/passwd`, `/data` or anything else on the machine it runs on, and the path rules below have no
 file system to escape into.
 
 A path is relative, written with `/`, and made of plain names:
@@ -145,11 +145,11 @@ marked **Not used**, and a file that is a secret is marked **Secret**.
 
 **Variables come only from the stack's own table.** The caption of the table says it exactly: *Values come from
 this table. A variable with no value here uses the default written in the compose file, like `${NAME:-default}`.
-Bayplan fills them in itself before it deploys.*
+Coaming fills them in itself before it deploys.*
 
 So the precedence is: **the stack's variables table, then the default written in the YAML**. There is **no
-environment-level or global variable** in this version, and **the Bayplan server's own environment is never
-read**: a `${HOME}` or `${BAYPLAN_...}` in your file is a variable like any other, and without a value in the table
+environment-level or global variable** in this version, and **the Coaming server's own environment is never
+read**: a `${HOME}` or `${COAMING_...}` in your file is a variable like any other, and without a value in the table
 and a default in the file it is an error, not the server's value. (Compose's own `.env` convention is replaced by
 the table: a stack file called `.env` that nothing uses is only warned about, *`.env` isn't read automatically.
 Import it into Variables, or use it as an env_file.*)
@@ -167,15 +167,15 @@ Import it into Variables, or use it as an env_file.*)
 rendered YAML, the console, the logs and the audit log, and is readable only by someone who holds
 `secrets.reveal`. **Show** reads it for 60 seconds and writes a `stack.value_revealed` row first; if that row
 can't be written, you get no value. A secret value needs at least 4 characters, so that hiding it can't hide
-ordinary words. Bayplan hides the value as stored and in the escaped forms error messages write it in, and a
+ordinary words. Coaming hides the value as stored and in the escaped forms error messages write it in, and a
 value of several lines, such as a PEM key, is also hidden line by line (each line of 4 characters or more, for the
-first 200 lines of a value up to 64 KB; a longer value is hidden whole). When a value that comes from a secret variable can't be used (for example `mem_limit: ${PW}`), the check, the review, the deploy, the roll back and the start name the field and say that the value comes from a secret variable. They never show what the compose loader or the swarm converter said about it, because that can contain part of the value. The server log gets the same sentence for a conversion a job could not make. A message about a value that is not secret keeps the loader's words. Bayplan decides this from where the value comes from in the file, never from what the message says. When a message names no field, or a field Bayplan can't find in the file, and the file uses a secret variable, it says only that a value isn't valid and that the file uses a secret variable. An item of a list (a volume, a device rate) is judged by its whole list, across every YAML document of the file, because compose merges the documents and repeated items, so a position in a list is not one line of the file. When any item of that list uses a secret variable, a message about any of its items says only that a value isn't valid and that the file uses a secret variable. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
+first 200 lines of a value up to 64 KB; a longer value is hidden whole). When a value that comes from a secret variable can't be used (for example `mem_limit: ${PW}`), the check, the review, the deploy, the roll back and the start name the field and say that the value comes from a secret variable. They never show what the compose loader or the swarm converter said about it, because that can contain part of the value. The server log gets the same sentence for a conversion a job could not make. A message about a value that is not secret keeps the loader's words. Coaming decides this from where the value comes from in the file, never from what the message says. When a message names no field, or a field Coaming can't find in the file, and the file uses a secret variable, it says only that a value isn't valid and that the file uses a secret variable. An item of a list (a volume, a device rate) is judged by its whole list, across every YAML document of the file, because compose merges the documents and repeated items, so a position in a list is not one line of the file. When any item of that list uses a secret variable, a message about any of its items says only that a value isn't valid and that the file uses a secret variable. Secret variables are interpolated like any other: they are **not** turned into Docker secrets.
 Put a value a container should read as a file in a [secret file](#secrets-and-configs) instead.
 
 ## Secrets and configs
 
 Declare a secret or config in `compose.yaml` with `file:` (a [stack file](#stack-files)), `environment:` or
-`content:`, as you would for any compose file. Bayplan only creates the secrets and configs that at least one
+`content:`, as you would for any compose file. Coaming only creates the secrets and configs that at least one
 service uses, and an `external: true` one is never created, changed or removed (it must exist, or the deploy
 stops before anything changes).
 
@@ -188,7 +188,7 @@ stops before anything changes).
   is the first 8 hex digits of a SHA-256 over the name and the content. **A changed file gives a new object**: the
   services move to it in the same deploy, and the old object is removed after a deploy that succeeded. The review
   says *new version*. An unchanged file gives the same name, so a redeploy nobody edited changes nothing.
-- **On a standalone host**, there are no Docker secrets. Bayplan writes the content into the container as a file
+- **On a standalone host**, there are no Docker secrets. Coaming writes the content into the container as a file
   just before it starts, at the `target` you gave (by default `/run/secrets/<name>` for a secret), and a changed
   secret or config recreates the container. The file is owned by the user the container starts as: **`uid`
   and `gid` keys on a standalone secret or config are refused**, as are a `read_only` service that uses one
@@ -203,7 +203,7 @@ secret, never in a config (see [services.md](services.md#secrets-and-configs)).
 ## What a stack cannot use
 
 **Relative bind mounts (`./data:/data`) are a blocking error on both targets.** A stack has no directory on the
-host for a path to be relative to: its files are rows in Bayplan, not a folder. The error says *use a named
+host for a path to be relative to: its files are rows in Coaming, not a folder. The error says *use a named
 volume, or an absolute path on the host*. What to use instead:
 
 - a **named volume** (`web-data:/var/lib/data`) for data a container writes;
@@ -215,18 +215,18 @@ volume, or an absolute path on the host*. What to use instead:
 
 Also refused or ignored:
 
-- **`include` is not supported**: *put everything in compose.yaml*. A remote `include` would make the Bayplan
+- **`include` is not supported**: *put everything in compose.yaml*. A remote `include` would make the Coaming
   server fetch a URL, and a local one has no directory to read from.
 - **`extends` is not supported**: *copy the settings you need into the service*.
-- **`build` is ignored**: Bayplan does not build images, it deploys the image named in `image`. A service with
+- **`build` is ignored**: Coaming does not build images, it deploys the image named in `image`. A service with
   `build` and no `image` is an error on both targets.
 - **`label_file`**, and on a swarm the keys `docker stack deploy` also refuses (`volumes_from`, `volume_driver`,
   `cpu_quota`, `cpu_shares`, `cpuset`, `mem_limit`, `memswap_limit`) are blocking errors that name the key.
   Standalone-only or swarm-only keys the other target ignores are warnings.
 - On a standalone host `provider` services and `use_api_socket` are refused (the first would run a program on the
-  Bayplan server, the second is a mount of the Docker socket that skips the host-access rules).
+  Coaming server, the second is a mount of the Docker socket that skips the host-access rules).
 
-`env_file:` is supported: Bayplan reads the named stack file once, with Compose's own `.env` parser, so a swarm and
+`env_file:` is supported: Coaming reads the named stack file once, with Compose's own `.env` parser, so a swarm and
 a standalone host can't see different values.
 
 ## A worked example
@@ -291,13 +291,13 @@ The field diff and the Rendered YAML answer different questions, and both are la
 with what is running on both targets**: on a swarm it reads each service's current spec, and on a standalone host
 it rebuilds every running container's settings. A container changed by hand on the host (`docker update`, for
 instance) is therefore listed as changed at that setting even though your compose file did not change, and the
-next deploy recreates it. **The Rendered YAML tab compares with the last deploy Bayplan made**, so it shows what
+next deploy recreates it. **The Rendered YAML tab compares with the last deploy Coaming made**, so it shows what
 you changed in the file, whatever someone did on the host.
 
 Two more parts appear only when they apply, and neither holds a deploy back. **Reverts drift** lists the changes
-somebody made outside Bayplan that this deploy would put back (see [Drift](#drift)). **Ownership labels only** groups
+somebody made outside Coaming that this deploy would put back (see [Drift](#drift)). **Ownership labels only** groups
 the services or containers of a freshly [adopted stack](#adopting-a-stack) that the deploy recreates only to take
-Bayplan's labels.
+Coaming's labels.
 
 **Errors stop the deploy** and are listed with a link to the line; **Deploy stack** says why it is off.
 **Warnings do not.** A review of a stack that is the same as what runs says *No changes* and has nothing to deploy.
@@ -305,7 +305,7 @@ Bayplan's labels.
 **A concurrent-deploy warning.** A draft remembers the deployed version it started from. If someone deployed
 since, the review shows *This stack was deployed after you started editing* and a **See what changed** view
 (what the draft started from, what is deployed now, your changes, secrets hidden), and **Deploy stack** stays off
-until you tick that you have seen it. The server enforces this as well as the page. Bayplan never overwrites
+until you tick that you have seen it. The server enforces this as well as the page. Coaming never overwrites
 someone's deploy silently.
 
 A review right after a successful deploy is empty on both targets.
@@ -320,7 +320,7 @@ resources**:
 - a **network** row: *Its settings differ from the compose file. The deploy recreates it, which restarts the
   containers attached to it.* Docker Compose recreates a network whose settings changed, and no data is lost, but
   the containers on it restart;
-- a **volume** row: *Its settings differ from the compose file. Bayplan keeps it as it is.* A volume is never
+- a **volume** row: *Its settings differ from the compose file. Coaming keeps it as it is.* A volume is never
   recreated (see [Volumes are never recreated](#volumes-are-never-recreated)), so the change is not applied.
 
 **This applies to every standalone stack, those created before this release included.** A standalone review in
@@ -329,16 +329,16 @@ with no hash label are not flagged.
 
 ## Image pinning and Update images
 
-**A redeploy never changes an image by itself.** Bayplan resolves a tag to a digest when a service is new or the
+**A redeploy never changes an image by itself.** Coaming resolves a tag to a digest when a service is new or the
 image text you wrote changes (`nginx:1.27` to `nginx:1.28`). A service whose image text is unchanged **keeps the
 digest it runs**, however far the registry's tag has moved. An image that already carries `@sha256:` is used as
-written. The pin is Bayplan's state, not a change to your file, and it shows as a **digest chip** (click to copy)
+written. The pin is Coaming's state, not a change to your file, and it shows as a **digest chip** (click to copy)
 on the Overview, in the review and in the Rendered YAML. A standalone host is pinned the same way as a swarm.
 
 - A service that needs a fresh digest needs its registry. If the registry can't be reached, only the services that
   need it are blocked, with the reason. A service that keeps its running digest never needs the registry.
-  Registry credentials are the ones stored in Bayplan ([registries.md](registries.md)).
-- **On a swarm, when Bayplan looks an image up it also writes the image's platforms** (for example `linux/amd64` and
+  Registry credentials are the ones stored in Coaming ([registries.md](registries.md)).
+- **On a swarm, when Coaming looks an image up it also writes the image's platforms** (for example `linux/amd64` and
   `linux/arm64`) into the service's placement, as `docker stack deploy` does with its default
   `--resolve-image=always`. The swarm then schedules the service's tasks only on nodes that can run the image. A kept
   digest keeps the platforms recorded for it, and asks no registry for them. A service deployed before this version
@@ -348,9 +348,9 @@ on the Overview, in the review and in the Rendered YAML. A standalone host is pi
   registry*. See [behaviour that is still open](#behaviour-that-is-still-open) for Engine 29.
 
 **Update images** (in the stack's header) is the one way to move a tag. It lists the services that run, with
-their digests; you tick what may move, and Bayplan looks each tag up again and opens the same review with the
+their digests; you tick what may move, and Coaming looks each tag up again and opens the same review with the
 digest changes. Only the ticked services get a new digest. Services that pin their image in the file, run an
-image from no registry or are not deployed can't be ticked. **Bayplan does not tell you that an update is
+image from no registry or are not deployed can't be ticked. **Coaming does not tell you that an update is
 available**: detection is a later phase, and this is the action you take when you decide to look.
 
 ## Deploying
@@ -372,18 +372,18 @@ and an output log, all with the stack's secret values removed before anything is
   - A service whose tasks are waiting because a network of the stack
     has no free addresses reads *Failed*, and the console names the network and its subnet. Give the network
     a larger subnet under `networks.<name>.ipam` (a network with no `ipam` gets a /24, 253 addresses, shared by
-    every task, service virtual IP and node of the stack), or run fewer tasks, then deploy again. Bayplan reads
+    every task, service virtual IP and node of the stack), or run fewer tasks, then deploy again. Coaming reads
     this from a manager, which needs Docker Engine 29 or later. On an older engine such a service reads *Timed
     out*, and the console says how many tasks were still waiting for an address.
 
   Set the timeout with
-  `BAYPLAN_STACK_CONVERGE_TIMEOUT` (default `10m`, from `1m` to `2h`; see the table in the README). Job services
+  `COAMING_STACK_CONVERGE_TIMEOUT` (default `10m`, from `1m` to `2h`; see the table in the README). Job services
   (`replicated-job`, `global-job`) are not waited for.
-- **On a standalone host**, Bayplan prepares the project and runs the Docker Compose engine itself against the
+- **On a standalone host**, Coaming prepares the project and runs the Docker Compose engine itself against the
   host, so `depends_on` conditions, health-check waits, recreates when a service's configuration hash changes and
   removal of services the file no longer declares all behave as `docker compose up` does. Each service shows its
   containers going *Pulling image, Creating, Starting, Running, Healthy*. Every image the host lacks is pulled by
-  Bayplan **with the stored registry credential** before the engine runs.
+  Coaming **with the stored registry credential** before the engine runs.
 - **Your draft is deployed as reviewed.** The deploy checks again, for you, that the draft and the pins are still
   those the review showed, and that the host-access policy still allows them.
 
@@ -393,7 +393,7 @@ You may have at most five jobs running at once.
 
 On a standalone host, the Docker Compose engine notices when a named volume exists but its driver, options or
 labels differ from the compose file, and it asks: *"Recreate (data will be lost)?"*. Answering yes removes the
-volume and creates it again, which deletes the data in it. **Bayplan always answers no** (decision D-46): a deploy
+volume and creates it again, which deletes the data in it. **Coaming always answers no** (decision D-46): a deploy
 whose compose file changes a volume's driver, options or labels leaves the volume as it is, goes on, and the
 containers mount the existing volume with its data. The change is not applied, and the console log says which
 volume was left alone.
@@ -408,7 +408,7 @@ still recreates a network when its settings change, which restarts the container
 
 ## When a deploy fails, is cancelled or is interrupted
 
-**Bayplan stops, reports and never rolls back by itself.** The console names the service it stopped at with
+**Coaming stops, reports and never rolls back by itself.** The console names the service it stopped at with
 Docker's own words (*Docker rejected web: ...*), says how many services were updated before it stopped, and keeps
 the failure on the stack as **Deploy failed** until a later deploy succeeds. What was already updated stays
 updated.
@@ -424,8 +424,8 @@ updated.
   on a failed or cancelled deploy and on the stack page's failure alert, and it never starts without your click.
   Rolling back across a secret or config change recreates the object that version needs. It works on a swarm and on
   a standalone host, and it is the one-click form of [rolling back to a chosen revision](#history-and-roll-back).
-- **A deploy that was running when Bayplan stopped is marked interrupted** when it starts again. The stack reads
-  *Deploy failed* with *The deploy was interrupted when Bayplan stopped. The swarm may be partly updated.* The next
+- **A deploy that was running when Coaming stopped is marked interrupted** when it starts again. The stack reads
+  *Deploy failed* with *The deploy was interrupted when Coaming stopped. The swarm may be partly updated.* The next
   deploy finds what is left by its labels and reconciles it.
 
 ## Stop, Start and Remove
@@ -435,7 +435,7 @@ All three are jobs with a console, under the [operation lock](#one-operation-at-
 **Stop stack…** (a button in the stack's header while it runs) parks a stack without deleting anything it owns.
 
 - On a **swarm**, replicated services are scaled to 0 and their counts remembered on the service
-  (`bayplan.stack.stopped-replicas`); global and job services are removed and recreated on Start.
+  (`coaming.stack.stopped-replicas`); global and job services are removed and recreated on Start.
 - On a **standalone host**, it stops the containers.
 - **Networks, volumes, secrets and configs stay.** The stack reads **Stopped**.
 
@@ -521,7 +521,7 @@ drift](#drift) works.
 
 ### How many revisions are kept
 
-Bayplan keeps the last **N** revisions of each stack. N is **Revisions kept per stack** under **Settings, General,
+Coaming keeps the last **N** revisions of each stack. N is **Revisions kept per stack** under **Settings, General,
 Stack history**: 20 by default, from 5 to 200, one value for the whole instance, changed by an instance admin
 (`settings.write`).
 
@@ -539,8 +539,8 @@ Stack history**: 20 by default, from 5 to 200, one value for the whole instance,
 
 ## Unmanaged stacks
 
-Bayplan lists the stacks it did not create (made by `docker stack deploy`, `docker compose up` or Portainer) beside
-its own, read only. They are **Unmanaged**. Nothing about them is stored: Bayplan reads them from the engine each
+Coaming lists the stacks it did not create (made by `docker stack deploy`, `docker compose up` or Portainer) beside
+its own, read only. They are **Unmanaged**. Nothing about them is stored: Coaming reads them from the engine each
 time, and Docker stays the source of truth.
 
 **What counts as a stack.** Only labels define one. On a swarm, the services that share a
@@ -550,13 +550,13 @@ service or container with neither label is not a stack and stays on the Services
 
 **Where they show.** The environment's stack list and **All stacks** list them with an *Unmanaged* badge, a count in
 the caption (*3 stacks, 1 unmanaged*) and a **Show** filter with *All*, *Managed* and *Unmanaged* (kept in the page
-address, so a link keeps it). Their row menu offers *Open stack* and *Adopt stack…*. If Bayplan cannot read the
+address, so a link keeps it). Their row menu offers *Open stack* and *Adopt stack…*. If Coaming cannot read the
 engine to look for them, the list says *Couldn't look for unmanaged stacks on {environment}* with a **Retry**, and your
-own stacks still list. A stack that Bayplan is deploying for the first time is never listed twice.
+own stacks still list. A stack that Coaming is deploying for the first time is never listed twice.
 
 **The page of an unmanaged stack** has **Overview**, **Generated compose**, **Resources** and **Logs**, and no
-Editor or History: Bayplan holds no definition of it. Its note says so: *You can look at it here. Adopt it to deploy,
-update and roll it back with Bayplan. Adopting changes nothing until you deploy.*
+Editor or History: Coaming holds no definition of it. Its note says so: *You can look at it here. Adopt it to deploy,
+update and roll it back with Coaming. Adopting changes nothing until you deploy.*
 
 - **Generated compose** is a preview of the compose file [adoption](#adopting-a-stack) would use, rebuilt from the
   running services. Nothing is saved. It needs only `stacks.read`, and **for anyone without `secrets.reveal` every
@@ -573,18 +573,18 @@ update and roll it back with Bayplan. Adopting changes nothing until you deploy.
 
 | Flag | Meaning |
 |------|---------|
-| *Portainer* | Looks like Portainer made it: a label whose key starts with `io.portainer.`, or a Compose working directory under `/data/compose/`. The page says: *Remove it from Portainer without deleting it, or the two tools will fight over it. Bayplan doesn't contact Portainer.* See [behaviour that is still open](#behaviour-that-is-still-open) for how far those markers are verified. |
-| *Created by Bayplan (another instance or a lost record)* | Its objects carry a `bayplan.stack.id` that no stack of this instance has, for instance after a restore from an old backup, or because another Bayplan made it. The label is only a note: it never links the stack to anything. It is adopted like any other, and the first deploy replaces the old ID. |
-| *Bayplan*, *Bayplan agent* | The stack Bayplan itself runs in, or one that runs a Bayplan agent. It is listed, and **Adopt is off** (*This is Bayplan's own stack.*, *This stack runs Bayplan's agent.*), so Bayplan cannot be made to deploy or remove itself. |
+| *Portainer* | Looks like Portainer made it: a label whose key starts with `io.portainer.`, or a Compose working directory under `/data/compose/`. The page says: *Remove it from Portainer without deleting it, or the two tools will fight over it. Coaming doesn't contact Portainer.* See [behaviour that is still open](#behaviour-that-is-still-open) for how far those markers are verified. |
+| *Created by Coaming (another instance or a lost record)* | Its objects carry a `coaming.stack.id` that no stack of this instance has, for instance after a restore from an old backup, or because another Coaming made it. The label is only a note: it never links the stack to anything. It is adopted like any other, and the first deploy replaces the old ID. |
+| *Coaming*, *Coaming agent* | The stack Coaming itself runs in, or one that runs a Coaming agent. It is listed, and **Adopt is off** (*This is Coaming's own stack.*, *This stack runs Coaming's agent.*), so Coaming cannot be made to deploy or remove itself. |
 | *Can't be adopted* | Its name breaks the [stack-name rule](#stack-names), for example a space or a slash. The reason is shown. |
 
 ## Adopting a stack
 
-**Adopting** turns an unmanaged stack into one Bayplan manages fully, so you can edit, deploy, update, roll back,
+**Adopting** turns an unmanaged stack into one Coaming manages fully, so you can edit, deploy, update, roll back,
 stop and remove it, and see its drift. It is how you move off Portainer. It needs the Admin role on the environment
 (`stacks.create`; adoption adds no permission of its own). The check beforehand needs only `stacks.read`.
 
-**Adopting changes nothing on the engine.** Pressing **Adopt stack** stores a record in Bayplan, and no request is
+**Adopting changes nothing on the engine.** Pressing **Adopt stack** stores a record in Coaming, and no request is
 sent to Docker. The first deploy afterwards is what changes things, and it is **not restart-free**: see [the first
 deploy](#the-first-deploy-of-an-adopted-stack).
 
@@ -592,15 +592,15 @@ Open the stack's page and press **Adopt stack** (or use the row menu). Work thro
 
 ### 1. Choose where the definition comes from
 
-- **Rebuild from the running services** (the default). Bayplan reads what runs and writes a compose file from it. It
+- **Rebuild from the running services** (the default). Coaming reads what runs and writes a compose file from it. It
   is the reverse of what a deploy does, and it leaves out engine defaults so the file reads like one a person would
   write. A stack that cannot be written as a compose file that passes the check is refused with the reason
   (`rebuild_failed`).
 - **I have the original compose file.** Paste it (or choose a file, up to 1 MiB), fill in the values of any variables
-  it uses, and Bayplan checks it against what runs. It says *Matches what's running* or *Differs from what's running
+  it uses, and Coaming checks it against what runs. It says *Matches what's running* or *Differs from what's running
   in n settings*, with the differences, and **Use the rebuild instead** is always one click away. A file that
   matches is used **exactly as you wrote it** (comments and key order kept). The file goes through the same check as
-  any draft, so `include`, `extends` and files on the Bayplan server are refused, and the server checks it again when
+  any draft, so `include`, `extends` and files on the Coaming server are refused, and the server checks it again when
   you press Adopt. The variable values you type are saved with the stack (a secret one sealed). Nothing of the file
   or the values is kept in the browser after you leave the page.
 
@@ -608,18 +608,18 @@ Open the stack's page and press **Adopt stack** (or use the row menu). Work thro
 
 Before anything is stored, the page runs a review of the definition against what runs, with these results.
 
-- **What happens on the first deploy.** *Nothing will change except Bayplan's ownership labels*, or a list of
+- **What happens on the first deploy.** *Nothing will change except Coaming's ownership labels*, or a list of
   **differences** (*3 differences will change on the first deploy*) with what runs now and what the first deploy
   would set. **Differences are shown, and they do not block adopting.** A rebuild is close but not always perfect, so
   read them: for example a setting the engine reports in a form the compose file cannot say. The ownership labels are
-  counted apart: *2 services will be recreated to take Bayplan ownership labels (brief restart)*.
+  counted apart: *2 services will be recreated to take Coaming ownership labels (brief restart)*.
 - **How the pieces are treated.** A table of every network, volume, secret and config:
   - a **network or volume that carries the stack's label** (`com.docker.stack.namespace` or
     `com.docker.compose.project`) is **owned by the stack under its existing name** and is not recreated. A later
     Remove cleans it up (a volume only if you tick it);
-  - a network or volume **without** the label is **External**. Bayplan does not change it;
+  - a network or volume **without** the label is **External**. Coaming does not change it;
   - an existing **swarm secret or config** is referenced as **external** and left untouched: *Not stack-owned. Move it
-    to a stack file to rotate it.* Bayplan never reads their values and does not import their contents;
+    to a stack file to rotate it.* Coaming never reads their values and does not import their contents;
   - on a standalone host a network or volume is written in the form whose configuration hash equals the one on the
     host, so the Compose engine does not see a change. If no form matches, the object is kept **external** with a
     note, so the first deploy cannot recreate it.
@@ -628,7 +628,7 @@ Before anything is stored, the page runs a review of the definition against what
   deploy, as for any stack.
 - **Portainer** and **orphan ID** advice, when they apply (see [Unmanaged stacks](#unmanaged-stacks)).
 - **Environment values are copied in as literals.** The definition holds each service's environment values as they
-  are, **passwords included**, in the stored draft and in revision #1. Bayplan does not guess which ones are secret.
+  are, **passwords included**, in the stored draft and in revision #1. Coaming does not guess which ones are secret.
   After adopting, move secret values to **Variables** as secret variables and refer to them as `${NAME}`. Until you
   do, anyone who holds `stacks.read` on the environment can read them in the draft and in History's *Rendered* and
   *YAML diff* views of revision #1. [threat-model.md](threat-model.md) records this as an accepted residual risk.
@@ -648,13 +648,13 @@ In one step it then stores:
 - the **draft** and **revision #1** (*Adopted from {name}*, Good), both holding the definition, with the images
   **pinned to the digests that run**, so no tag is looked up and nothing can move;
 - a record of what it adopted: the networks and volumes it owns, the secrets and configs it references, the old
-  Bayplan ID if there was one, and the places where the definition differed from what runs.
+  Coaming ID if there was one, and the places where the definition differed from what runs.
 
 The audit log gets `stack.adopted` (the stack, its target, where it was taken from, the number of services and the
 revision).
 
-A stack that is Bayplan's own or an agent's, or whose name breaks the rule, is refused (`stack_not_adoptable`), and a
-name Bayplan already manages is refused with a link to that stack (`stack_already_managed`).
+A stack that is Coaming's own or an agent's, or whose name breaks the rule, is refused (`stack_not_adoptable`), and a
+name Coaming already manages is refused with a link to that stack (`stack_already_managed`).
 
 **Names.** Adopting takes any name the [stack-name rule](#stack-names) allows, which includes capital letters on a
 swarm that Phase 7 refused. Docker itself accepts more than that rule (a dot, for example), but a name outside it
@@ -662,11 +662,11 @@ is listed and cannot be adopted, because a stack named so could not be deployed 
 
 ### The first deploy of an adopted stack
 
-An adopted stack's Overview says *{name} is adopted but not yet deployed by Bayplan* until its first deploy. The review
+An adopted stack's Overview says *{name} is adopted but not yet deployed by Coaming* until its first deploy. The review
 of that deploy shows **Ownership labels only** apart from real changes, with how many services or containers are
 recreated.
 
-- **The first deploy puts Bayplan's labels on everything**, as for any stack, so removal, history and later phases
+- **The first deploy puts Coaming's labels on everything**, as for any stack, so removal, history and later phases
   find the stack's things the same way. A label change **restarts the workload briefly**: on a swarm Docker restarts
   the tasks of each service whose container labels change, and on a standalone host Docker Compose recreates each container, because the labels
   change its configuration hash. Plan the deploy for a time a restart is acceptable. The review says so plainly before
@@ -674,7 +674,7 @@ recreated.
 - **Platforms are kept.** A stack made with `docker stack deploy` carries the platforms the CLI wrote into each
   service's placement. Adopting records them with the first revision, and the first deploy sends them again, so the
   review shows no placement change.
-- **A named volume's mount gets the label too.** Bayplan's `bayplan.stack.id` is added to the volume options of a
+- **A named volume's mount gets the label too.** Coaming's `coaming.stack.id` is added to the volume options of a
   service's mount of a named volume. It counts as an ownership label, so the first review lists it under *Ownership
   labels only*. The volume itself is not touched.
 - **Data is kept.** The networks and volumes the stack owns are reused under their names. A volume is never
@@ -682,9 +682,9 @@ recreated.
   in a volume. Secrets and configs that already exist are not created, changed or removed.
 - **The differences from the check are applied** by this deploy, since the definition is what gets deployed.
 - **Host access is judged here**: whoever deploys needs Admin if the definition uses it.
-- After a first deploy that went well, Bayplan treats a service or container of the same namespace or project that
-  has no Bayplan ID as someone else's, and a deploy that would clash with it stops (*a stack named X already exists
-  ... not managed by Bayplan*). Until then such workloads count as part of the stack.
+- After a first deploy that went well, Coaming treats a service or container of the same namespace or project that
+  has no Coaming ID as someone else's, and a deploy that would clash with it stops (*a stack named X already exists
+  ... not managed by Coaming*). Until then such workloads count as part of the stack.
 
 **Differences found at adoption are shown as drift until then.** If the definition differs from what runs, the
 stack's [drift](#drift) page lists those differences with the cause *Differed from the rebuilt definition when {name}
@@ -693,36 +693,36 @@ was adopted*, and they are cleared by the first deploy.
 ### Removing an adopted stack
 
 Remove works as for any stack: the services or containers, the networks the stack owns, the definition, and the
-volumes you tick. **It leaves the secrets and configs the stack only referenced**, because Bayplan never owned them.
+volumes you tick. **It leaves the secrets and configs the stack only referenced**, because Coaming never owned them.
 The Remove dialog lists them as external. Delete them on the **Secrets** and **Configs** pages when nothing else uses
 them. An external network is left too, as for every stack.
 
 ### What adopting owns
 
 Later phases decide what is safe to clean up (Phase 10, orphaned networks and volumes; Phase 11, the janitor). They
-must not infer an adopted stack's ownership from `bayplan.stack.id` labels alone.
+must not infer an adopted stack's ownership from `coaming.stack.id` labels alone.
 
 - **Networks and volumes are owned by name.** The stack's record lists the engine names of the networks and volumes
   that carried its label when it was adopted. They are the stack's **for as long as the stack exists**, and they are
-  **never recreated, so they never get a `bayplan.stack.id` label**. A rule that finds a stack's objects by that label
+  **never recreated, so they never get a `coaming.stack.id` label**. A rule that finds a stack's objects by that label
   would call them orphans.
 - **Secrets and configs it references are not owned.** They are recorded by name as external and are never removed
   with the stack.
-- **A `bayplan.stack.id` label alone never links an object to a stack.** Another ID is another stack's. Between the
+- **A `coaming.stack.id` label alone never links an object to a stack.** Another ID is another stack's. Between the
   adoption and its first good deploy, a service or container of the stack's namespace or project counts as its own if
   it has no ID or the old one recorded at adoption; afterwards only its own ID counts.
 - **On a standalone host, a container added to the stack's project from the host's CLI counts with the stack.** A
-  container of the project with no `bayplan.stack.id` is the stack's once the stack owns another container of the
+  container of the project with no `coaming.stack.id` is the stack's once the stack owns another container of the
   same service (drift, the stack's page, restore and Remove). Another stack's ID never counts, and a project the stack
   holds no container of, or a service it runs no container of, stays a name clash and is not taken over.
 - The one place that decides this is `Ownership` in `internal/stackops` (`OwnershipOf(stack)`). A guard test fails on
-  code elsewhere that decides ownership by a Bayplan ID label. Ask it, do not copy the rule.
+  code elsewhere that decides ownership by a Coaming ID label. Ask it, do not copy the rule.
 
 ## Drift
 
-**Drift** is a difference between what a managed stack's **deployed revision** says and what runs. Bayplan checks for
+**Drift** is a difference between what a managed stack's **deployed revision** says and what runs. Coaming checks for
 it so a hot-fix made on a host, or a service scaled by hand, does not stay unnoticed until the next deploy quietly
-puts it back. **Bayplan shows drift and never fixes it by itself**, and there is no way to dismiss it: you restore
+puts it back. **Coaming shows drift and never fixes it by itself**, and there is no way to dismiss it: you restore
 the revision, or you keep what runs.
 
 **What counts.** On a swarm, each service of the stack is compared with the deployed revision (converted with the
@@ -736,19 +736,19 @@ is **Extra**.
 
 **A container added from the host's CLI counts with the stack.** On a standalone host, a container someone adds to the
 stack's Compose project from the host, such as `docker compose up -d --scale web=2 --no-recreate` run on your own copy
-of the file, carries none of Bayplan's labels, but it belongs to the stack's project. Bayplan counts it with the
+of the file, carries none of Coaming's labels, but it belongs to the stack's project. Coaming counts it with the
 stack while the stack owns another container of the same service: a second container of `web` reads as
 **web Changed** with two containers, and a restore removes it. The same container shows on the stack's page, in its **Resources** tab and in its logs, does not
 block a deploy, a restore, Stop or Start as a name clash, and is listed and removed by **Remove**. A container that
-carries **another Bayplan stack's ID** never counts as this stack's. A Compose project of the same name that the stack
-owns **no container of** is not taken over: it stays a name clash, so Bayplan never acts on a project it did not deploy
-or adopt. Nor is a container with none of Bayplan's labels of a service the stack runs **no container of**, such as a
+carries **another Coaming stack's ID** never counts as this stack's. A Compose project of the same name that the stack
+owns **no container of** is not taken over: it stays a name clash, so Coaming never acts on a project it did not deploy
+or adopt. Nor is a container with none of Coaming's labels of a service the stack runs **no container of**, such as a
 `postgres` from an unrelated `compose.yaml` whose project happens to have the same name: it is not drift, and a deploy,
 restore or Remove is refused as a name clash until you remove it or rename one of the projects.
 
 **What is not drift:**
 
-- Bayplan's own ownership labels (including the one on a named volume's mount), and the swarm's force-update counter. A **restart** or a **force update** does
+- Coaming's own ownership labels (including the one on a named volume's mount), and the swarm's force-update counter. A **restart** or a **force update** does
   not change the spec and is not drift.
 - Runtime state such as task churn and a service's update status.
 - A **stopped** stack. Stop scales it down on purpose, and it is not checked until it is started.
@@ -758,7 +758,7 @@ restore or Remove is refused as a name clash until you remove it or rename one o
 If the deployed revision cannot be redeployed any more (for instance a file it needs is gone), the page says it
 *couldn't compare* instead of guessing.
 
-**Scaling from Bayplan's own service page counts as drift**, because the next stack deploy would put the old count
+**Scaling from Coaming's own service page counts as drift**, because the next stack deploy would put the old count
 back.
 
 ### Where you see it
@@ -772,14 +772,14 @@ back.
   variables, commands, health check commands and log options are withheld from anyone without `secrets.reveal`.
   **Check again** reads the engine at once.
 
-### When Bayplan checks
+### When Coaming checks
 
 The check is read only and runs in the background for every environment, so the badge is there before anyone opens the
 stack. It runs
 
 - about **every five minutes**, with a little random spread so environments do not all read at the same moment;
 - **a few seconds after a Docker event that names the stack** (a 3-second quiet period lets a burst of events become
-  one check). On a swarm the event carries only the **service's name**, not its stack, so Bayplan finds the stack
+  one check). On a swarm the event carries only the **service's name**, not its stack, so Coaming finds the stack
   that owns a service of that name. Drift is therefore found within seconds, and the five-minute timer is the backstop;
 - when an operation on the stack (deploy, update, roll back, stop, start) ends;
 - when you open the Overview or the drift page.
@@ -790,11 +790,11 @@ is connected.
 
 ### Why it differs
 
-Under each drifted service the page says what Bayplan knows from its **audit log**, and nothing it cannot back up:
+Under each drifted service the page says what Coaming knows from its **audit log**, and nothing it cannot back up:
 
-- *web was scaled from 1 to 3 by alice in Bayplan, 5 minutes ago.* (a scale, a roll back or an edit made from the
+- *web was scaled from 1 to 3 by alice in Coaming, 5 minutes ago.* (a scale, a roll back or an edit made from the
   service pages);
-- *Changed outside Bayplan.* when no audit row explains it;
+- *Changed outside Coaming.* when no audit row explains it;
 - *Differed from the rebuilt definition when the stack was adopted* until the first deploy, for a difference found at
   [adoption](#adopting-a-stack).
 
@@ -808,7 +808,7 @@ change made after it.
   digests and no registry lookup. **Restore stack** deploys it through the console. The result is recorded as a new
   revision (listed as *Roll back*) and audited as `stack.deployed` with mode `restore`. If the revision uses host
   access you need Admin, and if the stack was deployed again meanwhile the restore is refused and you review again.
-- **Accept live into draft** (Operator, `stacks.update`). It makes what runs the stack's **next draft**: Bayplan
+- **Accept live into draft** (Operator, `stacks.update`). It makes what runs the stack's **next draft**: Coaming
   rebuilds the compose file from the running services **on top of the deployed revision**, then you review and
   deploy it, which records a revision. It sends nothing to the engine. Because it starts from the revision, the
   secrets and configs the stack made stay declared as files, a value that equals a secret variable's is written as
@@ -826,15 +826,15 @@ When you review a deploy, an update or a roll back, anything it would **put back
 changes, in a section above the Summary: *This deploy reverts 2 changes made outside the stack*, with each setting,
 what runs now and what the deploy sets, and the cause under it. It is a warning so nobody undoes a hot-fix by
 accident, and it **never holds Deploy back**. A setting your draft changes itself, or one that already matches, is not
-listed. If Bayplan could not check, the section says *Couldn't check for drift; the changes below are still accurate.*
+listed. If Coaming could not check, the section says *Couldn't check for drift; the changes below are still accurate.*
 There is no such section on a restore, an adoption or a first deploy, and none for a stopped stack.
 
 ## Git stacks
 
 A **git stack** gets its compose files from a folder of a git repository instead of from the editor. The repository is
-the source of truth: Bayplan reads it, shows you what changed, and deploys it through the same review, deploy console,
+the source of truth: Coaming reads it, shows you what changed, and deploys it through the same review, deploy console,
 revisions and roll back as any other stack. It never writes to the repository. Stacks show their source in the list:
-*Inline* (files kept in Bayplan), *Adopted* (taken over from something else) or *Git*.
+*Inline* (files kept in Coaming), *Adopted* (taken over from something else) or *Git*.
 
 - [Repositories and credentials](#repositories-and-credentials)
 - [What a git stack imports](#what-a-git-stack-imports)
@@ -854,7 +854,7 @@ Git connections come in two objects, in two layers:
 
 - A **credential** is an HTTPS token (with the user name the server expects) or an SSH deploy key. It is encrypted at rest
   and never shown again once saved; the page shows only the last four characters of a token or the fingerprint of a key.
-- A **repository** is an address plus the credential you pick for it (or none, for a public repository). Bayplan never
+- A **repository** is an address plus the credential you pick for it (or none, for a public repository). Coaming never
   guesses a credential from the address: you choose it, and many repositories can share one.
 
 Each object lives either on the **instance** (managed by instance administrators, usable in every environment) or on
@@ -871,18 +871,18 @@ from `https` to anything but `https` is not followed.
 A repository can carry a custom certificate authority (PEM) for a self-hosted server with its own CA. There is no
 option to skip certificate verification.
 
-**SSH host keys are trusted on first use, by a person.** Bayplan ships the pinned host keys of github.com, gitlab.com
-and bitbucket.org. For any other host, **Test** shows the key's fingerprint and you confirm it; Bayplan stores it on
+**SSH host keys are trusted on first use, by a person.** Coaming ships the pinned host keys of github.com, gitlab.com
+and bitbucket.org. For any other host, **Test** shows the key's fingerprint and you confirm it; Coaming stores it on
 the repository. From then on a different key is a hard error (*host key changed*), never accepted by itself, and
 trusting the new key is an explicit, audited action by an Admin. An SSH address with no known key stops at the handshake,
-before any credential is sent. Bayplan never reads the server user's `known_hosts` or `ssh_config`.
+before any credential is sent. Coaming never reads the server user's `known_hosts` or `ssh_config`.
 
 **Test** lists the branches and tags and reports whether the credential works. Saving never waits for a test and works
 whether or not it passed; a problem shows when a stack uses the repository.
 
-Every address Bayplan connects to goes through the same egress policy as registry calls (see
+Every address Coaming connects to goes through the same egress policy as registry calls (see
 [threat-model.md](threat-model.md)): link-local, unspecified and multicast addresses are refused, and an operator can
-refuse more ranges with `BAYPLAN_REGISTRY_BLOCK_CIDRS`.
+refuse more ranges with `COAMING_REGISTRY_BLOCK_CIDRS`.
 
 ### What a git stack imports
 
@@ -905,7 +905,7 @@ compose files** inside that folder. Several compose files are merged in the orde
 - Relative bind mounts stay unsupported, as for every stack.
 
 There is no compose editor on a git stack, because the repository is the source: the files from the repository are
-read-only in Bayplan. What you can edit in Bayplan are the variables and the **overlay files** below. The stack's
+read-only in Coaming. What you can edit in Coaming are the variables and the **overlay files** below. The stack's
 **Git** tab holds the rest of the settings.
 
 ### Variables, secrets and the committed `.env`
@@ -923,17 +923,17 @@ default*, *Not set*).
 **Do not commit secrets.** The repository is readable by everyone who can read it and by the git host. A key of the
 committed `.env` whose name looks like a secret (a name with a `PASSWORD`, `PASSWD`, `PWD`, `SECRET`, `TOKEN`, `KEY`,
 `APIKEY`, `CREDENTIAL` or `PRIVATE` part, such as `DB_PASSWORD`) raises a warning that names the key, never its value,
-and advises setting a **secret variable** in Bayplan, which overrides it. Secret variables are sealed in Bayplan
+and advises setting a **secret variable** in Coaming, which overrides it. Secret variables are sealed in Coaming
 and shown as `<hidden>`.
 
 A secret that a compose file reads from a file (`secrets: db_pw: file: ./db_pw.txt`) is not in the repository either.
-Add an **overlay file** at that path on the stack: it is stored in Bayplan, sealed like any secret stack file, and fills
+Add an **overlay file** at that path on the stack: it is stored in Coaming, sealed like any secret stack file, and fills
 a path the repository does not have. **A path that exists both in the repository and as an overlay file is a blocking
 error**, never a silent shadow.
 
 ### Checking for changes: polling and webhooks
 
-Bayplan compares the stack folder at the head of the ref with the deployed one. The status is one of:
+Coaming compares the stack folder at the head of the ref with the deployed one. The status is one of:
 
 - **In sync**: the folder's contents are the same. A commit that changes other folders of the repository does not make
   the stack behind and starts nothing, so a monorepo with a folder per stack does not redeploy every stack on every
@@ -955,23 +955,23 @@ same second. **Keep polling on even with a webhook**: it catches a push the webh
 anyone who can see the stack may press it, up to 12 times a minute, and only someone who can deploy makes it try a commit
 that auto-deploy held back once more.
 
-**A webhook** tells Bayplan about a push straight away. Each git stack can have one. In the stack's **Git** tab choose
+**A webhook** tells Coaming about a push straight away. Each git stack can have one. In the stack's **Git** tab choose
 **Set up webhook**, pick the git host, and copy the address and the secret, which are **shown once**; a lost secret is
 replaced with **Rotate secret**. The address is `{public URL}/hooks/git/{token}`, built on the instance's public URL
-(Settings) or, when none is set, on the address you reached Bayplan at; your git host must be able to reach it. Then add it at the host:
+(Settings) or, when none is set, on the address you reached Coaming at; your git host must be able to reach it. Then add it at the host:
 
 - **GitHub**: in the repository open *Settings*, then *Webhooks*, then *Add webhook*. Payload URL: the address. Content
-  type: `application/json`. Secret: the secret. Events: just the push event. Bayplan checks the
+  type: `application/json`. Secret: the secret. Events: just the push event. Coaming checks the
   `X-Hub-Signature-256` signature.
 - **GitLab**: in the project open *Settings*, then *Webhooks*. URL: the address. Secret token: the secret. Trigger:
-  push events. Bayplan checks the `X-Gitlab-Token` header.
+  push events. Coaming checks the `X-Gitlab-Token` header.
 - **Gitea or Forgejo** (and Gogs): in the repository open *Settings*, then *Webhooks*, then *Add webhook*, then *Gitea* or
-  *Forgejo*. Target URL: the address. Secret: the secret. Trigger: push events. Bayplan checks the HMAC signature header.
+  *Forgejo*. Target URL: the address. Secret: the secret. Trigger: push events. Coaming checks the HMAC signature header.
 - **Other (generic)**: send a `POST` to the address whenever the repository changes. Choose where the secret goes:
   **in the address** (the token in the address is the secret, and the request carries nothing else) or **in an
   `Authorization: Bearer <secret>` header**.
 
-**A webhook only tells Bayplan to check.** It never deploys by itself: Bayplan ignores the body of the request, takes no
+**A webhook only tells Coaming to check.** It never deploys by itself: Coaming ignores the body of the request, takes no
 branch and no commit from it, and fetches the stack's own ref itself. Whether the check then deploys is a separate
 setting (see [Auto-deploy](#auto-deploy)). Several pushes in a burst cost one check and one trailing check.
 
@@ -979,7 +979,7 @@ A request that names no webhook, one with a wrong signature and one for a paused
 so the address cannot be probed. A delivery is limited to **60 a minute per client address and 10 a minute per webhook**
 (a burst of 10; only a delivery whose signature verified spends it), and a body over **5 MiB** is refused; the body is only
 the input of the signature check, and it is read only for an address that names a webhook. Behind a
-reverse proxy the client address is the one the proxy reports, so set `BAYPLAN_TRUSTED_PROXIES` as described in
+reverse proxy the client address is the one the proxy reports, so set `COAMING_TRUSTED_PROXIES` as described in
 [reverse-proxy.md](reverse-proxy.md); if the table of client addresses is ever full (65,536 addresses at once), new
 addresses are refused until it empties, and polling still catches the push. Accepted deliveries and rejected signatures
 are audited (`git.webhook_delivered`, `git.webhook_rejected`) without the address, the token or the signature, and the
@@ -1016,7 +1016,7 @@ it by hand, or you press **Check now**. These hold a commit back:
 
 - a blocking lint, policy or variable problem in the new commit (a missing variable, a blocked setting, a path clash
   between a repository file and an overlay file, `include`, a Git LFS pointer, a submodule);
-- **unreviewed local edits**: a draft with changes nobody reviewed, or a new source waiting for review. Bayplan never
+- **unreviewed local edits**: a draft with changes nobody reviewed, or a new source waiting for review. Coaming never
   deploys over them;
 - the operation lock is held: that is not an error, and the next check tries again.
 
@@ -1062,7 +1062,7 @@ only the access a deploy needs: see [threat-model.md](threat-model.md).
 
 ### Where the repository is kept: mirrors
 
-For each repository Bayplan keeps a bare **mirror** under `/data/git/<repository id>.git`, fetched one ref at a time and
+For each repository Coaming keeps a bare **mirror** under `/data/git/<repository id>.git`, fetched one ref at a time and
 read by commit ID; nothing is ever checked out, and the mirror holds neither the address nor the credential. A mirror is
 only a cache:
 
@@ -1088,31 +1088,31 @@ only a cache:
 Deploys, updates, roll backs, stops, starts and removals take a **per-environment operation lock**: one stack
 operation runs on an environment at a time. A second is refused with *Another stack operation is running on
 {environment}. Try again when it finishes.* and a link to the one that holds the lock, and nothing is stored. The
-lock is Bayplan's, so it protects against two people clicking, not against someone using `docker` on the host. The
+lock is Coaming's, so it protects against two people clicking, not against someone using `docker` on the host. The
 lock is built to be shared: the janitor of a later phase is designed to take the same one.
 
-## What Bayplan writes on your hosts
+## What Coaming writes on your hosts
 
 Everything a stack creates carries labels, and **Remove, the cleanup after a failure and later phases' orphan rules
 find the stack's things by them**, never by a name alone. They are on-host contracts: a network or volume a stack
 made keeps its labels for as long as it lives.
 
-**The one exception is an [adopted stack](#adopting-a-stack).** Its networks and volumes were made before Bayplan
+**The one exception is an [adopted stack](#adopting-a-stack).** Its networks and volumes were made before Coaming
 knew the stack, and a deploy reuses them as they are, so they keep the labels they had and **never get a
-`bayplan.stack.id`**. They are the stack's by the names its record holds (see [What adopting
+`coaming.stack.id`**. They are the stack's by the names its record holds (see [What adopting
 owns](#what-adopting-owns)). Its services and containers get the label at the first deploy.
 
 | Label | On | Meaning |
 |-------|----|---------|
-| `com.docker.stack.namespace` | swarm services, networks, secrets and configs | The stack's name, as `docker stack deploy` writes it. A stack that Bayplan did not make but that uses the same name is a foreign stack. |
+| `com.docker.stack.namespace` | swarm services, networks, secrets and configs | The stack's name, as `docker stack deploy` writes it. A stack that Coaming did not make but that uses the same name is a foreign stack. |
 | `com.docker.compose.project` | standalone containers, networks and volumes | The stack's name, as Docker Compose writes it. |
-| `com.docker.compose.service`, `.oneoff`, `.config-hash`, `.project.working_dir`, `.project.config_files` | standalone containers | Docker Compose's own labels. The working directory and config files carry neutral constants (`/bayplan-stack`, `compose.yaml`), never a path of the Bayplan server. A container whose config hash differs from its service is recreated. |
-| `bayplan.stack.id` | services, containers, networks, volumes, secrets and configs; on a swarm also the volume options of a service's mount of a named volume | The ID of the Bayplan stack record that owns the object. Not on an adopted stack's existing networks and volumes. On a mount it is an ownership label, like the one on the service. A label alone never links an object to a stack. |
-| `bayplan.stack.image` | services and containers | The image exactly as you wrote it, before it was pinned. |
-| `bayplan.stack.object` | secrets and configs | Marks an object made from one of the stack's files; its value is the name the compose file uses. |
-| `bayplan.stack.object.hash` | secrets and configs | The 8-hex-digit content hash that ends the object's name. |
-| `bayplan.stack.secret.<name>`, `bayplan.stack.config.<name>` | standalone containers | The content hash of each secret or config the service uses, so new content recreates the container. |
-| `bayplan.stack.stopped-replicas` | swarm services | A replicated service's count while the stack is stopped. |
+| `com.docker.compose.service`, `.oneoff`, `.config-hash`, `.project.working_dir`, `.project.config_files` | standalone containers | Docker Compose's own labels. The working directory and config files carry neutral constants (`/coaming-stack`, `compose.yaml`), never a path of the Coaming server. A container whose config hash differs from its service is recreated. |
+| `coaming.stack.id` | services, containers, networks, volumes, secrets and configs; on a swarm also the volume options of a service's mount of a named volume | The ID of the Coaming stack record that owns the object. Not on an adopted stack's existing networks and volumes. On a mount it is an ownership label, like the one on the service. A label alone never links an object to a stack. |
+| `coaming.stack.image` | services and containers | The image exactly as you wrote it, before it was pinned. |
+| `coaming.stack.object` | secrets and configs | Marks an object made from one of the stack's files; its value is the name the compose file uses. |
+| `coaming.stack.object.hash` | secrets and configs | The 8-hex-digit content hash that ends the object's name. |
+| `coaming.stack.secret.<name>`, `coaming.stack.config.<name>` | standalone containers | The content hash of each secret or config the service uses, so new content recreates the container. |
+| `coaming.stack.stopped-replicas` | swarm services | A replicated service's count while the stack is stopped. |
 
 **Hashed object names.** A swarm secret or config made from a stack file is named `<stack>_<name>_<hash>`, cut
 (never in the hash) to the 64 characters a swarm allows. The hash is a short content hash, **not a security
@@ -1126,7 +1126,7 @@ networks, its own secrets and configs, the volumes you ticked, and the definitio
 
 | Who | May |
 |-----|-----|
-| Viewer (`stacks.read`) | See stacks, their files, reviews, deploys, resources, logs, history, drift, and unmanaged stacks with their generated compose and adopt check. Secret values stay hidden, and so do the environment values of services Bayplan did not deploy. |
+| Viewer (`stacks.read`) | See stacks, their files, reviews, deploys, resources, logs, history, drift, and unmanaged stacks with their generated compose and adopt check. Secret values stay hidden, and so do the environment values of services Coaming did not deploy. |
 | Operator (`stacks.update`, `stacks.deploy`) | Save and discard a draft; review; deploy, update images, roll back to any good revision, restore from drift, accept live into the draft, stop, start and cancel. |
 | Env Admin (`stacks.create`, `stacks.delete`) | Create and remove stacks, **adopt an unmanaged stack**, and **deploy a stack that uses host access**. |
 | Anyone holding `secrets.reveal` | Read a secret variable or a secret file, one at a time, audited. |
@@ -1141,17 +1141,17 @@ Docker socket, a system path or any host path outside `/srv`, `/mnt` and `/media
 **a rollback** is judged on the version it restores, so they can't bring back host access an Admin removed.
 
 On a remote host the agent applies its own check to every container create and every service write, and **refuses
-host access unless the host owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`**, whoever asks: see
+host access unless the host owner set `COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true`**, whoever asks: see
 [agent.md](agent.md). A swarm service that a stack owns is read only on the service pages, with a link **Edit in
 stack**.
 
 ## The other tabs and the links from other pages
 
 - **Overview**: one state for the stack (*Not deployed, Deploying, Running, Degraded, Not running, Deploy failed,
-  Stopped, Stopping, Starting, Rolling back, Removing*, and *Unknown* when Bayplan can't read the engine), the
+  Stopped, Stopping, Starting, Rolling back, Removing*, and *Unknown* when Coaming can't read the engine), the
   services or containers with digest chips, replicas and ports, the last deploy and who made it, the deployed
   revision and its [drift](#drift), and banners for a running operation, a saved draft that is not deployed, a
-  stopped stack, drift, and an [adopted stack](#the-first-deploy-of-an-adopted-stack) that Bayplan has not deployed
+  stopped stack, drift, and an [adopted stack](#the-first-deploy-of-an-adopted-stack) that Coaming has not deployed
   yet. A failed last deploy is never hidden behind *Running* or *Degraded*.
 - **History**: the [revisions](#history-and-roll-back) of the stack, with roll back.
 - **Resources**: everything the stack owns on the environment, found by its labels: the tasks or containers, the
@@ -1159,12 +1159,12 @@ stack**.
   version and the services that use them. An object the file only refers to is marked **External**.
 - **Logs**: the merged log of every service of a swarm stack, or every container of a standalone one, with
   coloured prefixes and replacement markers, narrowing by service, task, node or container, a download, and a
-  pop-out. **Bayplan hides the secret values it knows** (the stack's secret variables and secret files, 4
+  pop-out. **Coaming hides the secret values it knows** (the stack's secret variables and secret files, 4
   characters or longer) in every streamed and downloaded line; a secret an application makes up itself is shown as
   written. A log that can't be masked is not served.
 - **Links.** A stack's name, wherever it appears (the services, containers, secrets and configs lists, their
-  detail pages' owner and the managed-by-stack notices), links to the Bayplan stack that owns it. A stack Bayplan
-  does not manage links to its read-only [unmanaged page](#unmanaged-stacks) (tooltip *Not managed by Bayplan.*).
+  detail pages' owner and the managed-by-stack notices), links to the Coaming stack that owns it. A stack Coaming
+  does not manage links to its read-only [unmanaged page](#unmanaged-stacks) (tooltip *Not managed by Coaming.*).
 
 ## Limits
 
@@ -1176,7 +1176,7 @@ stack**.
 | Files | 50 per stack, 1 MiB each, 8 MiB in all; a path of at most 255 characters, a name in it at most 100 |
 | Secret file | 500 KB on a swarm, 1,000 KB on a standalone host (config: 1 MB, 1,000 KB) |
 | Secret variable | at least 4 characters |
-| Convergence | each service `BAYPLAN_STACK_CONVERGE_TIMEOUT`, 10 minutes by default, 1 minute to 2 hours |
+| Convergence | each service `COAMING_STACK_CONVERGE_TIMEOUT`, 10 minutes by default, 1 minute to 2 hours |
 | Jobs | 5 running per person; one stack operation per environment |
 | Checks | the editor's check has a 5-second deadline, and a load still running at the deadline is abandoned; 2 run at once per person |
 | Adopt check, drift check, revision changes | each reads the engine, so 2 run at once per person (*Too many checks are running*) |
@@ -1207,20 +1207,20 @@ a webhook secret or the webhook's address. See [access.md](access.md) for the au
 
 ## Behaviour that is still open
 
-These are how Bayplan behaves today. Some are decisions the maintainer has not made, not oversights, and none of
+These are how Coaming behaves today. Some are decisions the maintainer has not made, not oversights, and none of
 them is hidden.
 
 - **`sysctls` and `ulimits` are not judged as host access.** Anyone with `stacks.deploy` (an Operator) can set
   them in a stack, and an Operator can already set them on a service.
 - **On Docker Engine 29, an image that exists only on the host fails with `image_unresolved`.** The containerd
-  image store lists a `name@sha256:...` for every image, including one never pushed, so Bayplan can't tell a local
+  image store lists a `name@sha256:...` for every image, including one never pushed, so Coaming can't tell a local
   image from one a registry lost, and a deploy of it stops at *Look up images*. Engines 24 and 25 pin it to its
   image ID with a warning. Push the image to a registry, or write its digest in the compose file.
 - **A standalone service with `pull_policy: always`, `daily` or `weekly`** makes the Compose engine pull again,
-  anonymously, after Bayplan pulled with your credential. A pinned digest means it can't move to a newer image, but
+  anonymously, after Coaming pulled with your credential. A pinned digest means it can't move to a newer image, but
   a private image fails at that pull.
 - **Behind an agent, `network_mode`, `pid` or `ipc` of `service:X`, and `volumes_from`, are refused as host access**
-  unless the host owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true`. On the Bayplan server's own host they
+  unless the host owner set `COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true`. On the Coaming server's own host they
   work. The review does not warn about it.
 - **An image update deploys the current draft.** **Update images** opens the same review and the same deploy, so
   edits in a saved draft that were never deployed go out together with the new digests. The review lists them
@@ -1234,9 +1234,9 @@ them is hidden.
 - **A network or a volume a file stops declaring is not removed** on either target, as `docker compose up` does
   not either; Remove deletes the networks the stack owns, and the volumes you tick. A roll back inherits this.
 - **A secret or config that is declared and used by no service is not created.** `docker stack deploy` creates
-  every declared secret and config; Bayplan creates the ones a service uses.
+  every declared secret and config; Coaming creates the ones a service uses.
 - **A changed secret or config on a standalone host reads "changed, 0 settings"** in the review, because its
-  content hash is a Bayplan label the comparison leaves out, and the Other resources table lists no secret or
+  content hash is a Coaming label the comparison leaves out, and the Other resources table lists no secret or
   config rows there.
 - **A secret file of the largest size made of one repeated character can take minutes to check and review**, and
   one of about a megabyte of ordinary content takes seconds.
@@ -1249,15 +1249,15 @@ them is hidden.
   yet deployed a stack from Portainer CE, in swarm mode and in standalone mode, and compared. A stack Portainer made may
   carry neither marker and then lists as unmanaged without the Portainer advice, and a stack with a marker that
   Portainer does not use would be flagged wrongly. Adopt it the same either way. Removing the stack from Portainer
-  *without deleting it* is still your step, and Bayplan never calls Portainer.
+  *without deleting it* is still your step, and Coaming never calls Portainer.
 - **Compose's network and volume hashes are proved on two Compose versions only.** Adopting a standalone project
-  relies on the hash Docker Compose stored on its networks and volumes matching the one Bayplan's engine computes for
+  relies on the hash Docker Compose stored on its networks and volumes matching the one Coaming's engine computes for
   the same settings, so the first deploy leaves them alone. Real-engine tests made a project with Docker Compose
   2.29.1 (Engine 24) and 5.5.1 (Engine 29) and adopted it with no network or volume change. Projects made with other
   versions, such as an older v2 Compose or the one inside Portainer, have not been tried. If the hashes ever differ,
   the review shows the network as recreated (a brief restart) and the volume as kept, and a rebuild that finds no
   matching form keeps the object external.
-- **A swarm's service events carry no stack.** Docker's service events name only the service, so Bayplan finds the
+- **A swarm's service events carry no stack.** Docker's service events name only the service, so Coaming finds the
   stack of a changed service by the service's name.
 - **A stack name of 61 characters works only with a short network name.** The 61-character cap is chosen so that
   `{stack}_{key}` fits swarm's 63-character limit for a one-character service. A stack that uses the implicit
@@ -1277,7 +1277,7 @@ These are decided and planned for later phases. None of them is in this version.
   variables, and the contents of existing swarm secrets and configs are referenced as external and never imported.
 - **Removing an unmanaged stack without adopting it first**, and adopting services or containers that carry no stack
   label.
-- **Two-way git sync.** Bayplan reads a repository and never commits to it; [git stacks](#git-stacks) are read-only
+- **Two-way git sync.** Coaming reads a repository and never commits to it; [git stacks](#git-stacks) are read-only
   apart from their variables and overlay files.
 - **Update detection.** Nothing says an image has a newer version, and there is no fleet view of updates.
 - **A janitor** for old objects (it will share the operation lock), and orphan rules for networks and volumes (they

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,7 +28,7 @@ const SUMMARY = {
   schema: 12,
 };
 
-const file = () => new File(["bytes"], "lab.bayplan");
+const file = () => new File(["bytes"], "lab.coaming");
 
 function stub(respond: (input: RequestInfo | URL, init?: RequestInit) => Response) {
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => respond(input, init));
@@ -40,7 +40,7 @@ beforeEach(() => setCsrfToken("csrf-9"));
 afterEach(() => {
   vi.unstubAllGlobals();
   setCsrfToken(null);
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
 });
 
@@ -62,15 +62,15 @@ describe("uploadRestore", () => {
 
   it("goes under the base path", async () => {
     const meta = document.createElement("meta");
-    meta.name = "bayplan-base";
-    meta.content = "/bayplan";
+    meta.name = "coaming-base";
+    meta.content = "/coaming";
     document.head.append(meta);
     resetBasePathForTests();
     const fn = stub(() =>
       Response.json({ uploadId: "u1", size: 1, expiresAt: "x" }, { status: 201 }),
     );
     await uploadRestore(file());
-    expect(fn.mock.calls[0]?.[0]).toBe("/bayplan/api/backup/restore/upload");
+    expect(fn.mock.calls[0]?.[0]).toBe("/coaming/api/backup/restore/upload");
   });
 
   it("throws the server's problem type, status and sentence", async () => {
@@ -113,7 +113,7 @@ describe("checkRestore and applyRestore", () => {
         {
           status: 409,
           type: "backup_newer",
-          detail: "This backup was made by a newer Bayplan (v9.9.9).",
+          detail: "This backup was made by a newer Coaming (v9.9.9).",
         },
         { status: 409 },
       ),
@@ -207,14 +207,14 @@ describe("restoreProblem", () => {
     const named = new RestoreError(
       409,
       "backup_newer",
-      "This backup was made by a newer Bayplan (v9.9.9). Upgrade this Bayplan to v9.9.9 or newer, then try again.",
+      "This backup was made by a newer Coaming (v9.9.9). Upgrade this Coaming to v9.9.9 or newer, then try again.",
     );
     expect(restoreProblem(named)).toEqual({
       key: "restore.errors.newer",
       values: { version: "v9.9.9" },
     });
     expect(
-      key(new RestoreError(409, "backup_newer", "This backup was made by a newer Bayplan.")),
+      key(new RestoreError(409, "backup_newer", "This backup was made by a newer Coaming.")),
     ).toBe("restore.errors.newerUnnamed");
   });
 

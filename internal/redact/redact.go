@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package redact keeps secret-bearing values from reaching a browser that may not
 // see them (D-15a, AUTH-07). Masking happens on the server: an environment
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // EnvVar is one environment variable as a browser receives it. Value is empty

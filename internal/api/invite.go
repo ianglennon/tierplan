@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -10,11 +10,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // targetLink is the audit target type of a refused link. The target ID stays
@@ -36,7 +36,7 @@ type LookupInviteInput struct {
 type LookupInviteBody struct {
 	Kind         string `json:"kind" enum:"invite,reset" doc:"invite for a new user choosing a first password, reset for an existing user choosing a new one"`
 	Username     string `json:"username" doc:"Whose link it is"`
-	InstanceName string `json:"instanceName" doc:"The name of this Bayplan instance"`
+	InstanceName string `json:"instanceName" doc:"The name of this Coaming instance"`
 }
 
 // LookupInviteOutput wraps LookupInviteBody for huma.

@@ -1,6 +1,6 @@
 Swarm
- docker service rm bayplan-agent && docker secret rm bayplan-agent-token-g1
- docker volume rm bayplan-agent   # on every node that ran the agent
+ docker service rm coaming-agent && docker secret rm coaming-agent-token-g1
+ docker volume rm coaming-agent   # on every node that ran the agent
 
 Standalone
- docker rm -f bayplan-agent && docker volume rm bayplan-agent
+ docker rm -f coaming-agent && docker volume rm coaming-agent

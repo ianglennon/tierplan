@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -433,13 +433,13 @@ describe("ConnectDialog from a container", () => {
   });
 });
 
-describe("ConnectDialog for Bayplan's own containers", () => {
+describe("ConnectDialog for Coaming's own containers", () => {
   it("needs the name of an own container typed before it connects, from the container's page", async () => {
     mountContainer("server");
     const dialog = await screen.findByRole("dialog");
     await choose(dialog, "Network", "back-net");
     const connect = within(dialog).getByRole("button", { name: "Connect container" });
-    expect(within(dialog).getByText(/one of Bayplan's own containers/)).toBeTruthy();
+    expect(within(dialog).getByText(/one of Coaming's own containers/)).toBeTruthy();
     expect(connect.hasAttribute("disabled")).toBe(true);
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Type web to confirm" }), {
       target: { value: "web" },
@@ -452,25 +452,25 @@ describe("ConnectDialog for Bayplan's own containers", () => {
 
   it("needs the name of an own container chosen on a network's page", async () => {
     containers = page([
-      { ...container("bayplan"), selfKind: "server", isSelf: true },
+      { ...container("coaming"), selfKind: "server", isSelf: true },
       container("web"),
     ]);
     mountNetwork();
     const dialog = await screen.findByRole("dialog");
     await choose(dialog, "Container", "web");
     expect(within(dialog).queryByRole("textbox", { name: /to confirm/ })).toBeNull();
-    await choose(dialog, "Container", "bayplan");
-    const input = await within(dialog).findByRole("textbox", { name: "Type bayplan to confirm" });
+    await choose(dialog, "Container", "coaming");
+    const input = await within(dialog).findByRole("textbox", { name: "Type coaming to confirm" });
     expect(
       within(dialog).getByRole("button", { name: "Connect container" }).hasAttribute("disabled"),
     ).toBe(true);
-    fireEvent.change(input, { target: { value: "bayplan" } });
+    fireEvent.change(input, { target: { value: "coaming" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Connect container" }));
     await waitFor(() => expect(connects()).toHaveLength(1));
-    expect(connects()[0]?.body).toMatchObject({ containerId: "bayplan-id", confirm: "bayplan" });
+    expect(connects()[0]?.body).toMatchObject({ containerId: "coaming-id", confirm: "coaming" });
   });
 
-  it("asks for the name when the server says the container is Bayplan's own though the page did not know", async () => {
+  it("asks for the name when the server says the container is Coaming's own though the page did not know", async () => {
     mountContainer();
     const dialog = await screen.findByRole("dialog");
     await choose(dialog, "Network", "back-net");

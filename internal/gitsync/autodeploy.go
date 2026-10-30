@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Deployer starts the deploy of a stack's draft for a principal that is not on a request. The API's StackDeployer is
@@ -27,7 +27,7 @@ type Deployer interface {
 	// DeployDraft deploys the draft at draftVersion for p. trigger is stackops.SyncPoll or stackops.SyncWebhook. A deploy
 	// that did not start is a *DeployRefusal.
 	DeployDraft(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64, trigger string) (DeployStarted, error)
-	// RevertedDrift says what deploying the draft at draftVersion would put back that was changed outside Bayplan,
+	// RevertedDrift says what deploying the draft at draftVersion would put back that was changed outside Coaming,
 	// as one line each ("web replicas 5 → 3"): the P8 "Reverts drift" computation of the review, with the values the
 	// caller may not reveal withheld. It reads and changes nothing. An error means it could not be worked out.
 	RevertedDrift(ctx context.Context, p *rbac.Principal, envID, stackID string, draftVersion int64) ([]string, error)
@@ -183,7 +183,7 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 		s.holdBack(ctx, st, head.SHA, pendingSourceDetail)
 		return
 	}
-	// Bayplan never deploys unreviewed local edits (D-29).
+	// Coaming never deploys unreviewed local edits (D-29).
 	edited, goodSeq, err := s.hasLocalEdits(ctx, stackID, draft)
 	if err != nil {
 		s.log.Warn("could not compare the draft with the deployed revision", "stack", stackID, "error", err)
@@ -276,7 +276,7 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 	}
 }
 
-// recordAutoDeployed audits a deploy Bayplan started by itself: the actor is the system principal that ran it, the
+// recordAutoDeployed audits a deploy Coaming started by itself: the actor is the system principal that ran it, the
 // details name the stack, the commit, what started it and the owner it acted for (T-09-77), and the lines it put back to
 // what the repository says (T-09-99): the audit entry lists them, or says they could not be worked out.
 func (s *Service) recordAutoDeployed(ctx context.Context, st stackops.Stack, p *rbac.Principal, owned access.OwnedResource, commit, trigger string, reverted []string, revertsUnknown bool) {
@@ -432,7 +432,7 @@ func sameVars(a, b []stacks.Var) bool {
 	return slices.Equal(sort(a), sort(b))
 }
 
-// sameOverlays compares the files Bayplan holds for paths the repository does not have, by path and content.
+// sameOverlays compares the files Coaming holds for paths the repository does not have, by path and content.
 func sameOverlays(a, b []stacks.File) bool {
 	pick := func(files []stacks.File) map[string]stacks.File {
 		out := map[string]stacks.File{}

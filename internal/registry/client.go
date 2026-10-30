@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry
 
@@ -54,7 +54,7 @@ type HostOptions struct {
 	CAPEM string
 	// Insecure makes the client reach the registry without verifying its certificate and, only
 	// when the server answers plain HTTP to a TLS request, over plain HTTP. Both stay behind
-	// the egress policy. It applies to Bayplan's own calls and to nothing on a node (D-14).
+	// the egress policy. It applies to Coaming's own calls and to nothing on a node (D-14).
 	Insecure bool
 }
 
@@ -82,7 +82,7 @@ type Client struct {
 }
 
 // NewClient returns a client for one registry host. Its connections dial through egress, its
-// requests carry the user agent bayplan/<version>, and what regclient logs goes through log
+// requests carry the user agent coaming/<version>, and what regclient logs goes through log
 // with request and response headers removed.
 func NewClient(o HostOptions, egress EgressPolicy, version string, log *slog.Logger) *Client {
 	if log == nil {
@@ -106,7 +106,7 @@ func newClient(o HostOptions, egress EgressPolicy, version string, log *slog.Log
 	h.TLS = mode
 	h.RegCert = o.CAPEM
 	h.ReqConcurrent = reqConcurrent
-	ua := "bayplan/" + version
+	ua := "coaming/" + version
 	rc := regclient.New(
 		regclient.WithConfigHost(*h),
 		regclient.WithRegOpts(

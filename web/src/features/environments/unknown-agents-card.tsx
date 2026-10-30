@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -24,7 +24,7 @@ import { useT } from "@/i18n/use-t";
 // 44px targets under 768px (D-64), the dense 32px size from there up.
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
-// UnknownAgentsCard is "Agents Bayplan doesn't know" (D-31): after a restore, the
+// UnknownAgentsCard is "Agents Coaming doesn't know" (D-31): after a restore, the
 // agents that were installed after the backup and so were refused unknown_agent.
 // It is for instance admins, who alone may read the list, and it is there only
 // while the list is not empty. Show install command opens the same dialog the

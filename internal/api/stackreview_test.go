@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -14,12 +14,12 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/stackstest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/stackstest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Reviewing a stack (plan 07-14, STK-06, D-11): what a deploy would change against what is
@@ -531,7 +531,7 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 	operator := f.caller(t, e, "operator-1", "operator")
 
 	rec := admin.createStack(`{"name":"taken"}`)
-	if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_clash" || problemOf(t, rec).Detail != "A stack named taken already exists on this environment, not managed by Bayplan." {
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_clash" || problemOf(t, rec).Detail != "A stack named taken already exists on this environment, not managed by Coaming." {
 		t.Fatalf("create of a name a foreign stack holds: %d %s, want 409 stack_name_clash", rec.Code, rec.Body)
 	}
 	list := answerOf[struct {
@@ -549,7 +549,7 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 		t.Errorf("create of a free name: %d %s", rec.Code, rec.Body)
 	}
 
-	// A stack that Bayplan already holds under that name is a stack_name_taken, not a clash, and the
+	// A stack that Coaming already holds under that name is a stack_name_taken, not a clash, and the
 	// objects it made itself never count as one.
 	own := newStack(t, admin, "mine")
 	version := saveCompose(t, operator, own.ID, reviewCompose, `[]`)
@@ -557,7 +557,7 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 		t.Fatalf("job = %+v", job)
 	}
 	if rec := admin.createStack(`{"name":"mine"}`); rec.Code != http.StatusConflict || problemType(t, rec) != "stack_name_taken" {
-		t.Errorf("create of a name Bayplan holds: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
+		t.Errorf("create of a name Coaming holds: %d %s, want 409 stack_name_taken", rec.Code, rec.Body)
 	}
 	rv, _, _ := operator.reviewStack(own.ID, `{}`)
 	if _, ok := rv.problem("stack_name_clash"); ok {
@@ -571,7 +571,7 @@ func TestNameClashIsRefusedAtCreateAndReview(t *testing.T) {
 		t.Fatalf("review: %d %s", code, raw)
 	}
 	p, ok := rv.problem("stack_name_clash")
-	if !ok || p.Severity != "error" || p.Message != "A stack named taken already exists on this environment, not managed by Bayplan." {
+	if !ok || p.Severity != "error" || p.Message != "A stack named taken already exists on this environment, not managed by Coaming." {
 		t.Fatalf("problems = %+v, want a blocking stack_name_clash", rv.Problems)
 	}
 	before := len(f.fake.Writes())
@@ -1269,7 +1269,7 @@ func TestReviewRestoreModeIsTheDriftAndAsksNoRegistry(t *testing.T) {
 	st := newStack(t, admin, "rr")
 	f.deployGood(t, operator, st.ID, composeWeb127)
 	f.deployGood(t, operator, st.ID, composeWeb128)
-	// Somebody outside Bayplan scaled the service; the registry's tag has moved on since the deploy.
+	// Somebody outside Coaming scaled the service; the registry's tag has moved on since the deploy.
 	f.editLiveService(t, e, "rr", "web", scaleTo(4))
 	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("c", 64))
 	lookups, writes := len(f.fake.DistributionRefs()), len(f.fake.Writes())
@@ -1409,7 +1409,7 @@ func TestReviewAnswerListsWhatTheDeployWouldRevertAndNeverBlocksIt(t *testing.T)
 	}
 }
 
-// reviewLiveKey and reviewLivePW are what somebody outside Bayplan put on the stack's service: a new key and a new password
+// reviewLiveKey and reviewLivePW are what somebody outside Coaming put on the stack's service: a new key and a new password
 // on the command line. They are made-up values the test must never find in an answer.
 const (
 	reviewLiveKey = "key-live-77aa"

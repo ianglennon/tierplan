@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -13,10 +13,10 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The nodes of a swarm (plan 06-13, RES-05 read side, D-20 to D-23). The fixture is the
@@ -27,7 +27,7 @@ type ndItem struct {
 	Hostname        string  `json:"hostname"`
 	Role            string  `json:"role"`
 	Leader          bool    `json:"leader"`
-	RunsBayplan     bool    `json:"runsBayplan"`
+	RunsCoaming     bool    `json:"runsCoaming"`
 	State           string  `json:"state"`
 	Availability    string  `json:"availability"`
 	Reachability    string  `json:"reachability"`
@@ -72,7 +72,7 @@ type ndDetail struct {
 	Hostname      string            `json:"hostname"`
 	Role          string            `json:"role"`
 	Leader        bool              `json:"leader"`
-	RunsBayplan   bool              `json:"runsBayplan"`
+	RunsCoaming   bool              `json:"runsCoaming"`
 	State         string            `json:"state"`
 	Availability  string            `json:"availability"`
 	Reachability  string            `json:"reachability"`
@@ -190,7 +190,7 @@ func TestListNodes(t *testing.T) {
 	}
 	mgr := b.Items[0]
 	want := ndItem{
-		ID: "node-1", Hostname: "mgr-1", Role: "manager", Leader: true, RunsBayplan: true, State: "ready", Availability: "active",
+		ID: "node-1", Hostname: "mgr-1", Role: "manager", Leader: true, RunsCoaming: true, State: "ready", Availability: "active",
 		Reachability: "reachable", Address: "10.0.0.1", EngineVersion: "29.1.0", OS: "linux", Arch: "aarch64", Cpus: 4, MemoryBytes: 8 << 30,
 		TasksRunning: 2, AgentReporting: true, TargetNodeID: e.ID,
 	}
@@ -204,7 +204,7 @@ func TestListNodes(t *testing.T) {
 	down := byHost["wrk-down"]
 	// A task on a node that is down cannot be believed to run (RESEARCH E13).
 	if down.State != "down" || down.Availability != "drain" || down.Role != "worker" || down.Reachability != "" || down.Leader ||
-		down.TasksRunning != 0 || down.TasksNotRunning != 1 || down.AgentReporting || down.TargetNodeID != "" || down.RunsBayplan {
+		down.TasksRunning != 0 || down.TasksNotRunning != 1 || down.AgentReporting || down.TargetNodeID != "" || down.RunsCoaming {
 		t.Errorf("wrk-down = %+v, want a drained down worker whose one task does not count as running, with no agent", down)
 	}
 	if ready := byHost["wrk-ready"]; ready.TasksRunning != 1 || ready.TasksNotRunning != 0 || ready.Cpus != 2 || ready.MemoryBytes != 4<<30 || ready.Arch != "x86_64" || ready.AgentReporting {
@@ -261,7 +261,7 @@ func TestGetNodeAndInspect(t *testing.T) {
 		t.Fatalf("GET node: %d %s", rec.code, rec.body)
 	}
 	d := decode[ndDetail](t, rec)
-	if d.ID != "node-1" || d.Version != 7 || d.Hostname != "mgr-1" || d.Role != "manager" || !d.Leader || !d.RunsBayplan || d.State != "ready" ||
+	if d.ID != "node-1" || d.Version != 7 || d.Hostname != "mgr-1" || d.Role != "manager" || !d.Leader || !d.RunsCoaming || d.State != "ready" ||
 		d.Availability != "active" || d.Reachability != "reachable" || d.Address != "10.0.0.1" || d.ManagerAddr != "10.0.0.1:2377" ||
 		d.EngineVersion != "29.1.0" || d.OS != "linux" || d.Arch != "aarch64" || d.Cpus != 4 || d.MemoryBytes != 8<<30 || d.TargetNodeID != e.ID {
 		t.Errorf("detail = %+v", d)
@@ -278,7 +278,7 @@ func TestGetNodeAndInspect(t *testing.T) {
 	}
 
 	w := decode[ndDetail](t, f.get(t, e, "nodes/node-3"))
-	if w.Role != "worker" || w.Leader || w.RunsBayplan || w.Reachability != "" || w.ManagerAddr != "" || w.Agent.Reporting || w.TargetNodeID != "" {
+	if w.Role != "worker" || w.Leader || w.RunsCoaming || w.Reachability != "" || w.ManagerAddr != "" || w.Agent.Reporting || w.TargetNodeID != "" {
 		t.Errorf("worker = %+v, want no manager facts, no agent and no route", w)
 	}
 	if w.Labels == nil || w.EngineLabels == nil {
@@ -381,7 +381,7 @@ func TestNodesAreForASwarmAndForAViewer(t *testing.T) {
 }
 
 // ndSwarm is a swarm of two managers and a worker, each with an agent, and a fourth node no
-// agent runs on. Bayplan's own container is on the second manager.
+// agent runs on. Coaming's own container is on the second manager.
 type ndSwarm struct {
 	*agentFix
 	env       tunneltest.Environment
@@ -412,7 +412,7 @@ func newNodesSwarm(t *testing.T) *ndSwarm {
 	s := &ndSwarm{agentFix: f, env: env}
 	cfg, facts := mgr(1, dockertest.FakeContainer{ID: "aaaaaaaaaaaa11111111", Names: []string{"/web"}, State: "running"})
 	s.m1 = f.connect(t, env, cfg, facts)
-	cfg, facts = mgr(2, dockertest.FakeContainer{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/bayplan"}, State: "running"})
+	cfg, facts = mgr(2, dockertest.FakeContainer{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/coaming"}, State: "running"})
 	s.m2 = f.connect(t, env, cfg, facts)
 	s.w = f.connect(t, env, dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active"},
 		&wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
@@ -420,22 +420,22 @@ func newNodesSwarm(t *testing.T) *ndSwarm {
 	return s
 }
 
-func TestRunsBayplanNode(t *testing.T) {
+func TestRunsCoamingNode(t *testing.T) {
 	t.Parallel()
 	// On the local socket's own swarm node.
 	f, e := ndEnv(t, nil)
 	b := ndList1(t, f, e, "")
 	var runs []string
 	for _, n := range b.Items {
-		if n.RunsBayplan {
+		if n.RunsCoaming {
 			runs = append(runs, n.ID)
 		}
 	}
 	if !slices.Equal(runs, []string{"node-1"}) {
-		t.Errorf("local socket: runsBayplan on %v, want only node-1, the node the socket is", runs)
+		t.Errorf("local socket: runsCoaming on %v, want only node-1, the node the socket is", runs)
 	}
 
-	// On the node of the container that is Bayplan's own, found through the agents.
+	// On the node of the container that is Coaming's own, found through the agents.
 	s := newNodesSwarm(t)
 	s.whenProbed(t, envs.AgentTarget(s.m1.id), envs.AgentTarget(s.m2.id), envs.AgentTarget(s.w.id))
 	// Every agent target has answered its first probe, so the node list is read once.
@@ -446,12 +446,12 @@ func TestRunsBayplanNode(t *testing.T) {
 	l := decode[ndList](t, rec)
 	runs = nil
 	for _, n := range l.Items {
-		if n.RunsBayplan {
+		if n.RunsCoaming {
 			runs = append(runs, n.ID)
 		}
 	}
 	if !slices.Equal(runs, []string{"node-mgr-2"}) {
-		t.Errorf("agents: runsBayplan on %v, want only node-mgr-2, the node of Bayplan's own container", runs)
+		t.Errorf("agents: runsCoaming on %v, want only node-mgr-2, the node of Coaming's own container", runs)
 	}
 	byID := map[string]ndItem{}
 	for _, n := range l.Items {
@@ -462,17 +462,17 @@ func TestRunsBayplanNode(t *testing.T) {
 			t.Errorf("%s = %+v, want an agent reporting, target %s", id, n, agent)
 		}
 	}
-	if ghost := byID["node-ghost"]; ghost.AgentReporting || ghost.TargetNodeID != "" || ghost.RunsBayplan {
+	if ghost := byID["node-ghost"]; ghost.AgentReporting || ghost.TargetNodeID != "" || ghost.RunsCoaming {
 		t.Errorf("node-ghost = %+v, want no agent", ghost)
 	}
 
 	// The detail has the same answer and the agent card.
 	d := decode[ndDetail](t, s.get(t, s.env.ID, "nodes/node-wrk-1"))
-	if !d.Agent.Reporting || d.Agent.Version == "" || d.Agent.LastSeen == "" || d.RunsBayplan {
-		t.Errorf("node-wrk-1 = %+v, want its agent's version and last seen, and not Bayplan's node", d)
+	if !d.Agent.Reporting || d.Agent.Version == "" || d.Agent.LastSeen == "" || d.RunsCoaming {
+		t.Errorf("node-wrk-1 = %+v, want its agent's version and last seen, and not Coaming's node", d)
 	}
-	if m2 := decode[ndDetail](t, s.get(t, s.env.ID, "nodes/node-mgr-2")); !m2.RunsBayplan {
-		t.Errorf("node-mgr-2 detail = %+v, want runsBayplan", m2)
+	if m2 := decode[ndDetail](t, s.get(t, s.env.ID, "nodes/node-mgr-2")); !m2.RunsCoaming {
+		t.Errorf("node-mgr-2 detail = %+v, want runsCoaming", m2)
 	}
 	ghost := decode[ndDetail](t, s.get(t, s.env.ID, "nodes/node-ghost"))
 	if ghost.Agent != (ndAgent{}) {

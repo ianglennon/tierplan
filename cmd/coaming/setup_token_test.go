@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -35,7 +35,7 @@ func TestSetupTokenExitsOneWithAnExplanationWhenThereIsNone(t *testing.T) {
 	if strings.TrimSpace(out) != "" {
 		t.Fatalf("stdout = %q, want empty", out)
 	}
-	if !strings.Contains(errOut, "no active setup token: setup is already complete, or the Bayplan server has not started yet") {
+	if !strings.Contains(errOut, "no active setup token: setup is already complete, or the Coaming server has not started yet") {
 		t.Fatalf("stderr = %q, want the explanation", errOut)
 	}
 }
@@ -45,7 +45,7 @@ func TestSetupTokenNeverOpensTheDatabase(t *testing.T) {
 	if _, _, err := runCLI(t, dir, "setup-token"); err == nil {
 		t.Fatal("want an error with no token")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "bayplan.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "coaming.db")); err == nil {
 		t.Fatal("setup-token created or opened the database")
 	}
 }

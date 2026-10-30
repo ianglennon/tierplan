@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,13 +15,13 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // Stable problem types of the backup routes.
@@ -80,7 +80,7 @@ type ExportBackupInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Passphrase string `json:"passphrase" maxLength:"1024" doc:"Locks the backup. At least 16 characters; Bayplan never stores it and cannot recover it"`
+		Passphrase string `json:"passphrase" maxLength:"1024" doc:"Locks the backup. At least 16 characters; Coaming never stores it and cannot recover it"`
 	}
 }
 
@@ -123,8 +123,8 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/backup/export",
 		Summary:     "Download an encrypted backup",
-		Description: "Takes a consistent copy of the database while Bayplan runs and answers with it as a download named " +
-			"bayplan-backup-<UTC YYYYMMDD-HHMM>.bayplan, locked with the passphrase in the body. The backup holds users, teams, " +
+		Description: "Takes a consistent copy of the database while Coaming runs and answers with it as a download named " +
+			"coaming-backup-<UTC YYYYMMDD-HHMM>.coaming, locked with the passphrase in the body. The backup holds users, teams, " +
 			"access, settings, environments and the audit log. It does not hold the master key, sessions, invite or reset links " +
 			"or pending join tokens, and every secret in it is sealed under a key that is only inside the encrypted file. The " +
 			"passphrase is sent in the body, is never stored or logged, and is not in the audit entry. 422 " + problemPassphraseTooShort +
@@ -145,7 +145,7 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 		// Export into a file first, so a failure answers a problem instead of a
 		// truncated download. It lives next to the database, readable by this
 		// user only, and is removed on every path.
-		tmp, err := os.CreateTemp(d.DataDir, ".bayplan-export-*.tmp")
+		tmp, err := os.CreateTemp(d.DataDir, ".coaming-export-*.tmp")
 		if err != nil {
 			return nil, internal("create the export file", err)
 		}
@@ -171,12 +171,12 @@ func RegisterBackup(r *httpx.Router, d BackupDeps) {
 				"Another backup is being prepared. Try again in a moment.")
 		case errors.Is(err, backup.ErrChainBroken):
 			return nil, httpx.Problem(http.StatusConflict, problemAuditChainBroken,
-				"The audit log does not verify, so a backup would carry a log that cannot be trusted. Run bayplan audit verify in the container, or take the backup there with --allow-broken-chain.")
+				"The audit log does not verify, so a backup would carry a log that cannot be trusted. Run coaming audit verify in the container, or take the backup there with --allow-broken-chain.")
 		case err != nil:
 			return nil, internal("export", err)
 		}
 
-		name := "bayplan-backup-" + now.Format("20060102-1504") + backup.FileExtension
+		name := "coaming-backup-" + now.Format("20060102-1504") + backup.FileExtension
 		if err := d.Audit.Record(ctx, audit.Entry{
 			Actor:      p.AuditActor(),
 			Action:     audit.ActionBackupExported,

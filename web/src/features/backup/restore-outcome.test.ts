@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -53,14 +53,14 @@ function server(script: ("down" | number)[]) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("waitForRestoreOutcome", () => {
-  it("is restored when Bayplan went down and came back refusing the session", async () => {
+  it("is restored when Coaming went down and came back refusing the session", async () => {
     const c = clock();
     const s = server(["down", "down", 401]);
     await expect(waitForRestoreOutcome({ ...s, ...c })).resolves.toBe("restored");
     expect(c.sleeps).toEqual([POLL_INTERVAL_MS, POLL_INTERVAL_MS]);
   });
 
-  it("is rolled_back when Bayplan went down and came back still accepting the session", async () => {
+  it("is rolled_back when Coaming went down and came back still accepting the session", async () => {
     const c = clock();
     const s = server(["down", "down", 200]);
     await expect(waitForRestoreOutcome({ ...s, ...c })).resolves.toBe("rolled_back");
@@ -80,7 +80,7 @@ describe("waitForRestoreOutcome", () => {
     await expect(waitForRestoreOutcome({ ...s, ...c })).resolves.toBe("restored");
   });
 
-  it("keeps waiting through a 502 or 503 while Bayplan starts", async () => {
+  it("keeps waiting through a 502 or 503 while Coaming starts", async () => {
     const c = clock();
     const s = server(["down", 502, 503, 401]);
     await expect(waitForRestoreOutcome({ ...s, ...c })).resolves.toBe("restored");

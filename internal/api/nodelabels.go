@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // The bounds the agent puts on a node's labels. They are counted in UTF-8 bytes, and the
@@ -69,7 +69,7 @@ type labelImpactInput struct {
 }
 
 // reservedLabelPrefixes are the prefixes Docker keeps for itself. Docker accepts a node label that
-// starts with one (RESEARCH E15), so Bayplan is the one that refuses it.
+// starts with one (RESEARCH E15), so Coaming is the one that refuses it.
 var reservedLabelPrefixes = []string{"com.docker.", "io.docker.", "org.dockerproject."}
 
 // reservedPrefix is the reserved prefix a label key starts with, compared without regard to the
@@ -287,7 +287,7 @@ func registerNodeLabels(r *httpx.Router, d NodesDeps) {
 		Summary: "Replace a node's labels",
 		Description: "Replaces the labels of one node, once. The server reads the node fresh and sends its whole spec with only the labels changed and the version sent, so nothing else about the node changes. " +
 			"A node whose version is not the one sent is 409 node_changed and nothing is retried; Docker's own refusals are 502 node_update_failed with Docker's words. Whether a constraint would stop matching is the caller's to confirm: " +
-			"Bayplan does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. " + common,
+			"Coaming does not block it. Every attempt on a node that exists is audited as node.labels_changed with the name, how many labels were added, changed and removed, how many services are affected and the code. " + common,
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
 	}, need, func(ctx context.Context, in *NodeLabelsInput) (*struct{}, error) {
 		p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)

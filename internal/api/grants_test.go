@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
+	"github.com/ianglennon/coaming/internal/audit"
 )
 
 // The grant routes (plan 03-19, AUTH-06, AUTH-07, D-05, D-06, D-15 to D-17,
@@ -50,7 +50,7 @@ type userAccessResp struct {
 // summary) and environment B (an agent environment) as the signed-in admin.
 func (f *envFix) twoEnvironments(t *testing.T) (a, b envBody) {
 	t.Helper()
-	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	f.inst.Apply("Coaming", "https://example.com/coaming")
 	a = f.add(t)
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {

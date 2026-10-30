@@ -21,7 +21,7 @@
       "generic": "Needs the {{permission}} permission"
     },
     "instance": "Only an instance admin can do this",
-    "lastAdmin": "Bayplan needs at least one active instance admin",
+    "lastAdmin": "Coaming needs at least one active instance admin",
     "ownAccount": "You can't do this to your own account here",
     "typeToConfirm": {
       "label": "Type {{name}} to confirm",

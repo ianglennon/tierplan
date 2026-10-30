@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package swarmops
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // ErrRevealRequired means the spec adds a secret reference the service does not have, and the caller

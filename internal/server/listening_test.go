@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // pickAddress returns a loopback address that was free a moment ago.
@@ -33,8 +33,8 @@ func pickAddress(t *testing.T) string {
 func TestListeningClosesOnceTheServerHasBoundItsAddress(t *testing.T) {
 	addr := pickAddress(t)
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{
-		"BAYPLAN_DATA_DIR": t.TempDir() + "/data",
-		"BAYPLAN_LISTEN":   addr,
+		"COAMING_DATA_DIR": t.TempDir() + "/data",
+		"COAMING_LISTEN":   addr,
 	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -77,8 +77,8 @@ func TestListeningStaysOpenWhenTheAddressIsTaken(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{
-		"BAYPLAN_DATA_DIR": t.TempDir() + "/data",
-		"BAYPLAN_LISTEN":   taken.Addr().String(),
+		"COAMING_DATA_DIR": t.TempDir() + "/data",
+		"COAMING_LISTEN":   taken.Addr().String(),
 	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestListeningStaysOpenWhenTheAddressIsTaken(t *testing.T) {
 }
 
 // listeningLines is a log destination that reports the address of every
-// "bayplan listening" line it is given, so a test learns that the line was
+// "coaming listening" line it is given, so a test learns that the line was
 // written from the line itself instead of from a timer.
 type listeningLines struct{ addrs chan string }
 
@@ -107,7 +107,7 @@ func (w listeningLines) Write(p []byte) (int, error) {
 		Addr   string `json:"addr"`
 		Scheme string `json:"scheme"`
 	}
-	if json.Unmarshal(p, &rec) == nil && rec.Msg == "bayplan listening" {
+	if json.Unmarshal(p, &rec) == nil && rec.Msg == "coaming listening" {
 		select {
 		case w.addrs <- rec.Scheme + "://" + rec.Addr:
 		default:
@@ -117,15 +117,15 @@ func (w listeningLines) Write(p []byte) (int, error) {
 }
 
 // WR-07, product half: a caller that binds port 0 learns the port from the
-// server's own log line, in the JSON form cmd/bayplan configures
-// ({"msg":"bayplan listening","addr":"127.0.0.1:<port>","scheme":"http"}), so
+// server's own log line, in the JSON form cmd/coaming configures
+// ({"msg":"coaming listening","addr":"127.0.0.1:<port>","scheme":"http"}), so
 // scripts/smoke.sh does not probe for a free port and race the other runner on
 // the same VM.
 func TestTheListeningLogLineNamesTheAddressThatWasBound(t *testing.T) {
 	lines := listeningLines{addrs: make(chan string, 1)}
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{
-		"BAYPLAN_DATA_DIR": t.TempDir() + "/data",
-		"BAYPLAN_LISTEN":   "127.0.0.1:0",
+		"COAMING_DATA_DIR": t.TempDir() + "/data",
+		"COAMING_LISTEN":   "127.0.0.1:0",
 	}), slog.New(slog.NewJSONHandler(lines, nil)))
 	if err != nil {
 		t.Fatal(err)

@@ -176,7 +176,7 @@ func (q *Queries) GetRegistryCredentialSecret(ctx context.Context, id string) (s
 
 const insertRegistryCredential = `-- name: InsertRegistryCredential :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 INSERT INTO registry_credentials (
     id, env_id, name, type, host, prefix, username, secret_sealed, secret_last4,

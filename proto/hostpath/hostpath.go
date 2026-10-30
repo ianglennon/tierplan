@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package hostpath is the one rule that says which host paths a container may
 // be given without extra privilege. The compose policy (stacks) and the agent's
@@ -18,7 +18,7 @@ import (
 // path is a host-escalation feature unless it sits under one of these data
 // roots, so a system or runtime path nobody thought to list (the containerd
 // state directory, /usr, /home, ...) fails closed. The roots are conventional
-// places for data a stack is meant to bind. The Bayplan data directory and
+// places for data a stack is meant to bind. The Coaming data directory and
 // anything else a user keeps under one of them cannot be known to this pass, so
 // an operator who stores secrets under /srv or /mnt should not rely on it.
 var (

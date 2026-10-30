@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -22,10 +22,10 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // targetVault is the master key of the instance a backup is restored into: not
@@ -138,7 +138,7 @@ func TestRestoreIntoAFreshDataDirectoryRewrapsSecretsAndVerifiesTheChainUnderThe
 
 // --- validation before any change (D-30) -------------------------------------
 
-// buildOpts shapes a backup written by hand, the way an older or hostile Bayplan
+// buildOpts shapes a backup written by hand, the way an older or hostile Coaming
 // could have written one.
 type buildOpts struct {
 	// maxMigration limits the schema to migrations 1..n; 0 is the embedded set.
@@ -536,7 +536,7 @@ func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 		}
 	}
 	for i := range 4 {
-		if err := os.WriteFile(filepath.Join(backups, "bayplan-v0.1."+strconv.Itoa(i)+"-2026010"+strconv.Itoa(i+1)+"T000000Z.db"), []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(backups, "coaming-v0.1."+strconv.Itoa(i)+"-2026010"+strconv.Itoa(i+1)+"T000000Z.db"), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -554,12 +554,12 @@ func TestMigrationPrunerLeavesPreRestoreSnapshotsAlone(t *testing.T) {
 		switch {
 		case strings.HasPrefix(e.Name(), "prerestore-"):
 			gotPre++
-		case strings.HasPrefix(e.Name(), "bayplan-"):
+		case strings.HasPrefix(e.Name(), "coaming-"):
 			gotMig++
 		}
 	}
 	if gotPre != len(pre) || gotMig != 3 {
-		t.Fatalf("after the migration pruner: %d prerestore (want %d), %d bayplan-* (want 3)", gotPre, len(pre), gotMig)
+		t.Fatalf("after the migration pruner: %d prerestore (want %d), %d coaming-* (want 3)", gotPre, len(pre), gotMig)
 	}
 }
 

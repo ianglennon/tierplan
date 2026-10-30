@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -19,16 +19,16 @@ import (
 func TestStartupSweepsWhatAKilledBackupLeftBehindAndNothingElse(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 	backups := filepath.Join(dir, "backups")
-	if err := os.MkdirAll(filepath.Join(dir, ".bayplan-backup-dead", "inner"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".coaming-backup-dead", "inner"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(backups, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range []string{
-		filepath.Join(dir, ".bayplan-export-dead.tmp"),
-		filepath.Join(backups, ".bayplan-schedule-dead.tmp"),
-		filepath.Join(backups, "bayplan-backup-20261001-0300.bayplan"),
+		filepath.Join(dir, ".coaming-export-dead.tmp"),
+		filepath.Join(backups, ".coaming-schedule-dead.tmp"),
+		filepath.Join(backups, "coaming-backup-20261001-0300.coaming"),
 		filepath.Join(dir, "notes.txt"),
 	} {
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
@@ -37,20 +37,20 @@ func TestStartupSweepsWhatAKilledBackupLeftBehindAndNothingElse(t *testing.T) {
 	}
 	old := time.Now().Add(-3 * time.Hour)
 	for _, p := range []string{
-		filepath.Join(dir, ".bayplan-backup-dead"), filepath.Join(dir, ".bayplan-export-dead.tmp"),
-		filepath.Join(backups, ".bayplan-schedule-dead.tmp"), filepath.Join(backups, "bayplan-backup-20261001-0300.bayplan"),
+		filepath.Join(dir, ".coaming-backup-dead"), filepath.Join(dir, ".coaming-export-dead.tmp"),
+		filepath.Join(backups, ".coaming-schedule-dead.tmp"), filepath.Join(backups, "coaming-backup-20261001-0300.coaming"),
 		filepath.Join(dir, "notes.txt"),
 	} {
 		if err := os.Chtimes(p, old, old); err != nil {
 			t.Fatal(err)
 		}
 	}
-	live := filepath.Join(dir, ".bayplan-export-live.tmp")
+	live := filepath.Join(dir, ".coaming-export-live.tmp")
 	if err := os.WriteFile(live, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -58,15 +58,15 @@ func TestStartupSweepsWhatAKilledBackupLeftBehindAndNothingElse(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 
 	for _, gone := range []string{
-		filepath.Join(dir, ".bayplan-backup-dead"), filepath.Join(dir, ".bayplan-export-dead.tmp"),
-		filepath.Join(backups, ".bayplan-schedule-dead.tmp"),
+		filepath.Join(dir, ".coaming-backup-dead"), filepath.Join(dir, ".coaming-export-dead.tmp"),
+		filepath.Join(backups, ".coaming-schedule-dead.tmp"),
 	} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s survived the start", gone)
 		}
 	}
 	for _, kept := range []string{
-		live, filepath.Join(backups, "bayplan-backup-20261001-0300.bayplan"), filepath.Join(dir, "notes.txt"),
+		live, filepath.Join(backups, "coaming-backup-20261001-0300.coaming"), filepath.Join(dir, "notes.txt"),
 	} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Errorf("%s was removed: %v", kept, err)

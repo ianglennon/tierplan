@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package privdrop
 
@@ -172,9 +172,9 @@ func TestDropWithNoSocketJoinsNoSupplementaryGroup(t *testing.T) {
 func TestDropChownsRootOwnedDataEntriesAndLeavesOwnedOnesAlone(t *testing.T) {
 	r := newRig(t)
 	r.add(".", 0, 0, true) // a fresh bind mount starts root-owned (Pitfall 9)
-	r.add("bayplan.db", 0, 0, false)
-	r.add("bayplan.db-wal", 0, 0, false) // left behind by a CLI run as root (A8)
-	r.add("bayplan.key", 1000, 1000, false)
+	r.add("coaming.db", 0, 0, false)
+	r.add("coaming.db-wal", 0, 0, false) // left behind by a CLI run as root (A8)
+	r.add("coaming.key", 1000, 1000, false)
 	r.add("setup-token", 0, 0, false)
 	r.add("backups", 0, 0, true)
 	r.add("backups/pre-0003.db", 0, 0, false)
@@ -191,8 +191,8 @@ func TestDropChownsRootOwnedDataEntriesAndLeavesOwnedOnesAlone(t *testing.T) {
 		".=1000:1000",
 		"backups/pre-0003.db=1000:1000",
 		"backups=1000:1000",
-		"bayplan.db-wal=1000:1000",
-		"bayplan.db=1000:1000",
+		"coaming.db-wal=1000:1000",
+		"coaming.db=1000:1000",
 		"other=1000:1000",
 		"setup-token=1000:1000",
 		"tls/selfsigned.key=1000:1000",
@@ -265,14 +265,14 @@ func TestDropCreatesAMissingDataDirectoryBeforeChowningIt(t *testing.T) {
 func TestDropSetsUmask077BeforeTheIdentityChange(t *testing.T) {
 	r := newRig(t)
 	r.add(".", 0, 0, true)
-	r.add("bayplan.db", 0, 0, false)
+	r.add("coaming.db", 0, 0, false)
 
 	if _, err := Drop(r.options(r.data(), "")); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"chown .=1000:1000",
-		"chown bayplan.db=1000:1000",
+		"chown coaming.db=1000:1000",
 		"umask 077",
 		"setgroups []",
 		"setgid 1000",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package fieldclass is the table of what a swarm does with each compose service key. It is a
 // package of its own because two packages that cannot import one another read it: convert (which
@@ -124,7 +124,7 @@ var Table = map[string]Class{
 	"pids_limit":          IgnoredOnSwarm, // Use deploy.resources.limits.pids.
 
 	// --- Blocking (the service is refused) ---------------------------------------------
-	"extends":       Blocking, // Bayplan does not follow extends; write the service out in full.
+	"extends":       Blocking, // Coaming does not follow extends; write the service out in full.
 	"volumes_from":  Blocking, // Define the volume under volumes: and mount it in each service.
 	"volume_driver": Blocking, // Define the volume under volumes: with its driver.
 	"cpu_quota":     Blocking, // Use deploy.resources.limits.cpus.
@@ -132,8 +132,8 @@ var Table = map[string]Class{
 	"cpuset":        Blocking, // Use deploy.placement constraints.
 	"mem_limit":     Blocking, // Use deploy.resources.limits.memory.
 	"memswap_limit": Blocking, // Use deploy.resources.limits.memory.
-	"env_file":      Blocking, // Bayplan reads no file from disk; put the variables under environment: or in the stack's variables.
-	"label_file":    Blocking, // Bayplan reads no file from disk; put the labels under labels:.
+	"env_file":      Blocking, // Coaming reads no file from disk; put the variables under environment: or in the stack's variables.
+	"label_file":    Blocking, // Coaming reads no file from disk; put the labels under labels:.
 	"pre_start":     Blocking, // A swarm has no lifecycle hooks; run the step in the entrypoint.
 	"post_start":    Blocking, // A swarm has no lifecycle hooks; run the step in the entrypoint.
 	"pre_stop":      Blocking, // A swarm has no lifecycle hooks; handle the stop signal in the service.

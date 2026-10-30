@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx_test
 
@@ -19,11 +19,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
 )
 
-// Mirrors and reading them (plan 09-09, GIT-02, D-06, D-12): a bare repository per Bayplan repository
+// Mirrors and reading them (plan 09-09, GIT-02, D-06, D-12): a bare repository per Coaming repository
 // ID on the server's disk, filled with one ref at a time and read by commit ID.
 
 // browseFixture is a repository with folders, a symlink and a submodule, served over TLS.

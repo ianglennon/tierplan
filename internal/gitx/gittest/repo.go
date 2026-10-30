@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package gittest builds real git repositories and serves them over smart HTTP, for tests that
 // need a git server without the network. It uses the git command line and git-http-backend, and
@@ -50,8 +50,8 @@ func NewRepo(tb testing.TB) *Repo {
 			"HOME="+root,
 			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
 			"GIT_TERMINAL_PROMPT=0",
-			"GIT_AUTHOR_NAME=Bayplan Test", "GIT_AUTHOR_EMAIL=test@bayplan.invalid",
-			"GIT_COMMITTER_NAME=Bayplan Test", "GIT_COMMITTER_EMAIL=test@bayplan.invalid",
+			"GIT_AUTHOR_NAME=Coaming Test", "GIT_AUTHOR_EMAIL=test@coaming.invalid",
+			"GIT_COMMITTER_NAME=Coaming Test", "GIT_COMMITTER_EMAIL=test@coaming.invalid",
 			"GIT_AUTHOR_DATE=2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2026-01-01T00:00:00Z",
 		),
 	}
@@ -133,7 +133,7 @@ func (r *Repo) CommitMany(tb testing.TB, n int, file func(i int) string) string 
 	for i := range n {
 		msg := fmt.Sprintf("bulk %d", i)
 		content := fmt.Sprintf("%d\n", i)
-		fmt.Fprintf(&in, "commit refs/heads/main\ncommitter Bayplan Test <test@bayplan.invalid> %d +0000\ndata %d\n%s\n", base+i, len(msg), msg)
+		fmt.Fprintf(&in, "commit refs/heads/main\ncommitter Coaming Test <test@coaming.invalid> %d +0000\ndata %d\n%s\n", base+i, len(msg), msg)
 		if i == 0 {
 			in.WriteString("from refs/heads/main^0\n")
 		}

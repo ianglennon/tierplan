@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -43,7 +43,7 @@ const stack = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-// A stack found on the engine that Bayplan did not make: no ID, a state and the service counts, and the flags.
+// A stack found on the engine that Coaming did not make: no ID, a state and the service counts, and the flags.
 const unmanaged = (
   name: string,
   over: Record<string, unknown> = {},
@@ -313,7 +313,7 @@ describe("StackList", () => {
     const { onCreatingChange } = mount();
     expect(await screen.findByRole("heading", { name: "No stacks", level: 2 })).toBeTruthy();
     expect(
-      screen.getByText(/A stack is a compose file that Bayplan deploys and keeps tidy\./),
+      screen.getByText(/A stack is a compose file that Coaming deploys and keeps tidy\./),
     ).toBeTruthy();
     const buttons = screen.getAllByRole("button", { name: "Create stack" });
     expect(buttons.length).toBeGreaterThan(0);
@@ -778,7 +778,7 @@ describe("StackList: columns and pending rows", () => {
 describe("StackList unmanaged stacks", () => {
   const rowOfName = (name: string) => screen.getByText(name).closest("tr") as HTMLElement;
 
-  it("lists a stack Bayplan did not make with the Unmanaged badge, its state and services, a link to its page and Open stack and Adopt stack… only", async () => {
+  it("lists a stack Coaming did not make with the Unmanaged badge, its state and services, a link to its page and Open stack and Adopt stack… only", async () => {
     stacks = {
       items: [
         stack(),
@@ -834,7 +834,7 @@ describe("StackList unmanaged stacks", () => {
         unmanaged(
           "selfstack",
           {},
-          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+          { owner: "coaming", adoptable: false, reason: "This is Coaming's own stack." },
         ),
       ],
     };
@@ -890,14 +890,14 @@ describe("StackList unmanaged stacks", () => {
     expect(name.querySelector("img")).toBeNull();
   });
 
-  it("explains in a Tooltip that Bayplan did not create the stack", async () => {
+  it("explains in a Tooltip that Coaming did not create the stack", async () => {
     stacks = { items: [unmanaged("legacy")] };
     mount();
     await screen.findByText("legacy");
     fireEvent.focus(within(rowOfName("legacy")).getByText("Unmanaged"));
     const tip = await screen.findByRole("tooltip");
     expect(tip.textContent).toBe(
-      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
+      "Coaming didn't create this stack and doesn't manage it. Adopt it to manage it here.",
     );
   });
 });
@@ -991,7 +991,7 @@ describe("StackList: the Show group, captions and discovery", () => {
     expect(
       await screen.findByRole("heading", { name: "No unmanaged stacks", level: 2 }),
     ).toBeTruthy();
-    expect(screen.getByText("Every stack on Prod is managed by Bayplan.")).toBeTruthy();
+    expect(screen.getByText("Every stack on Prod is managed by Coaming.")).toBeTruthy();
     const buttons = screen.getAllByRole("button", { name: "Clear filters" });
     fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
     expect(onChange).toHaveBeenCalledWith({ q: undefined, status: undefined, kind: undefined });
@@ -1049,7 +1049,7 @@ describe("StackList: flags on unmanaged stacks", () => {
     fireEvent.focus(within(rowOfName("orphan")).getByText("Unmanaged"));
     const tip = await screen.findByRole("tooltip");
     expect(tip.textContent).toBe(
-      "Bayplan didn't create this stack and doesn't manage it. Adopt it to manage it here. Created by Bayplan (another instance or a lost record).",
+      "Coaming didn't create this stack and doesn't manage it. Adopt it to manage it here. Created by Coaming (another instance or a lost record).",
     );
   });
 
@@ -1065,18 +1065,18 @@ describe("StackList: flags on unmanaged stacks", () => {
     expect(source("plain").textContent).toBe("—");
   });
 
-  it("badges Bayplan's own stack and the agent's stack beside Unmanaged, with the reason in a Tooltip", async () => {
+  it("badges Coaming's own stack and the agent's stack beside Unmanaged, with the reason in a Tooltip", async () => {
     stacks = {
       items: [
         unmanaged(
           "self",
           {},
-          { owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." },
+          { owner: "coaming", adoptable: false, reason: "This is Coaming's own stack." },
         ),
         unmanaged(
           "agents",
           {},
-          { owner: "agent", adoptable: false, reason: "This stack runs Bayplan's agent." },
+          { owner: "agent", adoptable: false, reason: "This stack runs Coaming's agent." },
         ),
         unmanaged("blog"),
       ],
@@ -1085,12 +1085,12 @@ describe("StackList: flags on unmanaged stacks", () => {
     await screen.findByText("self");
     const own = rowOfName("self");
     expect(within(own).getByText("Unmanaged")).toBeTruthy();
-    expect(within(own).getByText("Bayplan")).toBeTruthy();
-    expect(within(rowOfName("agents")).getByText("Bayplan agent")).toBeTruthy();
-    expect(within(rowOfName("blog")).queryByText(/^Bayplan/)).toBeNull();
+    expect(within(own).getByText("Coaming")).toBeTruthy();
+    expect(within(rowOfName("agents")).getByText("Coaming agent")).toBeTruthy();
+    expect(within(rowOfName("blog")).queryByText(/^Coaming/)).toBeNull();
 
-    fireEvent.focus(within(own).getByText("Bayplan"));
-    expect((await screen.findByRole("tooltip")).textContent).toBe("This is Bayplan's own stack.");
+    fireEvent.focus(within(own).getByText("Coaming"));
+    expect((await screen.findByRole("tooltip")).textContent).toBe("This is Coaming's own stack.");
   });
 
   it("draws every flag as a neutral outline badge, never a status fill, and keeps names as text", async () => {
@@ -1107,7 +1107,7 @@ describe("StackList: flags on unmanaged stacks", () => {
     const name = await screen.findByText("<b>flagged</b>");
     expect(name.querySelector("b")).toBeNull();
     const row = name.closest("tr") as HTMLElement;
-    for (const word of ["Unmanaged", "Bayplan agent", "Portainer"]) {
+    for (const word of ["Unmanaged", "Coaming agent", "Portainer"]) {
       const badge = within(row).getByText(word);
       expect(badge.getAttribute("data-variant")).toBe("outline");
     }

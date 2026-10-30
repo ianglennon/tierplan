@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // Stacks made from a repository folder (plan 09-10, GIT-02, D-06, D-08, D-14, D-18): the draft holds the
@@ -416,7 +416,7 @@ func TestInlineRevisionUnchanged(t *testing.T) {
 }
 
 // Refreshing the draft of a git stack from a newer commit (plan 09-19, GIT-04, D-17): the repository's files are
-// replaced, Bayplan's own files and the variables stay, and a draft that moved is not overwritten.
+// replaced, Coaming's own files and the variables stay, and a draft that moved is not overwritten.
 
 func TestRefreshDraftKeepsOverlaysAndVars(t *testing.T) {
 	t.Parallel()

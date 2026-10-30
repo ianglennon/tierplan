@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package auth
 
@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // Sign-in errors.
@@ -360,7 +360,7 @@ func (l *Login) Logout(ctx context.Context, p *rbac.Principal, ip, userAgent str
 }
 
 // Unlock clears an account's lock and failure count, for the operator who ran
-// `bayplan user unlock` (D-29). It is audited as system:cli. A name that is not
+// `coaming user unlock` (D-29). It is audited as system:cli. A name that is not
 // a user is ErrUserNotFound and writes nothing.
 func Unlock(ctx context.Context, s *store.Store, w *audit.Writer, username string) error {
 	name, err := NormalizeUsername(username)

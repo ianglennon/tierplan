@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // A line of a .env file that is not a variable, with why. A comment and a blank line are ignored
 // on purpose; a malformed line is one the person probably meant as a variable.

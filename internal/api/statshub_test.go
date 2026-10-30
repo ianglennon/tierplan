@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -17,11 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/api"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/api"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The shared, ref-counted stats sampler (plan 06-32, RES-11, D-29 to D-31, RESEARCH
@@ -474,7 +474,7 @@ func TestStatsFilesImportNothingThatCouldStoreASample(t *testing.T) {
 			path := strings.Trim(imp.Path.Value, `"`)
 			switch path {
 			case "database/sql", "os", "io/ioutil", "bufio", "encoding/gob",
-				"github.com/ianglennon/bayplan/internal/store", "github.com/ianglennon/bayplan/internal/audit":
+				"github.com/ianglennon/coaming/internal/store", "github.com/ianglennon/coaming/internal/audit":
 				t.Errorf("%s imports %s, which could store a stats sample", file, path)
 			}
 		}

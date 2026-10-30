@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { ChevronDown } from "lucide-react";
 
@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useT } from "@/i18n/use-t";
 
-// The command rotates the key offline: the data directory is locked while Bayplan
+// The command rotates the key offline: the data directory is locked while Coaming
 // runs, so a `docker exec` into the running container would be refused. <volume>
-// is the volume the Bayplan container mounts at /data.
-const ROTATE_COMMAND = "docker run --rm -v <volume>:/data ghcr.io/ianglennon/bayplan key rotate";
+// is the volume the Coaming container mounts at /data.
+const ROTATE_COMMAND = "docker run --rm -v <volume>:/data ghcr.io/ianglennon/coaming key rotate";
 
 // MasterKeyNote points to key rotation, which is a command-line task. It is
 // collapsed by default: most visits to this page are for a backup.

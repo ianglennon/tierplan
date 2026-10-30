@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -242,19 +242,19 @@ describe("CheckSummary", () => {
           problems: [
             problem({
               code: "git_submodule",
-              message: "vendor/lib is a submodule. Bayplan doesn't support submodules.",
+              message: "vendor/lib is a submodule. Coaming doesn't support submodules.",
               file: "compose.yaml",
               line: 5,
             }),
             problem({
               code: "git_lfs_pointer",
-              message: "data/big.bin is a Git LFS pointer. Bayplan doesn't support Git LFS.",
+              message: "data/big.bin is a Git LFS pointer. Coaming doesn't support Git LFS.",
               file: "compose.yaml",
               line: 9,
             }),
             problem({
               code: "path_illegal",
-              message: "../x points outside the stack folder. Bayplan only reads files inside it.",
+              message: "../x points outside the stack folder. Coaming only reads files inside it.",
               file: "compose.yaml",
               line: 14,
             }),

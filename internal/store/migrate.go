@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package store
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 //go:embed migrations/*.sql
@@ -33,7 +33,7 @@ const (
 	freeSpaceFactor = 2
 
 	backupsDir     = "backups"
-	snapshotPrefix = "bayplan-"
+	snapshotPrefix = "coaming-"
 	snapshotSuffix = ".db"
 	// snapshotTimeLayout is the UTC timestamp in a snapshot's file name. It
 	// sorts lexically in time order.
@@ -42,9 +42,9 @@ const (
 	metaAppVersion = "app_version"
 )
 
-// ErrDowngrade is returned when the database was migrated by a newer Bayplan
+// ErrDowngrade is returned when the database was migrated by a newer Coaming
 // than the running binary (D-84). There are no down-migrations.
-var ErrDowngrade = errors.New("the database schema is newer than this Bayplan version")
+var ErrDowngrade = errors.New("the database schema is newer than this Coaming version")
 
 // MigrateOptions configures Migrate. The zero value of every function and FS
 // field selects the production behaviour; tests inject the rest.
@@ -52,9 +52,9 @@ type MigrateOptions struct {
 	// AppVersion is recorded in app_meta and names the next snapshot. Empty
 	// means "dev".
 	AppVersion string
-	// DataDir holds bayplan.db and the backups directory.
+	// DataDir holds coaming.db and the backups directory.
 	DataDir string
-	// SkipBackup is BAYPLAN_SKIP_PRE_MIGRATE_BACKUP: no snapshot and no
+	// SkipBackup is COAMING_SKIP_PRE_MIGRATE_BACKUP: no snapshot and no
 	// free-space check (D-83).
 	SkipBackup bool
 	// Migrations overrides the embedded migrations. Files sit at the root.
@@ -143,7 +143,7 @@ func Migrate(ctx context.Context, s *Store, o MigrateOptions) (MigrateResult, er
 			newest = "none found in " + filepath.Join(o.DataDir, backupsDir)
 		}
 		return res, fmt.Errorf("%w: the database is at schema version %d but this binary only knows schema version %d; "+
-			"run a newer Bayplan, or restore the newest backup: %s", ErrDowngrade, current, target, newest)
+			"run a newer Coaming, or restore the newest backup: %s", ErrDowngrade, current, target, newest)
 	}
 
 	pending, err := p.HasPending(ctx)
@@ -201,12 +201,12 @@ func checkFreeSpace(s *Store, o MigrateOptions) error {
 	if free < need {
 		return fmt.Errorf("not enough free space in %s to snapshot the database before migrating: "+
 			"%d bytes free, %d needed (twice the database size); free some space, or set "+
-			"BAYPLAN_SKIP_PRE_MIGRATE_BACKUP=true to migrate without a snapshot", o.DataDir, free, need)
+			"COAMING_SKIP_PRE_MIGRATE_BACKUP=true to migrate without a snapshot", o.DataDir, free, need)
 	}
 	return nil
 }
 
-// snapshot writes VACUUM INTO <DataDir>/backups/bayplan-<oldver>-<ts>.db and
+// snapshot writes VACUUM INTO <DataDir>/backups/coaming-<oldver>-<ts>.db and
 // prunes older snapshots.
 func snapshot(ctx context.Context, s *Store, o MigrateOptions) (string, error) {
 	dir := filepath.Join(o.DataDir, backupsDir)

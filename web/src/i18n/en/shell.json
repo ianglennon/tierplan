@@ -5,7 +5,7 @@
     "sidebar": {
       "title": "Navigation",
       "close": "Close menu",
-      "description": "Main navigation for Bayplan."
+      "description": "Main navigation for Coaming."
     },
     "switcher": {
       "none": "No environment",
@@ -77,12 +77,12 @@
       "bellCount_other": "Warnings, {{count}} items",
       "empty": "No warnings",
       "plainHttp": {
-        "title": "You're using Bayplan over plain HTTP.",
-        "fix": "Serve Bayplan over HTTPS or put it behind a reverse proxy"
+        "title": "You're using Coaming over plain HTTP.",
+        "fix": "Serve Coaming over HTTPS or put it behind a reverse proxy"
       },
       "keyBackup": {
         "title": "Back up your encryption key.",
-        "body": "Stored secrets can't be recovered without /data/bayplan.key.",
+        "body": "Stored secrets can't be recovered without /data/coaming.key.",
         "ack": "I've backed it up"
       },
       "banner": "Data isn't being persisted. /data isn't a mounted volume, so users, sessions and the audit log are lost when this container is removed. Mount a volume at /data and restart."

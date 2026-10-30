@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package agents_test
@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/server/servertest"
 )
 
 // agentContainer is the name the standalone install gives the agent container.
-const agentContainer = "bayplan-agent"
+const agentContainer = "coaming-agent"
 
 // containerView is the part of `docker inspect` of the agent container that an
 // update must carry over.
@@ -63,20 +63,20 @@ func inspectContainer(t *testing.T, n *dockertest.Node, name string) containerVi
 	return got[0]
 }
 
-// operators is what the operator chose and an update must keep: the BAYPLAN_ settings
-// (the engine and the image add the rest), the bayplan.* labels (the image adds
+// operators is what the operator chose and an update must keep: the COAMING_ settings
+// (the engine and the image add the rest), the coaming.* labels (the image adds
 // org.opencontainers.*), the mounts, the restart policy and the hardening flags.
 func (c containerView) operators() map[string]any {
 	var env []string
 	for _, e := range c.Config.Env {
-		if strings.HasPrefix(e, "BAYPLAN_") {
+		if strings.HasPrefix(e, "COAMING_") {
 			env = append(env, e)
 		}
 	}
 	slices.Sort(env)
 	labels := map[string]string{}
 	for k, v := range c.Config.Labels {
-		if strings.HasPrefix(k, "bayplan.") {
+		if strings.HasPrefix(k, "coaming.") {
 			labels[k] = v
 		}
 	}

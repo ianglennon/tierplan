@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // sharedImagePullFanOut pulls an image on every node of a real swarm of three
@@ -21,7 +21,7 @@ import (
 // D-13): the default targets are all four nodes, each pulls from a registry inside the
 // test network and ends Done with the same digest, and every node has the image. Then
 // the worker's agent is revoked, which leaves the node in the swarm and out of
-// Bayplan's reach: a second pull fails that node alone with node_unreachable while the
+// Coaming's reach: a second pull fails that node alone with node_unreachable while the
 // other three are Done, and every audit row of the job carries the job ID as its bulk.
 func sharedImagePullFanOut(t *testing.T, f *swarmFix) {
 	registry := dockertest.StartSwarmRegistry(t, f.sw, dockertest.RegistryOptions{})
@@ -190,7 +190,7 @@ func sharedPrivatePullEveryNode(t *testing.T, f *swarmFix) {
 			t.Errorf("%s does not have %s after the pull: %q", n.Hostname, ref, id)
 		}
 		if dockertest.HasClientConfig(t, n) {
-			t.Errorf("%s has a Docker client configuration after the pull: Bayplan must not log in", n.Hostname)
+			t.Errorf("%s has a Docker client configuration after the pull: Coaming must not log in", n.Hostname)
 		}
 	}
 

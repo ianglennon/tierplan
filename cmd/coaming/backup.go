@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -20,18 +20,18 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/buildinfo"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/buildinfo"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // passphraseFileEnv names the file the backup passphrase is read from. The
 // passphrase is never a flag: a flag shows in the process list and in shell
 // history (D-32).
-const passphraseFileEnv = "BAYPLAN_BACKUP_PASSPHRASE_FILE" //nolint:gosec // the name of an environment variable, not a credential
+const passphraseFileEnv = "COAMING_BACKUP_PASSPHRASE_FILE" //nolint:gosec // the name of an environment variable, not a credential
 
 // maxPassphraseLine bounds what is read for a passphrase.
 const maxPassphraseLine = 4096
@@ -46,12 +46,12 @@ func newBackupCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "backup",
-		Short: "Write an encrypted backup while the server runs, for example: docker exec <container> bayplan backup",
-		Long: "Writes the same encrypted .bayplan file as Settings > Backup, from a consistent copy of the database, while Bayplan runs.\n" +
+		Short: "Write an encrypted backup while the server runs, for example: docker exec <container> coaming backup",
+		Long: "Writes the same encrypted .coaming file as Settings > Backup, from a consistent copy of the database, while Coaming runs.\n" +
 			"The passphrase is read from the file named by " + passphraseFileEnv + ", or else from the first line of standard input; " +
 			"it is never a flag. It must be at least " + strconv.Itoa(backup.MinPassphraseLen) + " characters.\n" +
 			"The file goes to --out: a path (an existing file there is replaced), or - for standard output. By default it goes to " +
-			"BAYPLAN_BACKUP_DIR, or backups/ in the data directory, as bayplan-manual-<date>-<time>.bayplan; a default name is never " +
+			"COAMING_BACKUP_DIR, or backups/ in the data directory, as coaming-manual-<date>-<time>.coaming; a default name is never " +
 			"given to a file that exists. Scheduled-backup retention does not touch these files, and Settings > Backup does not list them.\n" +
 			"A broken audit chain refuses the backup unless --allow-broken-chain is given; the backup then records that it did not verify.\n" +
 			"The backup is audited as backup.exported by system:cli.",
@@ -60,7 +60,7 @@ func newBackupCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE:          func(cmd *cobra.Command, _ []string) error { return runBackup(cmd, out, allowBroken) },
 	}
-	cmd.Flags().StringVar(&out, "out", "", "where to write the backup: a file path, or - for standard output (default: bayplan-manual-<date>-<time>.bayplan in BAYPLAN_BACKUP_DIR, or in backups/ in the data directory)")
+	cmd.Flags().StringVar(&out, "out", "", "where to write the backup: a file path, or - for standard output (default: coaming-manual-<date>-<time>.coaming in COAMING_BACKUP_DIR, or in backups/ in the data directory)")
 	cmd.Flags().BoolVar(&allowBroken, "allow-broken-chain", false, "back up even if the audit chain does not verify")
 	return cmd
 }
@@ -91,7 +91,7 @@ func runBackup(cmd *cobra.Command, out string, allowBroken bool) error {
 	// the server's.
 	v, err := vault.Load(cfg.EncryptionKey, cfg.DataDir)
 	if errors.Is(err, vault.ErrNoKey) {
-		return fail(fmt.Errorf("no encryption key: set BAYPLAN_ENCRYPTION_KEY (or _FILE), or point BAYPLAN_DATA_DIR at the "+
+		return fail(fmt.Errorf("no encryption key: set COAMING_ENCRYPTION_KEY (or _FILE), or point COAMING_DATA_DIR at the "+
 			"directory that holds %s (looked in %s)", vault.KeyFile, cfg.DataDir))
 	}
 	if err != nil {
@@ -99,7 +99,7 @@ func runBackup(cmd *cobra.Command, out string, allowBroken bool) error {
 	}
 	dbPath := filepath.Join(cfg.DataDir, store.DatabaseFile)
 	if _, err := os.Stat(dbPath); err != nil {
-		return fail(fmt.Errorf("no database at %s: set BAYPLAN_DATA_DIR to the directory Bayplan stores its data in", dbPath))
+		return fail(fmt.Errorf("no database at %s: set COAMING_DATA_DIR to the directory Coaming stores its data in", dbPath))
 	}
 	st, err := store.Open(ctx, cfg.DataDir)
 	if err != nil {
@@ -226,7 +226,7 @@ func newBackupDestination(cmd *cobra.Command, dataDir, backupDir, out string, no
 		}
 		reserved = true
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".bayplan-backup-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".coaming-backup-*.tmp")
 	if err != nil {
 		if reserved {
 			_ = os.Remove(path)

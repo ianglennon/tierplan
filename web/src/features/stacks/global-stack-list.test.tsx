@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,7 +50,7 @@ const group = (
   ...over,
 });
 
-// A stack found on the engine that Bayplan did not make.
+// A stack found on the engine that Coaming did not make.
 const unmanaged = (name: string, over: Record<string, unknown> = {}) => ({
   id: "",
   name,

@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
-<!-- SPDX-FileCopyrightText: 2026 The Bayplan Authors -->
+<!-- SPDX-FileCopyrightText: 2026 The Coaming Authors -->
 
 # Swarm services, nodes, secrets and configs
 
-This page explains what Bayplan does with the services of a Docker Swarm, the nodes that run
+This page explains what Coaming does with the services of a Docker Swarm, the nodes that run
 them, and the secrets and configs they use: who may do each thing, what asks for
 confirmation first, and what is written down about it. It also states plainly three things that
-are decisions and not oversights: [a host's owner decides whether Bayplan may change a service
+are decisions and not oversights: [a host's owner decides whether Coaming may change a service
 that has host access](#changing-services-with-host-access), [config content is readable by
 everyone who can see the config](#secrets-and-configs), and [service logs are shown as the
 application wrote them](#service-logs).
@@ -22,10 +22,10 @@ covers the containers a service's tasks run in.
 
 Every change on this page goes through a typed route, not through a raw Docker proxy, and is
 checked against the person's role on that environment first. A change to a swarm is sent through one
-manager's agent, once. Nothing is retried: if the connection to the manager is lost while Bayplan is
+manager's agent, once. Nothing is retried: if the connection to the manager is lost while Coaming is
 changing something, the answer says the manager did not answer, and you look at the swarm before you
 try again. If no manager's agent is connected, or the swarm has lost its quorum, the pages show what
-Bayplan last saw and every change is off, with that as the reason.
+Coaming last saw and every change is off, with that as the reason.
 
 - [Services](#services)
 - [Changing services with host access](#changing-services-with-host-access)
@@ -67,7 +67,7 @@ the environment (`services.read`) can open all of them.
 
 The values of environment variables, and of the command, arguments, health check test and log-driver
 options, are hidden for everyone who does not hold the **Reveal secrets** extra permission, on the
-Overview, in the Inspect JSON, in the editor and in every difference Bayplan shows. They appear as
+Overview, in the Inspect JSON, in the editor and in every difference Coaming shows. They appear as
 `••••` in the form and as `<hidden>` in the Spec tab. Labels are shown as they are, so do not put a
 secret in a label.
 
@@ -92,20 +92,20 @@ A Viewer sees the buttons disabled, with the reason ("Needs Operator" or "Needs 
   The bulk shares one **bulk ID** in the audit log, and a selection of more than 100 is sent in
   several requests that share it.
 - **Force update** makes Swarm replace every task, a batch at a time, using the service's own
-  update settings. Bayplan looks the image up again and pins the result: if the tag has moved since the
+  update settings. Coaming looks the image up again and pins the result: if the tag has moved since the
   last update, the new image is what runs. An image that is already given as a digest is sent as it
   is. Repeating a force update starts another rollout each time. When an update has paused, the same
   dialog is offered as **Retry update**.
 - **Roll back** puts the service back to the settings it had before its last update, and shows the
   current settings against the earlier ones before you confirm. It is disabled, with the reason,
   when Swarm holds no earlier version. If the earlier version names a secret, config or network that
-  has since been removed, Swarm refuses and Bayplan says which object is missing.
-- **Remove** deletes the service; Swarm stops its tasks. Bayplan's own agent service can be removed
-  only by typing its name, because it cuts Bayplan off from every node the agent runs on.
+  has since been removed, Swarm refuses and Coaming says which object is missing.
+- **Remove** deletes the service; Swarm stops its tasks. Coaming's own agent service can be removed
+  only by typing its name, because it cuts Coaming off from every node the agent runs on.
 - **Digest pinning.** Whenever the image of a service changes, or the service is force-updated,
-  Bayplan asks the registry for the digest and stores `image:tag@sha256:...` in the spec, the way the
+  Coaming asks the registry for the digest and stores `image:tag@sha256:...` in the spec, the way the
   Docker CLI does. The page shows the tag with the digest as a copyable chip. Every create and update
-  carries the registry credential Bayplan holds for that image (see [registries.md](registries.md)),
+  carries the registry credential Coaming holds for that image (see [registries.md](registries.md)),
   so the nodes can pull a private image without a `docker login` on them.
 - **Rolling updates.** After a scale-free change the page shows the update as it runs: how many tasks
   are on the new version, Docker's own message, and **Update complete** when it finishes. A paused or
@@ -118,14 +118,14 @@ its page: the next deploy of the stack would overwrite the change. The page says
 {name}" and the **Edit** and **Remove** buttons say why they are off. **Scale, force update and roll
 back stay available**, and each warns that the next stack deploy applies the compose file again.
 The server enforces this, not only the page: an edit or remove of a stack's service is refused with
-`stack_owned` and audited as a failure. Changing a stack's services through Bayplan comes with stack
+`stack_owned` and audited as a failure. Changing a stack's services through Coaming comes with stack
 deploys in a later release.
 
 ## Changing services with host access
 
 A service spec is a whole container specification. A service that binds the Docker socket, adds a
 capability, lowers its sandbox or joins the host network is, in effect, root on every node it runs on.
-Bayplan treats that in two places, and the second one is the host owner's:
+Coaming treats that in two places, and the second one is the host owner's:
 
 - **On the server**, a person below Admin cannot create or change a service whose spec gives tasks
   host access. The check covers the whole spec, not only the fields the form shows: bind mounts
@@ -135,36 +135,36 @@ Bayplan treats that in two places, and the second one is the host owner's:
   Admin and Apply stays off. A rollback is judged the same way, on the earlier
   version it would restore: rolling back to an earlier version with host access needs Admin, and an
   Operator is told which settings.
-- **On the host**, the agent of each manager refuses such a spec whatever Bayplan says, unless the
-  host's owner set `BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on the agent. Without it, an
-  Admin who writes such a spec gets a refusal that Bayplan words as "the manager's agent refused host
+- **On the host**, the agent of each manager refuses such a spec whatever Coaming says, unless the
+  host's owner set `COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true` on the agent. Without it, an
+  Admin who writes such a spec gets a refusal that Coaming words as "the manager's agent refused host
   access" (`agent_host_policy`). The same goes for a service mount whose volume has a driver other
   than `local`, for a cluster volume, and for a named volume that already exists on the manager with
   options the volume rule refuses (a host path, or a filesystem other than tmpfs or a network share)
   or a plugin driver: they are refused without the opt-in. A volume made with such options is refused
   at creation (see [containers.md](containers.md)).
 
-**Without that opt-in, Bayplan cannot change a service that already has host access. That includes
+**Without that opt-in, Coaming cannot change a service that already has host access. That includes
 scale, force update and roll back.** Every one of them sends the service's whole spec back to Swarm, so
 the agent sees the host access in it and refuses the request. Such a service is changed with the
-Docker CLI on a manager. Bayplan's own agent service mounts the Docker socket, so it is the usual
-example: Bayplan does not scale it, and it is updated by the agent's own self-update (see
+Docker CLI on a manager. Coaming's own agent service mounts the Docker socket, so it is the usual
+example: Coaming does not scale it, and it is updated by the agent's own self-update (see
 [agent-updates.md](agent-updates.md)), which does not go through this check.
 
-To allow Bayplan to manage services with host access, set the variable on the agent of every manager.
+To allow Coaming to manage services with host access, set the variable on the agent of every manager.
 On a swarm the agent is a global service, so the setting goes on the service (this command was
 not tested for this page; check the variable name and your service name before running it):
 
 ```sh
-docker service update --env-add BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true bayplan-agent
+docker service update --env-add COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true coaming-agent
 ```
 
-Think first about what this allows. With the opt-in, a compromised Bayplan can run a privileged
+Think first about what this allows. With the opt-in, a compromised Coaming can run a privileged
 service on every node of the swarm, which is root on every node. [agent.md](agent.md#service-specs-and-host-access)
 lists exactly what the agent refuses, and [threat-model.md](threat-model.md) explains the risk.
 On managers it covers service writes, including the volumes they name; on every agent-managed host it
 also covers volume creates. The server's own host is reached through the local socket and has no agent,
-so none of this is checked there. A host that is read-only (`BAYPLAN_AGENT_READ_ONLY=true`) refuses
+so none of this is checked there. A host that is read-only (`COAMING_AGENT_READ_ONLY=true`) refuses
 every service change before any of this is looked at.
 
 ## The editor
@@ -184,20 +184,20 @@ every service change before any of this is looked at.
   A syntax error is shown with its line. The editor does not trap the Tab key, so it can be left with
   the keyboard.
 - **Hidden values.** A value you may not see appears as `<hidden>` in the Spec tab and as dots in the
-  form. Leave it alone and it stays what it is: Bayplan puts the real value back when it sends the
+  form. Leave it alone and it stays what it is: Coaming puts the real value back when it sends the
   spec. Type over it to replace it, or remove the entry to delete it. `<hidden>` cannot itself be a
   value, and a hidden value that points at nothing is refused by name. The same goes for the review:
   a replaced hidden value reads "Hidden value replaced" and prints neither the old nor the new value.
 - **Secrets.** Adding a secret the service does not already use, or rolling back to a version that
   uses one, needs the reveal secrets permission (an Admin has it; an Operator only when granted).
-  Without it the secret picker offers only the secrets the service uses, and Bayplan refuses the
+  Without it the secret picker offers only the secrets the service uses, and Coaming refuses the
   change with `secret_reveal_required`. Keeping, removing or re-targeting a secret the service
   already uses stays Operator. A secret is matched by its ID in the swarm, not by the name the spec
   gives it: a reference whose name is not that of the secret its ID points at is refused
   (`spec_invalid`), so correct the name or give only the name. Someone who can change a service can
   still read what that service holds (see residual risk 36 in
   [threat-model.md](threat-model.md)).
-- **Review changes.** The editor is locked while Bayplan checks the change. Shows a field-by-field
+- **Review changes.** The editor is locked while Coaming checks the change. Shows a field-by-field
   list of the current spec against the new one, the image the tag resolves to (with its digest and
   the credential that will be used), anything that needs Admin, and the manager's own notes.
   **Apply changes** stays off, with the reason, when there is nothing to apply, when the spec needs
@@ -210,7 +210,7 @@ every service change before any of this is looked at.
 - **Auto-rollback.** "Roll back automatically if an update fails" is a checkbox in two places that
   are one setting: the Update policy card and the Review step. It is saved on the service
   (`UpdateConfig.FailureAction`): ticked, a failed update rolls back by itself; unticked, a failed
-  update pauses. Later updates, from Bayplan or not, follow the same policy.
+  update pauses. Later updates, from Coaming or not, follow the same policy.
 
 ### Objects the spec names
 
@@ -251,14 +251,14 @@ the permission for that object as well.
   **Placement** tab that shows the same view for one service, plus a **Placement rules** card: each
   constraint with how many of the swarm's nodes it matches, and a warning when it matches none.
 - **Who.** Anyone who can see the environment's services (`services.read`).
-- Bayplan evaluates placement constraints with the same rules as Swarm, including the way Swarm treats
+- Coaming evaluates placement constraints with the same rules as Swarm, including the way Swarm treats
   label names and addresses. Where it cannot tell, it says so instead of guessing.
 
 ## Nodes
 
 **Nodes** in the sidebar lists the swarm's nodes: name, status, role, availability, how many tasks run,
-the platform, CPU and memory, the engine version, and whether Bayplan's agent on the node is reporting. Badges mark the leader and
-the node Bayplan itself runs on. The chips filter to managers, workers, drained and down nodes, and
+the platform, CPU and memory, the engine version, and whether Coaming's agent on the node is reporting. Badges mark the leader and
+the node Coaming itself runs on. The chips filter to managers, workers, drained and down nodes, and
 the search matches the name, the address and any label. A node's page has **Overview**, **Tasks**,
 **Labels** and **Inspect**. Anyone who can see the environment (`nodes.read`) can open them.
 
@@ -272,23 +272,23 @@ All node changes need **Admin** (`nodes.manage`).
 | Pause | No new tasks; the ones there keep running | |
 | Activate | Takes a drained or paused node back | |
 | Promote | Makes a worker a manager | |
-| Demote | Makes a manager a worker | An even number of managers, a loss of quorum, Bayplan's own node, the only connected manager agent |
+| Demote | Makes a manager a worker | An even number of managers, a loss of quorum, Coaming's own node, the only connected manager agent |
 | Remove | Removes a node that is down | See below |
 
-- **Warnings, not blocks.** Bayplan tells you what will happen and lets an Admin go ahead. The refusals
+- **Warnings, not blocks.** Coaming tells you what will happen and lets an Admin go ahead. The refusals
   that remain are Docker's own, such as demoting the last manager.
-- **Typed confirmation.** Where an action could cut Bayplan off or break the swarm, you must type the
-  node's name: draining the node Bayplan runs on or the only manager agent that is connected, and
-  demoting a node when the quorum is at risk, when it runs Bayplan, when it holds the only manager
-  agent, or when Bayplan cannot read the managers' state. The server checks the name, not only the page:
+- **Typed confirmation.** Where an action could cut Coaming off or break the swarm, you must type the
+  node's name: draining the node Coaming runs on or the only manager agent that is connected, and
+  demoting a node when the quorum is at risk, when it runs Coaming, when it holds the only manager
+  agent, or when Coaming cannot read the managers' state. The server checks the name, not only the page:
   without it the request is refused with `confirmation_required` and nothing is sent.
 - **Stale pages.** Every change names the version of the node you were looking at. If the node changed
   since, the change is refused ("That changed while you were looking at it") and you reload and decide
   again.
 - **Remove...** is offered for a node whose state is **Down** and that is not a manager (demote it
   first). It needs the node's name typed, and Swarm forgets the node: if the machine comes back it has to
-  join the swarm again. Bayplan never forces a removal, so a node that is up cannot be removed through
-  it. Afterwards Bayplan marks the node's agent as gone (the same as the "revoke" in
+  join the swarm again. Coaming never forces a removal, so a node that is up cannot be removed through
+  it. Afterwards Coaming marks the node's agent as gone (the same as the "revoke" in
   [agent.md](agent.md#revoke-unblock-and-enrol-again) but without blocking it), so a host that rejoins can
   enrol again with the join token. A task that ran on the removed node still shows in history with
   **Removed node**.
@@ -298,7 +298,7 @@ All node changes need **Admin** (`nodes.manage`).
 The **Labels** tab edits a node's labels in a table. Services use them in placement constraints, such as
 `node.labels.disk==ssd`. Before you save, **Effect on services** lists each constraint that mentions a
 label you changed, whether the node meets it before and after, and how many tasks Swarm may move. If a
-service would stop matching, Bayplan asks **Apply label changes?** and then applies; it does not block.
+service would stop matching, Coaming asks **Apply label changes?** and then applies; it does not block.
 A label may not start with `com.docker.`, `io.docker.` or `org.dockerproject.`, a node can have at most
 64 labels, a name is at most 256 bytes and a value at most 4096 bytes. Below Admin the table is
 read-only. Engine labels, set in the node's Docker daemon settings, are shown and cannot be changed
@@ -314,7 +314,7 @@ rotating and deleting needs **Admin** (`secrets.manage`, `configs.manage`).
 | | Secret | Config |
 |---|--------|--------|
 | Size | 1 to **511,999** bytes | 1 to **1,023,999** bytes |
-| Value after saving | **Never shown.** Docker does not return it, so Bayplan cannot show it to anyone, instance admins and holders of **Reveal secrets** included | **Shown** on the detail page and in Inspect, to everyone who can read configs |
+| Value after saving | **Never shown.** Docker does not return it, so Coaming cannot show it to anyone, instance admins and holders of **Reveal secrets** included | **Shown** on the detail page and in Inspect, to everyone who can read configs |
 | Encrypted by Docker | Yes, in the swarm's store | **No** |
 | Delete asks | The name typed | A confirmation |
 | Extra at create | | An optional Go template driver |
@@ -327,7 +327,7 @@ The size limits are Docker's own (about 500 KB and 1 MB, each less one byte).
   Neither a secret's nor a config's value is ever written to the audit log, the server's log or the
   database.
 - **Configs are not secrets.** Docker stores a config unencrypted and returns it with every list, and
-  Bayplan shows it to **everyone who can read configs, which includes a Viewer**. Put passwords, keys
+  Coaming shows it to **everyone who can read configs, which includes a Viewer**. Put passwords, keys
   and tokens in a secret.
 - **Used by, and deleting.** The list shows how many services use each object, and the page lists
   them. An object cannot be deleted while any service spec names it, **including a service scaled to 0**.
@@ -343,7 +343,7 @@ The size limits are Docker's own (about 500 KB and 1 MB, each less one byte).
   stack are skipped and listed, because the stack's next deploy would put the old object back. The old
   object is removed after the last service moved, only if "Remove {name} when nothing uses it" is ticked
   and nothing names it any more.
-- **Secrets in memory.** A secret's value passes through Bayplan's memory once, while it is being sent
+- **Secrets in memory.** A secret's value passes through Coaming's memory once, while it is being sent
   (see the [threat model](threat-model.md), residual risk 31).
 
 ## Service logs
@@ -354,7 +354,7 @@ follow, the **Show** control, **Load earlier lines**, search, timestamps in your
 wrapping, standard error marked, pausing when you scroll up, **Download** and **Open in new window**.
 
 - **Who.** Everyone who can see the service (`services.read`).
-- **One stream.** Bayplan follows the service once, through a manager, and puts the lines in time order
+- **One stream.** Coaming follows the service once, through a manager, and puts the lines in time order
   in a short buffer, so lines from different nodes can arrive slightly out of order by a moment. It is
   not an exact global order: two lines stamped in the same instant have no meaning in order.
 - **Task prefixes.** Each line starts with a coloured task name such as `2@node3` (the slot and the
@@ -383,7 +383,7 @@ Live CPU, memory and network figures are shown for a container, a service, a nod
 - **Where.** The **Stats** tab on a container and on a service. A **Live stats** switch on the container and
   service lists adds columns for the rows in view. The **Placement** page's node columns show each node's
   total use against its capacity when its **Live stats** is on.
-- **Source.** Bayplan asks each node's agent for one reading of each container about every **2 seconds**,
+- **Source.** Coaming asks each node's agent for one reading of each container about every **2 seconds**,
   turns two readings into rates (CPU as a percent of one core, like `docker stats`, memory without the
   file cache, and network and disk rates per second), and sends them to the browser. The agent never holds
   a stats stream open. Two people looking at the same container cost one reading, and a node is asked
@@ -418,16 +418,16 @@ A service that keeps failing is flagged, so a crash loop does not look like a he
   the health bell, and a **Restart loops** tile on the environment's dashboard.
 - **Mute.** An Operator can **Mute alerts** for one service that is meant to fail, such as a job. A muted
   service shows a grey **Muted** badge and raises no bell entry. Mute and unmute are audited
-  (`restart_loop.muted`, `restart_loop.unmuted`), and the mute is kept in Bayplan's database and travels in
+  (`restart_loop.muted`, `restart_loop.unmuted`), and the mute is kept in Coaming's database and travels in
   backups.
 - **Containers too.** On any environment, a container with a restart policy that keeps dying with a
   non-zero exit code gets the same badge in the container list and on its page, with the same threshold
   and window, a bell entry and a mute (needs `containers.control`). A policy of "no" is never flagged, and
   the tasks of a service are not tracked as containers, because their service carries the flag.
 - **A note on how far back it can see.** Docker keeps only the last few failed tasks per slot (five by
-  default) and prunes the rest. Bayplan checks every 15 seconds and remembers the failures it has seen, so
+  default) and prunes the rest. Coaming checks every 15 seconds and remembers the failures it has seen, so
   a loop is met reliably at any threshold up to what Docker keeps, and above that only when the tasks fail
-  more slowly than that check. The settings card says so beside the threshold. A restart of Bayplan starts
+  more slowly than that check. The settings card says so beside the threshold. A restart of Coaming starts
   counting again from what Docker still holds.
 
 ## What is recorded

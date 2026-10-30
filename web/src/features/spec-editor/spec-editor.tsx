@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import CodeMirror from "@uiw/react-codemirror";
 import { Check, Copy, TriangleAlert } from "lucide-react";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -12,10 +12,10 @@ import (
 
 	mobycontainer "github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The standalone review against what is running (plan 07-22, STK-06, STK-09, D-11, Pitfall 5): each running
@@ -390,7 +390,7 @@ func TestStandaloneReviewInUpdateModeMovesOnlyTheChosenService(t *testing.T) {
 }
 
 // foreignAdoptable is a docker compose up project of two services, a network and a volume, as an owner who has not
-// met Bayplan runs it (plan 08-17).
+// met Coaming runs it (plan 08-17).
 const foreignAdoptable = `services:
   web:
     image: nginx:1.27
@@ -405,7 +405,7 @@ volumes:
   data: {}
 `
 
-// networkedHosted is the compose file of a stack made and deployed in Bayplan: a network, a volume and a service.
+// networkedHosted is the compose file of a stack made and deployed in Coaming: a network, a volume and a service.
 const networkedHosted = `services:
   web:
     image: nginx:1.27-alpine
@@ -483,7 +483,7 @@ func TestAnAdoptedStandaloneReviewKeepsARealChangeInTheList(t *testing.T) {
 	}
 }
 
-// TestStandaloneReviewWarnsOfANetworkRecreate: a stack made and deployed in Bayplan before Phase 8 and never adopted
+// TestStandaloneReviewWarnsOfANetworkRecreate: a stack made and deployed in Coaming before Phase 8 and never adopted
 // whose file changed a network's settings shows the network row, with the sentence for a network the deploy
 // recreates (D-46, D-56).
 func TestStandaloneReviewWarnsOfANetworkRecreate(t *testing.T) {
@@ -506,7 +506,7 @@ func TestStandaloneReviewWarnsOfANetworkRecreate(t *testing.T) {
 }
 
 // TestStandaloneReviewKeepsAVolume: a volume whose labels changed in the file shows the volume row, and the sentence
-// says Bayplan keeps it as it is (D-46, D-56, T-08-65).
+// says Coaming keeps it as it is (D-46, D-56, T-08-65).
 func TestStandaloneReviewKeepsAVolume(t *testing.T) {
 	t.Parallel()
 	rig := hostRig(t, hostStack(t, "demo", networkedHosted, nil))
@@ -514,7 +514,7 @@ func TestStandaloneReviewKeepsAVolume(t *testing.T) {
 
 	rv := rig.reviewOf(t, "demo", edited, nil, nil)
 
-	want := []string{"changed volume demo_data: Its settings differ from the compose file. Bayplan keeps it as it is."}
+	want := []string{"changed volume demo_data: Its settings differ from the compose file. Coaming keeps it as it is."}
 	if got := objectRows(rv); !slices.Equal(got, want) {
 		t.Errorf("objects = %q, want %q", got, want)
 	}
@@ -544,7 +544,7 @@ func TestStandaloneReviewNoObjectRowsWhenUnchanged(t *testing.T) {
 }
 
 // TestStandaloneReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash: docker compose up --scale web=2 adds web-2 to
-// the project with none of Bayplan's labels. Beside web-1, which carries the stack's ID, it is the person's own
+// the project with none of Coaming's labels. Beside web-1, which carries the stack's ID, it is the person's own
 // change to the stack, so the review goes ahead and shows the scale instead of refusing as a name clash (G-08-6,
 // user decision 2026-10-27). Another stack's container, or a project the stack holds none of, still is one.
 func TestStandaloneReviewOfAStackWithAContainerTheHostCLIAddedIsNoNameClash(t *testing.T) {

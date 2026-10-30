@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // The row of an action that has been done is written even if the browser that asked
@@ -84,7 +84,7 @@ func TestNetworkAndVolumeAuditRowsAreWrittenEvenWhenTheRequestWasCancelled(t *te
 }
 
 // A connection that closes while a request body is still being written fails with a
-// broken pipe, not a reset: a network disconnect that cuts Bayplan off can end that way.
+// broken pipe, not a reset: a network disconnect that cuts Coaming off can end that way.
 // Found in CI under load, where it was answered as an offline environment.
 func TestABrokenPipeIsALostConnection(t *testing.T) {
 	t.Parallel()

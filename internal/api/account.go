@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,17 +15,17 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/datadir"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // Field error codes of POST /api/me/password. password_too_short and
@@ -57,7 +57,7 @@ const (
 	// settingKeyBackupAck holds the UTC nanoseconds at which an admin said they
 	// had backed up the generated encryption key.
 	settingKeyBackupAck = "key_backup_ack"
-	// keySourceFile is vault.KeySource() for a key that Bayplan generated into
+	// keySourceFile is vault.KeySource() for a key that Coaming generated into
 	// the data directory, the only key it can lose with the container.
 	keySourceFile = "file"
 	// targetKeyBackup is the audit target of that acknowledgement.
@@ -129,7 +129,7 @@ type WarningBody struct {
 	Scheme  string `json:"scheme,omitempty" doc:"For proxy_url_mismatch: the scheme the newest request effectively used, http or https"`
 	URL     string `json:"url,omitempty" doc:"For proxy_url_mismatch: the public URL the request should have matched"`
 	Subject string `json:"subject,omitempty" doc:"For refusal_burst: the username that was refused. For backup_failed: why the last scheduled backup failed"`
-	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Bayplan does not know"`
+	Count   int    `json:"count,omitempty" doc:"For refusal_burst: how many times that user was refused inside one minute. For unknown_agents: how many agents Coaming does not know"`
 	// Since is a pointer so that "no good backup yet" leaves it out.
 	Since *time.Time `json:"since,omitempty" doc:"For backup_failed: when the last good scheduled backup finished; absent when there has not been one"`
 }
@@ -305,12 +305,12 @@ func RegisterAccount(r *httpx.Router, d AccountDeps) {
 		Path:        "/api/warnings",
 		Summary:     "List the instance warnings that need an admin's attention",
 		Description: "Includes data_not_persisted while the data directory would be lost with the container, and key_backup " +
-			"while the encryption key Bayplan generated into the data directory has not been acknowledged (D-15, D-59). " +
+			"while the encryption key Coaming generated into the data directory has not been acknowledged (D-15, D-59). " +
 			"The reverse proxy warnings (the proxy_ ones) are listed while " +
-			"Bayplan has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
+			"Coaming has seen that problem in the last hour, one item per kind, naming the newest sighting (D-53). " +
 			"refusal_burst lists, for instance admins only, each user who was refused ten or more times in a minute in the last hour (D-20). " +
 			"backup_failed is listed, for instance admins only, while scheduled backups are on and the newest scheduled run failed; subject is why and since is when the last good backup finished (D-32). " +
-			"unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Bayplan was restored from keep trying; count is how many (D-31). " +
+			"unknown_agents is listed, for instance admins only, while agents that were installed after the backup this Coaming was restored from keep trying; count is how many (D-31). " +
 			"The plain-HTTP warning is the browser's to compute and is not listed.",
 		Tags: []string{"settings"},
 	}, rbac.Requirement{Perm: rbac.PermSettingsRead, Scope: rbac.ScopeGlobal}, func(ctx context.Context, _ *struct{}) (*WarningsOutput, error) {

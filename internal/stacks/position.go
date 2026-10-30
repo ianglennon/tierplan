@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -11,7 +11,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/bayplan/internal/stacks/lint"
+	"github.com/ianglennon/coaming/internal/stacks/lint"
 )
 
 // NewPositionIndex reads the positions of every key of the YAML in src. It is what Check builds

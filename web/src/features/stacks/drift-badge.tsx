@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { GitCompareArrows } from "lucide-react";
 import { useId } from "react";
@@ -18,7 +18,7 @@ interface DriftBadgeProps {
 // DriftBadge marks a stack whose running state no longer matches its deployed revision (UI-SPEC "Stack lists"). It is
 // an outline badge with a warning icon after the stack's name, and draws nothing unless the newest check found drift:
 // a stack not yet checked, stopped, never deployed or one that could not be compared shows no badge. The Tooltip says
-// which revision the stack drifted from and, when the audit log knows, who changed what in Bayplan, and the same words are the badge's description for a reader who never
+// which revision the stack drifted from and, when the audit log knows, who changed what in Coaming, and the same words are the badge's description for a reader who never
 // opens the Tooltip.
 export function DriftBadge({ drift }: DriftBadgeProps) {
   const t = useT();
@@ -26,7 +26,7 @@ export function DriftBadge({ drift }: DriftBadgeProps) {
   const cause = useCauseText({ cause: drift?.cause, count: drift?.causes });
   if (drift?.state !== "drifted") return null;
   const base = t("stackDriftList.tooltip", { revision: drift.revision });
-  // The cause is added only when the audit log knows it: "Changed outside Bayplan." is for the page, not the Tooltip.
+  // The cause is added only when the audit log knows it: "Changed outside Coaming." is for the page, not the Tooltip.
   const tip = cause ? `${base} ${cause}` : base;
   return (
     <Tooltip>

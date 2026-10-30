@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -33,7 +33,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
-    bayplanStackId: "",
+    coamingStackId: "",
     service: "",
     health: "none",
     selfKind: "",
@@ -549,75 +549,75 @@ describe("ActionDialog warnings for swarm tasks and projects", () => {
   });
 });
 
-describe("ActionDialog on Bayplan's own containers", () => {
+describe("ActionDialog on Coaming's own containers", () => {
   const own = (extra: Partial<ContainerRow> = {}) =>
-    row("bayplan", { selfKind: "server", isSelf: true, ...extra });
+    row("coaming", { selfKind: "server", isSelf: true, ...extra });
 
   it("warns, asks for the name, keeps the destructive confirm disabled until it matches, and sends it", async () => {
     mount([own()]);
-    const dialog = await dialogOf("Stop bayplan?");
+    const dialog = await dialogOf("Stop coaming?");
     expect(dialog.textContent).toContain(
-      "This is Bayplan's own container. Stopping it cuts Bayplan off from this host, and you can't start it again from here.",
+      "This is Coaming's own container. Stopping it cuts Coaming off from this host, and you can't start it again from here.",
     );
-    const confirm = within(dialog).getByRole("button", { name: "Stop Bayplan" });
+    const confirm = within(dialog).getByRole("button", { name: "Stop Coaming" });
     expect(confirm.className).toContain("bg-destructive-fill");
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
-    const field = within(dialog).getByLabelText("Type bayplan to confirm");
+    const field = within(dialog).getByLabelText("Type coaming to confirm");
     // Focus starts on Cancel, not on the field.
     await waitFor(() =>
       expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })),
     );
     fireEvent.click(confirm);
     expect(posts()).toEqual([]);
-    fireEvent.change(field, { target: { value: "bayplan-x" } });
+    fireEvent.change(field, { target: { value: "coaming-x" } });
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(field, { key: "Enter" });
     expect(posts()).toEqual([]);
-    fireEvent.change(field, { target: { value: "bayplan" } });
+    fireEvent.change(field, { target: { value: "coaming" } });
     expect(confirm.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.click(confirm);
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(body()).toEqual({
       action: "stop",
-      confirm: "bayplan",
-      targets: [{ nodeId: "n1", id: "id-bayplan" }],
+      confirm: "coaming",
+      targets: [{ nodeId: "n1", id: "id-coaming" }],
     });
   });
 
   it("has no Advanced section for it", async () => {
     mount([own()]);
-    const dialog = await dialogOf("Stop bayplan?");
+    const dialog = await dialogOf("Stop coaming?");
     expect(within(dialog).queryByRole("button", { name: "Advanced" })).toBeNull();
   });
 
   it("names the node for an agent and its own confirm 'Kill agent'", async () => {
-    mount([row("bayplan-agent", { selfKind: "agent" })], { verb: "kill" });
-    const dialog = await dialogOf("Kill bayplan-agent?");
+    mount([row("coaming-agent", { selfKind: "agent" })], { verb: "kill" });
+    const dialog = await dialogOf("Kill coaming-agent?");
     expect(dialog.textContent).toContain(
-      "This is the Bayplan agent on node-1. Killing it cuts Bayplan off from node-1.",
+      "This is the Coaming agent on node-1. Killing it cuts Coaming off from node-1.",
     );
     expect(within(dialog).getByRole("button", { name: "Kill agent" })).toBeTruthy();
   });
 
   it.each([
-    ["restart", "Restart bayplan?", "Restarting it", "Restart Bayplan"],
-    ["pause", "Pause bayplan?", "Pausing it", "Pause Bayplan"],
-    ["remove", "Remove bayplan?", "Removing it", "Remove Bayplan"],
+    ["restart", "Restart coaming?", "Restarting it", "Restart Coaming"],
+    ["pause", "Pause coaming?", "Pausing it", "Pause Coaming"],
+    ["remove", "Remove coaming?", "Removing it", "Remove Coaming"],
   ] as const)("words %s for it", async (verb, title, gerund, button) => {
     mount([own({ state: verb === "remove" ? "exited" : "running" })], { verb });
     const dialog = await dialogOf(title);
-    expect(dialog.textContent).toContain(`${gerund} cuts Bayplan off from this host`);
+    expect(dialog.textContent).toContain(`${gerund} cuts Coaming off from this host`);
     expect(within(dialog).getByRole("button", { name: button })).toBeTruthy();
   });
 
   it("says to type the name when the server still wants it", async () => {
     answer = () => Response.json({ status: 422, type: "confirmation_required" }, { status: 422 });
     mount([own()]);
-    const dialog = await dialogOf("Stop bayplan?");
-    fireEvent.change(within(dialog).getByLabelText("Type bayplan to confirm"), {
-      target: { value: "bayplan" },
+    const dialog = await dialogOf("Stop coaming?");
+    fireEvent.change(within(dialog).getByLabelText("Type coaming to confirm"), {
+      target: { value: "coaming" },
     });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Stop Bayplan" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop Coaming" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "Type the container's name to confirm this.",
     );
@@ -659,7 +659,7 @@ describe("ActionDialog results", () => {
         "c",
         "node-1",
         "Skipped",
-        "c is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
+        "c is one of Coaming's own containers. Stopping it would cut Coaming off from the host, so it can't be done from this list.",
       ],
     ]);
     expect(results.textContent).not.toContain("node_unreachable");

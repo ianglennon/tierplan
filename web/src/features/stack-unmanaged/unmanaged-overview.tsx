@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -26,7 +26,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// UnmanagedDetails is the Details card of an unmanaged stack: where it is, how it runs, that Bayplan did not make
+// UnmanagedDetails is the Details card of an unmanaged stack: where it is, how it runs, that Coaming did not make
 // it and the label it was found by. The label and its value are Docker's text, in mono and wrapped anywhere, so a
 // long name never widens the page.
 function UnmanagedDetails({ envId, stack }: { envId: string; stack: UnmanagedStack }) {

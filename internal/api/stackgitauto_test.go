@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // A git stack's auto-deploy (plan 09-25, GIT-07, D-18 to D-21, D-29): off until a user turns it on, and then a commit
@@ -529,7 +529,7 @@ func TestAutoDeployRevertedBellItem(t *testing.T) {
 	envAdmin := a.f.asRoleOn(t, "u-env-admin", a.env, "admin")
 	a.turnOn(t, operator)
 
-	// Somebody scales web outside Bayplan; the commit then changes the image of web and leaves its replicas alone.
+	// Somebody scales web outside Coaming; the commit then changes the image of web and leaves its replicas alone.
 	a.f.editLiveService(t, a.e, "web", "web", scaleTo(5))
 	head := a.commitCompose(t, gitCompose("1.28"), "newer web")
 	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {

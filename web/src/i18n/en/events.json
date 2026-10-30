@@ -26,7 +26,7 @@
       "node": "Node",
       "secret": "Secret",
       "config": "Config",
-      "bayplan": "Bayplan",
+      "coaming": "Coaming",
       "label": "Filter events by type"
     },
     "row": {

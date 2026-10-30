@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { HealthState } from "@/api/environments";
 import type { StackRevision } from "@/api/stack-history";
@@ -41,7 +41,7 @@ interface RevisionResultCellProps {
 
 // RevisionResultCell is the result of a revision as a dot and a word, never colour alone. A failed one
 // adds the reason in muted text under the word, clamped to one line with the whole text in a Tooltip. The
-// reason is Docker's and Bayplan's text, drawn as text.
+// reason is Docker's and Coaming's text, drawn as text.
 export function RevisionResultCell({ item }: RevisionResultCellProps) {
   const t = useT();
   return (

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry
 
@@ -92,7 +92,7 @@ func newHubClient(egress EgressPolicy, version string) *hubClient {
 	return &hubClient{
 		base: hubBase,
 		http: &http.Client{
-			Transport: &userAgentTransport{base: egress.Transport(), ua: "bayplan/" + version},
+			Transport: &userAgentTransport{base: egress.Transport(), ua: "coaming/" + version},
 			// An answer that redirects is reported, not followed.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -14,11 +14,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // maxStackQuery is the longest search the stack lists take, in characters.
@@ -46,15 +46,15 @@ const (
 const problemKindInvalid = "kind_invalid"
 
 const (
-	reasonOwnStack   = "This is Bayplan's own stack."
-	reasonAgentStack = "This stack runs Bayplan's agent."
+	reasonOwnStack   = "This is Coaming's own stack."
+	reasonAgentStack = "This stack runs Coaming's agent."
 )
 
 var stackStatuses = []string{stackStatusDegraded, stackStatusStopped, stackStatusDraft, stackStatusDeployFailed, stackStatusDrifted, stackStatusBehind, stackStatusSyncError}
 
 // stateRank is the order the State column sorts in, the priority of UI-SPEC "Color": an operation under
 // way, then stopped, deploy failed, not running, degraded, running, and a stack never deployed last.
-// A state Bayplan could not read sits with deploy failed: it needs a look.
+// A state Coaming could not read sits with deploy failed: it needs a look.
 var stateRank = map[string]int{
 	string(stackops.StateRemoving):     0,
 	string(stackops.StateDeploying):    1,
@@ -86,7 +86,7 @@ type StackStatusCountsBody struct {
 type StackQueryInput struct {
 	Q      string `query:"q" doc:"Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap"`
 	Status string `query:"status" maxLength:"64" doc:"Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid"`
-	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
+	Kind   string `query:"kind" maxLength:"16" doc:"Only stacks Coaming manages (managed) or only stacks found on the engine that Coaming did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap"`
 	Sort   string `query:"sort" enum:"name,state,lastDeployed" doc:"What the rows are ordered by: name (the default), state (by the priority the State column sorts in: an operation under way, stopped, deploy failed, not running, degraded, running, not deployed) or lastDeployed (a stack never deployed comes last whichever way). Ties break by name"`
 	Dir    string `query:"dir" enum:"asc,desc" doc:"asc (the default) or desc"`
 }
@@ -145,8 +145,8 @@ func newStackQuery(in StackQueryInput) (stackQuery, error) {
 	return q, nil
 }
 
-// hasStackStatus says whether a row counts under one status value. The chips are for stacks Bayplan
-// manages: an unmanaged stack has no draft, no deploys and no stop of Bayplan's, and is in none of them.
+// hasStackStatus says whether a row counts under one status value. The chips are for stacks Coaming
+// manages: an unmanaged stack has no draft, no deploys and no stop of Coaming's, and is in none of them.
 func hasStackStatus(it StackItem, status string) bool {
 	if !it.Managed {
 		return false
@@ -345,7 +345,7 @@ func registerAllStacks(r *httpx.Router, d StacksDeps) {
 			"their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, " +
 			"and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read " +
 			"is named in failedEnvironments while the others are answered. env chooses environments by ID. " +
-			"Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. " +
+			"Stacks Coaming did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. " +
 			"The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort " +
 			"run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, " +
 			"with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.",
@@ -454,11 +454,11 @@ type envStackRows struct {
 	discoveryFailed bool
 }
 
-// stackRowsOf builds the list rows of one environment's stacks, by name: the rows Bayplan stores for
+// stackRowsOf builds the list rows of one environment's stacks, by name: the rows Coaming stores for
 // them and, for a stack that has had an operation, what the engine runs, from the caches the lists
-// use, then the stacks found on the engine that Bayplan did not make (stackops.Discover) from the same
+// use, then the stacks found on the engine that Coaming did not make (stackops.Discover) from the same
 // caches. envName is kept on each row to break a tie between environments. selfHost is true for the
-// Docker host Bayplan itself runs on, the only one whose swarm namespace can be Bayplan's own.
+// Docker host Coaming itself runs on, the only one whose swarm namespace can be Coaming's own.
 func (d StacksDeps) stackRowsOf(ctx context.Context, envID, envName string, selfHost bool) (envStackRows, error) {
 	if d.ReadEnv != nil {
 		if err := d.ReadEnv(ctx, envID); err != nil {
@@ -536,7 +536,7 @@ func (d StacksDeps) driftOf(ctx context.Context, repo stackops.Repo, st stackops
 	return driftSummaryOf(d, st, seq)
 }
 
-// discover finds the stacks of an environment that Bayplan did not make, in the caches the lists use. The
+// discover finds the stacks of an environment that Coaming did not make, in the caches the lists use. The
 // bool is false when they could not be read: the caller lists the managed stacks without them.
 func (d StacksDeps) discover(ctx context.Context, reads *stackReads, managed []stackops.Stack, selfHost bool) ([]stackops.Discovered, stacks.Target, bool) {
 	envID := reads.envID
@@ -573,7 +573,7 @@ func (d StacksDeps) discover(ctx context.Context, reads *stackReads, managed []s
 // first (D-49), then the name rule of its target (D-53).
 func notAdoptableReason(u stackops.Discovered) string {
 	switch u.Owner {
-	case stackops.OwnerBayplan:
+	case stackops.OwnerCoaming:
 		return reasonOwnStack
 	case stackops.OwnerAgent:
 		return reasonAgentStack
@@ -610,7 +610,7 @@ func compareText(a, b string) int {
 
 // StackNameCheckBody is the verdict on a stack name for one environment.
 type StackNameCheckBody struct {
-	Status  string `json:"status" enum:"available,taken,clash,invalid" doc:"available: the name can be used. taken: one of Bayplan's stacks on this environment has it. clash: something Bayplan does not manage has it on this environment (D-12). invalid: the name breaks the rule"`
+	Status  string `json:"status" enum:"available,taken,clash,invalid" doc:"available: the name can be used. taken: one of Coaming's stacks on this environment has it. clash: something Coaming does not manage has it on this environment (D-12). invalid: the name breaks the rule"`
 	Message string `json:"message" doc:"The sentence to show for a name that cannot be used, naming the environment where it matters; empty when it is available"`
 }
 
@@ -634,7 +634,7 @@ func registerStackNameCheck(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "checkStackName", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/name-check",
 		Summary: "Whether a stack name can be used on an environment",
-		Description: "Answers available, taken (a stack of Bayplan's has it on this environment), clash (something Bayplan does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. " +
+		Description: "Answers available, taken (a stack of Coaming's has it on this environment), clash (something Coaming does not manage has it: a swarm namespace or a Compose project of that name) or invalid, with the sentence to show. " +
 			"The Create stack dialog asks when the name field loses focus and again on submit. It only reads: nothing is stored, audited or sent to an engine. " +
 			"It needs stacks.create on the environment, so it cannot be used to probe what an environment holds by anyone who may not create there.",
 		Tags: []string{"stacks"},

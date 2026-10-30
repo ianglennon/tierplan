@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package redact_test
 
@@ -12,10 +12,10 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/storetest"
 )
 
 // Environment variable values reach a browser only for someone who may reveal
@@ -746,7 +746,7 @@ func TestWebhookPathHidesTheRoutingToken(t *testing.T) {
 	for name, tc := range map[string]struct{ in, want string }{
 		"the webhook address":           {"/hooks/git/" + token, "/hooks/git/[redacted]"},
 		"a trailing slash and a suffix": {"/hooks/git/" + token + "/extra/", "/hooks/git/[redacted]"},
-		"behind a base path":            {"/bayplan/hooks/git/" + token, "/bayplan/hooks/git/[redacted]"},
+		"behind a base path":            {"/coaming/hooks/git/" + token, "/coaming/hooks/git/[redacted]"},
 		"no token":                      {"/hooks/git/", "/hooks/git/[redacted]"},
 		"another path":                  {"/api/env/e1/stacks", "/api/env/e1/stacks"},
 		"the empty path":                {"", ""},

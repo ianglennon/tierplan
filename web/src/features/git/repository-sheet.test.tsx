@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -229,7 +229,7 @@ describe("RepositorySheet address rules", () => {
     await screen.findByText("Add a repository");
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
     expect(
-      await screen.findByText("Bayplan has no option to skip certificate checks."),
+      await screen.findByText("Coaming has no option to skip certificate checks."),
     ).toBeTruthy();
     expect(screen.getByLabelText("Custom CA certificate (PEM)")).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();

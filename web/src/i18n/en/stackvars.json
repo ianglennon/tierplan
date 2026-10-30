@@ -1,6 +1,6 @@
 {
   "stackVars": {
-    "caption": "Values come from this table. A variable with no value here uses the default written in the compose file, like ${NAME:-default}. Bayplan fills them in itself before it deploys.",
+    "caption": "Values come from this table. A variable with no value here uses the default written in the compose file, like ${NAME:-default}. Coaming fills them in itself before it deploys.",
     "loading": "Loading the variables",
     "empty": {
       "title": "No variables",

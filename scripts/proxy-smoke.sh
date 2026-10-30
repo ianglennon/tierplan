@@ -1,57 +1,57 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
-# Runs the built Bayplan image (`make e2e-image` builds bayplan:e2e) behind each of
+# Runs the built Coaming image (`make e2e-image` builds coaming:e2e) behind each of
 # Caddy, nginx and Traefik, with the configuration files in docs/proxy, at the root
-# of a host and at the subpath /bayplan, and checks what a proxy gets wrong when it
+# of a host and at the subpath /coaming, and checks what a proxy gets wrong when it
 # is set up badly (D-52, PLAT-04):
 #
-#   - the index carries the bayplan-base meta with the base path
+#   - the index carries the coaming-base meta with the base path
 #   - /api/version answers 200
-#   - a WebSocket upgrade to /agent/connect with the subprotocol bayplan.agent.v1
+#   - a WebSocket upgrade to /agent/connect with the subprotocol coaming.agent.v1
 #     is answered 101 Switching Protocols
 #   - the signed-in event stream sends its first frame at once (no buffering) and
 #     the same stream without a session answers 401 promptly
-#   - Bayplan shows no proxy warning for a correct setup
-#   - shell_ws_reaches_bayplan: the upgrade request of a browser shell
+#   - Coaming shows no proxy warning for a correct setup
+#   - shell_ws_reaches_coaming: the upgrade request of a browser shell
 #     (/api/env/<id>/shell-sessions/<id>/ws, with the session cookie and the public
-#     Origin) comes back as Bayplan's own JSON problem (environment_not_found, for an
+#     Origin) comes back as Coaming's own JSON problem (environment_not_found, for an
 #     environment that does not exist), not a 400, 426 or 502 from the proxy
 #   - log_stream_prompt: a container log stream request
-#     (/api/env/<id>/containers/<id>/logs/stream) is answered with Bayplan's own JSON
+#     (/api/env/<id>/containers/<id>/logs/stream) is answered with Coaming's own JSON
 #     404 within 3 seconds, so the proxy does not hold the response back
 #
 # The two checks above use an environment that does not exist, so no container and no
 # Docker socket is needed. They prove the proxy carries the request and its headers to
-# Bayplan and returns the answer at once. They do not complete a shell upgrade (101) or
-# stream real log lines; the end-to-end suite does that behind Caddy at /bayplan.
+# Coaming and returns the answer at once. They do not complete a shell upgrade (101) or
+# stream real log lines; the end-to-end suite does that behind Caddy at /coaming.
 #
-# It then breaks nginx on purpose, three ways, and checks that Bayplan notices:
+# It then breaks nginx on purpose, three ways, and checks that Coaming notices:
 # without the two Upgrade header lines the agent endpoint answers 426 and the
 # websocket_failing warning appears; without the Host line the url_mismatch
-# warning appears; with Bayplan not told to trust the proxy the
+# warning appears; with Coaming not told to trust the proxy the
 # untrusted_forwarded warning appears. A fourth deliberate check, no_agent_switch,
-# leaves Bayplan's development switch off and expects the plain agent upgrade to be
+# leaves Coaming's development switch off and expects the plain agent upgrade to be
 # refused 403 insecure_transport through the proxy.
 #
-# The proxies listen on plain HTTP, so Bayplan's public URL is http://. The Caddy
-# file reads BAYPLAN_SCHEME, which this script sets to "http://" so that Caddy does
+# The proxies listen on plain HTTP, so Coaming's public URL is http://. The Caddy
+# file reads COAMING_SCHEME, which this script sets to "http://" so that Caddy does
 # not look for a certificate. Requests go to the proxy's published port with the
 # Host header of the site, so no DNS entry is needed.
 #
 # That makes the agent address plain ws:// for a host that is not loopback
-# (bayplan.example.com), which Bayplan accepts only with
-# BAYPLAN_AGENT_ALLOW_INSECURE=true, a development-only switch. This script sets it
-# on Bayplan so that it can test that each proxy passes the upgrade, and only the
+# (coaming.example.com), which Coaming accepts only with
+# COAMING_AGENT_ALLOW_INSECURE=true, a development-only switch. This script sets it
+# on Coaming so that it can test that each proxy passes the upgrade, and only the
 # no_agent_switch variant leaves it off to check the refusal through a real proxy.
 # The throwaway containers run on a private Docker network with ports published on
 # 127.0.0.1 only and hold no secrets.
 #
-# Environment: IMAGE (default bayplan:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
+# Environment: IMAGE (default coaming:e2e), CADDY_IMAGE (caddy:2), NGINX_IMAGE
 # (nginx:stable-alpine), TRAEFIK_IMAGE (traefik:v3). Needs Docker, curl and jq.
 # Removes every container and the network it creates, by name, and labels them with
-# bayplan.ci.owner=$BAYPLAN_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
+# coaming.ci.owner=$COAMING_CI_OWNER (local-<pid> when unset) so that `make ci-clean`
 # in CI removes what a cancelled run left (D-23). The proxy's host port is assigned by
 # Docker and read back. Prints one PASS or FAIL line per check and exits 1 if any
 # check failed.
@@ -59,7 +59,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-IMAGE="${IMAGE:-bayplan:e2e}"
+IMAGE="${IMAGE:-coaming:e2e}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2}"
 NGINX_IMAGE="${NGINX_IMAGE:-nginx:stable-alpine}"
 TRAEFIK_IMAGE="${TRAEFIK_IMAGE:-traefik:v3}"
@@ -70,8 +70,8 @@ done
 docker image inspect "${IMAGE}" >/dev/null 2>&1 || { echo "FAIL: the image ${IMAGE} is not built; run make e2e-image" >&2; exit 1; }
 
 RUN_ID="$$"
-OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
-NET="bayplan-proxy-smoke-${RUN_ID}"
+OWNER_LABEL="coaming.ci.owner=${COAMING_CI_OWNER:-local-$$}"
+NET="coaming-proxy-smoke-${RUN_ID}"
 WORK="$(mktemp -d)"
 JSON_H='Content-Type: application/json'
 PW='correct horse battery'
@@ -113,7 +113,7 @@ stop_container() {
 }
 
 # Per-scenario state, set by run_scenario.
-LABEL="" HOST="" BASE="" PUBLIC="" PORT="" SESSION="" PROXY_NAME="" BAYPLAN_NAME=""
+LABEL="" HOST="" BASE="" PUBLIC="" PORT="" SESSION="" PROXY_NAME="" COAMING_NAME=""
 
 # curl_proxy PATH ARGS... talks to the proxy's published port as HOST.
 curl_proxy() {
@@ -122,7 +122,7 @@ curl_proxy() {
   curl -sS -H "Host: ${HOST}" "$@" "http://127.0.0.1:${PORT}${BASE}${path}"
 }
 
-# await_index waits until the proxy serves an index page that carries the bayplan-base
+# await_index waits until the proxy serves an index page that carries the coaming-base
 # meta for ${BASE}, or 60 s pass (a deadline, not a count of tries). It sets index_last
 # (declared by the caller) to the status and first line of the last response it saw.
 await_index() {
@@ -132,7 +132,7 @@ await_index() {
     status="${body##*$'\n'}"
     body="${body%$'\n'*}"
     index_last="${status} $(printf '%s' "${body}" | head -n 1 | cut -c1-200)"
-    if grep -qF "<meta name=\"bayplan-base\" content=\"${BASE}\">" <<<"${body}"; then
+    if grep -qF "<meta name=\"coaming-base\" content=\"${BASE}\">" <<<"${body}"; then
       return 0
     fi
     [ "${SECONDS}" -ge "${deadline}" ] && return 1
@@ -140,15 +140,15 @@ await_index() {
   done
 }
 
-wait_bayplan() {
+wait_coaming() {
   local state="" _
   for _ in $(seq 1 60); do
-    state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${BAYPLAN_NAME}")"
+    state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${COAMING_NAME}")"
     [ "${state}" = "healthy" ] && return 0
-    [ "$(docker inspect -f '{{.State.Running}}' "${BAYPLAN_NAME}")" = "true" ] || break
+    [ "$(docker inspect -f '{{.State.Running}}' "${COAMING_NAME}")" = "true" ] || break
     sleep 1
   done
-  docker logs "${BAYPLAN_NAME}" 2>&1 | tail -n 20 >&2 || true
+  docker logs "${COAMING_NAME}" 2>&1 | tail -n 20 >&2 || true
   return 1
 }
 
@@ -168,15 +168,15 @@ start_proxy() {
   local kind="$1" conf="$2"
   case "${kind}" in
     caddy)
-      start_container "${PROXY_NAME}" -p 127.0.0.1::80 -e BAYPLAN_SCHEME=http:// \
+      start_container "${PROXY_NAME}" -p 127.0.0.1::80 -e COAMING_SCHEME=http:// \
         -v "${conf}:/etc/caddy/Caddyfile:ro" "${CADDY_IMAGE}" ;;
     nginx)
       start_container "${PROXY_NAME}" -p 127.0.0.1::80 \
         -v "${conf}:/etc/nginx/nginx.conf:ro" "${NGINX_IMAGE}" ;;
     traefik)
       start_container "${PROXY_NAME}" -p 127.0.0.1::80 \
-        -v "${conf}:/etc/traefik/bayplan.yml:ro" "${TRAEFIK_IMAGE}" \
-        --entrypoints.web.address=:80 --providers.file.filename=/etc/traefik/bayplan.yml ;;
+        -v "${conf}:/etc/traefik/coaming.yml:ro" "${TRAEFIK_IMAGE}" \
+        --entrypoints.web.address=:80 --providers.file.filename=/etc/traefik/coaming.yml ;;
   esac
   PORT="$(docker port "${PROXY_NAME}" 80/tcp | head -n 1 | sed 's/.*://')"
 }
@@ -187,7 +187,7 @@ start_proxy() {
 upgrade_request() {
   curl -sS -i --http1.1 --max-time 3 -o "${WORK}/upgrade.out" -H "Host: ${HOST}" \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Protocol: bayplan.agent.v1' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Protocol: coaming.agent.v1' \
     "http://127.0.0.1:${PORT}${BASE}/agent/connect" 2>/dev/null || true
   head -n 1 "${WORK}/upgrade.out" | tr -d '\r'
 }
@@ -197,7 +197,7 @@ problem_type() {
   jq -r '.type // empty' "$1" 2>/dev/null || true
 }
 
-# A signed-in request to an environment that does not exist is answered by Bayplan's
+# A signed-in request to an environment that does not exist is answered by Coaming's
 # policy before any handler runs, so the answer is the same on every proxy and needs
 # no container.
 MISSING_ENV="01980000-0000-7000-8000-0000000000ff"
@@ -208,21 +208,21 @@ shell_ws_request() {
   curl -sS -i --http1.1 --max-time 5 -o "${WORK}/shellws.out" -H "Host: ${HOST}" \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
     -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H "Origin: http://${HOST}" \
-    -H "Cookie: bayplan_session=${SESSION}" \
+    -H "Cookie: coaming_session=${SESSION}" \
     "http://127.0.0.1:${PORT}${BASE}/api/env/${MISSING_ENV}/shell-sessions/x/ws" 2>/dev/null || true
   head -n 1 "${WORK}/shellws.out" | tr -d '\r'
 }
 
 # warnings prints the ids of the proxy warnings the signed-in admin sees, sorted.
 warnings() {
-  curl_proxy /api/warnings -H "Cookie: bayplan_session=${SESSION}" --max-time 5 \
+  curl_proxy /api/warnings -H "Cookie: coaming_session=${SESSION}" --max-time 5 \
     | jq -r '[.items[].id | select(startswith("proxy_"))] | sort | join(" ")'
 }
 
 # sign_in completes setup through the proxy and keeps the session cookie.
 sign_in() {
   local token code
-  token="$(docker exec "${BAYPLAN_NAME}" /usr/local/bin/bayplan setup-token)" || return 1
+  token="$(docker exec "${COAMING_NAME}" /usr/local/bin/coaming setup-token)" || return 1
   code="$(curl_proxy /api/setup/complete -o "${WORK}/complete.json" -D "${WORK}/complete.hdr" -w '%{http_code}' \
     -H "${JSON_H}" --max-time 10 \
     -d "{\"token\":\"${token}\",\"username\":\"admin\",\"password\":\"${PW}\",\"instanceName\":\"Proxy smoke\",\"publicUrl\":\"${PUBLIC}\"}")"
@@ -236,14 +236,14 @@ sign_in() {
 run_scenario() {
   local kind="$1" site="$2" variant="${3:-ok}" conf trust agent_switch
   case "${site}" in
-    root) HOST="bayplan.example.com" BASE="" ;;
-    subpath) HOST="example.com" BASE="/bayplan" ;;
+    root) HOST="coaming.example.com" BASE="" ;;
+    subpath) HOST="example.com" BASE="/coaming" ;;
   esac
   PUBLIC="http://${HOST}${BASE}"
   LABEL="${kind} ${site}"
   [ "${variant}" = ok ] || LABEL="${LABEL} (${variant})"
-  BAYPLAN_NAME="bayplan-psmoke-${RUN_ID}-bp"
-  PROXY_NAME="bayplan-psmoke-${RUN_ID}-px"
+  COAMING_NAME="coaming-psmoke-${RUN_ID}-bp"
+  PROXY_NAME="coaming-psmoke-${RUN_ID}-px"
   SESSION=""
 
   case "${kind}" in
@@ -264,23 +264,23 @@ run_scenario() {
   [ "${variant}" = untrusted_proxy ] && trust=""
 
   # The proxies are plain HTTP for a host that is not loopback, the development-only
-  # case, so every variant but no_agent_switch sets Bayplan's development switch.
+  # case, so every variant but no_agent_switch sets Coaming's development switch.
   agent_switch=1
   [ "${variant}" = no_agent_switch ] && agent_switch=""
-  start_container "${BAYPLAN_NAME}" --network-alias bayplan --tmpfs /data \
-    -e "BAYPLAN_PUBLIC_URL=${PUBLIC}" ${trust:+-e "BAYPLAN_TRUSTED_PROXIES=${trust}"} \
-    ${agent_switch:+-e "BAYPLAN_AGENT_ALLOW_INSECURE=true"} \
+  start_container "${COAMING_NAME}" --network-alias coaming --tmpfs /data \
+    -e "COAMING_PUBLIC_URL=${PUBLIC}" ${trust:+-e "COAMING_TRUSTED_PROXIES=${trust}"} \
+    ${agent_switch:+-e "COAMING_AGENT_ALLOW_INSECURE=true"} \
     --health-interval 2s --health-start-period 0s --health-retries 10 "${IMAGE}"
-  if ! wait_bayplan; then
-    fail "${LABEL}: Bayplan did not become healthy"
-    stop_container "${BAYPLAN_NAME}"
+  if ! wait_coaming; then
+    fail "${LABEL}: Coaming did not become healthy"
+    stop_container "${COAMING_NAME}"
     return
   fi
   start_proxy "${kind}" "${conf}"
   if ! wait_proxy; then
-    fail "${LABEL}: the proxy never passed /healthz through to Bayplan"
+    fail "${LABEL}: the proxy never passed /healthz through to Coaming"
     stop_container "${PROXY_NAME}"
-    stop_container "${BAYPLAN_NAME}"
+    stop_container "${COAMING_NAME}"
     return
   fi
 
@@ -293,9 +293,9 @@ run_scenario() {
   # what the last response was.
   local index_last=""
   if await_index; then
-    pass "${LABEL}: the index carries the bayplan-base meta \"${BASE}\""
+    pass "${LABEL}: the index carries the coaming-base meta \"${BASE}\""
   else
-    fail "${LABEL}: the index has no bayplan-base meta \"${BASE}\" after 60s; last response: ${index_last}"
+    fail "${LABEL}: the index has no coaming-base meta \"${BASE}\" after 60s; last response: ${index_last}"
   fi
   local code
   code="$(curl_proxy /api/version -o /dev/null -w '%{http_code}' --max-time 5 || true)"
@@ -309,14 +309,14 @@ run_scenario() {
   case "${status}" in
     *" ${want} "*)
       if [ "${want}" = 101 ]; then
-        if grep -qai '^sec-websocket-protocol: bayplan.agent.v1' "${WORK}/upgrade.out"; then
-          pass "${LABEL}: ${BASE}/agent/connect upgrades to a WebSocket with bayplan.agent.v1 (${status})"
+        if grep -qai '^sec-websocket-protocol: coaming.agent.v1' "${WORK}/upgrade.out"; then
+          pass "${LABEL}: ${BASE}/agent/connect upgrades to a WebSocket with coaming.agent.v1 (${status})"
         else
-          fail "${LABEL}: the upgrade was accepted without the bayplan.agent.v1 subprotocol"
+          fail "${LABEL}: the upgrade was accepted without the coaming.agent.v1 subprotocol"
         fi
       elif [ "${want}" = 403 ]; then
         if grep -qa 'insecure_transport' "${WORK}/upgrade.out"; then
-          pass "${LABEL}: a plain agent upgrade without BAYPLAN_AGENT_ALLOW_INSECURE is refused with ${status} insecure_transport"
+          pass "${LABEL}: a plain agent upgrade without COAMING_AGENT_ALLOW_INSECURE is refused with ${status} insecure_transport"
         else
           fail "${LABEL}: ${BASE}/agent/connect answered ${status} without insecure_transport in the body"
         fi
@@ -335,7 +335,7 @@ run_scenario() {
     fail "${LABEL}: the event stream without a session answered '${timing}', want 401 in under 3 s"
   fi
   if [ "${ok_signed}" = 1 ]; then
-    curl_proxy /api/environments/stream -H "Cookie: bayplan_session=${SESSION}" -N --max-time 4 >"${WORK}/sse.out" 2>/dev/null || true
+    curl_proxy /api/environments/stream -H "Cookie: coaming_session=${SESSION}" -N --max-time 4 >"${WORK}/sse.out" 2>/dev/null || true
     if grep -q '^event: snapshot' "${WORK}/sse.out"; then
       pass "${LABEL}: the event stream's first frame arrives within 4 s, unbuffered"
     else
@@ -343,50 +343,50 @@ run_scenario() {
     fi
 
     if [ "${variant}" = ok ]; then
-      # shell_ws_reaches_bayplan: the shell's WebSocket upgrade request gets to Bayplan.
+      # shell_ws_reaches_coaming: the shell's WebSocket upgrade request gets to Coaming.
       local shell_status shell_type
       shell_status="$(shell_ws_request)"
       shell_type="$(sed '1,/^\r\?$/d' "${WORK}/shellws.out" | jq -r '.type // empty' 2>/dev/null || true)"
       case "${shell_status}" in
         *" 404 "*)
           if [ "${shell_type}" = environment_not_found ]; then
-            pass "${LABEL}: shell_ws_reaches_bayplan: the shell upgrade request reaches Bayplan (${shell_status}, ${shell_type})"
+            pass "${LABEL}: shell_ws_reaches_coaming: the shell upgrade request reaches Coaming (${shell_status}, ${shell_type})"
           else
-            fail "${LABEL}: shell_ws_reaches_bayplan: ${shell_status} but the body is not Bayplan's environment_not_found problem ('${shell_type}')"
+            fail "${LABEL}: shell_ws_reaches_coaming: ${shell_status} but the body is not Coaming's environment_not_found problem ('${shell_type}')"
           fi ;;
-        *) fail "${LABEL}: shell_ws_reaches_bayplan: the shell upgrade request answered '${shell_status}', want Bayplan's 404 environment_not_found" ;;
+        *) fail "${LABEL}: shell_ws_reaches_coaming: the shell upgrade request answered '${shell_status}', want Coaming's 404 environment_not_found" ;;
       esac
 
       # log_stream_prompt: a log stream request is answered at once, not held back.
       local log_timing log_type
       log_timing="$(curl_proxy "/api/env/${MISSING_ENV}/containers/x/logs/stream?sid=abcdefghijklmnopqrstuv" \
-        -H "Cookie: bayplan_session=${SESSION}" -H 'Accept: text/event-stream' -N \
+        -H "Cookie: coaming_session=${SESSION}" -H 'Accept: text/event-stream' -N \
         -o "${WORK}/logstream.out" -w '%{http_code} %{time_total}' --max-time 5 || true)"
       log_type="$(problem_type "${WORK}/logstream.out")"
       if [ "${log_timing%% *}" = 404 ] && [ "${log_type}" = environment_not_found ] && awk -v t="${log_timing##* }" 'BEGIN { exit !(t < 3) }'; then
-        pass "${LABEL}: log_stream_prompt: the log stream request is answered by Bayplan at once (${log_timing##* } s)"
+        pass "${LABEL}: log_stream_prompt: the log stream request is answered by Coaming at once (${log_timing##* } s)"
       else
         fail "${LABEL}: log_stream_prompt: the log stream request answered '${log_timing}' type '${log_type}', want 404 environment_not_found in under 3 s"
       fi
     fi
 
-    # What Bayplan itself says about the proxy.
+    # What Coaming itself says about the proxy.
     local seen
     seen="$(warnings || true)"
     case "${variant}" in
       ok | no_agent_switch)
-        if [ -z "${seen}" ]; then pass "${LABEL}: Bayplan shows no proxy warning"; else fail "${LABEL}: Bayplan shows proxy warnings: ${seen}"; fi ;;
+        if [ -z "${seen}" ]; then pass "${LABEL}: Coaming shows no proxy warning"; else fail "${LABEL}: Coaming shows proxy warnings: ${seen}"; fi ;;
       no_upgrade_headers)
-        if [ "${seen}" = proxy_websocket_failing ]; then pass "${LABEL}: Bayplan shows proxy_websocket_failing"; else fail "${LABEL}: warnings are '${seen}', want proxy_websocket_failing"; fi ;;
+        if [ "${seen}" = proxy_websocket_failing ]; then pass "${LABEL}: Coaming shows proxy_websocket_failing"; else fail "${LABEL}: warnings are '${seen}', want proxy_websocket_failing"; fi ;;
       no_host_header)
-        if [ "${seen}" = proxy_url_mismatch ]; then pass "${LABEL}: Bayplan shows proxy_url_mismatch"; else fail "${LABEL}: warnings are '${seen}', want proxy_url_mismatch"; fi ;;
+        if [ "${seen}" = proxy_url_mismatch ]; then pass "${LABEL}: Coaming shows proxy_url_mismatch"; else fail "${LABEL}: warnings are '${seen}', want proxy_url_mismatch"; fi ;;
       untrusted_proxy)
-        if [ "${seen}" = proxy_untrusted_forwarded ]; then pass "${LABEL}: Bayplan shows proxy_untrusted_forwarded"; else fail "${LABEL}: warnings are '${seen}', want proxy_untrusted_forwarded"; fi ;;
+        if [ "${seen}" = proxy_untrusted_forwarded ]; then pass "${LABEL}: Coaming shows proxy_untrusted_forwarded"; else fail "${LABEL}: warnings are '${seen}', want proxy_untrusted_forwarded"; fi ;;
     esac
   fi
 
   stop_container "${PROXY_NAME}"
-  stop_container "${BAYPLAN_NAME}"
+  stop_container "${COAMING_NAME}"
 }
 
 # The guide embeds each file. A line of a file that is missing from the guide means

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { ContainerRow } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
@@ -76,7 +76,7 @@ function StartButton({ envId, row }: { envId: string; row: ContainerRow }) {
   );
 }
 
-// NoShell: the image has neither bash nor sh where Bayplan looks. The launcher's form is
+// NoShell: the image has neither bash nor sh where Coaming looks. The launcher's form is
 // shown with Custom command chosen and its field focused, so a path to the image's own
 // shell can be entered.
 const CUSTOM_CHOICE: ShellChoice = { ...DEFAULT_CHOICE, shell: "custom" };
@@ -114,7 +114,7 @@ function NoShell({
 
 // RefusalPanel is the panel of one reason a shell cannot be opened: not running (with
 // Start container), no shell found (with the custom command field), a read-only host, one
-// of Bayplan's own containers, or an agent too old to run an exec.
+// of Coaming's own containers, or an agent too old to run an exec.
 export function RefusalPanel({ kind, envId, row, onOpen, opening }: RefusalPanelProps) {
   const t = useT();
   switch (kind) {

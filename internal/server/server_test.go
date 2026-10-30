@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -27,17 +27,17 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 func testConfig(t *testing.T, env map[string]string) config.Config {
@@ -63,11 +63,11 @@ func httpGet(t *testing.T, url string) (int, string) {
 }
 
 func TestBuildLogsRedactedConfigAndPreparesDataDir(t *testing.T) {
-	// Exactly 32 bytes, as BAYPLAN_ENCRYPTION_KEY must decode to.
+	// Exactly 32 bytes, as COAMING_ENCRYPTION_KEY must decode to.
 	const raw = "never-log-this-key-never-log-thi"
 	secret := base64.StdEncoding.EncodeToString([]byte(raw))
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "BAYPLAN_ENCRYPTION_KEY": secret})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir, "COAMING_ENCRYPTION_KEY": secret})
 
 	var logs bytes.Buffer
 	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -78,7 +78,7 @@ func TestBuildLogsRedactedConfigAndPreparesDataDir(t *testing.T) {
 	if strings.Contains(logs.String(), secret) || strings.Contains(logs.String(), raw) {
 		t.Fatalf("startup log leaks the encryption key: %s", logs.String())
 	}
-	for _, want := range []string{"BAYPLAN_ENCRYPTION_KEY", "[redacted]", "BAYPLAN_LISTEN", "version"} {
+	for _, want := range []string{"COAMING_ENCRYPTION_KEY", "[redacted]", "COAMING_LISTEN", "version"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("startup log lacks %q: %s", want, logs.String())
 		}
@@ -100,7 +100,7 @@ func TestBuildFailsWhenDataDirIsNotWritable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // a directory needs the search bit to be removed
-	_, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil {
 		t.Fatal("expected Build to fail")
 	}
@@ -108,7 +108,7 @@ func TestBuildFailsWhenDataDirIsNotWritable(t *testing.T) {
 
 func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestReadyzTurns503WhenTheDataDirDisappears(t *testing.T) {
 }
 
 func TestRunServesThenShutsDownOnCancelAndHealthcheckFollows(t *testing.T) {
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,27 +199,27 @@ func TestRunReportsListenErrorsNamingTheEnvVar(t *testing.T) {
 	}
 	defer func() { _ = busy.Close() }()
 	srv, err := Build(context.Background(), testConfig(t, map[string]string{
-		"BAYPLAN_DATA_DIR": t.TempDir() + "/data",
-		"BAYPLAN_LISTEN":   busy.Addr().String(),
+		"COAMING_DATA_DIR": t.TempDir() + "/data",
+		"COAMING_LISTEN":   busy.Addr().String(),
 	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = srv.Run(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_LISTEN") {
-		t.Fatalf("Run on a busy port = %v, want an error naming BAYPLAN_LISTEN", err)
+	if err == nil || !strings.Contains(err.Error(), "COAMING_LISTEN") {
+		t.Fatalf("Run on a busy port = %v, want an error naming COAMING_LISTEN", err)
 	}
 }
 
 func TestBuildMigratesAndRecordsTheVersion(t *testing.T) {
 	dir := t.TempDir() + "/data"
 	var logs bytes.Buffer
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
-	if _, err := os.Stat(dir + "/bayplan.db"); err != nil {
+	if _, err := os.Stat(dir + "/coaming.db"); err != nil {
 		t.Errorf("database file missing: %v", err)
 	}
 	if v, err := srv.Store().RQ.GetMeta(context.Background(), "app_version"); err != nil || v != "dev" {
@@ -234,7 +234,7 @@ func TestBuildMigratesAndRecordsTheVersion(t *testing.T) {
 // next one ends it as interrupted and fails the revision it had taken (plan 07-18, Open Q5).
 func TestBuildMarksStackDeploysThatWereRunningAsInterrupted(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	var logs bytes.Buffer
 	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -279,7 +279,7 @@ func TestBuildMarksStackDeploysThatWereRunningAsInterrupted(t *testing.T) {
 // deployed revision and a pending one stay, and the rest go with their variables.
 func TestBuildPrunesStackRevisionsBeyondTheLimit(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	var logs bytes.Buffer
 	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -326,7 +326,7 @@ func TestBuildPrunesStackRevisionsBeyondTheLimit(t *testing.T) {
 
 func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	first, err := Build(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +351,7 @@ func TestBuildRefusesADatabaseNewerThanTheBinary(t *testing.T) {
 
 func TestBuildGeneratesTheKeyFileAndNeverLogsIt(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 
 	var logs bytes.Buffer
 	srv, err := Build(context.Background(), cfg, slog.New(slog.NewJSONHandler(&logs, nil)))
@@ -360,7 +360,7 @@ func TestBuildGeneratesTheKeyFileAndNeverLogsIt(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = srv.Close() })
 
-	keyPath := dir + "/bayplan.key"
+	keyPath := dir + "/coaming.key"
 	st, err := os.Stat(keyPath)
 	if err != nil {
 		t.Fatalf("no key file generated: %v", err)
@@ -385,12 +385,12 @@ func TestBuildGeneratesTheKeyFileAndNeverLogsIt(t *testing.T) {
 
 func TestBuildRejectsAMalformedKeyBeforeTouchingTheDatabase(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "BAYPLAN_ENCRYPTION_KEY": "too-short"})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir, "COAMING_ENCRYPTION_KEY": "too-short"})
 	_, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
-	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_ENCRYPTION_KEY") {
-		t.Fatalf("Build = %v, want an error naming BAYPLAN_ENCRYPTION_KEY", err)
+	if err == nil || !strings.Contains(err.Error(), "COAMING_ENCRYPTION_KEY") {
+		t.Fatalf("Build = %v, want an error naming COAMING_ENCRYPTION_KEY", err)
 	}
-	if _, statErr := os.Stat(dir + "/bayplan.db"); statErr == nil {
+	if _, statErr := os.Stat(dir + "/coaming.db"); statErr == nil {
 		t.Error("a malformed key must stop startup before the database is created")
 	}
 }
@@ -398,7 +398,7 @@ func TestBuildRejectsAMalformedKeyBeforeTouchingTheDatabase(t *testing.T) {
 func TestBuildRejectsADockerHostThatIsNotAUnixSocketBeforeTouchingTheDataDirectory(t *testing.T) {
 	for _, host := range []string{"tcp://1.2.3.4:2375", "ssh://host", "npipe:////./pipe/docker_engine", "/var/run/docker.sock"} {
 		dir := t.TempDir() + "/data"
-		cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "DOCKER_HOST": host})
+		cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir, "DOCKER_HOST": host})
 		_, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 		if !errors.Is(err, engine.ErrUnsupportedDockerHost) || !strings.Contains(err.Error(), "unix") {
 			t.Errorf("DOCKER_HOST=%s: Build = %v, want ErrUnsupportedDockerHost naming unix", host, err)
@@ -410,7 +410,7 @@ func TestBuildRejectsADockerHostThatIsNotAUnixSocketBeforeTouchingTheDataDirecto
 }
 
 func TestBuildGuardsEveryRoute(t *testing.T) {
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestBuildGuardsEveryRoute(t *testing.T) {
 func TestBuildWritesASetupTokenWhileNoUserExistsAndServesTheGate(t *testing.T) {
 	dir := t.TempDir() + "/data"
 	var logs bytes.Buffer
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestBuildWritesASetupTokenWhileNoUserExistsAndServesTheGate(t *testing.T) {
 // is recognised from the cookie, and a mutation without the CSRF token is
 // refused (plan 12).
 func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,13 +562,13 @@ func TestBuildSignsInWithTheSessionAuthenticatorAndCSRFGuard(t *testing.T) {
 	}
 }
 
-// A reverse proxy that is not in BAYPLAN_TRUSTED_PROXIES shows up in the bell, and
+// A reverse proxy that is not in COAMING_TRUSTED_PROXIES shows up in the bell, and
 // one that is does not (plan 02-25, D-51, D-53).
 func TestBuildReportsForwardedHeadersFromAPeerThatIsNotATrustedProxy(t *testing.T) {
 	build := func(trusted string) (*Server, *http.Cookie) {
-		env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+		env := map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}
 		if trusted != "" {
-			env["BAYPLAN_TRUSTED_PROXIES"] = trusted
+			env["COAMING_TRUSTED_PROXIES"] = trusted
 		}
 		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 		if err != nil {
@@ -656,7 +656,7 @@ func TestBuildReportsForwardedHeadersFromAPeerThatIsNotATrustedProxy(t *testing.
 func TestBuildAddsNoEnvironmentAndNeverContactsDockerUntilAnAdminOptsIn(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "node-1"})
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir, "DOCKER_HOST": "unix://" + fake.SocketPath()})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir, "DOCKER_HOST": "unix://" + fake.SocketPath()})
 
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -710,7 +710,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "node-1", Events: []dockertest.FakeEvent{
 		{Type: "container", Action: "start", ActorID: "c-1", TimeNano: time.Now().Add(-time.Minute).UnixNano(), Attributes: map[string]string{"name": "web"}},
 	}})
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data", "DOCKER_HOST": "unix://" + fake.SocketPath()})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data", "DOCKER_HOST": "unix://" + fake.SocketPath()})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -815,7 +815,7 @@ func TestBuildFeedsEventsPerEnvironmentAndShutdownDoesNotWaitForAnOpenStream(t *
 
 func TestBuildTakesTheSelfContainerIDFromTheOption(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler), WithSelfContainerID(id))
 	if err != nil {
 		t.Fatal(err)
@@ -826,7 +826,7 @@ func TestBuildTakesTheSelfContainerIDFromTheOption(t *testing.T) {
 	}
 
 	// Without the option nothing is badged, whatever /proc says: Build no longer probes it.
-	bare, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	bare, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +840,7 @@ func TestBuildTakesTheSelfContainerIDFromTheOption(t *testing.T) {
 // refusal must still be accounted for.
 func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	srv, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
+	srv, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": dir}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +913,7 @@ func TestBuildAggregatesAnAnonymousDenialFloodAndKeepsSignInWorking(t *testing.T
 // Strict-Transport-Security header, for a request that arrived over TLS or not.
 func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 	t.Helper()
-	env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+	env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 	srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -931,10 +931,10 @@ func hstsOf(t *testing.T, env map[string]string, overTLS bool) string {
 func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 	// A browser that pinned the generated certificate could not click through
 	// a regenerated one (WR-09), so the header is withheld in that mode.
-	if got := hstsOf(t, map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"}, true); got != "" {
+	if got := hstsOf(t, map[string]string{"COAMING_TLS_SELF_SIGNED": "true"}, true); got != "" {
 		t.Errorf("self-signed: Strict-Transport-Security = %q, want none", got)
 	}
-	if got := hstsOf(t, map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true", "BAYPLAN_PUBLIC_URL": "https://bayplan.example"}, true); got != "" {
+	if got := hstsOf(t, map[string]string{"COAMING_TLS_SELF_SIGNED": "true", "COAMING_PUBLIC_URL": "https://coaming.example"}, true); got != "" {
 		t.Errorf("self-signed with an https public URL: Strict-Transport-Security = %q, want none", got)
 	}
 
@@ -944,15 +944,15 @@ func TestHSTSIsNeverSentWithTheSelfSignedCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	supplied := map[string]string{
-		"BAYPLAN_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
-		"BAYPLAN_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
+		"COAMING_TLS_CERT_FILE": filepath.Join(src, "tls", "selfsigned.crt"),
+		"COAMING_TLS_KEY_FILE":  filepath.Join(src, "tls", "selfsigned.key"),
 	}
 	if got := hstsOf(t, supplied, true); got != "max-age=31536000" {
 		t.Errorf("supplied certificate: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 
-	// TLS ended in front of Bayplan: the request is plain but the public URL is https.
-	if got := hstsOf(t, map[string]string{"BAYPLAN_PUBLIC_URL": "https://bayplan.example"}, false); got != "max-age=31536000" {
+	// TLS ended in front of Coaming: the request is plain but the public URL is https.
+	if got := hstsOf(t, map[string]string{"COAMING_PUBLIC_URL": "https://coaming.example"}, false); got != "max-age=31536000" {
 		t.Errorf("https public URL behind a proxy: Strict-Transport-Security = %q, want max-age=31536000", got)
 	}
 }
@@ -1027,7 +1027,7 @@ func serveForTest(t *testing.T, h http.Handler, readTimeout time.Duration) strin
 // production value must be pinned here or the slow-body protection could drop
 // to zero (no timeout) without a test failing.
 func TestTheHTTPServerThatServeBuildsReadsRequestsForThirtySeconds(t *testing.T) {
-	built, err := Build(context.Background(), testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
+	built, err := Build(context.Background(), testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

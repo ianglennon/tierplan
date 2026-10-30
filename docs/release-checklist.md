@@ -1,10 +1,10 @@
 # Release checklist
 
-Work through this in order for every release. No release has been cut yet; the first one is v0.1.0, never "v1". Bayplan follows Semantic Versioning, and breaking changes are allowed between 0.x minors.
+Work through this in order for every release. No release has been cut yet; the first one is v0.1.0, never "v1". Coaming follows Semantic Versioning, and breaking changes are allowed between 0.x minors.
 
 ## Before the first public image (once)
 
-- [ ] **The repository is public.** The running application links to its source at `https://github.com/ianglennon/bayplan/tree/<commit>` (Settings > About and `/api/version`), and AGPL section 13 requires that offer to work for everyone who uses a modified or unmodified network service. While the repository is private that link answers 404 to outsiders. Make the repository public **before** the first public image is pushed, and check the link from a signed-out browser. (RESEARCH Pitfall 25.)
+- [ ] **The repository is public.** The running application links to its source at `https://github.com/ianglennon/coaming/tree/<commit>` (Settings > About and `/api/version`), and AGPL section 13 requires that offer to work for everyone who uses a modified or unmodified network service. While the repository is private that link answers 404 to outsiders. Make the repository public **before** the first public image is pushed, and check the link from a signed-out browser. (RESEARCH Pitfall 25.)
 - [ ] The planning files (`.planning/`, `.claude/`, `CLAUDE.md`) are not in the repository history. They are git-ignored and must never be committed or pushed. Check with `git log --all --stat -- .planning .claude CLAUDE.md`.
 - [ ] **Decide whether to squash the pre-v0.1.0 migrations into one baseline before the first tag** (D-85). Once a tagged release ships a migration, users' databases depend on it and it is never edited again, so this choice is one-way. The current migrations are `internal/store/migrations/00001` to `00006`; record the decision (squash, or keep as is) in the release notes of v0.1.0.
 - [ ] GitHub Security Advisories are enabled on the repository, so SECURITY.md's reporting route works.
@@ -12,26 +12,26 @@ Work through this in order for every release. No release has been cut yet; the f
 ## Every release
 
 - [ ] The branch to release from is `main`, and CI is **green**, including `make lint`, `make test`, `make gen-check`, `make licences`, `make spdx`, `make dco`, the Docker engine matrix (`make test-int`), `make release-check` and the end-to-end job (`make e2e`) and the proxy job (`make proxy-smoke`).
-- [ ] `docs/` and the README still match the code: every `BAYPLAN_*` setting in `internal/config/config.go` is in the README table, and the README's `docker run` command matches `web/src/features/environments/docker-run-snippet.ts`.
+- [ ] `docs/` and the README still match the code: every `COAMING_*` setting in `internal/config/config.go` is in the README table, and the README's `docker run` command matches `web/src/features/environments/docker-run-snippet.ts`.
 - [ ] Dependencies changed? Run `make gen` and commit `web/public/third-party-notices.json`, and look at `make licences` output for new licences.
 - [ ] The distroless base image digest in `Dockerfile` was bumped deliberately if you want newer base-image fixes (bump the digest, never the tag), and `make image image-smoke` passes with it.
-- [ ] **Both images are built and released together.** The release workflow publishes `ghcr.io/ianglennon/bayplan` and `ghcr.io/ianglennon/bayplan-agent` from the same tag, each as `X.Y.Z` and `X.Y` for `linux/amd64` and `linux/arm64`, with no `:latest`. The agent image is the second signed image: verify it the way the server image is verified, with the same identity and issuer, and check its SBOM too:
+- [ ] **Both images are built and released together.** The release workflow publishes `ghcr.io/ianglennon/coaming` and `ghcr.io/ianglennon/coaming-agent` from the same tag, each as `X.Y.Z` and `X.Y` for `linux/amd64` and `linux/arm64`, with no `:latest`. The agent image is the second signed image: verify it the way the server image is verified, with the same identity and issuer, and check its SBOM too:
 
   ```sh
-  cosign verify ghcr.io/ianglennon/bayplan-agent:X.Y.Z \
-    --certificate-identity-regexp '^https://github.com/ianglennon/bayplan/\.github/workflows/release\.yml@refs/tags/v' \
+  cosign verify ghcr.io/ianglennon/coaming-agent:X.Y.Z \
+    --certificate-identity-regexp '^https://github.com/ianglennon/coaming/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-  docker buildx imagetools inspect ghcr.io/ianglennon/bayplan-agent:X.Y.Z --format '{{ json .SBOM }}'
-  docker buildx imagetools inspect ghcr.io/ianglennon/bayplan-agent:latest   # must fail
+  docker buildx imagetools inspect ghcr.io/ianglennon/coaming-agent:X.Y.Z --format '{{ json .SBOM }}'
+  docker buildx imagetools inspect ghcr.io/ianglennon/coaming-agent:latest   # must fail
   ```
 
-  Install commands and automatic updates name the agent image by the server's own version, `ghcr.io/ianglennon/bayplan-agent:X.Y.Z`, so an unpublished or unsigned agent image breaks every new install and every update at once.
-- [ ] **Agent and server versions match.** `ghcr.io/ianglennon/bayplan-agent:X.Y.Z` reports `vX.Y.Z` (start it once and read `starting bayplan-agent version=vX.Y.Z` in its log), the server reports the same in `/api/version`, and the compatibility window in `internal/tunnel/versionwindow.go` still accepts the previous minor: an agent of the previous release connects to this server and is offered the update.
+  Install commands and automatic updates name the agent image by the server's own version, `ghcr.io/ianglennon/coaming-agent:X.Y.Z`, so an unpublished or unsigned agent image breaks every new install and every update at once.
+- [ ] **Agent and server versions match.** `ghcr.io/ianglennon/coaming-agent:X.Y.Z` reports `vX.Y.Z` (start it once and read `starting coaming-agent version=vX.Y.Z` in its log), the server reports the same in `/api/version`, and the compatibility window in `internal/tunnel/versionwindow.go` still accepts the previous minor: an agent of the previous release connects to this server and is offered the update.
 - [ ] **The agent protocol is unchanged, or the change is deliberate.** The update and uninstall messages are frozen for all of 0.x so that any older agent that can connect can be updated out of its version. The golden files under `proto/wire/testdata` (`update`, `update_digest`, `update_result`, `update_result_error`, `uninstall` and `uninstall_service`) must be **unchanged** by the release (`git diff vPREVIOUS -- proto/wire/testdata` prints nothing); a diff there needs a decision recorded in the release notes, not a regenerated file.
-- [ ] **The end-to-end run through a proxy passed on the release commit**, including the agent project: `make e2e` brings up Bayplan behind Caddy at `/bayplan`, runs the install command on a second Docker host, switches to it and revokes it. Look at the agent spec's trace in `.devdata/playwright-report` once: the waiting panel moves to "is online" without a reload, and the revoked page says "This environment was revoked". `make proxy-smoke` passed too.
+- [ ] **The end-to-end run through a proxy passed on the release commit**, including the agent project: `make e2e` brings up Coaming behind Caddy at `/coaming`, runs the install command on a second Docker host, switches to it and revokes it. Look at the agent spec's trace in `.devdata/playwright-report` once: the waiting panel moves to "is online" without a reload, and the revoked page says "This environment was revoked". `make proxy-smoke` passed too.
 - [ ] **Stacks (Phase 7) are proved on both engines and through the agent.** Each of these is in addition to the green CI run above:
   - **The Docker-backed jobs ran five times in a row on the release commit, all green, with no code change between them** (`scripts/ci-gate.sh` judges the series, see [testing.md](testing.md)). The stack tests deploy to real engines (the integration matrix, the swarm legs, the standalone deploys through a real agent and the end-to-end run), so a test that fails one run in five is a defect, not weather.
-  - **`make test-swarm` passed on Engine 24 and on Engine 29** (`BAYPLAN_TEST_ENGINE=24` and `BAYPLAN_TEST_ENGINE=29`). The stack deploy is compared with `docker stack deploy` on a real swarm, and one case (a local-only image pinned to its image ID) skips on Engine 29 on purpose: read the skip reason, it is the open decision in [stacks.md](stacks.md#behaviour-that-is-still-open).
+  - **`make test-swarm` passed on Engine 24 and on Engine 29** (`COAMING_TEST_ENGINE=24` and `COAMING_TEST_ENGINE=29`). The stack deploy is compared with `docker stack deploy` on a real swarm, and one case (a local-only image pinned to its image ID) skips on Engine 29 on purpose: read the skip reason, it is the open decision in [stacks.md](stacks.md#behaviour-that-is-still-open).
   - **The `stacks` project of `make e2e` ran** (look for `stacks.spec.ts` in `.devdata/test/e2e.json`): a stack is created, checked, reviewed, deployed, edited and removed on the managed host, and a stack with a secret file is deployed through a real agent and the secret is read inside the container.
   - **The agent image was rebuilt and published with this release, and the agents on your own hosts are updated.** A standalone stack needs the agent's container create, archive, rename and image inspect routes, which an agent from before Phase 7 does not have: a deploy to such a host is refused by the agent until it is updated (Settings > Environments, or [agent-updates.md](agent-updates.md)).
   - **`stacks.md` still says what the code does.** Its "Behaviour that is still open" and "What Phase 7 does not do" lists are true as written: an item that was decided or built since is removed there, and nothing deferred is described as shipped.
@@ -40,12 +40,12 @@ Work through this in order for every release. No release has been cut yet; the f
 - [ ] **Verify the signatures.** The workflow signs with keyless cosign, so the identity is the release workflow of this repository. Look at what `cosign verify` prints and confirm the identity and issuer are what you expect:
 
   ```sh
-  cosign verify ghcr.io/ianglennon/bayplan:X.Y.Z \
-    --certificate-identity-regexp '^https://github.com/ianglennon/bayplan/\.github/workflows/release\.yml@refs/tags/v' \
+  cosign verify ghcr.io/ianglennon/coaming:X.Y.Z \
+    --certificate-identity-regexp '^https://github.com/ianglennon/coaming/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
   cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
-    --certificate-identity-regexp '^https://github.com/ianglennon/bayplan/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-identity-regexp '^https://github.com/ianglennon/coaming/\.github/workflows/release\.yml@refs/tags/v' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
@@ -53,11 +53,11 @@ Work through this in order for every release. No release has been cut yet; the f
 - [ ] **Check the SBOMs.** Each archive has a `.spdx.json` file next to it in the release. The image carries its own SPDX attestation:
 
   ```sh
-  docker buildx imagetools inspect ghcr.io/ianglennon/bayplan:X.Y.Z --format '{{ json .SBOM }}'
+  docker buildx imagetools inspect ghcr.io/ianglennon/coaming:X.Y.Z --format '{{ json .SBOM }}'
   ```
 
   It must be present and list the Go and npm components.
-- [ ] **Confirm the image tags.** `X.Y.Z` and `X.Y` exist (a pre-release gets only `X.Y.Z`), both for `linux/amd64` and `linux/arm64`, and **there is no `:latest` or other floating catch-all tag** while Bayplan is 0.x. `docker buildx imagetools inspect ghcr.io/ianglennon/bayplan:latest` must fail.
+- [ ] **Confirm the image tags.** `X.Y.Z` and `X.Y` exist (a pre-release gets only `X.Y.Z`), both for `linux/amd64` and `linux/arm64`, and **there is no `:latest` or other floating catch-all tag** while Coaming is 0.x. `docker buildx imagetools inspect ghcr.io/ianglennon/coaming:latest` must fail.
 - [ ] Pull the released image on a clean machine and run the README's install command. It must be healthy, show the setup wizard, and report the right version in Settings > About.
 - [ ] **Update the README's image tag from `:edge` to `:X.Y`** (and the upgrade example), in the same release, so the documented command pins the line it was written for.
 - [ ] The GitHub release notes group changes by Conventional Commit type; read them and add anything a user must do when upgrading (a breaking change, a new setting, a migration).

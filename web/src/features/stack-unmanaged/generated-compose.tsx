@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Check, CircleX, Copy, Download } from "lucide-react";
@@ -26,8 +26,8 @@ interface GeneratedComposeProps {
   name: string;
 }
 
-// GeneratedCompose is the Generated compose tab of a stack Bayplan did not make (UI-SPEC "Unmanaged stack page", D-09,
-// D-12): the compose file Bayplan would start from if the stack were adopted, rebuilt from the running services,
+// GeneratedCompose is the Generated compose tab of a stack Coaming did not make (UI-SPEC "Unmanaged stack page", D-09,
+// D-12): the compose file Coaming would start from if the stack were adopted, rebuilt from the running services,
 // read only. It is a preview and saves nothing. The server hides every value the caller may not read, so the text
 // is shown as it came; it is held in the query and never changed here. Download names the file {name}.generated.yaml
 // from a Blob, and no request is made for it.

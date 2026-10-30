@@ -31,7 +31,7 @@
       "pending": "Saving…",
       "toast": "Saved the draft of {{name}}.",
       "errors": {
-        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
         "lost": "The server didn't answer. The draft may have been saved: reload it before you save again.",
         "permission": "You can't save this stack's draft.",
         "tooLarge": "A stack can hold at most 50 files and 8 MB in all.",
@@ -96,7 +96,7 @@
       "pending": "Discarding…",
       "toast": "Discarded the draft of {{name}}.",
       "errors": {
-        "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+        "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
         "lost": "The server didn't answer. The draft may have been discarded: reload the page to check.",
         "permission": "You can't discard this stack's draft."
       }

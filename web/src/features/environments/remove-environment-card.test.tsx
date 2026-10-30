@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -20,8 +20,8 @@ import { RemoveEnvironmentCard } from "@/features/environments/remove-environmen
 import "@/i18n";
 
 const SWARM_CLEANUP =
-  " docker service rm bayplan-agent && docker secret rm bayplan-agent-token-g2\n docker volume rm bayplan-agent   # on every node that ran the agent";
-const STANDALONE_CLEANUP = " docker rm -f bayplan-agent && docker volume rm bayplan-agent";
+  " docker service rm coaming-agent && docker secret rm coaming-agent-token-g2\n docker volume rm coaming-agent   # on every node that ran the agent";
+const STANDALONE_CLEANUP = " docker rm -f coaming-agent && docker volume rm coaming-agent";
 
 function agent(id: string, node: string, connected: boolean, extra: Record<string, unknown> = {}) {
   return {
@@ -160,7 +160,7 @@ describe("RemoveEnvironmentCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove environment" }));
     const dialog = await screen.findByRole("alertdialog", { name: "Remove edge?" });
     expect(dialog.textContent).toContain(
-      "Bayplan will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
+      "Coaming will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
     );
     await waitFor(() =>
       expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })),
@@ -275,8 +275,8 @@ describe("RemoveEnvironmentCard", () => {
         "If an agent is offline, or you leave the box unchecked, run this on each host:",
       ),
     ).toBeTruthy();
-    expect(dialog.textContent).toContain("docker secret rm bayplan-agent-token-g2");
-    expect(dialog.textContent).not.toContain("docker rm -f bayplan-agent");
+    expect(dialog.textContent).toContain("docker secret rm coaming-agent-token-g2");
+    expect(dialog.textContent).not.toContain("docker rm -f coaming-agent");
     expect(
       within(dialog).getByRole("button", { name: "Copy the swarm cleanup command" }),
     ).toBeTruthy();

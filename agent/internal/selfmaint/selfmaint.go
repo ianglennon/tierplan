@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package selfmaint is the agent's own maintenance: updating itself to a new
 // image of its own repository and removing itself. It is the one
@@ -14,10 +14,10 @@
 //   - It may remove its own service and the join-token secret that service names, and
 //     have a helper remove its own container and state volume (uninstall).
 //
-// "Its own" is the label bayplan.agent=true on the agent's own container, found by
+// "Its own" is the label coaming.agent=true on the agent's own container, found by
 // the container's ID, plus the swarm service ID that container carries. Nothing is
 // ever selected by a name or an ID the server sent. The host owner can switch all of
-// it off with BAYPLAN_AGENT_SELF_UPDATE=false, which is checked first and before any
+// it off with COAMING_AGENT_SELF_UPDATE=false, which is checked first and before any
 // Docker call (D-28).
 package selfmaint
 
@@ -39,15 +39,15 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 const (
 	// AgentLabel marks every container and service of the agent, including the
 	// helper. Self-maintenance touches nothing without it.
-	AgentLabel = "bayplan.agent"
+	AgentLabel = "coaming.agent"
 	// HelperLabel marks the short-lived helper container of a standalone update.
-	HelperLabel = "bayplan.agent.helper"
+	HelperLabel = "coaming.agent.helper"
 	// swarmServiceLabel is set by swarm on every task container.
 	swarmServiceLabel = "com.docker.swarm.service.id"
 
@@ -69,14 +69,14 @@ type Config struct {
 	// SelfID is the ID of the agent's own container, or its hostname, which Docker
 	// sets to the short ID. Empty means ResolveSelfID().
 	SelfID string
-	// SelfUpdate is BAYPLAN_AGENT_SELF_UPDATE. False refuses update and uninstall.
+	// SelfUpdate is COAMING_AGENT_SELF_UPDATE. False refuses update and uninstall.
 	SelfUpdate bool
 	// OwnRepository is the agent's image repository, for example
-	// ghcr.io/ianglennon/bayplan-agent. Empty means it is read from the agent's own
+	// ghcr.io/ianglennon/coaming-agent. Empty means it is read from the agent's own
 	// container the first time an update arrives.
 	OwnRepository string
 	// StateDir is the agent's state directory, which the helper mounts.
-	// Empty means /var/lib/bayplan-agent.
+	// Empty means /var/lib/coaming-agent.
 	StateDir string
 	// Log receives one line per event. Nil means slog.Default().
 	Log *slog.Logger
@@ -100,7 +100,7 @@ func New(cfg Config) *Maint {
 		cfg.SocketPath = "/var/run/docker.sock"
 	}
 	if cfg.StateDir == "" {
-		cfg.StateDir = "/var/lib/bayplan-agent"
+		cfg.StateDir = "/var/lib/coaming-agent"
 	}
 	if cfg.SelfID == "" {
 		cfg.SelfID = ResolveSelfID()
@@ -137,7 +137,7 @@ func refuse(res wire.UpdateResult, code string) wire.UpdateResult {
 func (m *Maint) Update(ctx context.Context, msg wire.Update) wire.UpdateResult {
 	res := result(msg.ID)
 	if !m.cfg.SelfUpdate {
-		m.log.Warn("the server asked this agent to update, and BAYPLAN_AGENT_SELF_UPDATE=false refuses it")
+		m.log.Warn("the server asked this agent to update, and COAMING_AGENT_SELF_UPDATE=false refuses it")
 		return refuse(res, wire.UpdateErrSelfUpdateDisabled)
 	}
 	ref, ok := parseImage(msg.Image)

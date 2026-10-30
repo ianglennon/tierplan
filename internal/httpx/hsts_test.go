@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package httpx
 
@@ -27,7 +27,7 @@ func TestHSTSIsSentWhenTheHookSaysSo(t *testing.T) {
 		t.Errorf("plain HTTP request: Strict-Transport-Security = %q, want none", got)
 	}
 
-	secure := httptest.NewRequest(http.MethodGet, "https://bayplan.example/healthz", nil)
+	secure := httptest.NewRequest(http.MethodGet, "https://coaming.example/healthz", nil)
 	secure.TLS = &tls.ConnectionState{}
 	if got := hstsFor(t, opts, secure); got != "max-age=31536000" {
 		t.Errorf("TLS request: Strict-Transport-Security = %q, want max-age=31536000", got)
@@ -35,7 +35,7 @@ func TestHSTSIsSentWhenTheHookSaysSo(t *testing.T) {
 }
 
 func TestHSTSIsAbsentWithoutAHook(t *testing.T) {
-	secure := httptest.NewRequest(http.MethodGet, "https://bayplan.example/healthz", nil)
+	secure := httptest.NewRequest(http.MethodGet, "https://coaming.example/healthz", nil)
 	secure.TLS = &tls.ConnectionState{}
 	if got := hstsFor(t, Options{}, secure); got != "" {
 		t.Errorf("no hook: Strict-Transport-Security = %q, want none", got)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -23,12 +23,12 @@ import (
 // The published layout (D-28). See the package documentation.
 const (
 	// Magic starts every backup file.
-	Magic = "BAYPLANBK1\n"
+	Magic = "COAMINGBK1\n"
 	// FormatVersion is the layout version this binary writes and the highest
 	// it reads.
 	FormatVersion uint16 = 1
 	// FileExtension is the suggested file extension, with the dot.
-	FileExtension = ".bayplan"
+	FileExtension = ".coaming"
 	// MinPassphraseLen is the shortest backup passphrase accepted, counted in
 	// characters. It is one constant so the server can hand it to the SPA.
 	MinPassphraseLen = 16
@@ -38,7 +38,7 @@ const (
 
 	// EntryManifest and EntryDB are the two payload entries, in this order.
 	EntryManifest = "manifest.json"
-	EntryDB       = "bayplan.db"
+	EntryDB       = "coaming.db"
 
 	maxHeaderLen = 4096
 
@@ -62,10 +62,10 @@ const (
 // distinct problem type (D-30).
 var (
 	// ErrNotBackup is returned for a file that does not start with the magic.
-	ErrNotBackup = errors.New("not a Bayplan backup file")
+	ErrNotBackup = errors.New("not a Coaming backup file")
 	// ErrNewerFormat is returned for a file whose format version is higher
 	// than this binary understands.
-	ErrNewerFormat = errors.New("backup was made by a newer Bayplan")
+	ErrNewerFormat = errors.New("backup was made by a newer Coaming")
 	// ErrHeaderLimits is returned for a header that asks for more than the
 	// caps allow, before any key derivation runs.
 	ErrHeaderLimits = errors.New("backup header is outside the allowed limits")
@@ -229,7 +229,7 @@ func newWriter(dst io.Writer, h Header, passphrase []byte) (*Writer, error) {
 	return &Writer{ageW: ageW, gz: gz, tw: tar.NewWriter(gz), maxEntry: MaxEntrySize}, nil
 }
 
-// Add writes the next payload entry. Only manifest.json first and bayplan.db
+// Add writes the next payload entry. Only manifest.json first and coaming.db
 // second are accepted, and size must be exactly the number of bytes r yields.
 func (w *Writer) Add(name string, size int64, r io.Reader) error {
 	if w.closed {
@@ -318,7 +318,7 @@ func unreadable(err error) error {
 // Header returns the validated outer header.
 func (r *Reader) Header() Header { return r.header }
 
-// Next returns the next payload entry: manifest.json, then bayplan.db, then
+// Next returns the next payload entry: manifest.json, then coaming.db, then
 // io.EOF once the whole stream, including its final authenticated chunk, has
 // been read. The returned reader is valid until the next call to Next.
 func (r *Reader) Next() (string, io.Reader, error) {

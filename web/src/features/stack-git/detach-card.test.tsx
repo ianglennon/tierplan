@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
@@ -170,7 +170,7 @@ describe("Detach, in the Advanced section", () => {
     expect(await screen.findByRole("button", { name: "Detach from git…" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Turn web back into an inline stack you edit in Bayplan. The files now deployed become an editable draft. Bayplan stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running changes.",
+        "Turn web back into an inline stack you edit in Coaming. The files now deployed become an editable draft. Coaming stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running changes.",
       ),
     ).toBeTruthy();
   });
@@ -206,7 +206,7 @@ describe("Detach, in the Advanced section", () => {
     const dialog = await screen.findByRole("alertdialog", { name: "Detach web from git?" });
     expect(
       within(dialog).getByText(
-        "Revision #3 (commit 0123456) is copied into an editable draft. Bayplan stops checking stacks repo, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "Revision #3 (commit 0123456) is copied into an editable draft. Coaming stops checking stacks repo, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
       ),
     ).toBeTruthy();
     await waitFor(() =>

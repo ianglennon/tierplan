@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // What a change of a node's labels does to placement (plan 06-16, RES-05, D-21). The judgement is

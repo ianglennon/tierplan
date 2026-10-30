@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { TriangleAlert } from "lucide-react";
 import { useRef, useState } from "react";
@@ -36,7 +36,7 @@ interface ForceUpdateDialogProps {
 }
 
 // ForceUpdateDialog is "Force update {name}?": it replaces every task of a service again with
-// the settings it has, after Bayplan has looked the image's tag up again so a tag that moved is
+// the settings it has, after Coaming has looked the image's tag up again so a tag that moved is
 // picked up (D-08). A refusal stays inside it as an alert and the dialog closes only when the
 // manager accepted the update. The request is sent once and never retried.
 export function ForceUpdateDialog({
@@ -129,7 +129,7 @@ function ForceUpdateForm({ envId, target, retry, onClose }: FormProps) {
               values={{ name: target.name }}
               stack={target.stack}
               envId={envId}
-              bayplanStackId={target.bayplanStackId}
+              coamingStackId={target.coamingStackId}
             />
           </AlertDescription>
         </Alert>

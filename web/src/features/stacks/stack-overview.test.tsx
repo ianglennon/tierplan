@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -536,11 +536,11 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
   it("says the stack is adopted but not yet deployed, how many services the first deploy recreates and where to go", async () => {
     mount();
 
-    const title = await screen.findByText("tracer is adopted but not yet deployed by Bayplan");
+    const title = await screen.findByText("tracer is adopted but not yet deployed by Coaming");
     const banner = title.closest('[data-slot="adopted-banner"]') as HTMLElement;
     expect(
       within(banner).getByText(
-        "The first deploy adds Bayplan's ownership labels and recreates 3 services (brief restart). Review shows exactly what changes.",
+        "The first deploy adds Coaming's ownership labels and recreates 3 services (brief restart). Review shows exactly what changes.",
       ),
     ).toBeTruthy();
     expect(
@@ -557,7 +557,7 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
 
     expect(
       await screen.findByText(
-        "The first deploy adds Bayplan's ownership labels and recreates 1 service (brief restart). Review shows exactly what changes.",
+        "The first deploy adds Coaming's ownership labels and recreates 1 service (brief restart). Review shows exactly what changes.",
       ),
     ).toBeTruthy();
   });
@@ -568,7 +568,7 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
 
     expect(
       await screen.findByText(
-        "The first deploy adds Bayplan's ownership labels and recreates 2 containers (brief restart). Review shows exactly what changes.",
+        "The first deploy adds Coaming's ownership labels and recreates 2 containers (brief restart). Review shows exactly what changes.",
       ),
     ).toBeTruthy();
   });
@@ -579,7 +579,7 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
 
     expect(
       await screen.findByText(
-        "The first deploy adds Bayplan's ownership labels and recreates 1 container (brief restart). Review shows exactly what changes.",
+        "The first deploy adds Coaming's ownership labels and recreates 1 container (brief restart). Review shows exactly what changes.",
       ),
     ).toBeTruthy();
   });
@@ -590,7 +590,7 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
 
     expect(
       await screen.findByText(
-        "The first deploy adds Bayplan's ownership labels and recreates its services (brief restart). Review shows exactly what changes.",
+        "The first deploy adds Coaming's ownership labels and recreates its services (brief restart). Review shows exactly what changes.",
       ),
     ).toBeTruthy();
   });
@@ -608,7 +608,7 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
     mount();
 
     await screen.findByRole("region", { name: "Services" });
-    expect(screen.queryByText(/is adopted but not yet deployed by Bayplan/)).toBeNull();
+    expect(screen.queryByText(/is adopted but not yet deployed by Coaming/)).toBeNull();
     expect(screen.queryByRole("link", { name: "Open history" })).toBeNull();
   });
 
@@ -617,14 +617,14 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
     mount();
 
     await screen.findByRole("region", { name: "Services" });
-    expect(screen.queryByText(/is adopted but not yet deployed by Bayplan/)).toBeNull();
+    expect(screen.queryByText(/is adopted but not yet deployed by Coaming/)).toBeNull();
   });
 
   it("draws a name with markup in it as text", async () => {
     detail = { ...detail, name: "<b>shop</b>" };
     mount();
 
-    const title = await screen.findByText("<b>shop</b> is adopted but not yet deployed by Bayplan");
+    const title = await screen.findByText("<b>shop</b> is adopted but not yet deployed by Coaming");
     expect(title.querySelector("b")).toBeNull();
   });
 });

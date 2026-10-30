@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -159,12 +159,12 @@ describe("EventsFeed", () => {
     expect(screen.queryByText("svc-9")).toBeNull();
   });
 
-  it("shows a row of Bayplan's own with a Bayplan label and its message, under All only", async () => {
+  it("shows a row of Coaming's own with a Coaming label and its message, under All only", async () => {
     recent = async () =>
       Response.json({
         items: [
           ev("1", {
-            type: "bayplan",
+            type: "coaming",
             action: "failover",
             name: "Manager mgr-2 unreachable, using mgr-1",
             actorId: "env-1",
@@ -176,27 +176,27 @@ describe("EventsFeed", () => {
       });
     show();
     const row = (await screen.findAllByRole("listitem"))[0] as HTMLElement;
-    expect(within(row).getByText("Bayplan")).toBeTruthy();
+    expect(within(row).getByText("Coaming")).toBeTruthy();
     expect(within(row).getByText("Manager mgr-2 unreachable, using mgr-1")).toBeTruthy();
     // The label stands in for the type icon, and the row has no subject line of its own.
     expect(row.querySelector("svg")).toBeNull();
     expect(within(row).queryByText("env-1")).toBeNull();
-    expect(within(row).queryByText("Bayplan failover")).toBeNull();
+    expect(within(row).queryByText("Coaming failover")).toBeNull();
 
     // No fifth filter, and the row is not under a Docker type.
-    expect(screen.queryByRole("radio", { name: "Bayplan" })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Coaming" })).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: "Container" }));
     expect(screen.queryByText("Manager mgr-2 unreachable, using mgr-1")).toBeNull();
     fireEvent.click(screen.getByRole("radio", { name: "All" }));
     expect(screen.getByText("Manager mgr-2 unreachable, using mgr-1")).toBeTruthy();
   });
 
-  it("sets the Bayplan label in the line of the message, so a word wider than the icon column never covers it", async () => {
+  it("sets the Coaming label in the line of the message, so a word wider than the icon column never covers it", async () => {
     recent = async () =>
       Response.json({
         items: [
           ev("1", {
-            type: "bayplan",
+            type: "coaming",
             action: "failover",
             name: "Manager m2 unreachable, using m1",
             actorId: "env-1",
@@ -205,7 +205,7 @@ describe("EventsFeed", () => {
       });
     show();
     const row = (await screen.findAllByRole("listitem"))[0] as HTMLElement;
-    const label = within(row).getByText("Bayplan");
+    const label = within(row).getByText("Coaming");
     const message = within(row).getByText("Manager m2 unreachable, using m1");
     expect(label.parentElement).toBe(message);
     expect(label.className).not.toMatch(/\bw-\d/);
@@ -333,7 +333,7 @@ describe("EventsFeed", () => {
 });
 
 // A swarm's feed merges every node's events, so each row says where it happened
-// (plan 22, D-43); Bayplan's own row says it in its message instead.
+// (plan 22, D-43); Coaming's own row says it in its message instead.
 describe("EventsFeed on a swarm", () => {
   it("shows each row's node in muted text", async () => {
     recent = async () =>
@@ -357,12 +357,12 @@ describe("EventsFeed on a swarm", () => {
     expect(screen.queryByText("lab")).toBeNull();
   });
 
-  it("shows no node on Bayplan's own row, only its message and label, and it stays under All", async () => {
+  it("shows no node on Coaming's own row, only its message and label, and it stays under All", async () => {
     recent = async () =>
       Response.json({
         items: [
           ev("1", {
-            type: "bayplan",
+            type: "coaming",
             action: "failover",
             name: "Manager m2 unreachable, using m1",
             node: "m1",
@@ -374,10 +374,10 @@ describe("EventsFeed on a swarm", () => {
       });
     show(true);
     const items = await screen.findAllByRole("listitem");
-    const bayplan = items[0] as HTMLElement;
-    expect(within(bayplan).getByText("Bayplan")).toBeTruthy();
-    expect(within(bayplan).getByText("Manager m2 unreachable, using m1")).toBeTruthy();
-    expect(within(bayplan).queryByText("m1")).toBeNull();
+    const coaming = items[0] as HTMLElement;
+    expect(within(coaming).getByText("Coaming")).toBeTruthy();
+    expect(within(coaming).getByText("Manager m2 unreachable, using m1")).toBeTruthy();
+    expect(within(coaming).queryByText("m1")).toBeNull();
     expect(within(items[1] as HTMLElement).getByText("m2")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Container" }));
     expect(screen.queryByText("Manager m2 unreachable, using m1")).toBeNull();

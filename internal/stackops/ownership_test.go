@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -7,14 +7,14 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// Ownership (plan 08-09, STK-12, D-09): one rule says what is a stack's, for a stack Bayplan holds and for
+// Ownership (plan 08-09, STK-12, D-09): one rule says what is a stack's, for a stack Coaming holds and for
 // one it found by its labels.
 
 func TestOwnershipManagedIsExactID(t *testing.T) {
@@ -92,7 +92,7 @@ func TestOwnershipRefusesAnotherNamespace(t *testing.T) {
 	}
 }
 
-// adoptedStack is a stack Bayplan took over: it owns the workloads of its namespace until its first deploy has
+// adoptedStack is a stack Coaming took over: it owns the workloads of its namespace until its first deploy has
 // labelled them, and the networks and volumes recorded at adoption for good (plan 08-13, D-11, D-18).
 func adoptedStack(pending bool) stackops.Stack {
 	return stackops.Stack{
@@ -160,7 +160,7 @@ func TestOwnershipAdoptedAfterFirstDeploy(t *testing.T) {
 	}
 }
 
-// TestOwnershipNeverTrustsAnotherID: a bayplan.stack.id on an object never links it to a stack by itself (T-08-47).
+// TestOwnershipNeverTrustsAnotherID: a coaming.stack.id on an object never links it to a stack by itself (T-08-47).
 func TestOwnershipNeverTrustsAnotherID(t *testing.T) {
 	t.Parallel()
 	for name, pending := range map[string]bool{"pending": true, "deployed": false} {
@@ -190,7 +190,7 @@ func TestOwnershipNeverTrustsAnotherID(t *testing.T) {
 	}
 }
 
-// TestAfterTheFirstDeployANewUnlabelledServiceIsForeign: a workload with no bayplan.stack.id is the adopted stack's
+// TestAfterTheFirstDeployANewUnlabelledServiceIsForeign: a workload with no coaming.stack.id is the adopted stack's
 // only while the adoption is pending. Once the first good deploy has cleared it, a service somebody adds to the
 // namespace without the stack's ID is a name clash, not something to take over (T-08-60). The services here are the
 // ones the CLI left, unlabelled, which is what such a service looks like to the stack.
@@ -294,7 +294,7 @@ func TestStandaloneNameClashGateUsesTheOwnershipOfTheStack(t *testing.T) {
 }
 
 // TestSplitProject: the containers of a standalone stack's Compose project fall in three classes (G-08-6). Owned
-// are the stack's by Ownership; unlabelled carry no bayplan.stack.id and run a service the stack owns a container of,
+// are the stack's by Ownership; unlabelled carry no coaming.stack.id and run a service the stack owns a container of,
 // which is how a container the person adds from the host CLI with docker compose up --scale looks; foreign are the
 // rest of the project: another stack's ID always (T-08-103), a project the stack holds nothing of (T-08-104, P7 D-12),
 // and a container with no ID of a service the stack runs nothing of (WR-03, T-08-113).

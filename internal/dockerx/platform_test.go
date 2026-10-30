@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx_test
 
 import (
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // An engine says x86_64 where the registry says amd64 (plan 05-03, IMG-02): the node

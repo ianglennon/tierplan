@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // The class string of the filter-chip row of the resource lists (services, nodes, containers,
 // volumes, images). The chips wrap onto further rows at every width, so each one stays on the

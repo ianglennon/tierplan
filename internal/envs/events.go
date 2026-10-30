@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // Sizes and timings of the events feed.
@@ -249,7 +249,7 @@ func (h *Hub) Subscribe(ctx context.Context, envID string) (backlog []dockerx.Ev
 	}
 }
 
-// Inject adds an event of Bayplan's own to the feed of a target, so it shows with
+// Inject adds an event of Coaming's own to the feed of a target, so it shows with
 // the Docker events of the environment that target serves. It reports false when
 // the target has no feed, which is when it is not being monitored. The event keeps
 // its ID, so injecting the same one twice shows it once.
@@ -426,7 +426,7 @@ func (f *feed) notifyLocked() {
 	}
 }
 
-// inject records an event of Bayplan's own. Unlike ingest it leaves the resume
+// inject records an event of Coaming's own. Unlike ingest it leaves the resume
 // point alone, which is the time of the newest event the daemon sent: moving it
 // would make a reopened stream skip what the daemon said in between. The caller
 // does not hold f.mu.
@@ -524,7 +524,7 @@ const (
 )
 
 // NodeEvent is a row of an environment's feed with the node it came from: the node
-// the Docker event happened on, or for a row of Bayplan's own the node it concerns.
+// the Docker event happened on, or for a row of Coaming's own the node it concerns.
 type NodeEvent struct {
 	dockerx.EventRow
 	Node string
