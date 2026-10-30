@@ -167,6 +167,11 @@ describe("VariablesPreview", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Set secret value" })).toBeTruthy();
+    // G-09-3: the shadcn TableCell base is whitespace-nowrap; the warning cell must override it so
+    // the sentence wraps at 375px instead of spilling across the shrink-0 button.
+    const cell = screen.getByTestId("git-variable-warning-DB_PASSWORD").querySelector("td");
+    expect(cell?.className).toContain("whitespace-normal");
+    expect(cell?.className).not.toContain("whitespace-nowrap");
   });
 
   it("turns the row into a secret row and focuses its input on Set secret value", () => {
