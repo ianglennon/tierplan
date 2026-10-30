@@ -231,4 +231,81 @@ func TestGitAutoDeployAfterRollback(t *testing.T) {
 			t.Errorf("git.autodeployed rows for %s = %+v, want one", head, deployed)
 		}
 	})
+
+	// UAT test 9 as it ran: the person presses Review update (the pull route) while auto-deploy is paused, so the draft
+	// already holds the head when auto-deploy is turned on. The pull inside the automatic deploy finds nothing to do, and
+	// the draft still starts below the roll back.
+	t.Run("a head a person pulled while paused deploys too", func(t *testing.T) {
+		t.Parallel()
+		a := newDeployedAutoFix(t)
+		operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+		a.turnOn(t, operator)
+		a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+		if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+			t.Fatalf("first check = %s, want behind", out)
+		}
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("deploy of #2 = %+v, want done", job)
+		}
+		a.rollBack(t, 1)
+		head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n", "bump nginx again")
+		if out := a.poll(t); out != gitsync.OutcomeBehind {
+			t.Fatalf("poll = %s, want behind", out)
+		}
+
+		person := a.f.caller(t, a.e, "operator-3", "operator")
+		if rec := person.pullGit(a.stackID, draftVersion(t, person, a.stackID)); rec.Code != http.StatusOK {
+			t.Fatalf("pull: %d %s", rec.Code, rec.Body)
+		}
+		if draft, err := a.stackRepo().Draft(context.Background(), a.stackID); err != nil || draft.BaseSeq >= 3 {
+			t.Fatalf("draft base = #%d (%v), want a draft that still starts below the roll back, #3", draft.BaseSeq, err)
+		}
+
+		a.turnOn(t, operator)
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("deploy of the head = %+v, want done", job)
+		}
+		if got := a.readGit(t, a.admin, a.stackID); got.Status != "in_sync" || got.DeployedSha != head || got.ReasonCode != "" {
+			t.Errorf("git = %+v, want in sync at %s", got, head)
+		}
+	})
+}
+
+// A drift restore (plan 09-34, D-23) makes a new good revision too, and auto-deploy stays on: the next commit to the
+// folder deploys by itself.
+func TestGitAutoDeployAfterRestore(t *testing.T) {
+	t.Parallel()
+	a := newDeployedAutoFix(t)
+	operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+	a.turnOn(t, operator)
+	a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("first check = %s, want behind", out)
+	}
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("deploy of #2 = %+v, want done", job)
+	}
+
+	restoredBy := a.f.caller(t, a.e, "operator-2", "operator")
+	rec := restoredBy.do(http.MethodPost, rollbackPath(a.stackID), `{"mode":"restore","revision":2}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("restore: %d %s", rec.Code, rec.Body)
+	}
+	if job := a.f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("restore job = %+v, want it done", job)
+	}
+	if got := a.readGit(t, a.admin, a.stackID); !got.AutoDeploy || got.Paused {
+		t.Fatalf("git after a restore = %+v, want auto-deploy still running", got)
+	}
+
+	head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n", "bump nginx again")
+	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+		t.Fatalf("check after the restore = %s, want behind", out)
+	}
+	if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+		t.Fatalf("deploy of the head = %+v, want done", job)
+	}
+	if got := a.readGit(t, a.admin, a.stackID); got.Status != "in_sync" || got.DeployedSha != head || got.ReasonCode != "" {
+		t.Errorf("git = %+v, want in sync at %s", got, head)
+	}
 }

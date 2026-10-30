@@ -33,6 +33,8 @@ type deployCall struct {
 	p       *rbac.Principal
 	version int64
 	trigger string
+	// baseSeq is the revision the draft started from when the deploy was made: what the concurrent gate would compare.
+	baseSeq int64
 }
 
 // fakeDeployer records the calls and takes the revision, the way the deploy route does.
@@ -65,14 +67,14 @@ func (d *fakeDeployer) RevertedDrift(_ context.Context, _ *rbac.Principal, _, _ 
 func (d *fakeDeployer) DeployDraft(ctx context.Context, p *rbac.Principal, envID, stackID string, version int64, trigger string) (gitsync.DeployStarted, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.calls = append(d.calls, deployCall{p: p, version: version, trigger: trigger})
-	if d.refuse != nil {
-		r := *d.refuse
-		return gitsync.DeployStarted{}, &r
-	}
 	draft, err := d.f.rr.Draft(ctx, stackID)
 	if err != nil {
 		return gitsync.DeployStarted{}, err
+	}
+	d.calls = append(d.calls, deployCall{p: p, version: version, trigger: trigger, baseSeq: draft.BaseSeq})
+	if d.refuse != nil {
+		r := *d.refuse
+		return gitsync.DeployStarted{}, &r
 	}
 	if draft.Version != version {
 		return gitsync.DeployStarted{}, &gitsync.DeployRefusal{Code: "draft_changed", Detail: "The draft changed."}
@@ -295,6 +297,73 @@ func TestAutoDeployOnFolderCommit(t *testing.T) {
 	// Looking again deploys nothing more.
 	if out := a.poll(t); out != gitsync.OutcomeInSync || a.dep.count() != 1 {
 		t.Errorf("second check = %s with %d deploys, want in_sync and still one", out, a.dep.count())
+	}
+}
+
+// A roll back or a drift restore makes a newer good revision and leaves the draft where it started. The automation has
+// just proven the draft holds nothing but the head, so the deploy it makes starts from the newest good revision and is
+// not taken for an overwrite of a newer deploy nobody saw (G-09-9).
+func TestAutoDeployRebasesTheDraftOnTheNewestGoodRevision(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	ctx := context.Background()
+	// Two more good revisions, as roll backs make them: the draft stays at the base it started from.
+	a.deploy(t)
+	newest := a.deploy(t)
+	if before, err := a.rr.Draft(ctx, a.stackID); err != nil || before.BaseSeq >= newest.Seq {
+		t.Fatalf("draft base = #%d (%v), want a draft behind the newest good revision #%d", before.BaseSeq, err, newest.Seq)
+	}
+	a.changeWeb(t, "1")
+
+	if out := a.poll(t); out != gitsync.OutcomeBehind {
+		t.Fatalf("check = %s, want behind", out)
+	}
+	if a.dep.count() != 1 {
+		t.Fatalf("deploys started = %d, want exactly one", a.dep.count())
+	}
+	if c := a.dep.call(0); c.baseSeq != newest.Seq {
+		t.Errorf("the deploy saw a draft based on #%d, want the newest good revision #%d", c.baseSeq, newest.Seq)
+	}
+}
+
+// A person who saves the draft after the automation read it keeps it: nothing is rebased, deployed or held back, and the
+// next round looks again (T-09-103).
+func TestAutoDeployDoesNotRebaseADraftSavedMeanwhile(t *testing.T) {
+	t.Parallel()
+	a := newAutoFixture(t, "operator")
+	ctx := context.Background()
+	a.deploy(t)
+	var saved stackops.Snapshot
+	a.dep.set(func(d *fakeDeployer) {
+		d.whileWorkingOut = func() {
+			draft, err := a.rr.Draft(ctx, a.stackID)
+			if err != nil {
+				t.Errorf("Draft: %v", err)
+				return
+			}
+			c := draft.Copy
+			c.Vars = append([]stacks.Var(nil), c.Vars...)
+			c.Vars = append(c.Vars, stacks.Var{Name: "PERSON", Value: "1"})
+			if saved, _, err = a.rr.SaveDraft(ctx, a.stackID, draft.Version, "ada", c); err != nil {
+				t.Errorf("SaveDraft: %v", err)
+			}
+		}
+	})
+	a.changeWeb(t, "1")
+
+	a.poll(t)
+	if n := a.dep.count(); n != 0 {
+		t.Fatalf("deploys started = %d, want none: a person saved the draft meanwhile", n)
+	}
+	if s := a.state(t); s.ReasonCode == string(gitsync.ReasonAutoDeployBlocked) || s.PendingCommit != "" {
+		t.Errorf("state = %+v, want no hold-back: the next round looks again", s)
+	}
+	after, err := a.rr.Draft(ctx, a.stackID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != saved.Version || after.BaseSeq != saved.BaseSeq || after.CreatedBy != "ada" {
+		t.Errorf("draft = version %d base #%d by %s, want what the person left: version %d base #%d by ada", after.Version, after.BaseSeq, after.CreatedBy, saved.Version, saved.BaseSeq)
 	}
 }
 
@@ -561,6 +630,8 @@ func TestAutoDeployDraftPending(t *testing.T) {
 			}
 			if after, _ := a.rr.Draft(ctx, a.stackID); after.Version != draft.Version+1 {
 				t.Errorf("draft version = %d, want %d: the person's edits are not touched", after.Version, draft.Version+1)
+			} else if after.BaseSeq != draft.BaseSeq {
+				t.Errorf("draft base = #%d, want #%d: a held-back draft is not rebased", after.BaseSeq, draft.BaseSeq)
 			}
 
 			// It keeps waiting for a person, who reviews it and deploys it by hand: the state is whole again.
