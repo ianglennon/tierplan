@@ -397,7 +397,7 @@ export function VariableRow({
       </TableRow>
       {warn ? (
         <TableRow data-testid={`variable-warning-${name}`}>
-          <TableCell colSpan={5} className="py-2">
+          <TableCell colSpan={5} className="py-2 whitespace-normal">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-status-warning-text">
               <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
               <span className="min-w-0 flex-1 break-words">
