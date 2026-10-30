@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,13 @@ func refusalOf(t *testing.T, err error) *api.DeployRefusal {
 	if !errors.As(err, &r) {
 		t.Fatalf("error = %v, want a *DeployRefusal", err)
 	}
+	// What an automatic deploy holds back on is read by nobody who is editing a draft or who can ask an administrator
+	// at once: it is worded for an automatic deploy (plan 09-34, G-09-8). Every refusal read here meets that.
+	for _, phrase := range []string{"you started editing", "your draft", "ask an administrator"} {
+		if strings.Contains(strings.ToLower(r.Detail), phrase) {
+			t.Errorf("refusal %s says %q, a sentence for a person at the screen: %q", r.Code, phrase, r.Detail)
+		}
+	}
 	return r
 }
 
@@ -180,6 +188,9 @@ func TestStackDeployerRefusals(t *testing.T) {
 				if ref.Code != "policy_refused" || ref.Retry {
 					t.Errorf("refusal = %+v, want policy_refused without retry", ref)
 				}
+				if want := "This needs Admin: a bind mount of /etc at compose.yaml:5."; ref.Detail != want {
+					t.Errorf("detail = %q, want %q", ref.Detail, want)
+				}
 				if revs := r.f.revisions(t, r.st.ID); len(revs) != 0 {
 					t.Errorf("revisions = %+v, a refused deploy leaves none", revs)
 				}
@@ -237,6 +248,34 @@ func TestStackDeployerRefusals(t *testing.T) {
 				ref := refusalOf(t, r.deploy(v, "poll"))
 				if ref.Code != "not_deployable" || ref.Retry {
 					t.Errorf("refusal = %+v, want not_deployable without retry", ref)
+				}
+			})
+			t.Run("a deploy that lost a race with a roll back is concurrent_unacknowledged in automation words", func(t *testing.T) {
+				t.Parallel()
+				r := newDeployerRig(t, target)
+				r.stack(t, "raced", composeWeb127)
+				// A deploy through the route rebases the draft on revision 1; a restore then makes a newer good revision and,
+				// as a roll back does, leaves the draft where it started. This is what an automatic deploy meets when the
+				// roll back lands between its comparison and its deploy.
+				r.f.deployGood(t, r.owner, r.st.ID, composeWeb127)
+				rec := r.owner.do(http.MethodPost, rollbackPath(r.st.ID), `{"mode":"restore","revision":1}`)
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("restore: %d %s", rec.Code, rec.Body)
+				}
+				if job := r.f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+					t.Fatalf("restore job = %+v, want it done", job)
+				}
+				revs := len(r.f.revisions(t, r.st.ID))
+
+				ref := refusalOf(t, r.deploy(draftVersion(t, r.owner, r.st.ID), "poll"))
+				if ref.Code != "concurrent_unacknowledged" || ref.Retry {
+					t.Fatalf("refusal = %+v, want concurrent_unacknowledged without retry", ref)
+				}
+				if want := "Another deploy or roll back of this stack ran while the automatic deploy was starting."; ref.Detail != want {
+					t.Errorf("detail = %q, want %q", ref.Detail, want)
+				}
+				if n := len(r.f.revisions(t, r.st.ID)); n != revs {
+					t.Errorf("revisions = %d, want still %d: a refused deploy leaves none", n, revs)
 				}
 			})
 			t.Run("a user without stacks.deploy is forbidden", func(t *testing.T) {

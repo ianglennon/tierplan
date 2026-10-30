@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -180,6 +181,11 @@ func (s *StackDeployer) internal(what, stackID string, err error) error {
 func (s *StackDeployer) refusal(stackID string, err error) error {
 	var ce *codedProblem
 	if errors.As(err, &ce) {
+		if ce.code == refusalPolicy {
+			if detail, ok := automaticPolicyDetail(ce.err); ok {
+				return &DeployRefusal{Code: ce.code, Detail: detail}
+			}
+		}
 		return &DeployRefusal{Code: ce.code, Detail: problemDetail(ce.err)}
 	}
 	var em *huma.ErrorModel
@@ -197,13 +203,41 @@ func (s *StackDeployer) refusal(stackID string, err error) error {
 			return &DeployRefusal{Code: refusalOperationLocked, Detail: em.Detail, Retry: true}
 		case problemTooManyDeploys:
 			return &DeployRefusal{Code: refusalJobsBusy, Detail: em.Detail, Retry: true}
-		case problemTargetChanged, problemConcurrentUnacknowledged, problemStackNotFound, problemServicesInvalid:
+		case problemConcurrentUnacknowledged:
+			// The route's sentence speaks to a person who started editing; nobody did here.
+			return &DeployRefusal{Code: em.Type, Detail: concurrentAutomationDetail}
+		case problemTargetChanged, problemStackNotFound, problemServicesInvalid:
 			return &DeployRefusal{Code: em.Type, Detail: em.Detail}
 		}
 	}
 	// Anything else is a failure of Bayplan or of the environment, which may pass: only the stack is logged.
 	s.d.Log.Error("an automated stack deploy failed", "stack", stackID, "error", err)
 	return &DeployRefusal{Code: refusalInternal, Detail: "Bayplan could not start the deploy.", Retry: true}
+}
+
+// concurrentAutomationDetail is what an automatic deploy says when the concurrent gate stops it: the gate is a backstop
+// for a roll back or a deploy that landed after the automation looked at the draft.
+const concurrentAutomationDetail = "Another deploy or roll back of this stack ran while the automatic deploy was starting."
+
+// automaticPolicyDetail words a policy refusal for an automatic deploy: what needs Admin, each setting at its place, and
+// no instruction to anyone at a screen. A refusal that lists no setting (a compose file that can't be checked) keeps its
+// own sentence, so it answers false.
+func automaticPolicyDetail(err error) (string, bool) {
+	var em *huma.ErrorModel
+	if !errors.As(err, &em) || em.Type != rbac.ReasonPrivilegedCompose || len(em.Errors) == 0 {
+		return "", false
+	}
+	lines := make([]string, 0, len(em.Errors))
+	for _, e := range em.Errors {
+		if e == nil {
+			continue
+		}
+		lines = append(lines, e.Message+" at "+e.Location)
+	}
+	if len(lines) == 0 {
+		return "", false
+	}
+	return "This needs Admin: " + strings.Join(lines, "; ") + ".", true
 }
 
 // firstProblem is the first problem a not deployable stack lists with where it is, which is what a person needs to

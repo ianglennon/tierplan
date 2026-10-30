@@ -368,8 +368,8 @@ func TestAutoDeployEndToEndPolicyAndHostAccess(t *testing.T) {
 
 		a.checkNow(t, operator, a.stackID, a.ended)
 		got := a.readGit(t, a.admin, a.stackID)
-		if got.Status != "error" || got.ReasonCode != "auto_deploy_blocked" || got.ReasonDetail == "" {
-			t.Fatalf("git = %+v, want error auto_deploy_blocked with the policy reason", got)
+		if got.Status != "error" || got.ReasonCode != "auto_deploy_blocked" || !strings.HasPrefix(got.ReasonDetail, "This needs Admin: a bind mount of /etc") {
+			t.Fatalf("git = %+v, want error auto_deploy_blocked with the policy reason, worded for an automatic deploy", got)
 		}
 		s, err := a.stackRepo().GitState(context.Background(), a.stackID)
 		if err != nil || s.PendingCommit != head || s.EventKind != stackops.GitEventSkipped {

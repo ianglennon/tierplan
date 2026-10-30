@@ -232,6 +232,43 @@ func TestGitAutoDeployAfterRollback(t *testing.T) {
 		}
 	})
 
+	// UAT test 8 as it ran: after a roll back, an Operator's auto-deploy meets a commit that adds a bind mount. The real
+	// blocker is named, not the stale draft of a roll back.
+	t.Run("a bind mount an Operator may not deploy is held back with the policy reason", func(t *testing.T) {
+		t.Parallel()
+		a := newDeployedAutoFix(t)
+		operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+		a.turnOn(t, operator)
+		a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+		if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+			t.Fatalf("first check = %s, want behind", out)
+		}
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("deploy of #2 = %+v, want done", job)
+		}
+		a.rollBack(t, 1)
+		revisions, writes := len(a.f.revisions(t, a.stackID)), len(a.f.fake.Writes())
+		head := a.commitCompose(t, gitBindCompose, "mount /etc")
+
+		a.turnOn(t, operator)
+		got := a.readGit(t, a.admin, a.stackID)
+		if got.Status != "error" || got.ReasonCode != "auto_deploy_blocked" {
+			t.Fatalf("git = %+v, want error auto_deploy_blocked", got)
+		}
+		if !strings.HasPrefix(got.ReasonDetail, "This needs Admin: a bind mount of /etc") || strings.Contains(got.ReasonDetail, "after you started editing") {
+			t.Errorf("reason = %q, want the host access that needs Admin and no sentence for a person editing", got.ReasonDetail)
+		}
+		if s, err := a.stackRepo().GitState(context.Background(), a.stackID); err != nil || s.PendingCommit != head {
+			t.Errorf("state = %+v, %v; want the commit %s pending", s, err, head)
+		}
+		if n := len(a.f.revisions(t, a.stackID)); n != revisions {
+			t.Errorf("revisions = %d, want still %d: a refused deploy adds none", n, revisions)
+		}
+		if n := len(a.f.fake.Writes()); n != writes {
+			t.Errorf("engine writes = %d, want still %d: a refused deploy writes nothing", n, writes)
+		}
+	})
+
 	// UAT test 9 as it ran: the person presses Review update (the pull route) while auto-deploy is paused, so the draft
 	// already holds the head when auto-deploy is turned on. The pull inside the automatic deploy finds nothing to do, and
 	// the draft still starts below the roll back.
