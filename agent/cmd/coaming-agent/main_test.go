@@ -130,7 +130,7 @@ func TestVersionFlagPrintsTheVersionAndExits(t *testing.T) {
 func TestTheTokenFileIsReadBeforeThePrivilegesAreDropped(t *testing.T) {
 	h := &harness{}
 	d := h.deps(
-		map[string]string{
+		map[string]string{ //nolint:gosec // a test fixture, not a credential
 			"COAMING_AGENT_URL":             "wss://coaming.example/agent/connect",
 			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
 			"COAMING_AGENT_DOCKER_GID":      "42",
@@ -167,7 +167,7 @@ func TestTheTokenFileIsReadBeforeThePrivilegesAreDropped(t *testing.T) {
 func TestNothingInTheStateDirectoryIsReadBeforeTheDrop(t *testing.T) {
 	h := &harness{stateLocked: true}
 	d := h.deps(
-		map[string]string{
+		map[string]string{ //nolint:gosec // a test fixture, not a credential
 			"COAMING_AGENT_URL":             "wss://coaming.example/agent/connect",
 			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
 		},

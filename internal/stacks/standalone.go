@@ -18,7 +18,7 @@ import (
 // Compose SDK. The SDK delivers a secret from an environment variable by writing it into the container
 // (CopyToContainer) and by that alone; a secret that names a file is bind-mounted from the server's disk
 // (RESEARCH Pitfall 4).
-const SecretEnvPrefix = "COAMING_SECRET_"
+const SecretEnvPrefix = "COAMING_SECRET_" //nolint:gosec // an environment variable name prefix, not a credential
 
 var (
 	// ErrPinMissing means a service that has an image was given no pin: a standalone deploy never sends

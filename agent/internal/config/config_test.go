@@ -33,7 +33,7 @@ const goodURL = "wss://coaming.example/agent/connect"
 
 func TestLoadTrimsTheTokenFileNewline(t *testing.T) {
 	cfg, err := Load(
-		env(map[string]string{
+		env(map[string]string{ //nolint:gosec // a test fixture, not a credential
 			"COAMING_AGENT_URL":             goodURL,
 			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
 		}),
