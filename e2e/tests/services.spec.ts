@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Golden path 6 (Phase 6): a swarm service, in a real browser behind the proxy at
-// /bayplan, against the dind engine Bayplan manages once that engine is made a
-// one-node swarm (swarmInit in helpers.ts runs `docker swarm init`). The service is started on the engine behind Bayplan's back, from
+// /coaming, against the dind engine Coaming manages once that engine is made a
+// one-node swarm (swarmInit in helpers.ts runs `docker swarm init`). The service is started on the engine behind Coaming's back, from
 // the dind's own local busybox with `--no-resolve-image`: creating a service through
-// Bayplan pins the image's digest, and this engine has no registry to ask. The story
+// Coaming pins the image's digest, and this engine has no registry to ask. The story
 // is the one an operator follows: scale it, edit it (review, then apply), roll the
 // edit back, create a secret, find the service's task on its node, and read the
 // service's merged log.
@@ -27,7 +27,7 @@ import {
 
 test.use({ storageState: AUTH_STATE });
 
-// One story: each test uses what the one before it left. The first test waits for Bayplan to
+// One story: each test uses what the one before it left. The first test waits for Coaming to
 // notice the new swarm, which it probes for every 30 seconds, so a test may take minutes.
 test.describe.configure({ mode: "serial", timeout: 240_000 });
 
@@ -63,7 +63,7 @@ function cleanUp(): void {
   );
 }
 
-// waitForSwarmEnvironment waits until Bayplan has noticed that the engine it manages is a
+// waitForSwarmEnvironment waits until Coaming has noticed that the engine it manages is a
 // swarm. It probes the engine from time to time, so this can take a little while.
 async function waitForSwarmEnvironment(page: Page): Promise<void> {
   await expect
@@ -85,12 +85,12 @@ async function waitForSwarmEnvironment(page: Page): Promise<void> {
 async function openService(page: Page): Promise<void> {
   await page.goto(at(`/env/${envId}/services`));
   await expect(page.getByRole("heading", { name: "Services", level: 1 })).toBeVisible();
-  // Bayplan reads the swarm again every few seconds and on the engine's own events, so a service
+  // Coaming reads the swarm again every few seconds and on the engine's own events, so a service
   // started behind its back, or a swarm made a moment ago, can take a little while to appear.
   const link = page.getByRole("link", { name: SERVICE, exact: true });
   await expect(link).toBeVisible({ timeout: 90_000 });
   await link.click();
-  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/services/[^/]+$`));
+  await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}/services/[^/]+$`));
   await expect(page.getByRole("heading", { name: SERVICE, level: 2 })).toBeVisible();
 }
 
@@ -117,7 +117,7 @@ test("a service started on the swarm shows in the list and is scaled to 2 from i
   page,
 }) => {
   const local = (await environmentsOf(page.context())).find((e) => e.isLocalSocket);
-  if (!local) throw new Error("the Docker host Bayplan manages is not among the environments");
+  if (!local) throw new Error("the Docker host Coaming manages is not among the environments");
   envId = local.id;
   await waitForSwarmEnvironment(page);
 
@@ -220,7 +220,7 @@ test("the node page lists the service's tasks, and the service's Logs tab shows 
   await expect(page.getByRole("heading", { name: "Nodes", level: 1 })).toBeVisible();
   // One node: the engine itself.
   await page.getByRole("main").getByRole("table").getByRole("link").first().click();
-  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/nodes/[^/]+$`));
+  await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}/nodes/[^/]+$`));
   await page.getByRole("tab", { name: "Tasks", exact: true }).click();
   await expect(page.getByRole("link", { name: SERVICE, exact: true }).first()).toBeVisible({
     timeout: 30_000,

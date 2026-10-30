@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Licence gate (D-70). Checks the Go dependencies of the server binary on both
 # release architectures, then the production pnpm dependencies of the SPA, against
@@ -27,7 +27,7 @@ GOBIN="${TOOLS}" go install "${GO_LICENSES}"
 for arch in amd64 arm64; do
   echo "licences: go linux/${arch}"
   CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-    "${TOOLS}/go-licenses" report ./cmd/bayplan --ignore github.com/ianglennon/bayplan \
+    "${TOOLS}/go-licenses" report ./cmd/coaming --ignore github.com/ianglennon/coaming \
     | node scripts/licence-check.mjs --format go-csv
 done
 
@@ -37,7 +37,7 @@ done
 for arch in amd64 arm64; do
   echo "licences: agent go linux/${arch}"
   (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" \
-    "${TOOLS}/go-licenses" report ./cmd/bayplan-agent --ignore github.com/ianglennon/bayplan \
+    "${TOOLS}/go-licenses" report ./cmd/coaming-agent --ignore github.com/ianglennon/coaming \
     | node ../scripts/licence-check.mjs --format go-csv)
 done
 

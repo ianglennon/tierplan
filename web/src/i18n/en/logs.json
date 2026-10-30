@@ -107,8 +107,8 @@
       }
     },
     "nodeNotice": {
-      "down": "— {{node}} is down, so new lines from its tasks can't reach Bayplan. —",
-      "disconnected": "— {{node}} is disconnected, so new lines from its tasks can't reach Bayplan. —",
+      "down": "— {{node}} is down, so new lines from its tasks can't reach Coaming. —",
+      "disconnected": "— {{node}} is disconnected, so new lines from its tasks can't reach Coaming. —",
       "back": "— {{node}} is back. —"
     },
     "filter": {

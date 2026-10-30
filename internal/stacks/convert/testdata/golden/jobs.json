@@ -8,7 +8,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "bayplan.stack.id": "id-jobs",
+        "coaming.stack.id": "id-jobs",
         "com.docker.stack.namespace": "jobs"
       },
       "DriverOpts": null,
@@ -24,7 +24,7 @@
       "Spec": {
         "Name": "jobs_agent",
         "Labels": {
-          "bayplan.stack.id": "id-jobs",
+          "coaming.stack.id": "id-jobs",
           "com.docker.stack.image": "agent:2",
           "com.docker.stack.namespace": "jobs"
         },
@@ -32,7 +32,7 @@
           "ContainerSpec": {
             "Image": "agent:2",
             "Labels": {
-              "bayplan.stack.id": "id-jobs",
+              "coaming.stack.id": "id-jobs",
               "com.docker.stack.namespace": "jobs"
             },
             "Privileges": {
@@ -66,7 +66,7 @@
       "Spec": {
         "Name": "jobs_migrate",
         "Labels": {
-          "bayplan.stack.id": "id-jobs",
+          "coaming.stack.id": "id-jobs",
           "com.docker.stack.image": "app:1",
           "com.docker.stack.namespace": "jobs"
         },
@@ -74,7 +74,7 @@
           "ContainerSpec": {
             "Image": "app:1",
             "Labels": {
-              "bayplan.stack.id": "id-jobs",
+              "coaming.stack.id": "id-jobs",
               "com.docker.stack.namespace": "jobs"
             },
             "Args": [
@@ -118,7 +118,7 @@
       "Spec": {
         "Name": "jobs_scan",
         "Labels": {
-          "bayplan.stack.id": "id-jobs",
+          "coaming.stack.id": "id-jobs",
           "com.docker.stack.image": "scanner:1",
           "com.docker.stack.namespace": "jobs"
         },
@@ -126,7 +126,7 @@
           "ContainerSpec": {
             "Image": "scanner:1",
             "Labels": {
-              "bayplan.stack.id": "id-jobs",
+              "coaming.stack.id": "id-jobs",
               "com.docker.stack.namespace": "jobs"
             },
             "Privileges": {
@@ -163,7 +163,7 @@
       "Spec": {
         "Name": "jobs_web",
         "Labels": {
-          "bayplan.stack.id": "id-jobs",
+          "coaming.stack.id": "id-jobs",
           "com.docker.stack.image": "web:3",
           "com.docker.stack.namespace": "jobs"
         },
@@ -171,7 +171,7 @@
           "ContainerSpec": {
             "Image": "web:3",
             "Labels": {
-              "bayplan.stack.id": "id-jobs",
+              "coaming.stack.id": "id-jobs",
               "com.docker.stack.namespace": "jobs"
             },
             "Privileges": {

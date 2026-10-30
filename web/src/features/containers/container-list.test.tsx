@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -38,7 +38,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
-    bayplanStackId: "",
+    coamingStackId: "",
     service: "",
     health: "none",
     selfKind: "",
@@ -189,11 +189,11 @@ describe("container list: the name opens the container", () => {
 });
 
 describe("container list: stack links", () => {
-  it("links a stack or project Bayplan manages in its group header, and a foreign one to its read-only page", async () => {
+  it("links a stack or project Coaming manages in its group header, and a foreign one to its read-only page", async () => {
     answer = () =>
       Response.json(
         body([
-          row("shop-web", { project: "shop", bayplanStackId: "stk-shop" }),
+          row("shop-web", { project: "shop", coamingStackId: "stk-shop" }),
           row("blog", { stack: "Blog" }),
         ]),
       );
@@ -661,12 +661,12 @@ describe("container list: columns and cells", () => {
     expect(cellOf("booting")).toBe("Running");
   });
 
-  it("badges Bayplan's own server and agent containers and no other", async () => {
+  it("badges Coaming's own server and agent containers and no other", async () => {
     answer = () =>
       Response.json(
         body([
-          row("bayplan", { isSelf: true, selfKind: "server" }),
-          row("bayplan-agent", { selfKind: "agent" }),
+          row("coaming", { isSelf: true, selfKind: "server" }),
+          row("coaming-agent", { selfKind: "agent" }),
           row("web"),
         ]),
       );
@@ -674,8 +674,8 @@ describe("container list: columns and cells", () => {
     await screen.findByText("web");
     const nameCell = (name: string) =>
       (screen.getByText(name).closest("td") as HTMLElement).textContent;
-    expect(nameCell("bayplan")).toBe("bayplanBayplan (this instance)");
-    expect(nameCell("bayplan-agent")).toBe("bayplan-agentBayplan agent");
+    expect(nameCell("coaming")).toBe("coamingCoaming (this instance)");
+    expect(nameCell("coaming-agent")).toBe("coaming-agentCoaming agent");
     expect(nameCell("web")).toBe("web");
   });
 
@@ -953,11 +953,11 @@ describe("container list: selection", () => {
     expect(selectedCount()).toBeNull();
   });
 
-  it("gives Bayplan's own containers a checkbox that cannot be ticked, and keeps them out of select all", async () => {
+  it("gives Coaming's own containers a checkbox that cannot be ticked, and keeps them out of select all", async () => {
     answer = () =>
-      Response.json(body([row("bayplan", { selfKind: "server", isSelf: true }), ...ROWS]));
+      Response.json(body([row("coaming", { selfKind: "server", isSelf: true }), ...ROWS]));
     await mountFlat();
-    const own = box("bayplan");
+    const own = box("coaming");
     expect(own.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(own);
     expect(isOn(own)).toBe("false");
@@ -1244,17 +1244,17 @@ describe("container list: every bulk action", () => {
   });
 });
 
-describe("container list: Bayplan's own container", () => {
+describe("container list: Coaming's own container", () => {
   it("opens the own-container dialog from the row menu, where the name must be typed", async () => {
     answer = () =>
-      Response.json(body([row("bayplan", { selfKind: "server", isSelf: true }), ...ROWS]));
+      Response.json(body([row("coaming", { selfKind: "server", isSelf: true }), ...ROWS]));
     mount({ group: "none" });
-    await screen.findByText("bayplan");
-    await openRowMenu("bayplan");
+    await screen.findByText("coaming");
+    await openRowMenu("coaming");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Stop" }));
-    const dialog = await screen.findByRole("alertdialog", { name: "Stop bayplan?" });
-    expect(dialog.textContent).toContain("This is Bayplan's own container.");
-    const confirm = within(dialog).getByRole("button", { name: "Stop Bayplan" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Stop coaming?" });
+    expect(dialog.textContent).toContain("This is Coaming's own container.");
+    const confirm = within(dialog).getByRole("button", { name: "Stop Coaming" });
     expect(confirm.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());

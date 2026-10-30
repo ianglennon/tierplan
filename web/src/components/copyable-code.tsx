@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -17,7 +17,7 @@ const MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 
 // execCopy is the fallback for pages where navigator.clipboard does not exist:
 // plain http: from an address that is not localhost, which is the usual way a
-// self-hosted Bayplan is opened. A hidden textarea is selected and copied with
+// self-hosted Coaming is opened. A hidden textarea is selected and copied with
 // the legacy command, then removed, and focus goes back to where it was.
 //
 // The textarea sits inside the copying component (host), not on document.body.

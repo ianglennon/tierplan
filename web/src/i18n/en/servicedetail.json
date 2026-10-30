@@ -23,7 +23,7 @@
       "title": "Managed by stack {{stack}}",
       "body": "Change its settings through the stack so the next deploy doesn't overwrite them. You can still scale, force update and roll back here, but a stack deploy sets those again."
     },
-    "agentService": "This is Bayplan's agent service. Removing or changing it can cut Bayplan off from every node it runs on.",
+    "agentService": "This is Coaming's agent service. Removing or changing it can cut Coaming off from every node it runs on.",
     "rollout": {
       "progressLabel": "Update progress",
       "updating": {

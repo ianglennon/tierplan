@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel_test
 
@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // updateRecorder is a tunnel.UpdateObserver that keeps what it is told.
@@ -74,12 +74,12 @@ func TestSendUpdateWritesTheFrozenUpdateLineToTheAgentsControlStream(t *testing.
 	lines := readControlLines(t, c.OpenControl(t))
 	rec.wait(t, func() bool { return len(rec.opened) == 1 })
 
-	err := srv.Hub.SendUpdate(c.Identity.AgentID, wire.Update{T: wire.TypeUpdate, ID: "u1", Image: "ghcr.io/ianglennon/bayplan-agent:0.2.1"})
+	err := srv.Hub.SendUpdate(c.Identity.AgentID, wire.Update{T: wire.TypeUpdate, ID: "u1", Image: "ghcr.io/ianglennon/coaming-agent:0.2.1"})
 	if err != nil {
 		t.Fatalf("SendUpdate: %v", err)
 	}
 	got := string(lines.next())
-	want := `{"t":"update","id":"u1","image":"ghcr.io/ianglennon/bayplan-agent:0.2.1"}`
+	want := `{"t":"update","id":"u1","image":"ghcr.io/ianglennon/coaming-agent:0.2.1"}`
 	if got != want {
 		t.Fatalf("the agent was sent %s, want %s", got, want)
 	}

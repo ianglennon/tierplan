@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package stacks holds the pure core of Bayplan's compose stacks: the model of a stack's working
+// Package stacks holds the pure core of Coaming's compose stacks: the model of a stack's working
 // copy (its files and variables), the ownership labels, and the sandboxed compose-go load. It
 // imports no HTTP type, no store and no Docker client: a stack's content comes in as values and
 // leaves as values, so every rule about it is testable without an engine.
@@ -20,7 +20,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 )
 
-// Target is where a stack deploys: a swarm (Bayplan's own stack deploy) or a standalone host (the
+// Target is where a stack deploys: a swarm (Coaming's own stack deploy) or a standalone host (the
 // Compose engine). It is fixed when the stack is created, from the environment's kind.
 type Target string
 
@@ -47,13 +47,13 @@ type Source struct {
 	Ref  string
 }
 
-// Adoption is what Bayplan recorded when it took over a stack that was made elsewhere (D-14, D-18). It is
+// Adoption is what Coaming recorded when it took over a stack that was made elsewhere (D-14, D-18). It is
 // stored with the stack and read by the ownership rule: until the stack's first deploy it says which
 // objects of the engine are the stack's (Pending), and for as long as the stack lives it names the networks
 // and volumes the stack owns, so a later removal cleans up the right ones. The zero value is a stack that was
 // not adopted.
 type Adoption struct {
-	// PriorID is the bayplan.stack.id the stack's objects carried when it was adopted (Bayplan made it once,
+	// PriorID is the coaming.stack.id the stack's objects carried when it was adopted (Coaming made it once,
 	// for a record this instance does not hold, D-11), empty for none. It widens ownership of the workloads of
 	// this namespace or project while Pending, and is never the stack's own ID.
 	PriorID string `json:"priorId,omitempty"`
@@ -63,7 +63,7 @@ type Adoption struct {
 	// Secrets and Configs are the names of the existing secrets and configs the stack references as external.
 	Secrets []string `json:"secrets,omitempty"`
 	Configs []string `json:"configs,omitempty"`
-	// Pending is true from the adoption until the first deploy of the stack has put Bayplan's labels on what
+	// Pending is true from the adoption until the first deploy of the stack has put Coaming's labels on what
 	// it runs.
 	Pending bool `json:"pending,omitempty"`
 	// Gaps are the places the rebuilt definition differs from what runs, by kind, found when the stack was
@@ -74,7 +74,7 @@ type Adoption struct {
 // ComposeFile is the path of the compose file in a stack's working copy.
 const ComposeFile = "compose.yaml"
 
-// MaxFileBytes is the largest stack file Bayplan loads or stores.
+// MaxFileBytes is the largest stack file Coaming loads or stores.
 const MaxFileBytes = 1 << 20
 
 // FileOrigin says where a stack file came from (D-09). An inline stack's files are all OriginInline; a
@@ -84,12 +84,12 @@ type FileOrigin string
 
 // The origins of a file.
 const (
-	// OriginInline is a file typed or uploaded into Bayplan: the origin of every file of an inline or
+	// OriginInline is a file typed or uploaded into Coaming: the origin of every file of an inline or
 	// adopted stack, and the zero value.
 	OriginInline FileOrigin = ""
 	// OriginRepo is a file of the repository the stack was made from.
 	OriginRepo FileOrigin = "repo"
-	// OriginOverlay is a file Bayplan holds for a path the repository does not have. It may never
+	// OriginOverlay is a file Coaming holds for a path the repository does not have. It may never
 	// shadow a repository file (D-09).
 	OriginOverlay FileOrigin = "overlay"
 )
@@ -195,7 +195,7 @@ var (
 )
 
 // NameValid reports whether name can be the name of a stack on target. It is the one rule that
-// decides both creating a stack in Bayplan and adopting one made elsewhere (D-48, D-53): there is no
+// decides both creating a stack in Coaming and adopting one made elsewhere (D-48, D-53): there is no
 // second, create-only rule.
 //
 // On a swarm the name is letters in either case, digits, "_" and "-", starting with a letter or a

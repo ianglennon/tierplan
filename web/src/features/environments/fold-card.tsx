@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -43,7 +43,7 @@ interface FoldCardProps {
   focusFallback?: () => HTMLElement | null;
 }
 
-// FoldCard is the Local host card (D-48): this Bayplan host is a manager of a swarm that
+// FoldCard is the Local host card (D-48): this Coaming host is a manager of a swarm that
 // is enrolled through agents, so it can be reached through the Docker socket and needs no
 // agent. "Fold into {swarm}" opens a plain dialog with the primary confirm, because
 // nothing on the host changes and the fold is recorded in the audit log. Confirming posts

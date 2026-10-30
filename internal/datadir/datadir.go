@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package datadir prepares the /data directory and reports whether what is
 // written there will survive the container (D-15, RESEARCH Pitfall 10).
@@ -88,8 +88,8 @@ func Prepare(path string, opts Options) (Info, error) {
 
 // narrow removes group-write and every other-permission bit from the directory
 // (0755 and 0777 become 0750, 0700 is untouched), so local users on the host
-// cannot list or read what Bayplan keeps there. When the mode cannot be changed
-// (a file system without chmod, a directory owned by someone else) Bayplan
+// cannot list or read what Coaming keeps there. When the mode cannot be changed
+// (a file system without chmod, a directory owned by someone else) Coaming
 // starts anyway and warns, because refusing to start would turn a hardening
 // step into an outage.
 func narrow(path string, chmod func(string, os.FileMode) error) {
@@ -110,7 +110,7 @@ func narrow(path string, chmod func(string, os.FileMode) error) {
 // CheckWritable proves the directory accepts a new file by creating and
 // removing one. It is also the readiness probe for /readyz.
 func CheckWritable(path string) error {
-	f, err := os.CreateTemp(path, ".bayplan-write-check-*")
+	f, err := os.CreateTemp(path, ".coaming-write-check-*")
 	if err != nil {
 		return fmt.Errorf("data directory %s is not writable: %w", path, err)
 	}

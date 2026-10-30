@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry_test
 
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // D-07: the bell warns about a credential that is about to expire, has expired or was refused by

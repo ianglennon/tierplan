@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // rotateFixture is a data directory on a file-sourced key: a migrated database
@@ -110,7 +110,7 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 		t.Fatalf("a file-sourced key must be swapped into place: %+v", res)
 	}
 
-	// The key files: new key in bayplan.key, old one kept, no .new left.
+	// The key files: new key in coaming.key, old one kept, no .new left.
 	if _, err := os.Stat(filepath.Join(f.dir, vault.NewKeyFile)); err == nil {
 		t.Errorf("%s was left behind", vault.NewKeyFile)
 	}
@@ -125,7 +125,7 @@ func TestRotateKeyMovesEverySecretAndTheWholeChainToTheNewKey(t *testing.T) {
 	cur, _ := vault.New(current, "file")
 	prev, _ := vault.New(oldKeyBytes, "file")
 	if cur.KeyID() != res.NewKID || prev.KeyID() != res.OldKID {
-		t.Fatalf("bayplan.key holds %s and bayplan.key.old holds %s, want %s and %s", cur.KeyID(), prev.KeyID(), res.NewKID, res.OldKID)
+		t.Fatalf("coaming.key holds %s and coaming.key.old holds %s, want %s and %s", cur.KeyID(), prev.KeyID(), res.NewKID, res.OldKID)
 	}
 	if got := f.scalar(t, `SELECT value FROM app_meta WHERE key = 'active_key_id'`); got != res.NewKID {
 		t.Fatalf("active_key_id = %s, want %s", got, res.NewKID)
@@ -280,7 +280,7 @@ func TestRotateKeyCanBeRunAgainAfterACrashBeforeTheCommit(t *testing.T) {
 	restore()
 	// A rolled-back transaction left the database as it was.
 	if _, err := backup.RotateKey(ctx, f.st, f.dir, f.old, audit.SystemCLI); !errors.Is(err, backup.ErrNewKeyPresent) {
-		t.Fatalf("a second run beside a stale bayplan.key.new = %v, want ErrNewKeyPresent until recovery has run", err)
+		t.Fatalf("a second run beside a stale coaming.key.new = %v, want ErrNewKeyPresent until recovery has run", err)
 	}
 	if _, err := vault.RecoverRotation(ctx, f.dir, false, func(ctx context.Context) (string, error) {
 		return backup.StoredActiveKeyID(ctx, f.dir)
@@ -335,9 +335,9 @@ func TestRotateKeyWithAnEnvironmentKeyWritesTheNewKeyFileAndRenamesNothing(t *te
 	if err != nil || vault.KeyIDOf(newKey) != res.NewKID {
 		t.Fatalf("%s holds %s, want %s (%v)", vault.NewKeyFile, vault.KeyIDOf(newKey), res.NewKID, err)
 	}
-	// Nothing was renamed: bayplan.key is what it was and no old file appeared.
+	// Nothing was renamed: coaming.key is what it was and no old file appeared.
 	if after, _ := vault.ReadKeyFile(f.dir, vault.KeyFile); !bytes.Equal(after, keyBefore) {
-		t.Error("bayplan.key changed for an environment-sourced key")
+		t.Error("coaming.key changed for an environment-sourced key")
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, vault.OldKeyFile)); err == nil {
 		t.Errorf("%s appeared for an environment-sourced key", vault.OldKeyFile)

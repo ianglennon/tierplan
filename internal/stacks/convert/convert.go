@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package convert turns a compose-go project into the swarm objects a stack deploy creates: one
 // service spec per compose service and one network per network the services use. It is pure: no
@@ -8,7 +8,7 @@
 //
 // The conversion follows docker/cli's stack deploy (cli/compose/convert, Apache-2.0): a service
 // is named <stack>_<service>, carries the com.docker.stack.namespace label and joins the
-// <stack>_default network unless it names others. Bayplan adds its own ownership labels
+// <stack>_default network unless it names others. Coaming adds its own ownership labels
 // (stacks.LabelStackID) beside the docker ones.
 //
 // Every compose service field is accounted for. FieldClasses says, for each, whether it is
@@ -25,7 +25,7 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // ErrNotConverted means a service uses a compose setting a swarm stack cannot deploy.
@@ -130,7 +130,7 @@ func GuardSecrets(err error, s stacks.SecretUse) error {
 	return err
 }
 
-// ErrRelativeBind means a bind mount's source is not an absolute path. Bayplan never resolves a
+// ErrRelativeBind means a bind mount's source is not an absolute path. Coaming never resolves a
 // path against its own directory, so a relative source could only mean a path on the server.
 var ErrRelativeBind = errors.New("convert: a bind mount source must be an absolute path on the swarm nodes")
 

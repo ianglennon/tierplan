@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package httpx builds the HTTP router and owns the one way to register an API
 // operation: Register, which cannot be called without declaring who may call
@@ -20,11 +20,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // requirementKey is the huma operation metadata key holding the Requirement.
-const requirementKey = "bayplan.requirement"
+const requirementKey = "coaming.requirement"
 
 // apiVersion is the constant OpenAPI info version. It is deliberately not the
 // build version: the committed openapi.json must not change on every commit
@@ -122,7 +122,7 @@ func New(opts Options) *Router {
 	r.mux.NotFound(r.notFound)
 	r.mux.MethodNotAllowed(r.methodNotAllowed)
 
-	cfg := huma.DefaultConfig("Bayplan API", apiVersion)
+	cfg := huma.DefaultConfig("Coaming API", apiVersion)
 	// No unauthenticated spec, docs or schema routes, and no $schema link
 	// transformer: the contract is the committed openapi.json (Pitfall 4).
 	cfg.OpenAPIPath = ""

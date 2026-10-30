@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package agents_test
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/server/servertest"
 )
 
 // actionResponse is the body of POST /api/env/{id}/containers/actions as far as
@@ -48,7 +48,7 @@ func act(t *testing.T, srv *servertest.Server, envID, action, nodeID, id string)
 // TestStandaloneAgentContainerActions stops and starts a container on a standalone
 // host through a real agent built from this branch: the write crosses the tunnel and
 // the agent's route table, and the container's state changes (plan 04-03, RES-01).
-// A second host whose agent runs with BAYPLAN_AGENT_READ_ONLY=true is refused by name
+// A second host whose agent runs with COAMING_AGENT_READ_ONLY=true is refused by name
 // before any call, and its container keeps running (D-35, Pitfall 3).
 func TestStandaloneAgentContainerActions(t *testing.T) {
 	host := dockertest.StartHost(t, "")
@@ -104,7 +104,7 @@ func TestStandaloneAgentContainerActions(t *testing.T) {
 	dockertest.LoadImage(t, "alpine", ro)
 	dumpOnFailure(t, ro)
 	roEnv := srv.CreateAgentEnvironment("")
-	cmd := strings.Replace(roEnv.Install.Standalone.Command, " "+roEnv.Install.Image, " -e BAYPLAN_AGENT_READ_ONLY=true "+roEnv.Install.Image, 1)
+	cmd := strings.Replace(roEnv.Install.Standalone.Command, " "+roEnv.Install.Image, " -e COAMING_AGENT_READ_ONLY=true "+roEnv.Install.Image, 1)
 	if cmd == roEnv.Install.Standalone.Command {
 		t.Fatal("could not add the read-only flag to the command")
 	}

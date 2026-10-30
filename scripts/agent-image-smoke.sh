@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
-# Runs the agent image (`make agent-image` builds bayplan-agent:dev) with the
+# Runs the agent image (`make agent-image` builds coaming-agent:dev) with the
 # hardening flags the install commands use, and checks what a unit test cannot:
 # the process runs as UID and GID 1000 in the Docker socket's group with no
 # capability left, no-new-privileges is set even where the platform cannot ask
@@ -18,14 +18,14 @@
 # connection and never answers; the agent waits in the dial and stays up while
 # its process is inspected. The listener binds a kernel-assigned port and the agent
 # uses the host network, so no fixed port is involved. Environment: IMAGE (default
-# bayplan-agent:dev). Needs Docker, python3 and tar. Removes every container, volume
-# and process it creates; they carry the label bayplan.ci.owner=$BAYPLAN_CI_OWNER
+# coaming-agent:dev). Needs Docker, python3 and tar. Removes every container, volume
+# and process it creates; they carry the label coaming.ci.owner=$COAMING_CI_OWNER
 # (local-<pid> when unset) so `make ci-clean` removes what a cancelled CI job left (D-23).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-IMAGE="${IMAGE:-bayplan-agent:dev}"
+IMAGE="${IMAGE:-coaming-agent:dev}"
 docker image inspect "${IMAGE}" >/dev/null 2>&1 \
   || { echo "AGENT IMAGE SMOKE FAIL: ${IMAGE} not found; run make agent-image first" >&2; exit 1; }
 
@@ -33,8 +33,8 @@ SOCKET=/var/run/docker.sock
 [ -S "${SOCKET}" ] || { echo "AGENT IMAGE SMOKE FAIL: ${SOCKET} is not a socket" >&2; exit 1; }
 SOCKET_GID="$(stat -c %g "${SOCKET}")"
 
-NAME="bayplan-agent-smoke-$$"
-OWNER_LABEL="bayplan.ci.owner=${BAYPLAN_CI_OWNER:-local-$$}"
+NAME="coaming-agent-smoke-$$"
+OWNER_LABEL="coaming.ci.owner=${COAMING_CI_OWNER:-local-$$}"
 WORK="$(mktemp -d)"
 HOLDER_PID=""
 VOLUMES=()
@@ -99,8 +99,8 @@ run_case() {
     --network host \
     --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID \
     -v "${SOCKET}:${SOCKET}" \
-    -v "${vol}:/var/lib/bayplan-agent" \
-    -e "BAYPLAN_AGENT_URL=${URL}" \
+    -v "${vol}:/var/lib/coaming-agent" \
+    -e "COAMING_AGENT_URL=${URL}" \
     "$@" \
     "${IMAGE}" >/dev/null || fail "${label}: docker run failed"
 
@@ -129,11 +129,11 @@ run_case() {
   # 4. The dropped user wrote the start marker in the state volume, and the
   # volume belongs to 1000 (docker cp shows owners as uid/gid).
   local listing
-  listing="$(docker cp "${cname}:/var/lib/bayplan-agent" - | tar -tvf -)"
+  listing="$(docker cp "${cname}:/var/lib/coaming-agent" - | tar -tvf -)"
   printf '%s\n' "${listing}" | awk '$6 ~ /\/started$/ { found = 1; if ($2 != "1000/1000") bad = 1 } END { exit !(found && !bad) }' \
     || fail "${label}: no start marker owned by 1000/1000 in the state volume:
 ${listing}"
-  printf '%s\n' "${listing}" | awk '$6 ~ /^bayplan-agent\/$/ { found = 1; if ($2 != "1000/1000" || $1 !~ /^drwx------/) bad = 1 } END { exit !(found && !bad) }' \
+  printf '%s\n' "${listing}" | awk '$6 ~ /^coaming-agent\/$/ { found = 1; if ($2 != "1000/1000" || $1 !~ /^drwx------/) bad = 1 } END { exit !(found && !bad) }' \
     || fail "${label}: the state directory is not 1000/1000 mode 0700:
 ${listing}"
 
@@ -141,7 +141,7 @@ ${listing}"
   # answered over the socket (the agent warns when GET /info fails).
   local logs
   logs="$(docker logs "${cname}" 2>&1)"
-  printf '%s' "${logs}" | grep -q 'starting bayplan-agent' || fail "${label}: no start line in the log"
+  printf '%s' "${logs}" | grep -q 'starting coaming-agent' || fail "${label}: no start line in the log"
   printf '%s' "${logs}" | grep -q "server=127.0.0.1:${PORT}" || fail "${label}: the start line does not name the server host"
   printf '%s' "${logs}" | grep -q 'uid=1000' || fail "${label}: the start line does not report uid=1000"
   printf '%s' "${logs}" | grep -q 'token_present=true' || fail "${label}: the agent did not find its token"
@@ -154,29 +154,29 @@ ${listing}"
 }
 
 # --- standalone: token in the environment, the engine asked for no-new-privileges.
-TOKEN_ENV="bpjt_smoke_ENVSECRET_$$"
+TOKEN_ENV="cmjt_smoke_ENVSECRET_$$"
 run_case standalone "${TOKEN_ENV}" \
   --security-opt no-new-privileges \
-  -e "BAYPLAN_AGENT_JOIN_TOKEN=${TOKEN_ENV}"
+  -e "COAMING_AGENT_JOIN_TOKEN=${TOKEN_ENV}"
 
 # --- swarm-like: the token is a root-owned 0400 file on a volume (a Docker
 # secret is mounted that way), and the engine is NOT asked for no-new-privileges.
-TOKEN_FILE="bpjt_smoke_FILESECRET_$$"
+TOKEN_FILE="cmjt_smoke_FILESECRET_$$"
 SECVOL="${NAME}-secret"
 SECBOX="${NAME}-secretbox"
 VOLUMES+=("${SECVOL}")
 CONTAINERS+=("${SECBOX}")
 docker volume create --label "${OWNER_LABEL}" "${SECVOL}" >/dev/null
 docker create --name "${SECBOX}" --label "${OWNER_LABEL}" -v "${SECVOL}:/run/secrets" "${IMAGE}" >/dev/null
-printf '%s\n' "${TOKEN_FILE}" >"${WORK}/bayplan-agent-token"
-tar -C "${WORK}" --owner=0 --group=0 --mode=0400 -cf - bayplan-agent-token | docker cp - "${SECBOX}:/run/secrets/" \
+printf '%s\n' "${TOKEN_FILE}" >"${WORK}/coaming-agent-token"
+tar -C "${WORK}" --owner=0 --group=0 --mode=0400 -cf - coaming-agent-token | docker cp - "${SECBOX}:/run/secrets/" \
   || fail "could not place the secret file"
-docker cp "${SECBOX}:/run/secrets" - | tar -tvf - | awk '$6 ~ /bayplan-agent-token$/ { found = 1; if ($2 != "0/0" || $1 != "-r--------") bad = 1 } END { exit !(found && !bad) }' \
+docker cp "${SECBOX}:/run/secrets" - | tar -tvf - | awk '$6 ~ /coaming-agent-token$/ { found = 1; if ($2 != "0/0" || $1 != "-r--------") bad = 1 } END { exit !(found && !bad) }' \
   || fail "the secret file is not root-owned 0400"
 docker rm -f "${SECBOX}" >/dev/null
 
 run_case swarm-like "${TOKEN_FILE}" \
   -v "${SECVOL}:/run/secrets:ro" \
-  -e BAYPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/bayplan-agent-token
+  -e COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/coaming-agent-token
 
 echo "AGENT IMAGE SMOKE OK (${IMAGE}): the agent runs as UID 1000 under both install styles"

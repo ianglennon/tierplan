@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Outcome is what a sync check found.
@@ -69,7 +69,7 @@ type checkCall struct {
 // owner turned auto-deploy on is deployed after the check, by autoDeploy, through the same checks as a person's deploy
 // (GIT-07). A failure to reach the
 // repository is an Outcome of OutcomeError with the reason stored, not an error; an error is returned for a stack that
-// is not a git stack of this environment, or for a failure of Bayplan's own storage.
+// is not a git stack of this environment, or for a failure of Coaming's own storage.
 //
 // Callers that ask for the same stack while a check runs share it. The check is not tied to the first caller's context
 // (a caller that gives up leaves it running for the others), and a caller that gives up returns its context's error.

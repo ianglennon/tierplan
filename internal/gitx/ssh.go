@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx
 
@@ -24,7 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/storage/memory"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // sshHandshakeTimeout is how long the connect and the handshake of an ssh call may take, to the moment
@@ -35,7 +35,7 @@ const sshHandshakeTimeout = 15 * time.Second
 // defaultSSHUser is the user name every large git host expects.
 const defaultSSHUser = "git"
 
-// HostKeyState is how Bayplan knows an SSH host: from the keys that ship with it, from a key a
+// HostKeyState is how Coaming knows an SSH host: from the keys that ship with it, from a key a
 // person trusted, or not at all.
 type HostKeyState string
 
@@ -48,7 +48,7 @@ const (
 	HostKeyChanged   HostKeyState = "changed"
 )
 
-// HostKeyStateOf is what Bayplan knows of the host of r before it connects: none for an https
+// HostKeyStateOf is what Coaming knows of the host of r before it connects: none for an https
 // address or an ssh host with no built-in and no saved key, builtin when the host ships with keys
 // (saved keys are ignored then), trusted when a key was saved. A test that finds a different key
 // than these is untrusted or changed instead, from the failure it returns.
@@ -92,7 +92,7 @@ func pinnedKeys(host string, saved []HostKey) []pinnedKey {
 }
 
 // hostKeyAlgorithms is what the client offers the server to sign with, from the types of the
-// pinned keys: a server must show a key of a type Bayplan holds, else it could present a type it
+// pinned keys: a server must show a key of a type Coaming holds, else it could present a type it
 // has no pin for. An RSA key is signed with SHA-2 by every server in use. Empty means no
 // restriction (nothing is pinned).
 func hostKeyAlgorithms(pinned []pinnedKey) []string {
@@ -262,7 +262,7 @@ func (g *GoGit) lsRemoteSSH(ctx context.Context, r Remote, u URL) (RefList, erro
 	}
 	rem := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{Name: "origin", URLs: []string{u.Raw}})
 
-	// go-git does not look at the context while it connects, but the connection is Bayplan's own and
+	// go-git does not look at the context while it connects, but the connection is Coaming's own and
 	// is closed when the context ends, so the call returns then.
 	refs, err := rem.ListContext(ctx, &git.ListOptions{PeelingOption: git.AppendPeeled, Auth: method, ProxyOptions: proxyOpts})
 	if err != nil {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { ReactNode } from "react";
 import { useId } from "react";
@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 
-// Which definition the adoption starts from (D-12): the one Bayplan writes from what runs, or the person's own file.
+// Which definition the adoption starts from (D-12): the one Coaming writes from what runs, or the person's own file.
 export type AdoptSourceKind = "rebuild" | "paste";
 
 interface AdoptSourceProps {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package envs keeps the managed environments: which Docker hosts an admin
 // opted in (the registry), and whether each is reachable right now (the
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/engine"
 )
 
 // State is what the monitor currently believes about an environment.
@@ -34,7 +34,7 @@ const (
 	// StateOffline is an environment whose engine did not answer.
 	StateOffline State = "offline"
 	// StateUnsupported is an environment whose engine answered but is not one
-	// Bayplan manages (too old, Podman, rootless, Docker Desktop).
+	// Coaming manages (too old, Podman, rootless, Docker Desktop).
 	StateUnsupported State = "unsupported"
 )
 

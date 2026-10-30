@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package auth_test
 
@@ -21,13 +21,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Sign-in, session lookup, CSRF and unlock (plan 12, AUTH-02, AUTH-03, AUTH-08).

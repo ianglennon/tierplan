@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package gitx is the one place go-git is imported. Everything else in Bayplan talks to git through
+// Package gitx is the one place go-git is imported. Everything else in Coaming talks to git through
 // the Client interface, so a different implementation (the git command line, for a repository
 // go-git cannot read) can replace it without touching a caller (STACK.md).
 //
@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // Ref kinds.
@@ -103,7 +103,7 @@ type RefList struct {
 	Tags     []Ref
 	// Default is the short name of the branch HEAD points at; empty when the server does not say.
 	Default string
-	// HostKey is the SSH host key the server presented and Bayplan verified; nil over https.
+	// HostKey is the SSH host key the server presented and Coaming verified; nil over https.
 	HostKey *PresentedKey
 }
 
@@ -159,7 +159,7 @@ type Dir struct {
 	Capped bool
 }
 
-// Client is what Bayplan asks of git.
+// Client is what Coaming asks of git.
 type Client interface {
 	// LsRemote lists the branches and tags of a remote without a clone. An error is a *Error (a
 	// fixed Code and the host) or one of ErrURLUnsupported, ErrURLUserinfo, ErrCAInvalid and
@@ -225,7 +225,7 @@ type GoGit struct {
 
 	usedMu sync.Mutex
 	// used is when each mirror was last fetched or read, since the process began; MirrorStats falls back to the
-	// mirror's bayplan-last-used file for one not used since.
+	// mirror's coaming-last-used file for one not used since.
 	used map[MirrorID]time.Time
 }
 

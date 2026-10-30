@@ -120,7 +120,7 @@ func (q *Queries) GetTeamWithCounts(ctx context.Context, id string) (GetTeamWith
 
 const insertTeam = `-- name: InsertTeam :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors
+   SPDX-FileCopyrightText: 2026 The Coaming Authors
 
    Queries of teams and their membership (internal/access/teams.go). A team's
    grants are role_assignments rows with principal_type 'team'; they have no

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops"
 )
 
 // The operation lock (plan 07-18, STK-09 concurrency): one stack operation at a time on an

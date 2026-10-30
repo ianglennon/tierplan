@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 func svc(t *testing.T, name, env string, replicas int) swarm.ServiceSpec {
@@ -145,14 +145,14 @@ func TestChangedPathsKeyedLists(t *testing.T) {
 	}
 }
 
-// TestMarkOwnershipOnly: a service is ownership-only when every difference is a bayplan.* label of the service or of
+// TestMarkOwnershipOnly: a service is ownership-only when every difference is a coaming.* label of the service or of
 // its containers; one other difference keeps it a gap (T-08-55).
 func TestMarkOwnershipOnly(t *testing.T) {
 	t.Parallel()
 	running := svc(t, "shop_web", `"A=1"`, 1)
 	labelled := func(spec swarm.ServiceSpec) swarm.ServiceSpec {
 		out := specOf(t, marshalSpec(t, spec))
-		out.Labels["bayplan.stack.id"] = "id-1"
+		out.Labels["coaming.stack.id"] = "id-1"
 		return out
 	}
 
@@ -160,18 +160,18 @@ func TestMarkOwnershipOnly(t *testing.T) {
 	withEnv := labelled(svc(t, "shop_web", `"A=2"`, 1))
 	foreign := specOf(t, marshalSpec(t, running))
 	foreign.Labels["team"] = "platform"
-	foreign.Labels["bayplan.stack.id"] = "id-1"
+	foreign.Labels["coaming.stack.id"] = "id-1"
 	containerLabel := specOf(t, marshalSpec(t, running))
-	containerLabel.TaskTemplate.ContainerSpec.Labels = map[string]string{"bayplan.stack.id": "id-1"}
+	containerLabel.TaskTemplate.ContainerSpec.Labels = map[string]string{"coaming.stack.id": "id-1"}
 
 	for name, tc := range map[string]struct {
 		desired swarm.ServiceSpec
 		want    bool
 	}{
-		"only the bayplan label":                    {only, true},
-		"a bayplan label on the containers":         {containerLabel, true},
-		"a bayplan label and an environment change": {withEnv, false},
-		"a bayplan label and another label":         {foreign, false},
+		"only the coaming label":                    {only, true},
+		"a coaming label on the containers":         {containerLabel, true},
+		"a coaming label and an environment change": {withEnv, false},
+		"a coaming label and another label":         {foreign, false},
 	} {
 		desired := map[string]swarm.ServiceSpec{"shop_web": tc.desired}
 		live := map[string]swarm.ServiceSpec{"shop_web": running}
@@ -195,22 +195,22 @@ func TestMarkOwnershipOnly(t *testing.T) {
 	}
 }
 
-// TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount: the converter puts Bayplan's ID label on the mount of a
+// TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount: the converter puts Coaming's ID label on the mount of a
 // named volume, so that path is one of the ownership labels. A difference in the same mount beside it, or a label of
-// the mount that is not Bayplan's, keeps the service a gap (G-08-4, T-08-55).
+// the mount that is not Coaming's, keeps the service a gap (G-08-4, T-08-55).
 func TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount(t *testing.T) {
 	t.Parallel()
-	const mountLabel = "TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.bayplan.stack.id"
+	const mountLabel = "TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.coaming.stack.id"
 	for name, tc := range map[string]struct {
 		paths []string
 		want  bool
 	}{
 		"only the mount label":                    {[]string{mountLabel}, true},
-		"the mount label and the service label":   {[]string{mountLabel, "Labels.bayplan.stack.id"}, true},
+		"the mount label and the service label":   {[]string{mountLabel, "Labels.coaming.stack.id"}, true},
 		"the mount label and its source":          {[]string{mountLabel, "TaskTemplate.ContainerSpec.Mounts[/data].Source"}, false},
 		"another label of the mount":              {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.com.docker.stack.namespace"}, false},
-		"a label of the mount named like Bayplan": {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.bayplanx"}, false},
-		"a bayplan key elsewhere in a mount":      {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].Source.bayplan.x"}, false},
+		"a label of the mount named like Coaming": {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.coamingx"}, false},
+		"a coaming key elsewhere in a mount":      {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].Source.coaming.x"}, false},
 	} {
 		var changes []stacks.PathChange
 		for _, p := range tc.paths {
@@ -222,12 +222,12 @@ func TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount(t *testing.T) {
 	}
 }
 
-// TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount: a service that differs from the running one in Bayplan's
+// TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount: a service that differs from the running one in Coaming's
 // ID on the service, its containers and a volume mount is ownership-only; a real difference in that mount is not.
 func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
 	t.Parallel()
 	running := specOf(t, `{"Name":"shop_api","Labels":{"x":"1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"com.docker.stack.namespace":"shop"}}}]}}}`)
-	desired := specOf(t, `{"Name":"shop_api","Labels":{"x":"1","bayplan.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"bayplan.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"com.docker.stack.namespace":"shop","bayplan.stack.id":"id-1"}}}]}}}`)
+	desired := specOf(t, `{"Name":"shop_api","Labels":{"x":"1","coaming.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"coaming.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"com.docker.stack.namespace":"shop","coaming.stack.id":"id-1"}}}]}}}`)
 	moved := specOf(t, marshalSpec(t, desired))
 	moved.TaskTemplate.ContainerSpec.Mounts[0].Source = "shop_other"
 
@@ -235,7 +235,7 @@ func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
 		desired swarm.ServiceSpec
 		want    bool
 	}{
-		"Bayplan's ID on service, containers and mount": {desired, true},
+		"Coaming's ID on service, containers and mount": {desired, true},
 		"the same and another source":                   {moved, false},
 	} {
 		d := map[string]swarm.ServiceSpec{"shop_api": tc.desired}
@@ -249,11 +249,11 @@ func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
 }
 
 // TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget: the live mount's target is written so that every path inside
-// it reads like Bayplan's label path. The paths alone would call a change of its source ownership-only; the two
+// it reads like Coaming's label path. The paths alone would call a change of its source ownership-only; the two
 // specs, with every ownership label stripped, still differ, so the service stays a gap (T-08-55, T-08-96).
 func TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget(t *testing.T) {
 	t.Parallel()
-	const target = "/x].VolumeOptions.Labels.bayplan.y"
+	const target = "/x].VolumeOptions.Labels.coaming.y"
 	mountOf := func(source string) string {
 		return `{"Name":"shop_api","TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"` + source + `","Target":"` + target + `"}]}}}`
 	}
@@ -273,12 +273,12 @@ func TestMarkOwnershipOnlyIsNotFooledByACraftedMountTarget(t *testing.T) {
 }
 
 // TestMarkOwnershipOnlyWhenTheRunningServiceHasNoLabelsAtAll: a service with no label anywhere, and its twin with only
-// Bayplan's ID on the service, the containers and a mount, differ in nothing else: an emptied label map is an absent
+// Coaming's ID on the service, the containers and a mount, differ in nothing else: an emptied label map is an absent
 // one.
 func TestMarkOwnershipOnlyWhenTheRunningServiceHasNoLabelsAtAll(t *testing.T) {
 	t.Parallel()
 	running := specOf(t, `{"Name":"shop_api","TaskTemplate":{"ContainerSpec":{"Image":"api","Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{}}]}}}`)
-	desired := specOf(t, `{"Name":"shop_api","Labels":{"bayplan.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"bayplan.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"bayplan.stack.id":"id-1"}}}]}}}`)
+	desired := specOf(t, `{"Name":"shop_api","Labels":{"coaming.stack.id":"id-1"},"TaskTemplate":{"ContainerSpec":{"Image":"api","Labels":{"coaming.stack.id":"id-1"},"Mounts":[{"Type":"volume","Source":"shop_data","Target":"/data","VolumeOptions":{"Labels":{"coaming.stack.id":"id-1"}}}]}}}`)
 	d := map[string]swarm.ServiceSpec{"shop_api": desired}
 	l := map[string]swarm.ServiceSpec{"shop_api": running}
 

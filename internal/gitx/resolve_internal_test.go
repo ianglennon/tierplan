@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
 )
 
 // A prefix several commits start with is ambiguous, never the first match. Seven hex characters are

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -106,13 +106,13 @@ describe("LocalHostPanel, a detected host", () => {
 
     expect(await screen.findByRole("heading", { name: "Manage this Docker host?" })).toBeTruthy();
     expect(
-      screen.getByText("Bayplan found Docker on lab-1 and can manage it through the socket."),
+      screen.getByText("Coaming found Docker on lab-1 and can manage it through the socket."),
     ).toBeTruthy();
     expect(screen.getByText("Docker Engine 29.8.2")).toBeTruthy();
     expect(screen.getByText("Standalone")).toBeTruthy();
     expect(
       screen.getByText(
-        "Managing a host through the Docker socket gives Bayplan, and any admin who signs in here, root-equivalent control of that host.",
+        "Managing a host through the Docker socket gives Coaming, and any admin who signs in here, root-equivalent control of that host.",
       ),
     ).toBeTruthy();
     expect(button("Manage this host")).toBeTruthy();
@@ -138,7 +138,7 @@ describe("LocalHostPanel, a detected host", () => {
     expect(await screen.findByText("Swarm worker")).toBeTruthy();
     expect(
       screen.getByText(
-        "This host is a swarm worker. Pin Bayplan to a manager node to manage the swarm. Bayplan will show node-local data only.",
+        "This host is a swarm worker. Pin Coaming to a manager node to manage the swarm. Coaming will show node-local data only.",
       ),
     ).toBeTruthy();
     expect(button("Manage this host").disabled).toBe(false);
@@ -263,7 +263,7 @@ describe("LocalHostPanel, an unsupported engine", () => {
     expect(await screen.findByText("Unsupported")).toBeTruthy();
     expect(
       screen.getByText(
-        "Docker Engine 22.0.0 (API 1.41) isn't supported. Bayplan needs Docker Engine 24 or later.",
+        "Docker Engine 22.0.0 (API 1.41) isn't supported. Coaming needs Docker Engine 24 or later.",
       ),
     ).toBeTruthy();
     expect(
@@ -302,7 +302,7 @@ describe("LocalHostPanel, an unsupported engine", () => {
     renderPanel();
 
     expect(
-      await screen.findByText("Podman 5.2.1 detected. Bayplan manages Docker Engine only."),
+      await screen.findByText("Podman 5.2.1 detected. Coaming manages Docker Engine only."),
     ).toBeTruthy();
     expect(screen.queryByText(/isn't supported/)).toBeNull();
   });
@@ -318,7 +318,7 @@ describe("LocalHostPanel, a socket that does not answer", () => {
     expect(await screen.findByRole("heading", { name: "Docker isn't answering" })).toBeTruthy();
     expect(
       screen.getByText(
-        /Bayplan found a Docker socket at \/var\/run\/docker.sock, but Docker didn't answer/,
+        /Coaming found a Docker socket at \/var\/run\/docker.sock, but Docker didn't answer/,
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
@@ -341,7 +341,7 @@ describe("LocalHostPanel, no Docker socket", () => {
     expect(await screen.findByRole("heading", { name: "No Docker socket found" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Bayplan didn't find a Docker socket at /var/run/docker.sock. To manage this host, start Bayplan with the socket mounted:",
+        "Coaming didn't find a Docker socket at /var/run/docker.sock. To manage this host, start Coaming with the socket mounted:",
       ),
     ).toBeTruthy();
     const code = (
@@ -349,10 +349,10 @@ describe("LocalHostPanel, no Docker socket", () => {
     ).closest("section");
     const text = code?.querySelector("code")?.textContent ?? "";
     expect(text).toContain("-p 7480:7480");
-    expect(text).toContain("-v bayplan-data:/data");
+    expect(text).toContain("-v coaming-data:/data");
     expect(text).toContain("-v /var/run/docker.sock:/var/run/docker.sock");
     // The running version is v0.1.0, so the snippet names the 0.1 line.
-    expect(text).toContain("ghcr.io/ianglennon/bayplan:0.1");
+    expect(text).toContain("ghcr.io/ianglennon/coaming:0.1");
     expect(text).not.toContain(":latest");
     expect(
       screen.getByText("You can add remote hosts and swarms after setup from Environments."),

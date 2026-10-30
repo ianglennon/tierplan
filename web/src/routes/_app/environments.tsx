@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -84,7 +84,7 @@ function EnvironmentsPage() {
   const loaded = environments.data !== undefined;
   const failed = environments.isError && !loaded;
   const empty = loaded && items.length === 0;
-  // The Bayplan host manages a swarm that is enrolled through agents and could be folded
+  // The Coaming host manages a swarm that is enrolled through agents and could be folded
   // into it (D-48). Only someone who may do it is told; the swarm environment is the one
   // the fold happens in, and its settings page holds the card.
   const foldSwarm = items.find(

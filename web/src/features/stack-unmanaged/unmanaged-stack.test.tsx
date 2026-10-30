@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -18,7 +18,7 @@ import "@/i18n";
 import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
-// The read-only page of a stack Bayplan did not make (plan 08-09, STK-12, D-09, D-10, D-11, D-19).
+// The read-only page of a stack Coaming did not make (plan 08-09, STK-12, D-09, D-10, D-11, D-19).
 
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));
 vi.mock("@/lib/toast", () => ({
@@ -200,7 +200,7 @@ function mount(name = "legacy") {
 }
 
 describe("the Unmanaged stack page: header and notes", () => {
-  it("shows the name, its state, Swarm and Unmanaged, and the line saying Bayplan does not manage it", async () => {
+  it("shows the name, its state, Swarm and Unmanaged, and the line saying Coaming does not manage it", async () => {
     mount();
     expect(await screen.findByRole("heading", { name: "legacy", level: 2 })).toBeTruthy();
     expect(await screen.findByText("Degraded")).toBeTruthy();
@@ -208,22 +208,22 @@ describe("the Unmanaged stack page: header and notes", () => {
     expect(await screen.findAllByText("Swarm")).toHaveLength(2);
     // The badge in the header and the Source row of the Details.
     expect(await screen.findAllByText("Unmanaged")).toHaveLength(2);
-    expect(await screen.findByText("Prod · Not managed by Bayplan")).toBeTruthy();
+    expect(await screen.findByText("Prod · Not managed by Coaming")).toBeTruthy();
     const crumb = screen.getByRole("navigation", { name: "Breadcrumb" });
     expect(within(crumb).getByRole("link", { name: "Stacks" }).getAttribute("href")).toBe(
       "/env/e1/stacks",
     );
   });
 
-  it("always shows the note that Bayplan doesn't manage the stack, as a status", async () => {
+  it("always shows the note that Coaming doesn't manage the stack, as a status", async () => {
     mount();
-    const note = (await screen.findByText("Bayplan doesn't manage this stack")).closest(
+    const note = (await screen.findByText("Coaming doesn't manage this stack")).closest(
       "[data-slot=alert]",
     );
     expect(note?.getAttribute("role")).toBe("status");
     expect(
       screen.getByText(
-        "You can look at it here. Adopt it to deploy, update and roll it back with Bayplan. Adopting changes nothing until you deploy.",
+        "You can look at it here. Adopt it to deploy, update and roll it back with Coaming. Adopting changes nothing until you deploy.",
       ),
     ).toBeTruthy();
   });
@@ -264,29 +264,29 @@ describe("the Unmanaged stack page: header and notes", () => {
     expect(screen.queryByRole("link", { name: "Adopt stack" })).toBeNull();
   });
 
-  it("shows Adopt stack off with the reason for Bayplan's own stack, even to an Admin", async () => {
+  it("shows Adopt stack off with the reason for Coaming's own stack, even to an Admin", async () => {
     role = "admin";
-    body = { ...body, owner: "bayplan", adoptable: false, reason: "This is Bayplan's own stack." };
+    body = { ...body, owner: "coaming", adoptable: false, reason: "This is Coaming's own stack." };
     mount();
 
     const adopt = await screen.findByRole("button", { name: "Adopt stack" });
     expect(adopt.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(adopt);
 
-    expect(toasts.info).toHaveBeenCalledWith("This is Bayplan's own stack.");
+    expect(toasts.info).toHaveBeenCalledWith("This is Coaming's own stack.");
     expect(screen.queryByRole("link", { name: "Adopt stack" })).toBeNull();
   });
 
   it("adds the orphan note and the Portainer advice only when they apply", async () => {
     mount();
-    await screen.findByText("Bayplan doesn't manage this stack");
-    expect(screen.queryByText("Created by Bayplan (another instance or a lost record)")).toBeNull();
+    await screen.findByText("Coaming doesn't manage this stack");
+    expect(screen.queryByText("Created by Coaming (another instance or a lost record)")).toBeNull();
     expect(screen.queryByText("This stack looks like it was created by Portainer")).toBeNull();
     cleanup();
     body = { ...body, orphan: true, portainer: true };
     mount();
     expect(
-      await screen.findByText("Created by Bayplan (another instance or a lost record)"),
+      await screen.findByText("Created by Coaming (another instance or a lost record)"),
     ).toBeTruthy();
     const advice = screen
       .getByText("This stack looks like it was created by Portainer")
@@ -295,7 +295,7 @@ describe("the Unmanaged stack page: header and notes", () => {
     expect(advice?.getAttribute("role")).toBe("status");
     expect(
       within(advice as HTMLElement).getByText(
-        "Remove it from Portainer without deleting it, or the two tools will fight over it. Bayplan doesn't contact Portainer.",
+        "Remove it from Portainer without deleting it, or the two tools will fight over it. Coaming doesn't contact Portainer.",
       ),
     ).toBeTruthy();
   });
@@ -311,14 +311,14 @@ describe("the Unmanaged stack page: unusual names (D-48, D-53)", () => {
 
   it("opens a name with a space and a slash through an encoded address, and says why it can't be adopted", async () => {
     const reason =
-      "Bayplan can't adopt My App/x: a stack name on a swarm takes only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters.";
+      "Coaming can't adopt My App/x: a stack name on a swarm takes only letters, numbers, dash and underscore, starting with a letter or number, up to 61 characters.";
     body = { ...body, name: "My App/x", adoptable: false, reason };
     mount("My App/x");
     expect(await screen.findByRole("heading", { name: "My App/x", level: 2 })).toBeTruthy();
     const note = (await screen.findByText("Can't be adopted")).closest("[data-slot=alert]");
     expect(note?.getAttribute("role")).toBe("status");
     expect(within(note as HTMLElement).getByText(reason)).toBeTruthy();
-    // The note is the reason of the server, as given; a Bayplan-owned stack's reason reads the same way. Adopt stack
+    // The note is the reason of the server, as given; a Coaming-owned stack's reason reads the same way. Adopt stack
     // is there but off, and never a link to the Adopt page.
     expect(screen.queryByRole("link", { name: /adopt/i })).toBeNull();
     expect(screen.getByRole("button", { name: "Adopt stack" }).getAttribute("aria-disabled")).toBe(
@@ -499,7 +499,7 @@ describe("the Unmanaged stack page: states", () => {
     // The breadcrumb names the stack at once; the header, the alert and the two cards are skeletons.
     expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "legacy", level: 2 })).toBeNull();
-    expect(screen.queryByText("Bayplan doesn't manage this stack")).toBeNull();
+    expect(screen.queryByText("Coaming doesn't manage this stack")).toBeNull();
     expect(document.querySelectorAll("[data-slot=skeleton]").length).toBeGreaterThanOrEqual(4);
     // The tabs are there already, so the page does not jump when the stack arrives.
     expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
@@ -527,7 +527,7 @@ describe("the Unmanaged stack page: states", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "It was removed outside Bayplan, or it is now managed. Go back to the list to find it.",
+        "It was removed outside Coaming, or it is now managed. Go back to the list to find it.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to stacks" }).getAttribute("href")).toBe(
@@ -538,7 +538,7 @@ describe("the Unmanaged stack page: states", () => {
     expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
   });
 
-  it("offers Open stack when a stack of Bayplan's holds the name now", async () => {
+  it("offers Open stack when a stack of Coaming's holds the name now", async () => {
     notFound = { managedStackId: "stk-9" };
     mount();
     const open = await screen.findByRole("link", { name: "Open stack" });
@@ -565,7 +565,7 @@ describe("the Unmanaged stack page: states", () => {
     const db = (await screen.findByRole("link", { name: "db" })).closest("tr") as HTMLElement;
     expect(within(db).getByText("0/1")).toBeTruthy();
     expect(screen.queryByText("This stack looks like it was created by Portainer")).toBeNull();
-    expect(screen.queryByText("Created by Bayplan (another instance or a lost record)")).toBeNull();
+    expect(screen.queryByText("Created by Coaming (another instance or a lost record)")).toBeNull();
   });
 
   it("counts one service in the singular and many in the plural", async () => {

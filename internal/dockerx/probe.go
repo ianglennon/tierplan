@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -14,7 +14,7 @@ import (
 )
 
 // minSupportedAPI is the API version of Docker Engine 24.0, the oldest engine
-// Bayplan supports (D-25). Engine 23 tops out at 1.42.
+// Coaming supports (D-25). Engine 23 tops out at 1.42.
 const minSupportedAPI = "1.43"
 
 // Engine names Classify can return.
@@ -42,7 +42,7 @@ const (
 	TypeStandalone   = "standalone"
 )
 
-// ProbeResult is what Bayplan learned about an engine.
+// ProbeResult is what Coaming learned about an engine.
 type ProbeResult struct {
 	Reachable      bool   `json:"reachable"`
 	Supported      bool   `json:"supported"`
@@ -178,7 +178,7 @@ func isRootless(info InfoFacts) bool {
 }
 
 // parseAPI parses "major.minor" and nothing else: a daemon that answers
-// anything different is not speaking a version Bayplan can reason about.
+// anything different is not speaking a version Coaming can reason about.
 func parseAPI(v string) (major, minor int, ok bool) {
 	maj, min, found := strings.Cut(v, ".")
 	if !found || !digits(maj) || !digits(min) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // uninstallLine reads the next line the server wrote to an agent's control stream and
@@ -284,24 +284,24 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 		return body.ManualCleanup.Swarm, body.ManualCleanup.Standalone
 	}
 	swarm, standalone := read()
-	for _, want := range []string{"docker service rm bayplan-agent", "docker secret rm bayplan-agent-token-g1", "docker volume rm bayplan-agent"} {
+	for _, want := range []string{"docker service rm coaming-agent", "docker secret rm coaming-agent-token-g1", "docker volume rm coaming-agent"} {
 		if !strings.Contains(swarm, want) {
 			t.Errorf("the swarm cleanup lacks %q:\n%s", want, swarm)
 		}
 	}
-	if !strings.Contains(standalone, "docker rm -f bayplan-agent") || !strings.Contains(standalone, "docker volume rm bayplan-agent") {
+	if !strings.Contains(standalone, "docker rm -f coaming-agent") || !strings.Contains(standalone, "docker volume rm coaming-agent") {
 		t.Errorf("the standalone cleanup = %q", standalone)
 	}
-	if strings.Contains(swarm+standalone, "bpjt_") {
+	if strings.Contains(swarm+standalone, "cmjt_") {
 		t.Fatal("a cleanup command carries a join token")
 	}
 
 	// A rotation moves the secret name on.
-	f.inst.Apply("Bayplan", "https://bayplan.example")
+	f.inst.Apply("Coaming", "https://coaming.example")
 	if rec := f.req(t, http.MethodPost, "/api/environments/"+env.ID+"/token", ""); rec.code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", rec.code, rec.body)
 	}
-	if swarm, _ := read(); !strings.Contains(swarm, "docker secret rm bayplan-agent-token-g2") {
+	if swarm, _ := read(); !strings.Contains(swarm, "docker secret rm coaming-agent-token-g2") {
 		t.Fatalf("after a rotation the swarm cleanup still names the old secret:\n%s", swarm)
 	}
 }

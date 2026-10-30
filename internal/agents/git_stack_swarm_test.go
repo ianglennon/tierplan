@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 )
 
 // The git stack suite on a real swarm (plan 09-33, GIT-04, GIT-06, GIT-07): a stack of two compose files from a folder of a
@@ -75,9 +75,9 @@ func TestGitStackOnSwarm(t *testing.T) {
 	if made.Commit != first {
 		t.Fatalf("the stack was made from %s, want %s", made.Commit, first)
 	}
-	// Cleanups run last in, first out: Bayplan removes the stack; the docker CLI only sweeps up what a failure left.
+	// Cleanups run last in, first out: Coaming removes the stack; the docker CLI only sweeps up what a failure left.
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	t.Cleanup(func() { removeStackBayplan(t, f, made.StackID, stack, engineObjects{}) })
+	t.Cleanup(func() { removeStackCoaming(t, f, made.StackID, stack, engineObjects{}) })
 
 	// 1. Revision #1: the second file's replicas win over the first's, and the overlay secret is a file in a task.
 	h.deploy(made.StackID, h.review(made.StackID))

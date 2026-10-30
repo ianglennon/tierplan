@@ -1,8 +1,8 @@
-# Start it with:  docker compose -f bayplan-agent.yml up -d
+# Start it with:  docker compose -f coaming-agent.yml up -d
 services:
-  bayplan-agent:
-    image: ghcr.io/ianglennon/bayplan-agent:0.2.0
-    container_name: bayplan-agent
+  coaming-agent:
+    image: ghcr.io/ianglennon/coaming-agent:0.2.0
+    container_name: coaming-agent
     restart: unless-stopped
     read_only: true
     cap_drop:
@@ -13,14 +13,14 @@ services:
     security_opt:
       - no-new-privileges:true
     labels:
-      bayplan.agent: "true"
+      coaming.agent: "true"
     environment:
-      BAYPLAN_AGENT_URL: "wss://example.com/bayplan/agent/connect"
-      BAYPLAN_AGENT_PIN: "sha256/P"
-      BAYPLAN_AGENT_JOIN_TOKEN: "bpjt_E_S"
+      COAMING_AGENT_URL: "wss://example.com/coaming/agent/connect"
+      COAMING_AGENT_PIN: "sha256/P"
+      COAMING_AGENT_JOIN_TOKEN: "cmjt_E_S"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - bayplan-agent:/var/lib/bayplan-agent
+      - coaming-agent:/var/lib/coaming-agent
 volumes:
-  bayplan-agent:
-    name: bayplan-agent
+  coaming-agent:
+    name: coaming-agent

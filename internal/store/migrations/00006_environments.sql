@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- Managed Docker environments (ENV-04, D-19). Phase 1 knows one kind, the

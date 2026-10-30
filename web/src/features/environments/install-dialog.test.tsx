@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -20,31 +20,31 @@ import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import "@/i18n";
 
-const TOKEN = "bpjt_E1_s3cr3tvalue";
+const TOKEN = "cmjt_E1_s3cr3tvalue";
 const MASK = "••••••••";
 
 function install(extra: Partial<InstallInfo> = {}, generation = 1): InstallInfo {
-  const secret = `bayplan-agent-token-g${generation}`;
+  const secret = `coaming-agent-token-g${generation}`;
   return {
-    agentUrl: "wss://bayplan.example.com/agent/connect",
+    agentUrl: "wss://coaming.example.com/agent/connect",
     generation,
-    image: "ghcr.io/ianglennon/bayplan-agent:0.1.0",
+    image: "ghcr.io/ianglennon/coaming-agent:0.1.0",
     joinToken: TOKEN,
     manualCleanup: {
-      standalone: " docker rm -f bayplan-agent",
-      swarm: " docker service rm bayplan-agent",
+      standalone: " docker rm -f coaming-agent",
+      swarm: " docker service rm coaming-agent",
     },
     secretName: secret,
     standalone: {
-      command: ` docker run -d --name bayplan-agent -e BAYPLAN_AGENT_JOIN_TOKEN='${TOKEN}' ghcr.io/ianglennon/bayplan-agent:0.1.0`,
-      composeFile: `services:\n  agent:\n    environment:\n      BAYPLAN_AGENT_JOIN_TOKEN: '${TOKEN}'\n`,
+      command: ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' ghcr.io/ianglennon/coaming-agent:0.1.0`,
+      composeFile: `services:\n  agent:\n    environment:\n      COAMING_AGENT_JOIN_TOKEN: '${TOKEN}'\n`,
     },
     swarm: {
-      command: ` printf %s '${TOKEN}' | docker secret create ${secret} - && docker service create --name bayplan-agent ghcr.io/ianglennon/bayplan-agent:0.1.0`,
-      stackFile: `# printf %s '${TOKEN}' | docker secret create ${secret} -\nservices:\n  agent:\n    image: ghcr.io/ianglennon/bayplan-agent:0.1.0\n`,
+      command: ` printf %s '${TOKEN}' | docker secret create ${secret} - && docker service create --name coaming-agent ghcr.io/ianglennon/coaming-agent:0.1.0`,
+      stackFile: `# printf %s '${TOKEN}' | docker secret create ${secret} -\nservices:\n  agent:\n    image: ghcr.io/ianglennon/coaming-agent:0.1.0\n`,
       ...(generation > 1
         ? {
-            rotateCommand: ` OLD=$(docker service inspect bayplan-agent) && printf %s '${TOKEN}' | docker secret create ${secret} -`,
+            rotateCommand: ` OLD=$(docker service inspect coaming-agent) && printf %s '${TOKEN}' | docker secret create ${secret} -`,
           }
         : {}),
     },
@@ -275,7 +275,7 @@ describe("InstallDialog add flow, step 1", () => {
     submit();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
+      "Couldn't create the environment. Try again, and check the Coaming logs if it keeps happening.",
     );
     expect(screen.queryByRole("heading", { name: "Install the agent" })).toBeNull();
     expect(nameField().matches(":disabled")).toBe(false);
@@ -303,14 +303,14 @@ const conflict = (type: string) =>
     { status: 409, headers: { "Content-Type": "application/problem+json" } },
   );
 
-// G-02-R4-3: a plain ws:// address for another host is refused by Bayplan and
+// G-02-R4-3: a plain ws:// address for another host is refused by Coaming and
 // by agents. The dialog says why, in its own words, and where to fix it.
 describe("InstallDialog insecure agent address", () => {
   const generic = {
     create:
-      "Couldn't create the environment. Try again, and check the Bayplan logs if it keeps happening.",
+      "Couldn't create the environment. Try again, and check the Coaming logs if it keeps happening.",
     rotate:
-      "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+      "Couldn't generate a new token. Try again, and check the Coaming logs if it keeps happening.",
   };
 
   it("explains the refusal when adding an environment, with a Settings link and no generic failure", async () => {
@@ -321,7 +321,7 @@ describe("InstallDialog insecure agent address", () => {
     const alert = await screen.findByRole("alert");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(alert.textContent).toContain("plain ws://");
-    expect(alert.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(alert.textContent).toContain("COAMING_AGENT_ALLOW_INSECURE");
     expect(alert.textContent).not.toContain(generic.create);
     const link = within(alert).getByRole("link", { name: "Settings" });
     expect(link.getAttribute("href")).toBe("/settings/general");
@@ -340,7 +340,7 @@ describe("InstallDialog insecure agent address", () => {
     expect(
       screen.getAllByRole("alert").filter((a) => a.textContent?.includes("plain ws://")),
     ).toHaveLength(1);
-    expect(failure.textContent).toContain("BAYPLAN_AGENT_ALLOW_INSECURE");
+    expect(failure.textContent).toContain("COAMING_AGENT_ALLOW_INSECURE");
     expect(
       screen
         .getAllByRole("alert")
@@ -380,7 +380,7 @@ describe("InstallDialog step 2", () => {
     expect(dialog().querySelector("code")?.textContent).toContain(`'${MASK}'`);
     expect(dialog().textContent).not.toContain(TOKEN);
     expect(dialog().textContent).toContain(
-      "Save this as bayplan-agent.yml and run docker stack deploy -c bayplan-agent.yml bayplan-agent.",
+      "Save this as coaming-agent.yml and run docker stack deploy -c coaming-agent.yml coaming-agent.",
     );
     expect(dialog().textContent).toContain(
       "Create the secret first with the command in the file's first line.",
@@ -395,7 +395,7 @@ describe("InstallDialog step 2", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Standalone" }), { button: 0 });
     fireEvent.click(screen.getByRole("tab", { name: "Standalone" }));
     expect(dialog().querySelector("code")?.textContent).toContain(
-      "docker run -d --name bayplan-agent",
+      "docker run -d --name coaming-agent",
     );
     expect(dialog().textContent).toContain(
       "Run it on the host. It starts the agent container with the Docker socket mounted.",
@@ -403,7 +403,7 @@ describe("InstallDialog step 2", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Compose file" }));
     expect(dialog().textContent).toContain(
-      "Save this as bayplan-agent.yml and run docker compose -f bayplan-agent.yml up -d.",
+      "Save this as coaming-agent.yml and run docker compose -f coaming-agent.yml up -d.",
     );
     expect(dialog().textContent).not.toContain("Create the secret first");
     expect(dialog().textContent).not.toContain(TOKEN);
@@ -414,9 +414,9 @@ describe("InstallDialog step 2", () => {
     await createWith("edge");
 
     expect(dialog().textContent).toContain("Agent image");
-    expect(dialog().textContent).toContain("ghcr.io/ianglennon/bayplan-agent:0.1.0");
+    expect(dialog().textContent).toContain("ghcr.io/ianglennon/coaming-agent:0.1.0");
     expect(dialog().textContent).toContain("Connects to");
-    expect(dialog().textContent).toContain("wss://bayplan.example.com/agent/connect");
+    expect(dialog().textContent).toContain("wss://coaming.example.com/agent/connect");
     expect(screen.getByRole("link", { name: "Change the agent URL" }).getAttribute("href")).toBe(
       "/settings/general",
     );
@@ -505,7 +505,7 @@ describe("InstallDialog and the waiting panel", () => {
       );
     });
     expect(
-      within(dialog()).getByText(/Refused: Bayplan rejected the agent's credentials\./),
+      within(dialog()).getByText(/Refused: Coaming rejected the agent's credentials\./),
     ).toBeTruthy();
     // The panel is in the dialog, not another place on the page.
     expect(dialog().contains(panel)).toBe(true);
@@ -568,7 +568,7 @@ describe("InstallDialog rotate flow", () => {
     await waitFor(() => expect(document.activeElement).toBe(heading));
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Swarm", "Standalone"]);
     // A first install gets the full command, with the next generation's secret.
-    expect(dialog().querySelector("code")?.textContent).toContain("bayplan-agent-token-g2");
+    expect(dialog().querySelector("code")?.textContent).toContain("coaming-agent-token-g2");
     expect(screen.queryByText("Update the join token on this swarm")).toBeNull();
   });
 
@@ -628,7 +628,7 @@ describe("InstallDialog rotate flow", () => {
           .map((a) => a.textContent)
           .join("|"),
       ).toContain(
-        "Couldn't generate a new token. Try again, and check the Bayplan logs if it keeps happening.",
+        "Couldn't generate a new token. Try again, and check the Coaming logs if it keeps happening.",
       ),
     );
     expect(screen.getByRole("button", { name: "Generate new token" })).toBeTruthy();

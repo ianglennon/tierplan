@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -157,10 +157,10 @@ function columnsOf(
               {t("nodes.badge.leader")}
             </Badge>
           ) : null}
-          {n.runsBayplan ? (
+          {n.runsCoaming ? (
             <Badge variant="outline" className="shrink-0">
               <Lock aria-hidden="true" />
-              {t("nodes.badge.runsBayplan")}
+              {t("nodes.badge.runsCoaming")}
             </Badge>
           ) : null}
         </span>
@@ -250,7 +250,7 @@ function columnsOf(
 }
 
 // NodeList is the Nodes page of a swarm environment (UI-SPEC "Nodes"): every node with its role,
-// health, platform, resources, task count and whether a Bayplan agent reports from it, found by a
+// health, platform, resources, task count and whether a Coaming agent reports from it, found by a
 // search and the status chips the server answers, and sorted from the column headers. It reads
 // the list the server serves from a manager; with no manager connected the last rows stay with a
 // notice above them. A node with no reporting agent keeps its row. Docker's host names and

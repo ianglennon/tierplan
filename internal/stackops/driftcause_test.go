@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -11,11 +11,11 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/vault"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Drift causes (plan 08-22, STK-14, D-24, D-55): the audit log says why a service differs from the deployed revision.
@@ -222,7 +222,7 @@ func TestDriftCauseAdoptionGap(t *testing.T) {
 		t.Errorf("api cause = %+v, want none: its image was not a recorded gap", api.Cause)
 	}
 	if res.Latest == nil || res.Latest.Action != stackops.CauseAdopted || res.Causes != 0 {
-		t.Errorf("latest = %+v, causes = %d, want the adoption's and no change of Bayplan's own", res.Latest, res.Causes)
+		t.Errorf("latest = %+v, causes = %d, want the adoption's and no change of Coaming's own", res.Latest, res.Causes)
 	}
 
 	// Once the first deploy has applied the rebuilt definition the adoption is no longer pending and explains nothing.

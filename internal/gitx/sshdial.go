@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx
 
@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/net/proxy"
 
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // go-git dials an ssh remote itself, without looking at the operation's context: it applies the
@@ -34,7 +34,7 @@ import (
 //   - counted, so a server cannot stream without end (WR-A06).
 
 // sshProxyScheme is the scheme of the proxy URL that names a call's dialer.
-const sshProxyScheme = "bayplan-ssh"
+const sshProxyScheme = "coaming-ssh"
 
 // The most bytes one ssh call reads from the server: 32 MiB for a listing, which go-git parses into
 // memory, and 1 GiB for a fetch, which is a packfile that goes to the mirror's disk.

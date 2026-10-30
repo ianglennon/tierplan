@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -22,11 +22,11 @@ import (
 	"github.com/moby/moby/client"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// The Compose SDK over Bayplan's own client (plan 07-20, STK-02, RESEARCH Q1 and Q6).
+// The Compose SDK over Coaming's own client (plan 07-20, STK-02, RESEARCH Q1 and Q6).
 
 // initCompose prepares the SDK's process-wide state under a directory of the test's own.
 func initCompose(t *testing.T) string {
@@ -324,7 +324,7 @@ func TestServiceHashIsTheSDKsAndNotTheCustomLabels(t *testing.T) {
 	if err != nil || len(h1) != 64 {
 		t.Fatalf("ServiceHash = %q, %v", h1, err)
 	}
-	svc.CustomLabels = types.Labels{"bayplan.stack.id": "stack-1"}
+	svc.CustomLabels = types.Labels{"coaming.stack.id": "stack-1"}
 	if h2, _ := ServiceHash(svc); h2 != h1 {
 		t.Error("a custom label moved the hash")
 	}
@@ -414,9 +414,9 @@ func TestComposeObjectHashesMatchTheResearchProbe(t *testing.T) {
 	if same, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", Driver: "local"}); same != vol {
 		t.Errorf("an explicit driver local hashes to %s, want the same as no driver (%s)", same, vol)
 	}
-	// A label is part of the hash; a custom label (Bayplan's own) is not.
+	// A label is part of the hash; a custom label (Coaming's own) is not.
 	with, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", Labels: types.Labels{"a": "b"}})
-	custom, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", CustomLabels: types.Labels{"bayplan.stack.id": "x"}})
+	custom, _ := ComposeVolumeHash(types.VolumeConfig{Name: "bpresearchprobe_data", CustomLabels: types.Labels{"coaming.stack.id": "x"}})
 	if with == vol || custom != vol {
 		t.Errorf("label hash %s custom-label hash %s, want a label to move the hash and a custom label not to (%s)", with, custom, vol)
 	}

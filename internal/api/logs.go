@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -20,13 +20,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 // Limits and problem types of the log stream.
@@ -428,7 +428,7 @@ func openLogs(ctx context.Context, d LogsDeps, envID, nodeID, containerID string
 	case dockerx.IsNotFound(err):
 		return nil, false, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return nil, false, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return nil, false, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	default:
 		return nil, false, snapshotProblem(d.Log, envID, err)
 	}
@@ -444,7 +444,7 @@ func openLogs(ctx context.Context, d LogsDeps, envID, nodeID, containerID string
 // heartbeat re-checks access; a user who lost it is told with a closed event, and the
 // stream never outlives MaxLifetime.
 //
-// No line of the log is stored, audited or written to Bayplan's own log; only the
+// No line of the log is stored, audited or written to Coaming's own log; only the
 // fact that a stream was opened is recorded (D-23, D-24).
 func serveLogStream(w http.ResponseWriter, req *http.Request, d LogsDeps, lim *streamLimiter, mem *logAuditMemory) {
 	ctx := req.Context()

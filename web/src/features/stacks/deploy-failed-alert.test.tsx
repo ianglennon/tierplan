@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -116,12 +116,12 @@ describe("DeployFailedAlert", () => {
     expect(within(alert).queryByText(/^Last deployed/)).toBeNull();
   });
 
-  it("says The last deploy failed and where Bayplan stopped and why", async () => {
+  it("says The last deploy failed and where Coaming stopped and why", async () => {
     mount(stackOf());
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("The last deploy failed")).toBeTruthy();
     expect(
-      within(alert).getByText("Bayplan stopped at web_api: Docker rejected the service."),
+      within(alert).getByText("Coaming stopped at web_api: Docker rejected the service."),
     ).toBeTruthy();
   });
 
@@ -130,7 +130,7 @@ describe("DeployFailedAlert", () => {
     const alert = await screen.findByRole("alert");
     expect(
       within(alert).getByText(
-        "Bayplan stopped at web_api: The host's agent doesn't let Bayplan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
+        "Coaming stopped at web_api: The host's agent doesn't let Coaming deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
       ),
     ).toBeTruthy();
     expect(within(alert).queryByText(/agent_host_policy/)).toBeNull();
@@ -195,7 +195,7 @@ describe("DeployFailedAlert", () => {
     expect(within(alert).getByText("The last deploy failed")).toBeTruthy();
     expect(
       within(alert).getByText(
-        "The deploy was interrupted when Bayplan stopped. The swarm may be partly updated.",
+        "The deploy was interrupted when Coaming stopped. The swarm may be partly updated.",
       ),
     ).toBeTruthy();
     expect(
@@ -208,7 +208,7 @@ describe("DeployFailedAlert", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("The last deploy was cancelled")).toBeTruthy();
     expect(
-      within(alert).getByText("Bayplan stopped at web_api. Nothing was rolled back."),
+      within(alert).getByText("Coaming stopped at web_api. Nothing was rolled back."),
     ).toBeTruthy();
   });
 
@@ -216,7 +216,7 @@ describe("DeployFailedAlert", () => {
     mount(withOperation({ code: "converge_timeout" }));
     expect(
       await screen.findByText(
-        "Bayplan stopped at web_api: It didn't settle in time. Docker may still finish it.",
+        "Coaming stopped at web_api: It didn't settle in time. Docker may still finish it.",
       ),
     ).toBeTruthy();
   });
@@ -225,7 +225,7 @@ describe("DeployFailedAlert", () => {
     mount(withOperation({ code: "tasks_failed" }));
     expect(
       await screen.findByText(
-        "Bayplan stopped at web_api: Its tasks stopped and the swarm won't start them again.",
+        "Coaming stopped at web_api: Its tasks stopped and the swarm won't start them again.",
       ),
     ).toBeTruthy();
   });
@@ -234,7 +234,7 @@ describe("DeployFailedAlert", () => {
     mount(withOperation({ code: "network_full" }));
     expect(
       await screen.findByText(
-        "Bayplan stopped at web_api: A network of the stack has no free addresses.",
+        "Coaming stopped at web_api: A network of the stack has no free addresses.",
       ),
     ).toBeTruthy();
   });
@@ -242,14 +242,14 @@ describe("DeployFailedAlert", () => {
   it("names no service when the deploy stopped before any", async () => {
     mount(withOperation({ code: "needs_admin", failedService: "" }));
     expect(
-      await screen.findByText("Bayplan stopped: The stack uses host access that needs Admin."),
+      await screen.findByText("Coaming stopped: The stack uses host access that needs Admin."),
     ).toBeTruthy();
   });
 
   it("falls back to a plain sentence for a code it does not know", async () => {
     mount(withOperation({ code: "something_new" }));
     expect(
-      await screen.findByText("Bayplan stopped at web_api: The deploy didn't finish."),
+      await screen.findByText("Coaming stopped at web_api: The deploy didn't finish."),
     ).toBeTruthy();
   });
 
@@ -281,7 +281,7 @@ describe("DeployFailedAlert", () => {
 
   it("draws a service name with markup in it as text", async () => {
     mount(withOperation({ failedService: "<b>x</b>" }));
-    const text = await screen.findByText(/Bayplan stopped at <b>x<\/b>/);
+    const text = await screen.findByText(/Coaming stopped at <b>x<\/b>/);
     expect(text.querySelector("b")).toBeNull();
   });
 });

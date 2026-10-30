@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package swarmspec is the D-13 host-escalation check over a decoded swarm
 // service spec. Where internal/rbac/compose reads the text of a compose file,
@@ -14,8 +14,8 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
-	"github.com/ianglennon/bayplan/proto/hostpath"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
+	"github.com/ianglennon/coaming/proto/hostpath"
 )
 
 // The rule names of a finding.

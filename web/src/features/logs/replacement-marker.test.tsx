@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,10 +78,10 @@ describe("swarmMarkerText", () => {
 
   it("says a node cannot send logs, and that it is back", () => {
     expect(swarmMarkerText(t, { kind: "down", node: "beta" }, "web")).toBe(
-      "— beta is down, so new lines from its tasks can't reach Bayplan. —",
+      "— beta is down, so new lines from its tasks can't reach Coaming. —",
     );
     expect(swarmMarkerText(t, { kind: "disconnected", node: "beta" }, "web")).toBe(
-      "— beta is disconnected, so new lines from its tasks can't reach Bayplan. —",
+      "— beta is disconnected, so new lines from its tasks can't reach Coaming. —",
     );
     expect(swarmMarkerText(t, { kind: "back", node: "beta" }, "web")).toBe("— beta is back. —");
   });

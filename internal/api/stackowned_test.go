@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,11 +11,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
-func TestStackOwnedLabelsNameTheStackAndTheBayplanID(t *testing.T) {
+func TestStackOwnedLabelsNameTheStackAndTheCoamingID(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		labels map[string]string
@@ -27,17 +27,17 @@ func TestStackOwnedLabelsNameTheStackAndTheBayplanID(t *testing.T) {
 		"unrelated labels": {map[string]string{"app": "web"}, "", "", false},
 		"an empty stack":   {map[string]string{"com.docker.stack.namespace": ""}, "", "", false},
 		"a stack":          {map[string]string{"com.docker.stack.namespace": "shop", "app": "web"}, "shop", "", true},
-		"a stack Bayplan manages": {
-			map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stk-1"}, "web", "stk-1", true,
+		"a stack Coaming manages": {
+			map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stk-1"}, "web", "stk-1", true,
 		},
 		"a compose project": {map[string]string{"com.docker.compose.project": "shop"}, "shop", "", true},
-		"a compose project Bayplan manages": {
-			map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stk-2"}, "web", "stk-2", true,
+		"a compose project Coaming manages": {
+			map[string]string{"com.docker.compose.project": "web", "coaming.stack.id": "stk-2"}, "web", "stk-2", true,
 		},
 		"the namespace before the project": {
 			map[string]string{"com.docker.stack.namespace": "a", "com.docker.compose.project": "b"}, "a", "", true,
 		},
-		"an id with no stack": {map[string]string{"bayplan.stack.id": "stk-3"}, "", "", false},
+		"an id with no stack": {map[string]string{"coaming.stack.id": "stk-3"}, "", "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			stack, id, owned := stackOwner(tc.labels)
@@ -74,7 +74,7 @@ func TestStackOwnedIDIsConfirmedOnlyForAStackOfTheEnvironment(t *testing.T) {
 }
 
 // TestStackOwnedLinksAPendingAdoptedStacksUnlabelledObject: an adopted stack that has not been deployed yet owns the
-// services and containers of its name that carry no bayplan.stack.id, or the stale one recorded at adoption, so their
+// services and containers of its name that carry no coaming.stack.id, or the stale one recorded at adoption, so their
 // pages link to it; any other ID under that name is a claim that links to nothing (T-07-146, T-08-68). Once the
 // first deploy is done only its own ID links. A secret or a config is linked by its ID alone: the ones an adopted
 // stack references are not its own.
@@ -101,7 +101,7 @@ func TestStackOwnedLinksAPendingAdoptedStacksUnlabelledObject(t *testing.T) {
 		"its own ID, deployed":            {[]stackops.Stack{adopted(false)}, "shop", "stk-adopted", "stk-adopted", "stk-adopted"},
 		"no ID, under another name":       {[]stackops.Stack{adopted(true)}, "blog", "", "", ""},
 		"its ID under another name":       {[]stackops.Stack{adopted(true)}, "blog", "stk-adopted", "", ""},
-		"no ID, a stack Bayplan made":     {[]stackops.Stack{managed}, "web", "", "", ""},
+		"no ID, a stack Coaming made":     {[]stackops.Stack{managed}, "web", "", "", ""},
 		"the stale ID, a stack it made":   {[]stackops.Stack{managed}, "web", "stale-id", "", ""},
 		"its own ID, a stack it made":     {[]stackops.Stack{managed}, "web", "stk-1", "stk-1", "stk-1"},
 		"no stack of that name at all":    {nil, "shop", "", "", ""},
@@ -130,7 +130,7 @@ func TestStackOwnedProblemIsA409NamingTheStack(t *testing.T) {
 	}
 }
 
-func TestStackOwnedProblemCarriesTheBayplanStackIDOnlyForAStackBayplanManages(t *testing.T) {
+func TestStackOwnedProblemCarriesTheCoamingStackIDOnlyForAStackCoamingManages(t *testing.T) {
 	t.Parallel()
 	errs := func(err error) map[string]string {
 		var em *huma.ErrorModel
@@ -143,8 +143,8 @@ func TestStackOwnedProblemCarriesTheBayplanStackIDOnlyForAStackBayplanManages(t 
 		}
 		return got
 	}
-	if got := errs(stackOwnedProblem("web", "stk-1")); got["stack"] != "web" || got["bayplanStackId"] != "stk-1" {
-		t.Errorf("errors = %v, want stack web and bayplanStackId stk-1", got)
+	if got := errs(stackOwnedProblem("web", "stk-1")); got["stack"] != "web" || got["coamingStackId"] != "stk-1" {
+		t.Errorf("errors = %v, want stack web and coamingStackId stk-1", got)
 	}
 	if got := errs(stackOwnedProblem("web", "")); got["stack"] != "web" || len(got) != 1 {
 		t.Errorf("errors = %v, want the stack alone for a foreign stack", got)

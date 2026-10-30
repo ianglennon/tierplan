@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitconn
 
@@ -12,8 +12,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // Credential types: an HTTPS token or an SSH deploy key (Phase 9 D-01).

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Prints, one import path per line, the packages under ./internal/... whose test
 # files differ when the build tag TAG is on. `make test-int` and `make test-swarm`

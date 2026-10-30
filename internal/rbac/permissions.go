@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rbac
 
@@ -115,7 +115,7 @@ var defaultRegistry = Registry{
 	{Name: PermSettingsWrite, Scope: ScopeGlobal, Description: "Change settings"},
 	{Name: PermUsersManage, Scope: ScopeGlobal, Description: "Create, change, disable and delete users"},
 	{Name: PermTeamsManage, Scope: ScopeGlobal, Description: "Create teams and change their members"},
-	{Name: PermBackupManage, Scope: ScopeGlobal, Dangerous: true, Description: "Back up and restore Bayplan"},
+	{Name: PermBackupManage, Scope: ScopeGlobal, Dangerous: true, Description: "Back up and restore Coaming"},
 	{Name: PermContainersExec, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Open a shell in a container"},
 	{Name: PermSecretsReveal, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Reveal secret values"},
 	{Name: PermVolumesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Extra: true, Dangerous: true, Description: "Delete volumes"},

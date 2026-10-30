@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,12 +15,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
 )
 
 // problemImageNotFound is the problem type of an image page whose image no reporting node has.
@@ -37,7 +37,7 @@ type ImagesDeps struct {
 	Audit    *audit.Writer
 	// Checker decides whether a caller may see the values in an image's configuration.
 	Checker *rbac.Checker
-	// SelfContainerID marks Bayplan's own container, for the routes that act on images.
+	// SelfContainerID marks Coaming's own container, for the routes that act on images.
 	SelfContainerID string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
@@ -76,7 +76,7 @@ type ImageItem struct {
 	Dangling         bool              `json:"dangling" doc:"True when the image has no tag"`
 	Size             int64             `json:"size" doc:"Size in bytes"`
 	Created          string            `json:"created,omitempty" format:"date-time"`
-	UsedByContainers int               `json:"usedByContainers" doc:"Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Bayplan reads, never from the engine's own per-image count, which a list does not compute"`
+	UsedByContainers int               `json:"usedByContainers" doc:"Containers, running or not, created from this image ID on the nodes the row stands for. Counted from the containers Coaming reads, never from the engine's own per-image count, which a list does not compute"`
 	UsedByServices   int               `json:"usedByServices" doc:"Swarm services whose spec names this image, by pinned digest else by repository and tag, even with no running task, as of the last cluster read. A service can run a task on any node, so it counts once for the image. Always 0 off a swarm"`
 	ReadOnly         bool              `json:"readOnly" doc:"True when the host of every node the row stands for is read-only, so no change to it will be accepted"`
 	Nodes            []ImageHolderBody `json:"nodes" doc:"The nodes that hold the image, by name, each with its container count: one in the per-node view, every holder in the merged one"`
@@ -192,7 +192,7 @@ func RegisterImages(r *httpx.Router, d ImagesDeps) {
 			"view=merged (the default) lists one row per image ID with the nodes that hold it, so two nodes with the same ID are one row while the same tag under different IDs stays two rows and a drifted node shows; view=node lists one row per copy on a node. " +
 			"Optionally only one node's (node), a search (q: a tag or repository, or the start of an ID) and only untagged images (dangling=1). The node, the search and the Dangling filter run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal and danglingCount the numbers before the search and the Dangling filter. " +
 			"Each row says what uses it: usedByContainers (containers on its node, stopped ones included, created from its ID) and usedByServices (swarm services whose spec names it, by pinned digest, else by repository and tag, even with no task). " +
-			"503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Bayplan manages, 502 agent_policy_denied when the agent refuses a read by its own policy. " +
+			"503 environment_offline (with the state, a reason code and since) when the environment cannot be read, 409 environment_unsupported (with the engine) when it is not one Coaming manages, 502 agent_policy_denied when the agent refuses a read by its own policy. " +
 			"Needs images.read (Viewer) on the environment. Reads are not audited.",
 		Tags: []string{"environments"}, Responses: maps.Clone(problems),
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
@@ -433,7 +433,7 @@ func imageUsedBy(ctx context.Context, d ImagesDeps, envID string, in *ImageDetai
 		known = known || n.ID == in.Node
 	}
 	if !known {
-		return ImageUsedByBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return ImageUsedByBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	}
 	for _, row := range agg.Images {
 		if row.ID == in.ImageID && (in.Node == "" || row.NodeID == in.Node) {
@@ -550,7 +550,7 @@ func askImageNodes(ctx context.Context, d ImagesDeps, envID string, nodes []envs
 	case firstErr == nil:
 		return nil, nil, httpx.Problem(http.StatusNotFound, problemImageNotFound, "No node has this image. It may have been removed, or its tag may have moved to another image.")
 	case errors.Is(firstErr, envs.ErrNodeUnavailable), errors.Is(firstErr, envs.ErrNotFound):
-		return nil, failed, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return nil, failed, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	}
 	return nil, failed, snapshotProblem(d.Log, envID, firstErr)
 }

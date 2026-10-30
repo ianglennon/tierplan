@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Fixture for scripts/test-scripts.sh (wallclock-check): stored as .txt so the tree's
 // tools never compile it. Every case below is allowed, each for its own reason.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package compose_test
 
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
-	"github.com/ianglennon/bayplan/proto/hostpath"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
+	"github.com/ianglennon/coaming/proto/hostpath"
 )
 
 // CR-A01: a bind source is allowed only under the data roots, so a system or
@@ -101,7 +101,7 @@ func TestTopLevelSecretAndConfigFileSourcesOutsideTheProjectAreFlagged(t *testin
 	for _, section := range []string{"secrets", "configs"} {
 		rule := map[string]string{"secrets": "secret_file", "configs": "config_file"}[section]
 		flagged := []string{
-			"/data/bayplan.key", "/data/bayplan.db", "/etc/shadow", "/srv/app/token", "../../../../data/bayplan.key",
+			"/data/coaming.key", "/data/coaming.db", "/etc/shadow", "/srv/app/token", "../../../../data/coaming.key",
 			"../x", "..", "./a/../../x", "~/.ssh/id_ed25519", `C:\Users\me\key`, `\\server\share\key`, "//server/share",
 		}
 		for _, p := range flagged {
@@ -162,12 +162,12 @@ func TestInterpolatedSecretAndConfigFileSourcesFailClosed(t *testing.T) {
 }
 
 func TestSecretFileSourcesAreResolvedThroughAnchorsAndMerges(t *testing.T) {
-	src := `x-bad: &bad {file: /data/bayplan.key}
+	src := `x-bad: &bad {file: /data/coaming.key}
 secrets:
   k:
     <<: *bad
 `
-	if got := ruleValues(t, src); !slices.Equal(got, []string{"secret_file:/data/bayplan.key"}) {
+	if got := ruleValues(t, src); !slices.Equal(got, []string{"secret_file:/data/coaming.key"}) {
 		t.Fatalf("got %v", got)
 	}
 }

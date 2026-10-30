@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // The placement constraint evaluator for the browser (RES-12). It follows swarmkit's
 // manager/constraint package, which is what the scheduler runs, and is the twin of

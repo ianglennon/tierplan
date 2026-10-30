@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -13,13 +13,13 @@ import (
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
-	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/stacks/rebuild"
 )
 
 // The items of a swarm deploy job, in order.
@@ -72,10 +72,10 @@ const (
 )
 
 var codeMessages = map[string]string{
-	CodeHostReadOnly:        "This host is read-only, so Bayplan cannot change it.",
+	CodeHostReadOnly:        "This host is read-only, so Coaming cannot change it.",
 	CodeAgentPolicyDenied:   "The agent refused the request.",
-	CodeAgentHostPolicy:     "The host's agent doesn't let Bayplan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
-	CodeNoManagerConnected:  "No manager of this swarm is connected to Bayplan.",
+	CodeAgentHostPolicy:     "The host's agent doesn't let Coaming deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
+	CodeNoManagerConnected:  "No manager of this swarm is connected to Coaming.",
 	CodeServiceRejected:     "The swarm rejected the service.",
 	CodeServiceChanged:      "The service was changed by someone else while the deploy ran.",
 	CodeServiceNameTaken:    "The swarm already has a service of that name.",
@@ -87,7 +87,7 @@ var codeMessages = map[string]string{
 	CodeObjectFailed:        "The swarm could not create a secret or config.",
 	CodeObjectNameTaken:     "The swarm already has a secret or config of that name that this stack does not own.",
 	CodeStackInvalid:        "The stack could not be converted for the swarm.",
-	CodeNameClash:           "A stack of that name already exists on this environment that Bayplan does not manage.",
+	CodeNameClash:           "A stack of that name already exists on this environment that Coaming does not manage.",
 	CodeRegistryUnresolved:  "The registry credential for an image could not be read.",
 	CodeImageUnresolved:     "An image could not be looked up to pin it to a digest.",
 	CodeRegistryUnreachable: "A registry could not be reached to pin an image.",
@@ -669,12 +669,12 @@ func (d Deps) authFor(ctx context.Context, envID, image string) (string, error) 
 }
 
 // clash reports whether the swarm holds an object under this stack's namespace that another
-// stack, or none of Bayplan's, owns: a stack of that name that Bayplan does not manage (D-12).
+// stack, or none of Coaming's, owns: a stack of that name that Coaming does not manage (D-12).
 // objects are the secrets and configs the deploy read; only those under the namespace count.
 //
 // What is foreign is decided by the Ownership predicate (plan 08-16, D-16): a network or service the stack owns is
 // not, and neither is a network, secret or config an adopted stack recorded when it was adopted, whatever
-// bayplan.stack.id it carries. A managed stack is judged by its own ID alone, as before.
+// coaming.stack.id it carries. A managed stack is judged by its own ID alone, as before.
 func clash(own Ownership, nets []dockerx.NetworkRow, svcs []dockerx.ServiceDetail, objects []objectRow) bool {
 	for _, n := range nets {
 		if !own.OwnsNetwork(n.Name, n.Labels) && !own.Knows(rebuild.KindNetwork, n.Name) {

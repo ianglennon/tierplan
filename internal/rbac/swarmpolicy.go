@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rbac
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
-	"github.com/ianglennon/bayplan/internal/rbac/swarmspec"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
+	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
 )
 
 // Decision reasons of CheckServiceSpec.

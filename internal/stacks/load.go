@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -20,9 +20,9 @@ import (
 // ErrTooLarge means the compose file is over MaxFileBytes.
 var ErrTooLarge = errors.New("stacks: the compose file is too large")
 
-// sandboxDir is the working directory a load runs in. It does not exist on any host Bayplan
+// sandboxDir is the working directory a load runs in. It does not exist on any host Coaming
 // runs on: a relative path in a compose file resolves under it and so reads nothing.
-const sandboxDir = "/bayplan-stack-sandbox"
+const sandboxDir = "/coaming-stack-sandbox"
 
 // ErrLoadPanicked means compose-go stopped with a panic. The panic value is never kept: it can
 // quote the file or a variable of the stack.
@@ -70,14 +70,14 @@ type Loaded struct {
 	Project *types.Project
 	// Unset are the names of the variables the file refers to plainly (${NAME} or $NAME) that have
 	// no value in the table and no default, sorted. compose-go fills them with a blank and only
-	// logs; Bayplan names them so a check can refuse the deploy (Pitfall 3).
+	// logs; Coaming names them so a check can refuse the deploy (Pitfall 3).
 	Unset []string
 }
 
 // Load reads the working copy's compose files, merged in order, with compose-go, in a sandbox:
 //
 //   - the content is in memory and the environment is the stack's variable table only, so a
-//     variable set in the Bayplan server's own environment never reaches interpolation (D-01). A
+//     variable set in the Coaming server's own environment never reaches interpolation (D-01). A
 //     table entry with no value is no value: the default written in the file is used;
 //   - include and extends are not followed, and env_file and label_file are not resolved, so the
 //     load opens no file;
@@ -182,7 +182,7 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 }
 
 // fillBareEnvironment gives a bare environment entry ("- FOO", "FOO:") the value the table holds for
-// it. The Compose spec would pass the host's own value through; Bayplan never reads the server's
+// it. The Compose spec would pass the host's own value through; Coaming never reads the server's
 // environment, so an entry the table has no value for stays unset and is named in unset.
 func fillBareEnvironment(project *types.Project, table types.Mapping, unset *unsetNames) {
 	for _, svc := range project.Services {

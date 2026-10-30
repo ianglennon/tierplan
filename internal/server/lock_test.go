@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/datadir"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 func TestBuildLockRefusesASecondServerOnTheSameDataDirectory(t *testing.T) {
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"})
 	first, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestBuildLockRefusesASecondServerOnTheSameDataDirectory(t *testing.T) {
 
 func TestBuildLockIsHeldBeforeTheDatabaseIsOpened(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	release, err := datadir.Lock(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -60,7 +60,7 @@ func TestBuildLockIsHeldBeforeTheDatabaseIsOpened(t *testing.T) {
 		t.Fatalf("Build with the lock held elsewhere = %v, want ErrLocked", err)
 	}
 	// Nothing was created: no database, no key.
-	for _, name := range []string{store.DatabaseFile, "bayplan.key"} {
+	for _, name := range []string{store.DatabaseFile, "coaming.key"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			t.Errorf("a refused Build created %s", name)
 		}
@@ -69,7 +69,7 @@ func TestBuildLockIsHeldBeforeTheDatabaseIsOpened(t *testing.T) {
 
 func TestBuildThatFailsAfterTakingTheLockReleasesIt(t *testing.T) {
 	dir := t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"BAYPLAN_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
 	first, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)

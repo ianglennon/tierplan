@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Theme choice, remembered per browser in localStorage (D-63). This is the same
 // logic as public/theme-init.js, which applies the saved choice before first
@@ -8,7 +8,7 @@
 
 export type ThemeMode = "light" | "dark" | "system";
 
-const STORAGE_KEY = "bayplan-theme";
+const STORAGE_KEY = "coaming-theme";
 
 function isMode(v: unknown): v is ThemeMode {
   return v === "light" || v === "dark" || v === "system";

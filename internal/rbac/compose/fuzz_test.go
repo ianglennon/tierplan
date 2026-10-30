@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package compose_test
 
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
 )
 
 // FuzzCheck feeds arbitrary bytes to Check. It must never panic, must only

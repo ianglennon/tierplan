@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { parsePath } from "@/features/service-editor/spec-patch";
 
@@ -32,7 +32,7 @@ export const FORM_OWNED_PATHS: readonly string[] = [
   // Mounts: the whole list, because a row is a mount. The card changes the type, source,
   // destination and read-only flag of a mount and carries the rest of it (volume options) as it is.
   "TaskTemplate.ContainerSpec.Mounts",
-  // Placement. Platforms are not here: Bayplan sets them when it pins an image.
+  // Placement. Platforms are not here: Coaming sets them when it pins an image.
   "TaskTemplate.Placement.Constraints",
   "TaskTemplate.Placement.Preferences",
   "TaskTemplate.Placement.MaxReplicas",

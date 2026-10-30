@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,7 @@ vi.mock("@/lib/toast", () => ({
   toastSuccess: vi.fn(),
 }));
 
-const CODE = "docker run -d\n  --name bayplan\n  ghcr.io/ianglennon/bayplan:edge";
+const CODE = "docker run -d\n  --name coaming\n  ghcr.io/ianglennon/coaming:edge";
 const COPY_NAME = "Copy the docker run command";
 const FAILED = "Copy failed. Select the text and copy it manually.";
 
@@ -264,15 +264,15 @@ describe("CopyableCode inside a modal dialog (G-02-1a)", () => {
 });
 
 describe("CopyableCode with a secret", () => {
-  const TOKEN = "bpjt_E_S";
-  const COMMAND = ` docker run -d -e BAYPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e BAYPLAN_AGENT_URL='wss://b.test/agent/connect' agent`;
+  const TOKEN = "cmjt_E_S";
+  const COMMAND = ` docker run -d -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://b.test/agent/connect' agent`;
   const MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 
   it("shows the mask in place of the token and keeps the rest of the command", () => {
     const { container } = render(<CopyableCode code={COMMAND} secret={TOKEN} label="command" />);
     const shown = container.querySelector("code")?.textContent ?? "";
-    expect(shown).toContain(`BAYPLAN_AGENT_JOIN_TOKEN='${MASK}'`);
-    expect(shown).toContain("BAYPLAN_AGENT_URL='wss://b.test/agent/connect'");
+    expect(shown).toContain(`COAMING_AGENT_JOIN_TOKEN='${MASK}'`);
+    expect(shown).toContain("COAMING_AGENT_URL='wss://b.test/agent/connect'");
     expect(container.textContent).not.toContain(TOKEN);
   });
 
@@ -328,21 +328,21 @@ describe("CopyableCode with a secret", () => {
 describe("dockerRunSnippet", () => {
   const mounts = [
     "-p 7480:7480",
-    "-v bayplan-data:/data",
+    "-v coaming-data:/data",
     "-v /var/run/docker.sock:/var/run/docker.sock",
   ];
 
   it("uses the edge tag for a development build", () => {
     for (const version of ["dev", "", "v0.1.0-3-gabc1234-dirty"]) {
       const snippet = dockerRunSnippet(version);
-      expect(snippet).toContain("ghcr.io/ianglennon/bayplan:edge");
+      expect(snippet).toContain("ghcr.io/ianglennon/coaming:edge");
       for (const m of mounts) expect(snippet).toContain(m);
     }
   });
 
   it("uses major.minor for a release, with or without the v", () => {
-    expect(dockerRunSnippet("0.1.0")).toContain("ghcr.io/ianglennon/bayplan:0.1");
-    expect(dockerRunSnippet("v0.2.7")).toContain("ghcr.io/ianglennon/bayplan:0.2");
+    expect(dockerRunSnippet("0.1.0")).toContain("ghcr.io/ianglennon/coaming:0.1");
+    expect(dockerRunSnippet("v0.2.7")).toContain("ghcr.io/ianglennon/coaming:0.2");
     expect(dockerRunSnippet("0.1.0")).not.toContain("0.1.0");
     for (const m of mounts) expect(dockerRunSnippet("0.1.0")).toContain(m);
   });
@@ -356,11 +356,11 @@ describe("dockerRunSnippet", () => {
   it("is the full documented command", () => {
     expect(dockerRunSnippet("dev")).toBe(
       [
-        "docker run -d --name bayplan --restart unless-stopped \\",
+        "docker run -d --name coaming --restart unless-stopped \\",
         "  -p 7480:7480 \\",
-        "  -v bayplan-data:/data \\",
+        "  -v coaming-data:/data \\",
         "  -v /var/run/docker.sock:/var/run/docker.sock \\",
-        "  ghcr.io/ianglennon/bayplan:edge",
+        "  ghcr.io/ianglennon/coaming:edge",
       ].join("\n"),
     );
   });

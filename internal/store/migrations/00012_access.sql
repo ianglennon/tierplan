@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- The Phase 3 schema in one migration: team access, safe admin and backups.

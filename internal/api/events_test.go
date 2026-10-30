@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -18,14 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/api"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/api"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The events routes (plan 21, ENV-07, D-47, D-57, Pitfall 8, T-01-87 to

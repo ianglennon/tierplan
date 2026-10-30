@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Fixture for scripts/test-scripts.sh: stored as .txt so the tree's Go tools
 // never compile it. The script copies it to internal/zzforbidigoprobe/ and lint

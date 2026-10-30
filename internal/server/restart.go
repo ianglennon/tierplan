@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -11,13 +11,13 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
-// The two ways Bayplan restarts after a restore from the web UI
-// (BAYPLAN_RESTORE_RESTART).
+// The two ways Coaming restarts after a restore from the web UI
+// (COAMING_RESTORE_RESTART).
 const (
-	// RestartExec replaces the process image with a new Bayplan, so the container's
+	// RestartExec replaces the process image with a new Coaming, so the container's
 	// PID 1 survives and no restart policy is needed.
 	RestartExec = config.RestoreRestartExec
 	// RestartExit exits 0 after the swap and leaves the start to the container's
@@ -28,7 +28,7 @@ const (
 // ErrRestart is what Run returns when a restore asked for a restart: the server
 // has stopped serving and closed its database, and still holds the data-directory
 // lock. errors.As to *RestartError for the request, then call Restart.
-var ErrRestart = errors.New("bayplan: restart requested")
+var ErrRestart = errors.New("coaming: restart requested")
 
 // RestartRequest is what a restore hands the process to finish after the server
 // has stopped.
@@ -89,7 +89,7 @@ func (s *Server) RequestRestart(req RestartRequest) bool { return s.restart.requ
 var execImage = syscall.Exec
 
 // Restart finishes a restore after Run returned ErrRestart. It runs the swap, then
-// in mode "exec" replaces the process with a new Bayplan (same arguments and
+// in mode "exec" replaces the process with a new Coaming (same arguments and
 // environment, same PID), which opens the restored database from scratch, so no
 // part of the old state survives. The data-directory lock is on a close-on-exec
 // descriptor, so it is held until that moment and released by it. In mode "exit"
@@ -107,10 +107,10 @@ func Restart(mode string, req RestartRequest) error {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("find the Bayplan executable to restart: %w", err)
+		return fmt.Errorf("find the Coaming executable to restart: %w", err)
 	}
 	if err := execImage(exe, os.Args, os.Environ()); err != nil {
-		return fmt.Errorf("restart Bayplan (BAYPLAN_RESTORE_RESTART=exit exits instead): %w", err)
+		return fmt.Errorf("restart Coaming (COAMING_RESTORE_RESTART=exit exits instead): %w", err)
 	}
 	return nil // not reached: a successful exec does not return
 }

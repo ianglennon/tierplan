@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -15,12 +15,12 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The background drift check (plan 08-21, STK-14, D-22): a worker for each environment that checks its stacks on a
@@ -574,7 +574,7 @@ func TestDriftMonitorFingerprintSkipsTheDiff(t *testing.T) {
 }
 
 // A container the person adds to a standalone stack's Compose project from the host CLI carries the project and no
-// bayplan.stack.id. The timed look takes it as the stack's and checks again; a container with another stack's ID is not
+// coaming.stack.id. The timed look takes it as the stack's and checks again; a container with another stack's ID is not
 // the stack's and does not wake the check (G-08-6, D-22, T-08-103).
 func TestDriftMonitorTimedLookSeesAContainerAddedFromTheHostCLI(t *testing.T) {
 	t.Parallel()
@@ -666,7 +666,7 @@ func TestDriftMonitorLeavesAStoppedOrNeverDeployedStackAlone(t *testing.T) {
 }
 
 // A check is given the store whose audit log names the causes (plan 08-22, D-24), and a drift whose cause is not
-// known is looked at again by the next timed look, because Bayplan writes the audit row of a scale after the engine has
+// known is looked at again by the next timed look, because Coaming writes the audit row of a scale after the engine has
 // changed and an early look can miss it. A drift whose cause is known is let be.
 func TestDriftMonitorGivesTheChecksTheAuditLogAndLooksAgainAtAnUnexplainedDrift(t *testing.T) {
 	t.Parallel()

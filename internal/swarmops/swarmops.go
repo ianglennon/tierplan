@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package swarmops is the orchestration of a change to a swarm service that is more than one
 // Docker call: review a full service spec, then apply it (RES-03, D-03). It imports no HTTP
@@ -24,12 +24,12 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/rbac/compose"
-	"github.com/ianglennon/bayplan/internal/rbac/swarmspec"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/rbac/compose"
+	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 var (
@@ -75,7 +75,7 @@ func (e *SpecInvalidError) Is(target error) bool { return target == ErrSpecInval
 // StackOwnedError names the stack that owns the service.
 type StackOwnedError struct {
 	Stack string
-	// StackID is the bayplan.stack.id label of the service, as the label says it: a claim the caller
+	// StackID is the coaming.stack.id label of the service, as the label says it: a claim the caller
 	// confirms before it links to anything. Empty for a stack docker stack deploy made.
 	StackID string
 }
@@ -168,7 +168,7 @@ type ImageInfo struct {
 	Credential string
 	// Changed is true when the spec's image differs from the service's current one.
 	Changed bool
-	// Pinned is true when Bayplan resolved the tag and wrote the digest into the spec.
+	// Pinned is true when Coaming resolved the tag and wrote the digest into the spec.
 	Pinned bool
 }
 
@@ -185,8 +185,8 @@ const stackLabelPrefix = "com.docker.stack."
 // stackNamespaceLabel is the label that makes a service a stack's.
 const stackNamespaceLabel = "com.docker.stack.namespace"
 
-// stackIDLabel is the label that names the Bayplan stack record behind a stack's service (stacks.LabelStackID).
-const stackIDLabel = "bayplan.stack.id"
+// stackIDLabel is the label that names the Coaming stack record behind a stack's service (stacks.LabelStackID).
+const stackIDLabel = "coaming.stack.id"
 
 // common is what Review and Apply read the same way.
 type common struct {

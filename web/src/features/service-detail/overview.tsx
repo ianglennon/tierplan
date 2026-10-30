@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -148,7 +148,7 @@ function ServiceCard({ envId, detail }: { envId: string; detail: ServiceDetail }
           {
             key: t(`${key}.service.stack`),
             value: detail.stack ? (
-              <StackLink envId={envId} name={detail.stack} bayplanStackId={detail.bayplanStackId} />
+              <StackLink envId={envId} name={detail.stack} coamingStackId={detail.coamingStackId} />
             ) : (
               missing
             ),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel
 
@@ -16,9 +16,9 @@ import (
 	"github.com/hashicorp/yamux"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/proto/authn"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // nonceLen is the length of both handshake nonces.
@@ -158,14 +158,14 @@ func (h *Hub) audience() (aud string, plainOK bool, err error) {
 	return aud, strings.EqualFold(u.Scheme, "http") && !PlainAddressRefused(raw, false), nil
 }
 
-// PlainAddressRefused reports whether raw is an address Bayplan refuses to have
+// PlainAddressRefused reports whether raw is an address Coaming refuses to have
 // agents dial: it is plain (scheme http or ws, any case) for a host that
-// authn.LoopbackHost does not accept, and allowInsecure (BAYPLAN_AGENT_ALLOW_INSECURE)
+// authn.LoopbackHost does not accept, and allowInsecure (COAMING_AGENT_ALLOW_INSECURE)
 // is false. raw is an address agents are told to dial, the agent base or the
 // endpoint built from it. An https or wss address, an empty value and one that does
 // not parse are not refused here; the caller deals with a missing address. This is
 // the one server-side rule for plain agent addresses (G-02-R4-3): the hub refuses
-// plain connections for such an address, and Bayplan does not hand it out.
+// plain connections for such an address, and Coaming does not hand it out.
 func PlainAddressRefused(raw string, allowInsecure bool) bool {
 	if allowInsecure {
 		return false
@@ -180,8 +180,8 @@ func PlainAddressRefused(raw string, allowInsecure bool) bool {
 	return !authn.LoopbackHost(u.Hostname())
 }
 
-// secureTransport reports whether the connection reached Bayplan over TLS, either
-// directly or through a proxy Bayplan trusts to say so: the effective scheme
+// secureTransport reports whether the connection reached Coaming over TLS, either
+// directly or through a proxy Coaming trusts to say so: the effective scheme
 // believes X-Forwarded-Proto from a trusted peer and from nobody else (D-51).
 func secureTransport(r *http.Request) bool {
 	return r.TLS != nil || httpx.EffectiveScheme(r.Context()) == "https"

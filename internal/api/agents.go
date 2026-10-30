@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -14,13 +14,13 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/buildinfo"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/buildinfo"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 // AgentSessions is what the node list reads of the live agents: the tunnel hub.
@@ -46,10 +46,10 @@ type AgentsDeps struct {
 	Live AgentSessions
 	// Instance supplies the address agents dial, as for adding an environment.
 	Instance *instance.Instance
-	// TLSPin returns the SPKI pin of the self-signed certificate Bayplan serves, or
+	// TLSPin returns the SPKI pin of the self-signed certificate Coaming serves, or
 	// "" when it serves none. Nil means none.
 	TLSPin func() string
-	// AgentAllowInsecure is the server's BAYPLAN_AGENT_ALLOW_INSECURE, a development
+	// AgentAllowInsecure is the server's COAMING_AGENT_ALLOW_INSECURE, a development
 	// switch. It only decides whether the install and the manual update command for a
 	// plain ws:// address also tell the agent to accept it (T-02-31).
 	AgentAllowInsecure bool
@@ -186,7 +186,7 @@ type UpdateAgentsInput struct {
 type AgentBody struct {
 	ID                  string          `json:"id" doc:"The agent ID"`
 	Node                string          `json:"node" doc:"The hostname the agent reported when it enrolled"`
-	Role                string          `json:"role" enum:"leader,manager,worker,standalone,local" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Bayplan host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it"`
+	Role                string          `json:"role" enum:"leader,manager,worker,standalone,local" doc:"What the node is: the swarm manager that leads, another swarm manager, a swarm worker or a standalone host. leader is as of the last read of the cluster, and is only ever an active manager. local is this Coaming host, folded into the swarm environment and reached through the Docker socket: it has no agent, certificate or clock, and none of the agent actions apply to it"`
 	Status              string          `json:"status" enum:"active,revoked" doc:"revoked means an administrator revoked the agent: it is disconnected, its certificate is refused, and it cannot come back"`
 	Blocked             bool            `json:"blocked" doc:"True while the host's engine ID and swarm node ID are blocked from enrolling again, until an administrator unblocks them"`
 	Connected           bool            `json:"connected" doc:"Whether the agent has a live connection now"`
@@ -202,7 +202,7 @@ type AgentBody struct {
 	LastDenial          *DenialBody     `json:"lastDenial,omitempty" doc:"The last request the agent refused by its own policy, while it is connected. Absent if it has refused none"`
 	UpdateState         UpdateStateBody `json:"updateState" doc:"How the agent's update is going. Held in memory, so it is idle again after the server restarts"`
 	UpdateAvailable     bool            `json:"updateAvailable" doc:"True for an agent that is not revoked and runs an older release than this server, so an update would bring it up to date. Never true for a development build on either side, which cannot be compared"`
-	ManualUpdateCommand string          `json:"manualUpdateCommand,omitempty" doc:"The one-line command that updates this agent by hand, present when the agent is behind and Bayplan cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off"`
+	ManualUpdateCommand string          `json:"manualUpdateCommand,omitempty" doc:"The one-line command that updates this agent by hand, present when the agent is behind and Coaming cannot update it: it is outside the server's version window, it is too old to update itself, or its host owner turned self-update off"`
 	RevokedAt           string          `json:"revokedAt,omitempty" format:"date-time" doc:"When the agent was revoked"`
 	RevokeReason        string          `json:"revokeReason,omitempty" doc:"The reason given when it was revoked"`
 }
@@ -210,7 +210,7 @@ type AgentBody struct {
 // AgentListBody is every agent of an environment.
 type AgentListBody struct {
 	Items         []AgentBody        `json:"items" doc:"One entry per enrolled node, problems first: revoked agents, then agents that are not connected, then the rest by node name. A node that was revoked and enrolled again has an entry for each agent"`
-	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts Bayplan cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token"`
+	ManualCleanup InstallCleanupBody `json:"manualCleanup" doc:"The commands that take the agent off a host by hand, for the hosts Coaming cannot uninstall when the environment is removed. The swarm secret in them is named for the join token's current generation. They carry no token"`
 }
 
 // AgentListOutput wraps AgentListBody for huma.
@@ -393,7 +393,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		case errors.Is(err, agents.ErrNoManager):
 			return httpx.Problem(http.StatusConflict, problemNoManager, "No manager of this swarm is connected, and a swarm's agents are updated through a manager.")
 		case errors.Is(err, agents.ErrSelfUpdateOff):
-			return httpx.Problem(http.StatusConflict, problemSelfUpdateDisabled, "The owner of that host turned agent self-update off (BAYPLAN_AGENT_SELF_UPDATE=false). Update it by hand.")
+			return httpx.Problem(http.StatusConflict, problemSelfUpdateDisabled, "The owner of that host turned agent self-update off (COAMING_AGENT_SELF_UPDATE=false). Update it by hand.")
 		case errors.Is(err, agents.ErrAgentUpToDate):
 			return httpx.Problem(http.StatusConflict, problemAgentUpToDate, "That agent already runs this server's version.")
 		case errors.Is(err, agents.ErrUpdateInProgress):
@@ -419,9 +419,9 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		Description: "Makes a new join token and retires the current one in the same transaction. The old install command stops " +
 			"enrolling hosts at once; agents that are already enrolled keep their certificates and are not disconnected. Answers the " +
 			"install object for the new token, once, with Cache-Control no-store; when the environment is a swarm that already has agents " +
-			"it carries the one-line rotate command. 404 environment_not_found; 409 " + problemPublicURLRequired + " when Bayplan has no " +
+			"it carries the one-line rotate command. 404 environment_not_found; 409 " + problemPublicURLRequired + " when Coaming has no " +
 			"address to give agents, and 409 " + problemInsecureAgentURL + " when that address is plain ws:// for a host that is not this machine " +
-			"and BAYPLAN_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
+			"and COAMING_AGENT_ALLOW_INSECURE is off; the current token stays in both cases. Needs environments.token. Audited as environment.token_rotated with the new generation.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsToken, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *TokenMutationInput) (*RotateTokenOutput, error) {
 		p := httpx.PrincipalFrom(ctx)
@@ -439,7 +439,7 @@ func RegisterAgents(r *httpx.Router, d AgentsDeps) {
 		}
 		if endpoint == "" {
 			return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
-				"Bayplan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL.")
+				"Coaming has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with COAMING_PUBLIC_URL or COAMING_AGENT_URL.")
 		}
 		if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
 			return nil, insecureAgentURLProblem()

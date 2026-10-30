@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx
 
@@ -18,7 +18,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
-	"github.com/ianglennon/bayplan/internal/registry"
+	"github.com/ianglennon/coaming/internal/registry"
 )
 
 // fetchDeadline is how long one FetchRef may take in all, waiting for the mirror included.
@@ -92,7 +92,7 @@ func (g *GoGit) FetchRef(ctx context.Context, m MirrorID, r Remote, kind RefKind
 		return Commit{}, Classify(err, u.Host)
 	}
 	defer mu.unlock()
-	// An ssh connection is Bayplan's own and is closed when ctx ends (sshdial.go), so the fetch ends
+	// An ssh connection is Coaming's own and is closed when ctx ends (sshdial.go), so the fetch ends
 	// with its deadline and the lock cannot be held past it.
 	return g.fetchLocked(ctx, m, dir, r, u, kind, ref)
 }
@@ -142,7 +142,7 @@ func (g *GoGit) fetchCommit(ctx context.Context, repo *git.Repository, r Remote,
 		return c, err
 	}
 	if full {
-		pinned := plumbing.ReferenceName("refs/bayplan/pinned/" + ref)
+		pinned := plumbing.ReferenceName("refs/coaming/pinned/" + ref)
 		switch err := g.fetch(ctx, repo, r, u, []config.RefSpec{pinSpec(ref, pinned)}); {
 		case err == nil:
 			if c, err := find(); err == nil {

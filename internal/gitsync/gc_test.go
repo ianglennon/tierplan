@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync_test
 
@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The sweep of the mirrors (plan 09-32, D-08): a mirror is only a cache, so the sweep removes the ones whose repository

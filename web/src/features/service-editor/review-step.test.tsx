@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -213,7 +213,7 @@ describe("ReviewStep", () => {
     });
     expect(
       screen.getByText(
-        "This swarm's manager agents don't let Bayplan change services with host access. Set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
+        "This swarm's manager agents don't let Coaming change services with host access. Set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on them to allow it.",
       ),
     ).toBeTruthy();
     expect(apply().getAttribute("aria-disabled")).toBeNull();
@@ -226,7 +226,7 @@ describe("ReviewStep", () => {
         hostPolicy: { managerAllowsPrivileged: false, readOnly: false },
       }),
     });
-    expect(screen.queryByText(/manager agents don't let Bayplan/)).toBeNull();
+    expect(screen.queryByText(/manager agents don't let Coaming/)).toBeNull();
   });
 
   it("cannot be applied on a read-only host, and says why", () => {

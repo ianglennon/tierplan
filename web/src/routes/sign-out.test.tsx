@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -149,7 +149,7 @@ describe("sign out from the user menu (WR-17)", () => {
     await screen.findByText("No environments yet");
     await clickLogOut();
     expect(
-      await screen.findByText("Can't reach Bayplan. Check your connection and try again."),
+      await screen.findByText("Can't reach Coaming. Check your connection and try again."),
     ).toBeTruthy();
     await settled(queryClient);
     expect(router.state.location.pathname).toBe("/environments");

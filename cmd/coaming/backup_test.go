@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/backup"
+	"github.com/ianglennon/coaming/internal/backup"
 )
 
 const cliPass = "correct horse battery"
@@ -24,10 +24,10 @@ const cliPass = "correct horse battery"
 // named by the environment.
 func runCLIWith(t *testing.T, dir, stdin, passphraseFile string, args ...string) (stdout []byte, stderr string, err error) {
 	t.Helper()
-	t.Setenv("BAYPLAN_DATA_DIR", dir)
-	t.Setenv("BAYPLAN_ENCRYPTION_KEY", "")
-	t.Setenv("BAYPLAN_ENCRYPTION_KEY_FILE", "")
-	t.Setenv("BAYPLAN_BACKUP_PASSPHRASE_FILE", passphraseFile)
+	t.Setenv("COAMING_DATA_DIR", dir)
+	t.Setenv("COAMING_ENCRYPTION_KEY", "")
+	t.Setenv("COAMING_ENCRYPTION_KEY_FILE", "")
+	t.Setenv("COAMING_BACKUP_PASSPHRASE_FILE", passphraseFile)
 	var out, errb bytes.Buffer
 	root := newRoot()
 	root.SetIn(strings.NewReader(stdin))
@@ -66,7 +66,7 @@ func readBackup(t *testing.T, file []byte, pass string) (manifest, db []byte) {
 
 func TestBackupWritesAFileThatOpensAndRecordsSystemCLI(t *testing.T) {
 	dir, st := seedDataDir(t, 2)
-	out := filepath.Join(t.TempDir(), "b.bayplan")
+	out := filepath.Join(t.TempDir(), "b.coaming")
 
 	stdout, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup", "--out", out)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestBackupWritesAFileThatOpensAndRecordsSystemCLI(t *testing.T) {
 		FROM audit_log WHERE action = 'backup.exported'`).Scan(&actor, &source, &name); err != nil {
 		t.Fatalf("no backup.exported entry: %v", err)
 	}
-	if actor != "system:cli" || source != "cli" || name != "b.bayplan" {
+	if actor != "system:cli" || source != "cli" || name != "b.coaming" {
 		t.Fatalf("backup.exported actor %q source %q file %q", actor, source, name)
 	}
 	// The CLI signs with the same key, so the server's chain stays intact.
@@ -107,7 +107,7 @@ func TestBackupReadsThePassphraseFromTheFileTheEnvironmentNames(t *testing.T) {
 	if err := os.WriteFile(passFile, []byte(cliPass+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(t.TempDir(), "b.bayplan")
+	out := filepath.Join(t.TempDir(), "b.coaming")
 	// Stdin holds something else: the file wins.
 	if _, errOut, err := runCLIWith(t, dir, "some other passphrase\n", passFile, "backup", "--out", out); err != nil {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
@@ -121,12 +121,12 @@ func TestBackupReadsThePassphraseFromTheFileTheEnvironmentNames(t *testing.T) {
 
 func TestBackupWithNoPassphraseSourceSaysWhereToGiveOneAndWritesNothing(t *testing.T) {
 	dir, _ := seedDataDir(t, 0)
-	out := filepath.Join(t.TempDir(), "b.bayplan")
+	out := filepath.Join(t.TempDir(), "b.coaming")
 	_, errOut, err := runCLIWith(t, dir, "", "", "backup", "--out", out)
 	if err == nil {
 		t.Fatal("backup with no passphrase exited 0")
 	}
-	if !strings.Contains(errOut, "set BAYPLAN_BACKUP_PASSPHRASE_FILE or pipe the passphrase on stdin") {
+	if !strings.Contains(errOut, "set COAMING_BACKUP_PASSPHRASE_FILE or pipe the passphrase on stdin") {
 		t.Fatalf("stderr = %q", errOut)
 	}
 	if _, err := os.Stat(out); err == nil {
@@ -136,7 +136,7 @@ func TestBackupWithNoPassphraseSourceSaysWhereToGiveOneAndWritesNothing(t *testi
 
 func TestBackupRefusesAShortPassphraseAndWritesNothing(t *testing.T) {
 	dir, _ := seedDataDir(t, 0)
-	out := filepath.Join(t.TempDir(), "b.bayplan")
+	out := filepath.Join(t.TempDir(), "b.coaming")
 	_, errOut, err := runCLIWith(t, dir, "too short\n", "", "backup", "--out", out)
 	if err == nil || !strings.Contains(errOut, "at least 16 characters") {
 		t.Fatalf("backup with a short passphrase = %v, stderr %q", err, errOut)
@@ -171,12 +171,12 @@ func TestBackupToDashWritesTheFileToStandardOutput(t *testing.T) {
 }
 
 func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectoryUnderAManualName(t *testing.T) {
-	t.Setenv("BAYPLAN_BACKUP_DIR", "")
+	t.Setenv("COAMING_BACKUP_DIR", "")
 	dir, _ := seedDataDir(t, 0)
 	if _, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup"); err != nil {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "backups", "bayplan-manual-*.bayplan"))
+	matches, err := filepath.Glob(filepath.Join(dir, "backups", "coaming-manual-*.coaming"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
 	}
@@ -190,15 +190,15 @@ func TestBackupDefaultsToTheBackupsFolderOfTheDataDirectoryUnderAManualName(t *t
 	readBackup(t, file, cliPass)
 }
 
-// BAYPLAN_DATA_DIR is commonly relative (./.devdata under make dev); the backup
+// COAMING_DATA_DIR is commonly relative (./.devdata under make dev); the backup
 // must work from it, to --out and to the default folder (UAT gap G-03-4).
 func TestBackupWorksWithARelativeDataDirectory(t *testing.T) {
-	t.Setenv("BAYPLAN_BACKUP_DIR", "")
+	t.Setenv("COAMING_BACKUP_DIR", "")
 	abs, _ := seedDataDir(t, 1)
 	t.Chdir(filepath.Dir(abs))
 	rel := "./" + filepath.Base(abs)
 
-	out := filepath.Join(rel, "b.bayplan")
+	out := filepath.Join(rel, "b.coaming")
 	if _, errOut, err := runCLIWith(t, rel, cliPass+"\n", "", "backup", "--out", out); err != nil || strings.Contains(errOut, "invalid uri authority") {
 		t.Fatalf("backup --out = %v, stderr %q", err, errOut)
 	}
@@ -211,7 +211,7 @@ func TestBackupWorksWithARelativeDataDirectory(t *testing.T) {
 	if _, errOut, err := runCLIWith(t, rel, cliPass+"\n", "", "backup"); err != nil || strings.Contains(errOut, "invalid uri authority") {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	matches, err := filepath.Glob(filepath.Join(rel, "backups", "bayplan-manual-*.bayplan"))
+	matches, err := filepath.Glob(filepath.Join(rel, "backups", "coaming-manual-*.coaming"))
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("backups in the data directory = %v, %v; want one", matches, err)
 	}
@@ -227,7 +227,7 @@ func TestBackupRefusesABrokenChainUnlessAllowed(t *testing.T) {
 	if _, err := st.Write.Exec("UPDATE audit_log SET action = 'x' || substr(action, 2) WHERE seq = 2"); err != nil {
 		t.Fatal(err)
 	}
-	out := filepath.Join(t.TempDir(), "b.bayplan")
+	out := filepath.Join(t.TempDir(), "b.coaming")
 
 	_, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup", "--out", out)
 	if err == nil || !strings.Contains(errOut, "--allow-broken-chain") {
@@ -256,22 +256,22 @@ func TestBackupRefusesABrokenChainUnlessAllowed(t *testing.T) {
 func TestBackupDefaultFileGoesToBackupDirWhenItIsSet(t *testing.T) {
 	dir, _ := seedDataDir(t, 0)
 	folder := filepath.Join(t.TempDir(), "elsewhere")
-	t.Setenv("BAYPLAN_BACKUP_DIR", folder)
+	t.Setenv("COAMING_BACKUP_DIR", folder)
 	stdout, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "backup")
 	if err != nil {
 		t.Fatalf("backup = %v, stderr %q", err, errOut)
 	}
-	matches, err := filepath.Glob(filepath.Join(folder, "bayplan-manual-*.bayplan"))
+	matches, err := filepath.Glob(filepath.Join(folder, "coaming-manual-*.coaming"))
 	if err != nil || len(matches) != 1 {
-		t.Fatalf("backups in BAYPLAN_BACKUP_DIR = %v, %v; want one", matches, err)
+		t.Fatalf("backups in COAMING_BACKUP_DIR = %v, %v; want one", matches, err)
 	}
 	if !strings.Contains(string(stdout), matches[0]) {
 		t.Fatalf("output %q does not name %s", stdout, matches[0])
 	}
-	if left, _ := filepath.Glob(filepath.Join(dir, "backups", "*.bayplan")); len(left) != 0 {
-		t.Fatalf("the data directory's backups folder holds %v, want nothing while BAYPLAN_BACKUP_DIR is set", left)
+	if left, _ := filepath.Glob(filepath.Join(dir, "backups", "*.coaming")); len(left) != 0 {
+		t.Fatalf("the data directory's backups folder holds %v, want nothing while COAMING_BACKUP_DIR is set", left)
 	}
-	if tmp, _ := filepath.Glob(filepath.Join(folder, ".bayplan-backup-*")); len(tmp) != 0 {
+	if tmp, _ := filepath.Glob(filepath.Join(folder, ".coaming-backup-*")); len(tmp) != 0 {
 		t.Fatalf("work files left behind: %v", tmp)
 	}
 	file, err := os.ReadFile(matches[0]) //nolint:gosec // a path the test made
@@ -282,7 +282,7 @@ func TestBackupDefaultFileGoesToBackupDirWhenItIsSet(t *testing.T) {
 }
 
 func TestBackupDefaultNameNeverReplacesAScheduledBackupOfTheSameMinute(t *testing.T) {
-	t.Setenv("BAYPLAN_BACKUP_DIR", "")
+	t.Setenv("COAMING_BACKUP_DIR", "")
 	dir, _ := seedDataDir(t, 0)
 	folder := filepath.Join(dir, "backups")
 	if err := os.MkdirAll(folder, 0o700); err != nil {
@@ -306,7 +306,7 @@ func TestBackupDefaultNameNeverReplacesAScheduledBackupOfTheSameMinute(t *testin
 			t.Fatalf("scheduled backup %s = %q, %v; want it untouched", name, got, err)
 		}
 	}
-	if matches, _ := filepath.Glob(filepath.Join(folder, "bayplan-manual-*.bayplan")); len(matches) != 1 {
+	if matches, _ := filepath.Glob(filepath.Join(folder, "coaming-manual-*.coaming")); len(matches) != 1 {
 		t.Fatalf("manual backups = %v, want one", matches)
 	}
 }
@@ -329,9 +329,9 @@ func TestBackupDefaultNameTakesAFreeNameWhenTheSecondIsTaken(t *testing.T) {
 		paths = append(paths, d.path)
 	}
 	want := []string{
-		filepath.Join(folder, "bayplan-manual-20261008-140509.bayplan"),
-		filepath.Join(folder, "bayplan-manual-20261008-140509-2.bayplan"),
-		filepath.Join(folder, "bayplan-manual-20261008-140509-3.bayplan"),
+		filepath.Join(folder, "coaming-manual-20261008-140509.coaming"),
+		filepath.Join(folder, "coaming-manual-20261008-140509-2.coaming"),
+		filepath.Join(folder, "coaming-manual-20261008-140509-3.coaming"),
 	}
 	if !slices.Equal(paths, want) {
 		t.Fatalf("paths = %v, want %v", paths, want)

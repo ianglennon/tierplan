@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package instance_test
 
@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/storetest"
 )
 
 func load(t *testing.T, cfg config.Config) (*instance.Instance, *store.Store) {
@@ -50,22 +50,22 @@ func TestLoadOnAFreshStoreIsEmptyAndUnlocked(t *testing.T) {
 
 func TestSetTxPersistsAndLoadReadsItBack(t *testing.T) {
 	i, st := load(t, config.Config{})
-	if err := set(t, i, st, "Home lab", "https://bayplan.example/ui"); err != nil {
+	if err := set(t, i, st, "Home lab", "https://coaming.example/ui"); err != nil {
 		t.Fatal(err)
 	}
-	i.Apply("Home lab", "https://bayplan.example/ui")
-	if i.Name() != "Home lab" || i.PublicURL() != "https://bayplan.example/ui" {
+	i.Apply("Home lab", "https://coaming.example/ui")
+	if i.Name() != "Home lab" || i.PublicURL() != "https://coaming.example/ui" {
 		t.Fatalf("after Apply: %q %q", i.Name(), i.PublicURL())
 	}
-	if i.PublicOrigin() != "https://bayplan.example" || !i.Secure() {
-		t.Fatalf("origin %q secure %v, want https://bayplan.example true", i.PublicOrigin(), i.Secure())
+	if i.PublicOrigin() != "https://coaming.example" || !i.Secure() {
+		t.Fatalf("origin %q secure %v, want https://coaming.example true", i.PublicOrigin(), i.Secure())
 	}
 
 	again, err := instance.Load(context.Background(), st, config.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Name() != "Home lab" || again.PublicURL() != "https://bayplan.example/ui" {
+	if again.Name() != "Home lab" || again.PublicURL() != "https://coaming.example/ui" {
 		t.Fatalf("reloaded: %q %q", again.Name(), again.PublicURL())
 	}
 }
@@ -96,8 +96,8 @@ func TestSetTxChangesAreInvisibleUntilAppliedAndLostOnRollback(t *testing.T) {
 
 func TestPlainHTTPURLIsNotSecureAndDefaultPortsDropFromTheOrigin(t *testing.T) {
 	i, _ := load(t, config.Config{})
-	i.Apply("x", "http://Bayplan.Example:80")
-	if i.Secure() || i.PublicOrigin() != "http://bayplan.example" {
+	i.Apply("x", "http://Coaming.Example:80")
+	if i.Secure() || i.PublicOrigin() != "http://coaming.example" {
 		t.Fatalf("origin %q secure %v", i.PublicOrigin(), i.Secure())
 	}
 }
@@ -155,8 +155,8 @@ func TestBasePathIsThePathOfThePublicURL(t *testing.T) {
 	cases := []struct{ url, want string }{
 		{"", ""},
 		{"https://example.com", ""},
-		{"https://example.com/bayplan", "/bayplan"},
-		{"https://example.com/tools/bayplan", "/tools/bayplan"},
+		{"https://example.com/coaming", "/coaming"},
+		{"https://example.com/tools/coaming", "/tools/coaming"},
 		{"http://localhost:8080", ""},
 		{"https://example.com/a%20b", "/a%20b"},
 	}
@@ -170,8 +170,8 @@ func TestBasePathIsThePathOfThePublicURL(t *testing.T) {
 
 func TestBasePathFollowsApply(t *testing.T) {
 	i, _ := load(t, config.Config{})
-	i.Apply("x", "https://example.com/bayplan")
-	if got := i.BasePath(); got != "/bayplan" {
+	i.Apply("x", "https://example.com/coaming")
+	if got := i.BasePath(); got != "/coaming" {
 		t.Fatalf("after Apply, BasePath = %q", got)
 	}
 	i.Apply("x", "")
@@ -200,7 +200,7 @@ func TestAgentEndpointFollowsThePublicURLAndItsBasePath(t *testing.T) {
 	for _, tc := range []struct{ public, want string }{
 		{"", ""},
 		{"https://example.com", "wss://example.com/agent/connect"},
-		{"https://example.com/bayplan", "wss://example.com/bayplan/agent/connect"},
+		{"https://example.com/coaming", "wss://example.com/coaming/agent/connect"},
 		{"http://10.0.0.5:7480", "ws://10.0.0.5:7480/agent/connect"},
 	} {
 		i, _ := load(t, config.Config{})
@@ -216,19 +216,19 @@ func TestAgentEndpointFollowsThePublicURLAndItsBasePath(t *testing.T) {
 
 func TestAgentURLReplacesThePublicURLForTheEndpoint(t *testing.T) {
 	i, st := load(t, config.Config{})
-	i.Apply("x", "https://example.com/bayplan")
-	if err := setAgentURL(t, i, st, "https://bayplan.lan:7480"); err != nil {
+	i.Apply("x", "https://example.com/coaming")
+	if err := setAgentURL(t, i, st, "https://coaming.lan:7480"); err != nil {
 		t.Fatal(err)
 	}
-	i.ApplyAgentURL("https://bayplan.lan:7480")
-	if got, want := i.AgentEndpoint(), "wss://bayplan.lan:7480/agent/connect"; got != want {
+	i.ApplyAgentURL("https://coaming.lan:7480")
+	if got, want := i.AgentEndpoint(), "wss://coaming.lan:7480/agent/connect"; got != want {
 		t.Errorf("AgentEndpoint = %q, want %q", got, want)
 	}
-	if got := i.AgentBase(); got != "https://bayplan.lan:7480" {
+	if got := i.AgentBase(); got != "https://coaming.lan:7480" {
 		t.Errorf("AgentBase = %q, want the agent URL", got)
 	}
 	// The browser-facing URL and base path are untouched.
-	if i.PublicURL() != "https://example.com/bayplan" || i.BasePath() != "/bayplan" {
+	if i.PublicURL() != "https://example.com/coaming" || i.BasePath() != "/coaming" {
 		t.Errorf("public URL %q base %q changed", i.PublicURL(), i.BasePath())
 	}
 
@@ -237,28 +237,28 @@ func TestAgentURLReplacesThePublicURLForTheEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	i.ApplyAgentURL("")
-	if got, want := i.AgentEndpoint(), "wss://example.com/bayplan/agent/connect"; got != want {
+	if got, want := i.AgentEndpoint(), "wss://example.com/coaming/agent/connect"; got != want {
 		t.Errorf("AgentEndpoint after clearing = %q, want %q", got, want)
 	}
-	if got := i.AgentBase(); got != "https://example.com/bayplan" {
+	if got := i.AgentBase(); got != "https://example.com/coaming" {
 		t.Errorf("AgentBase after clearing = %q, want the public URL", got)
 	}
 }
 
 func TestAgentURLIsStoredAndReadBackButNotBeforeApply(t *testing.T) {
 	i, st := load(t, config.Config{})
-	if err := setAgentURL(t, i, st, "https://bayplan.lan:7480"); err != nil {
+	if err := setAgentURL(t, i, st, "https://coaming.lan:7480"); err != nil {
 		t.Fatal(err)
 	}
 	if i.AgentURL() != "" {
 		t.Fatal("SetAgentURLTx changed the cache before Apply")
 	}
 	var stored string
-	if err := st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://bayplan.lan:7480" {
+	if err := st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://coaming.lan:7480" {
 		t.Fatalf("stored = %q, %v; want the agent_url setting", stored, err)
 	}
 	again, err := instance.Load(context.Background(), st, config.Config{})
-	if err != nil || again.AgentURL() != "https://bayplan.lan:7480" || again.AgentURLLocked() {
+	if err != nil || again.AgentURL() != "https://coaming.lan:7480" || again.AgentURLLocked() {
 		t.Fatalf("reloaded: %q locked=%v, %v", again.AgentURL(), again.AgentURLLocked(), err)
 	}
 }

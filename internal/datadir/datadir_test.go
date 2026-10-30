@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package datadir_test
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/moby/sys/mountinfo"
 
-	"github.com/ianglennon/bayplan/internal/datadir"
+	"github.com/ianglennon/coaming/internal/datadir"
 )
 
 func opts(inContainer bool, m *mountinfo.Info) datadir.Options {
@@ -40,7 +40,7 @@ func TestPrepareCreatesDirectoryAndOutsideContainerIsPersisted(t *testing.T) {
 	if perm := st.Mode().Perm(); perm != 0o750 {
 		t.Errorf("mode = %o, want 750", perm)
 	}
-	left, _ := filepath.Glob(filepath.Join(dir, ".bayplan-*"))
+	left, _ := filepath.Glob(filepath.Join(dir, ".coaming-*"))
 	if len(left) != 0 {
 		t.Errorf("writability probe left files behind: %v", left)
 	}

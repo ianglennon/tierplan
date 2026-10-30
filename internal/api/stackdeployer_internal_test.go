@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -13,10 +13,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
 )
 
 // envStub is an httpx.EnvResolver that answers one error.

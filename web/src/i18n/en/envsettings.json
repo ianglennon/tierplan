@@ -89,7 +89,7 @@
         "revoked": "Revoked",
         "blocked": "Blocked",
         "readOnly": "Read-only (set on host)",
-        "readOnlyTip": "BAYPLAN_AGENT_READ_ONLY is set on this host. The agent refuses every change Bayplan asks for."
+        "readOnlyTip": "COAMING_AGENT_READ_ONLY is set on this host. The agent refuses every change Coaming asks for."
       },
       "actionsFor": "Actions for {{node}}",
       "revokeNode": "Revoke node",
@@ -145,10 +145,10 @@
     },
     "fold": {
       "title": "Local host",
-      "alert": "This Bayplan host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
+      "alert": "This Coaming host is a manager of {{swarm}}. It can be reached through the Docker socket, so it needs no agent.",
       "button": "Fold into {{swarm}}",
       "dialogTitle": "Fold this host into {{swarm}}?",
-      "body": "Bayplan will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
+      "body": "Coaming will reach this node through the socket, and the separate Local socket environment is retired. Nothing changes on the host. This is recorded in the audit log.",
       "cancel": "Cancel",
       "confirm": "Fold into {{swarm}}",
       "pending": "Folding…",
@@ -158,14 +158,14 @@
     },
     "updates": {
       "autoLabel": "Update agents automatically",
-      "autoHelper": "After a Bayplan upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.",
+      "autoHelper": "After a Coaming upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.",
       "autoFailed": "Couldn't change the setting. Try again.",
       "updateAll": "Update all agents ({{count}})",
       "starting": "Starting…",
       "progress": "Updating agents ({{done}} of {{total}})",
       "swarmNote": "In a swarm one update rolls every node's agent, one after the other, so Update agent on one node updates them all.",
       "manualOff": "Self-update is turned off on {{node}}. Update it by hand:",
-      "manualOther": "Bayplan can't update {{node}} by itself. Update it by hand:",
+      "manualOther": "Coaming can't update {{node}} by itself. Update it by hand:",
       "manualLabel": "the update command for {{node}}"
     },
     "updateReasons": {
@@ -191,12 +191,12 @@
       "failed": "Couldn't start the update. Try again."
     },
     "remove": {
-      "cardBody": "Bayplan stops managing this environment, revokes every agent and disables the join token. You can also have it uninstall the agent from the hosts.",
-      "cardBodyLocal": "Bayplan stops managing this host. Nothing on it is changed.",
+      "cardBody": "Coaming stops managing this environment, revokes every agent and disables the join token. You can also have it uninstall the agent from the hosts.",
+      "cardBodyLocal": "Coaming stops managing this host. Nothing on it is changed.",
       "button": "Remove environment",
       "buttonLocal": "Remove host",
       "title": "Remove {{name}}?",
-      "body": "Bayplan will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
+      "body": "Coaming will stop managing this environment and revoke every agent and the join token. Containers, images, volumes and networks on the hosts are not changed.",
       "uninstall": "Also uninstall the agent from the hosts",
       "helperSome": "{{online}} of {{total}} agents are online. The others need the manual command below.",
       "helperAll": "All {{total}} agents are online.",
@@ -217,9 +217,9 @@
       "done": "{{name}} was removed."
     },
     "unknownAgents": {
-      "title": "Agents Bayplan doesn't know",
-      "body": "These agents were installed after the backup was taken, so this Bayplan refused them. Reinstall each one with its environment's install command.",
-      "tableLabel": "Agents Bayplan doesn't know",
+      "title": "Agents Coaming doesn't know",
+      "body": "These agents were installed after the backup was taken, so this Coaming refused them. Reinstall each one with its environment's install command.",
+      "tableLabel": "Agents Coaming doesn't know",
       "columns": {
         "node": "Node",
         "environment": "Environment",

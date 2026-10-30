@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Fail-first proof for the check scripts. Each gate must exit non-zero on a seeded
 # violation and zero on a clean fixture; a gate that cannot fail is not a gate.
@@ -163,13 +163,13 @@ expect pass "tls-gate-repository" scripts/insecure-tls-check.sh
 # variables or the -n flag state into the make under test.
 mk() { env -u MAKEFLAGS -u MAKELEVEL make -n "$@"; }
 expect pass "dev-go-default-public-url" mk dev-go
-expect_out "dev-go-default-public-url" "BAYPLAN_PUBLIC_URL='http://localhost:5173'"
+expect_out "dev-go-default-public-url" "COAMING_PUBLIC_URL='http://localhost:5173'"
 expect pass "dev-go-custom-public-url" mk dev-go DEV_PUBLIC_URL=http://dev.example.test:5173
-expect_out "dev-go-custom-public-url" "BAYPLAN_PUBLIC_URL='http://dev.example.test:5173'"
+expect_out "dev-go-custom-public-url" "COAMING_PUBLIC_URL='http://dev.example.test:5173'"
 expect pass "dev-go-empty-public-url" mk dev-go DEV_PUBLIC_URL=
-expect_out "dev-go-empty-public-url (unset, so not locked)" "BAYPLAN_PUBLIC_URL=''"
+expect_out "dev-go-empty-public-url (unset, so not locked)" "COAMING_PUBLIC_URL=''"
 expect pass "dev-web-default" mk dev-web
-expect_out "dev-web-default passes the public URL to Vite" "BAYPLAN_DEV_PUBLIC_URL='http://localhost:5173'"
+expect_out "dev-web-default passes the public URL to Vite" "COAMING_DEV_PUBLIC_URL='http://localhost:5173'"
 if grep -qF -- "--host" <<<"${LAST_OUT}"; then
   echo "SCRIPT TEST FAIL: dev-web-default must not pass --host (Vite stays on loopback)"
   failures=$((failures + 1))
@@ -560,7 +560,7 @@ package zzquarantineprobe
 import (
 	"testing"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 func TestProbeQuarantined(t *testing.T) {
@@ -593,15 +593,15 @@ expect_out "paralleltest-flags-a-serial-api-test names the test" "TestSerialProb
 rm -f "${api_probe_file}"
 mkdir -p "${depguard_probe_dir}"
 printf 'package zzdepguardprobe\n\nimport "testing"\n\nfunc TestSerialOutsideAPI(t *testing.T) {}\n' >"${depguard_probe_dir}/serial_test.go"
-printf 'package zzdepguardprobe\n\nimport (\n\t"testing"\n\n\t_ "github.com/ianglennon/bayplan/proto/testsupport"\n)\n\nfunc TestProbe(t *testing.T) { t.Parallel() }\n' >"${depguard_probe_dir}/probe_test.go"
+printf 'package zzdepguardprobe\n\nimport (\n\t"testing"\n\n\t_ "github.com/ianglennon/coaming/proto/testsupport"\n)\n\nfunc TestProbe(t *testing.T) { t.Parallel() }\n' >"${depguard_probe_dir}/probe_test.go"
 expect pass "testsupport-import-allowed-in-tests-and-serial-outside-api" lint_run "./${depguard_probe_dir}/"
-printf 'package zzdepguardprobe\n\nimport _ "github.com/ianglennon/bayplan/proto/testsupport"\n' >"${depguard_probe_dir}/probe.go"
+printf 'package zzdepguardprobe\n\nimport _ "github.com/ianglennon/coaming/proto/testsupport"\n' >"${depguard_probe_dir}/probe.go"
 expect fail "testsupport-import-denied-in-product-code" lint_run "./${depguard_probe_dir}/"
 expect_out "testsupport-import-denied-in-product-code names the rule" "testsupport-tests-only"
 rm -rf "${depguard_probe_dir}"
 
 # Vite's own host check: a Host header it does not know is answered 403 unless the
-# public URL's host name was passed in BAYPLAN_DEV_PUBLIC_URL.
+# public URL's host name was passed in COAMING_DEV_PUBLIC_URL.
 # vite_status <public-url-or-empty> <host-header>: prints the HTTP status.
 vite_status() {
   local public_url="$1" host_header="$2" port="${DEV_LOOP_TEST_PORT:-5198}" i code=""
@@ -611,7 +611,7 @@ vite_status() {
   fi
   (
     cd web &&
-      if [ -n "${public_url}" ]; then export BAYPLAN_DEV_PUBLIC_URL="${public_url}"; else unset BAYPLAN_DEV_PUBLIC_URL; fi &&
+      if [ -n "${public_url}" ]; then export COAMING_DEV_PUBLIC_URL="${public_url}"; else unset COAMING_DEV_PUBLIC_URL; fi &&
       exec node_modules/.bin/vite --host 127.0.0.1 --port "${port}" --strictPort
   ) >"${scratch}/vite.log" 2>&1 &
   vite_pid=$!
@@ -710,7 +710,7 @@ done
 # and the make target builds the base from a worktree of the ref it is given. The
 # Docker run itself is proved by `make upgrade-smoke`, not here.
 expect pass "upgrade-smoke-syntax" bash -n scripts/upgrade-smoke.sh
-expect fail "upgrade-smoke-missing-image" env BASE_IMAGE=bayplan-no-such-image:none scripts/upgrade-smoke.sh
+expect fail "upgrade-smoke-missing-image" env BASE_IMAGE=coaming-no-such-image:none scripts/upgrade-smoke.sh
 expect pass "upgrade-smoke-target" mk upgrade-smoke UPGRADE_BASE_REF=0123abc
 expect_out "upgrade-smoke-target builds the base from a worktree" "git worktree add --detach .devdata/upgrade-base '0123abc'"
 expect_out "upgrade-smoke-target runs the script" "scripts/upgrade-smoke.sh"
@@ -734,12 +734,12 @@ expect pass "ci-e2e-timeout-leaves-room" e2e_room .github/workflows/ci.yml e2e/p
 # --- Smoke ports (WR-07): no smoke picks a port by binding and releasing it first. Two
 # runners share each VM, so a port found free can be taken before the server binds it.
 # The container smokes publish 127.0.0.1::7480 and read the port back; the binary smoke
-# listens on 127.0.0.1:0 and reads the "bayplan listening" line.
+# listens on 127.0.0.1:0 and reads the "coaming listening" line.
 no_port_probe() { ! grep -nE 'free_port|\.bind\(\("127\.0\.0\.1", 0\)\)' "$@"; }
 printf 'free_port() {\n  python3 -c "s.bind((\\"127.0.0.1\\", 0))"\n}\n' >"${scratch}/probe-then-bind.sh"
 expect fail "smoke-port-probe-is-caught" no_port_probe "${scratch}/probe-then-bind.sh"
 expect pass "smoke-no-port-probe" no_port_probe scripts/smoke.sh scripts/image-smoke.sh scripts/restore-smoke.sh scripts/upgrade-smoke.sh
-expect pass "smoke-reads-the-listening-line" grep -q '"msg":"bayplan listening"' scripts/smoke.sh
+expect pass "smoke-reads-the-listening-line" grep -q '"msg":"coaming listening"' scripts/smoke.sh
 expect pass "image-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/image-smoke.sh
 expect pass "restore-smoke-reads-the-assigned-port" grep -q 'docker port' scripts/restore-smoke.sh
 
@@ -747,12 +747,12 @@ expect pass "restore-smoke-reads-the-assigned-port" grep -q 'docker port' script
 # its image or with an unknown restart mode, and the make target builds the image first.
 # The Docker run itself is proved by `make restore-smoke`, not here.
 expect pass "restore-smoke-syntax" bash -n scripts/restore-smoke.sh
-expect fail "restore-smoke-missing-image" env IMAGE=bayplan-no-such-image:none scripts/restore-smoke.sh
+expect fail "restore-smoke-missing-image" env IMAGE=coaming-no-such-image:none scripts/restore-smoke.sh
 expect_out "restore-smoke-missing-image says so" "RESTORE SMOKE FAIL"
 expect fail "restore-smoke-bad-mode" env RESTART_MODE=reboot scripts/restore-smoke.sh
 expect_out "restore-smoke-bad-mode names the setting" "RESTART_MODE must be exec or exit"
 expect pass "restore-smoke-target" mk restore-smoke
-expect_out "restore-smoke-target builds the image" "bayplan:e2e"
+expect_out "restore-smoke-target builds the image" "coaming:e2e"
 expect_out "restore-smoke-target runs the script" "scripts/restore-smoke.sh"
 
 # --- Timings report (D-17): package wall times and slowest tests from go test -json ---
@@ -835,22 +835,22 @@ elif kill -0 "${grandchild_pid}" 2>/dev/null; then
 fi
 
 # --- CI cleanup (D-23): ci-clean removes what carries this owner's label and nothing else ---
-expect fail "ci-clean-no-owner" env -u BAYPLAN_CI_OWNER scripts/ci-clean.sh
-expect_out "ci-clean-no-owner names the variable" "BAYPLAN_CI_OWNER"
+expect fail "ci-clean-no-owner" env -u COAMING_CI_OWNER scripts/ci-clean.sh
+expect_out "ci-clean-no-owner names the variable" "COAMING_CI_OWNER"
 if docker info >/dev/null 2>&1 && docker image inspect busybox >/dev/null 2>&1 || docker pull -q busybox >/dev/null 2>&1; then
   own="t-own-$$"
-  mine="bayplan-tclean-mine-$$"
-  other="bayplan-tclean-other-$$"
+  mine="coaming-tclean-mine-$$"
+  other="coaming-tclean-other-$$"
   docker rm -f "${mine}" "${other}" >/dev/null 2>&1
   docker network rm "${mine}" "${other}" >/dev/null 2>&1
   docker volume rm "${mine}" "${other}" >/dev/null 2>&1
-  docker network create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker network create --label "coaming.ci.owner=${own}" "${mine}" >/dev/null
   docker network create "${other}" >/dev/null
-  docker volume create --label "bayplan.ci.owner=${own}" "${mine}" >/dev/null
+  docker volume create --label "coaming.ci.owner=${own}" "${mine}" >/dev/null
   docker volume create "${other}" >/dev/null
-  docker run -d --name "${mine}" --label "bayplan.ci.owner=${own}" busybox sleep 300 >/dev/null
-  docker run -d --name "${other}" --label "bayplan.ci.owner=t-other-$$" busybox sleep 300 >/dev/null
-  expect pass "ci-clean-removes-own" env BAYPLAN_CI_OWNER="${own}" scripts/ci-clean.sh
+  docker run -d --name "${mine}" --label "coaming.ci.owner=${own}" busybox sleep 300 >/dev/null
+  docker run -d --name "${other}" --label "coaming.ci.owner=t-other-$$" busybox sleep 300 >/dev/null
+  expect pass "ci-clean-removes-own" env COAMING_CI_OWNER="${own}" scripts/ci-clean.sh
   expect_out "ci-clean-removes-own names the container" "removed container ${mine}"
   gone=1
   docker container inspect "${mine}" >/dev/null 2>&1 && gone=0
@@ -876,13 +876,13 @@ else
 fi
 
 # --- CI preflight (D-23): a disk below the threshold fails and names the variable ---
-expect fail "ci-preflight-bad-number" env BAYPLAN_CI_MIN_FREE_GB=lots scripts/ci-preflight.sh
-expect_out "ci-preflight-bad-number names the variable" "BAYPLAN_CI_MIN_FREE_GB"
+expect fail "ci-preflight-bad-number" env COAMING_CI_MIN_FREE_GB=lots scripts/ci-preflight.sh
+expect_out "ci-preflight-bad-number names the variable" "COAMING_CI_MIN_FREE_GB"
 if docker info >/dev/null 2>&1; then
-  expect fail "ci-preflight-low-disk" env BAYPLAN_CI_MIN_FREE_GB=100000 scripts/ci-preflight.sh
-  expect_out "ci-preflight-low-disk names the variable" "below BAYPLAN_CI_MIN_FREE_GB=100000"
+  expect fail "ci-preflight-low-disk" env COAMING_CI_MIN_FREE_GB=100000 scripts/ci-preflight.sh
+  expect_out "ci-preflight-low-disk names the variable" "below COAMING_CI_MIN_FREE_GB=100000"
   expect_out "ci-preflight-low-disk names the path" "GB free on "
-  expect pass "ci-preflight-zero-threshold" env BAYPLAN_CI_MIN_FREE_GB=0 scripts/ci-preflight.sh
+  expect pass "ci-preflight-zero-threshold" env COAMING_CI_MIN_FREE_GB=0 scripts/ci-preflight.sh
   expect_out "ci-preflight prints docker system df" "docker system df"
 else
   echo "test-scripts: Docker is not reachable; skipping the ci-preflight cases that need it"

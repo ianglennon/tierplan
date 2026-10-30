@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -115,7 +115,7 @@ describe("the Rendered pane", () => {
     expect(screen.getByText("Rendered stack")).toBeTruthy();
     expect(
       screen.getByText(
-        "The compose file after variables are filled in and images are pinned, as it will be deployed. Hidden values show as <hidden>. Bayplan never changes your compose file.",
+        "The compose file after variables are filled in and images are pinned, as it will be deployed. Hidden values show as <hidden>. Coaming never changes your compose file.",
       ),
     ).toBeTruthy();
   });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -14,9 +14,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Creating a stack from a repository folder (plan 09-10, GIT-02, D-06, D-14, D-27). The router, policy, CSRF

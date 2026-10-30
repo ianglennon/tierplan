@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -61,7 +61,7 @@ interface CardShellProps {
   empty: string;
   onRetry: () => void;
   retrying: boolean;
-  // True on the page of a stack Bayplan did not make, where a card with nothing in it is left out.
+  // True on the page of a stack Coaming did not make, where a card with nothing in it is left out.
   hideWhenEmpty?: boolean;
   // A line under the table of a card that has been read, as the volumes' nodes that were not reporting.
   after?: ReactNode;
@@ -133,7 +133,7 @@ const linkClass =
   "block min-w-0 rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
 
 // OwnershipBadge says whether an object is the stack's own or one the compose file only refers to. An
-// external object carries the Tooltip that says Bayplan never changes it. Never a badge for what the page
+// external object carries the Tooltip that says Coaming never changes it. Never a badge for what the page
 // does not know: only the labels of an object make it the stack's (STK-10).
 function OwnershipBadge({ ownership }: { ownership: "stack" | "external" }) {
   const t = useT();
@@ -431,7 +431,7 @@ function UsedBy({ envId, row }: { envId: string; row: StackResourceObject }) {
 }
 
 // ObjectNameCell is the name of a secret or a config as the compose file writes it, in mono, with a muted
-// version label when Bayplan hashed it into the object's name. The Tooltip carries the full object name.
+// version label when Coaming hashed it into the object's name. The Tooltip carries the full object name.
 function ObjectNameCell({ row }: { row: StackResourceObject }) {
   const t = useT();
   return (
@@ -519,12 +519,12 @@ interface StackResourcesViewProps {
   swarm: boolean;
   // True for a stack with nothing running, whose empty cards say so.
   idle: boolean;
-  // True on the page of a stack Bayplan did not make: the ownership badges preview what adopting would own, the
+  // True on the page of a stack Coaming did not make: the ownership badges preview what adopting would own, the
   // Networks and Volumes cards say so, and a card with nothing in it is left out.
   preview?: boolean;
 }
 
-// StackResourcesView draws the cards of a Resources tab from one answer. It is the tab of a stack Bayplan manages
+// StackResourcesView draws the cards of a Resources tab from one answer. It is the tab of a stack Coaming manages
 // and of one it found by its labels alike: only the preview changes what it draws.
 export function StackResourcesView({
   envId,

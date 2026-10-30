@@ -1,9 +1,9 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- Timestamps are INTEGER UTC unix nanoseconds. There is deliberately no Down
--- section: Bayplan 0.x has no down-migrations (D-84).
+-- section: Coaming 0.x has no down-migrations (D-84).
 
 CREATE TABLE app_meta (
     key        TEXT PRIMARY KEY,

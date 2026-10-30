@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -35,7 +35,7 @@ const detail = (extra: Partial<SecretDetail> = {}): SecretDetail => ({
   labels: { team: "data", env: "prod" },
   owner: "",
   ownerKind: "",
-  bayplanStackId: "",
+  coamingStackId: "",
   createdAt: "2026-10-01T10:00:00Z",
   updatedAt: "2026-10-02T10:00:00Z",
   usedBy: 0,
@@ -295,7 +295,7 @@ describe("the Overview tab", () => {
     await screen.findByText("Value");
     expect(
       screen.getByText(
-        "The value is write-only. Docker never returns a secret's value after it's created, and Bayplan can't show it, even with the reveal secrets permission.",
+        "The value is write-only. Docker never returns a secret's value after it's created, and Coaming can't show it, even with the reveal secrets permission.",
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /show value|hide value|reveal/i })).toBeNull();

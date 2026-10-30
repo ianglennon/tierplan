@@ -19,26 +19,26 @@
       "submit": "Save settings",
       "pending": "Saving…",
       "publicUrl": {
-        "helper": "The address people use to reach Bayplan. If Bayplan runs under a path, include it, for example https://example.com/bayplan. It controls cookies and request origin checks."
+        "helper": "The address people use to reach Coaming. If Coaming runs under a path, include it, for example https://example.com/coaming. It controls cookies and request origin checks."
       },
       "agentUrl": {
         "label": "Agent URL",
-        "helper": "Leave empty to use the public URL. Set it if your hosts reach Bayplan at a different address, such as an internal hostname.",
-        "placeholder": "https://bayplan.internal:7480",
-        "locked": "Set by the BAYPLAN_AGENT_URL environment variable.",
-        "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start Bayplan with BAYPLAN_AGENT_ALLOW_INSECURE=true.",
-        "refused": "Agents can't connect to this Bayplan. They would dial {{endpoint}}, a plain ws:// address for another host, which agents refuse, and so does Bayplan. Set an https agent URL above, or give Bayplan an https public URL. For development only, BAYPLAN_AGENT_ALLOW_INSECURE=true on Bayplan allows it."
+        "helper": "Leave empty to use the public URL. Set it if your hosts reach Coaming at a different address, such as an internal hostname.",
+        "placeholder": "https://coaming.internal:7480",
+        "locked": "Set by the COAMING_AGENT_URL environment variable.",
+        "insecure": "Agents refuse a plain http address for another host. Use an https address. For development only, start Coaming with COAMING_AGENT_ALLOW_INSECURE=true.",
+        "refused": "Agents can't connect to this Coaming. They would dial {{endpoint}}, a plain ws:// address for another host, which agents refuse, and so does Coaming. Set an https agent URL above, or give Coaming an https public URL. For development only, COAMING_AGENT_ALLOW_INSECURE=true on Coaming allows it."
       },
       "confirm": {
         "title": "Change the public URL?",
-        "body": "You're using Bayplan at {{origin}}. If the new address doesn't match how you reach Bayplan, you may be signed out and requests can be blocked.",
+        "body": "You're using Coaming at {{origin}}. If the new address doesn't match how you reach Coaming, you may be signed out and requests can be blocked.",
         "cancel": "Cancel",
         "confirm": "Change public URL",
         "agentTitle": "Change the agent URL?",
         "agentConfirm": "Change agent URL",
-        "agentsTold": "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Bayplan refuses agents that dial a different host or port: there's no fallback period.",
-        "offline_one": "{{count}} agent is offline. It can't learn the new address, and Bayplan will refuse it until you reinstall it with the new address or change the URL back.",
-        "offline_other": "{{count}} agents are offline. They can't learn the new address, and Bayplan will refuse them until you reinstall them with the new address or change the URL back."
+        "agentsTold": "Agents connected over wss:// are sent the new address now and switch to it on their next connection, if it's also a wss:// address. Agents on plain ws:// aren't told. From now on Coaming refuses agents that dial a different host or port: there's no fallback period.",
+        "offline_one": "{{count}} agent is offline. It can't learn the new address, and Coaming will refuse it until you reinstall it with the new address or change the URL back.",
+        "offline_other": "{{count}} agents are offline. They can't learn the new address, and Coaming will refuse them until you reinstall them with the new address or change the URL back."
       }
     },
     "shells": {
@@ -82,7 +82,7 @@
       "source": "Source",
       "notices": {
         "heading": "Third-party notices",
-        "description": "Bayplan includes the open source software below, each under its own licence.",
+        "description": "Coaming includes the open source software below, each under its own licence.",
         "region": "Third-party notices list",
         "package": "Package",
         "version": "Version",
@@ -94,7 +94,7 @@
     },
     "rename": {
       "title": "Rename environment",
-      "description": "Choose how this environment is named across Bayplan.",
+      "description": "Choose how this environment is named across Coaming.",
       "name": {
         "label": "Name",
         "helper": "Up to 64 characters."
@@ -110,7 +110,7 @@
     },
     "removeConfirm": {
       "title": "Remove {{name}}?",
-      "body": "Bayplan will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
+      "body": "Coaming will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
       "cancel": "Cancel",
       "confirm": "Remove host",
       "pending": "Removing…"

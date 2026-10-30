@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package dockerx_test
@@ -18,15 +18,15 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // Real-engine checks (D-28). CI runs this against docker:24-dind through
-// docker:29-dind with BAYPLAN_TEST_DOCKER_HOST and BAYPLAN_TEST_ENGINE set;
+// docker:29-dind with COAMING_TEST_DOCKER_HOST and COAMING_TEST_ENGINE set;
 // `make test-int` starts one dind with testcontainers. The product only ever
 // builds a local socket transport, so the tests reach the dind over TCP through
 // the same dockerx code path with the test-only TCPTransport (D-21).
@@ -77,7 +77,7 @@ func TestIntegrationProbeAgainstARealEngine(t *testing.T) {
 		if want := os.Getenv(dockertest.EnvEngine); want != "" {
 			major, _, _ := strings.Cut(res.EngineVersion, ".")
 			if major != want {
-				t.Errorf("EngineVersion = %q, want major %s (BAYPLAN_TEST_ENGINE)", res.EngineVersion, want)
+				t.Errorf("EngineVersion = %q, want major %s (COAMING_TEST_ENGINE)", res.EngineVersion, want)
 			}
 		}
 		if n, err := strconv.Atoi(strings.TrimPrefix(strings.SplitN(res.EngineVersion, ".", 2)[0], "v")); err != nil || n < 24 {
@@ -188,7 +188,7 @@ func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
 	}
 
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
-	running, stopped, vol, net := "bp-run-"+sfx, "bp-stop-"+sfx, "bp-vol-"+sfx, "bp-net-"+sfx
+	running, stopped, vol, net := "cm-run-"+sfx, "cm-stop-"+sfx, "cm-vol-"+sfx, "cm-net-"+sfx
 	for _, name := range []string{running, stopped} {
 		if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Name:   name,
@@ -265,7 +265,7 @@ func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
 		}
 		cleanup(func(c context.Context) { _, _ = raw.SwarmLeave(c, client.SwarmLeaveOptions{Force: true}) })
 		svc, err := raw.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: swarm.ServiceSpec{
-			Annotations:  swarm.Annotations{Name: "bp-svc-" + sfx},
+			Annotations:  swarm.Annotations{Name: "cm-svc-" + sfx},
 			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "alpine:3", Command: []string{"sleep", "300"}}},
 		}})
 		if err != nil {
@@ -325,10 +325,10 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	backlog, ch, stop := hub.Subscribe(ctx, env)
 	defer func() { stop() }()
 
-	name := "bp-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:   name,
-		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{"bayplan.test.secret": "hunter2"}},
+		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{"coaming.test.secret": "hunter2"}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -420,11 +420,11 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 	defer scancel()
 	rows, errc := cli.Events(sctx, time.Time{})
 
-	name := "bp-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{
-			"bayplan.test.secret": "hunter2", "com.docker.compose.project": "bp-test",
+			"coaming.test.secret": "hunter2", "com.docker.compose.project": "cm-test",
 		}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
@@ -449,10 +449,10 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 			if row.Type != "container" || row.Action != "start" || row.Name != name {
 				continue
 			}
-			if row.Attributes["com.docker.compose.project"] != "bp-test" {
+			if row.Attributes["com.docker.compose.project"] != "cm-test" {
 				t.Errorf("the compose project label did not pass: %v", row.Attributes)
 			}
-			if _, leaked := row.Attributes["bayplan.test.secret"]; leaked {
+			if _, leaked := row.Attributes["coaming.test.secret"]; leaked {
 				t.Errorf("a label outside the allowlist reached the row: %v", row.Attributes)
 			}
 			return
@@ -462,7 +462,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 	}
 }
 
-// TestContainerHealthInList checks, against the engine BAYPLAN_TEST_ENGINE names
+// TestContainerHealthInList checks, against the engine COAMING_TEST_ENGINE names
 // (24 to 29), that a container whose HEALTHCHECK keeps failing reads unhealthy in
 // the list within its retries (plan 04-06, RESEARCH A2). Engines before API 1.52
 // send no health summary, so this is what proves the status-text fallback.
@@ -486,7 +486,7 @@ func TestContainerHealthInList(t *testing.T) {
 		t.Fatalf("pull alpine: %v", err)
 	}
 
-	name := "bp-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{

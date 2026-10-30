@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -173,14 +173,14 @@ export function ConfigList({
       header: t("configs.list.columns.owner"),
       cell: (s) =>
         s.owner ? (
-          s.bayplanStackId ? (
+          s.coamingStackId ? (
             <span className="block max-w-64 truncate">
               <StackSentence
                 i18nKey="configs.list.owner"
                 variable="name"
                 stack={s.owner}
                 envId={envId}
-                bayplanStackId={s.bayplanStackId}
+                coamingStackId={s.coamingStackId}
               />
             </span>
           ) : (

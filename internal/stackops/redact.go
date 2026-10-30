@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // RedactChanges returns copies of changes for a reader who may not reveal secrets (D-47, AUTH-07). The spec of a

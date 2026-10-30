@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // Network create (plan 04-12, RES-06, D-39, D-40, D-51, P2 D-42). Docker is a fake
@@ -1578,7 +1578,7 @@ func TestDisconnectContainerOnASwarmGoesToTheContainersNodeOnly(t *testing.T) {
 	}
 }
 
-// Bayplan's own containers (WR-05, D-11, D-12): a connect or disconnect of the server's
+// Coaming's own containers (WR-05, D-11, D-12): a connect or disconnect of the server's
 // container or an agent's needs its name typed, from a fresh inspect, with the attempt
 // audited before the call and the outcome after it.
 
@@ -1591,9 +1591,9 @@ func ownNetworkEngine() dockertest.FakeConfig {
 			{ID: "app0", Name: "app-net", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24"}},
 		},
 		Containers: []dockertest.FakeContainer{
-			{ID: selfCtr, Names: []string{"/bayplan"}, Image: "bayplan:edge", State: "running", Networks: onApp},
-			{ID: agentID, Names: []string{"/bayplan-agent"}, Image: "bayplan-agent:edge", State: "running",
-				Labels: map[string]string{"bayplan.agent": "true"}, Networks: onApp},
+			{ID: selfCtr, Names: []string{"/coaming"}, Image: "coaming:edge", State: "running", Networks: onApp},
+			{ID: agentID, Names: []string{"/coaming-agent"}, Image: "coaming-agent:edge", State: "running",
+				Labels: map[string]string{"coaming.agent": "true"}, Networks: onApp},
 			{ID: "c1", Names: []string{"/web"}, State: "running"},
 		},
 	}
@@ -1627,8 +1627,8 @@ func TestDisconnectOfAnOwnContainerNeedsItsNameTypedAndSendsNothingWithout(t *te
 func TestDisconnectOfAnOwnContainerWithItsNameIsAuditedBeforeAndAfterTheCall(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct{ id, name, own string }{
-		{selfCtr, "bayplan", "server"},
-		{agentID, "bayplan-agent", "agent"},
+		{selfCtr, "coaming", "server"},
+		{agentID, "coaming-agent", "agent"},
 	} {
 		t.Run(c.own, func(t *testing.T) {
 			f, e := dashEnv(t, ownNetworkEngine())
@@ -1665,7 +1665,7 @@ func TestConnectOfAnOwnContainerNeedsItsNameTypedAndIsAuditedBeforeAndAfter(t *t
 	if w := f.fake.Writes(); len(w) != 0 {
 		t.Fatalf("the daemon saw %v, want nothing", w)
 	}
-	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":"bayplan-agent"}`, agentID))
+	rec = f.connectNet(t, e, "br0", fmt.Sprintf(`{"containerId":%q,"confirm":"coaming-agent"}`, agentID))
 	if rec.code != http.StatusNoContent {
 		t.Fatalf("%d: %s", rec.code, rec.body)
 	}
@@ -1705,9 +1705,9 @@ func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsC
 	cfg := ownNetworkEngine()
 	cfg.DropWrites = true
 	f, e := dashEnv(t, cfg)
-	rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":"bayplan"}`, selfCtr))
+	rec := f.disconnectNet(t, e, "app0", fmt.Sprintf(`{"containerId":%q,"confirm":"coaming"}`, selfCtr))
 	if rec.code != http.StatusNoContent {
-		t.Fatalf("%d: %s, want 204: cutting Bayplan off its network ends the call", rec.code, rec.body)
+		t.Fatalf("%d: %s, want 204: cutting Coaming off its network ends the call", rec.code, rec.body)
 	}
 	rows := f.networkAudits(t)
 	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != string(audit.ResultSuccess) {

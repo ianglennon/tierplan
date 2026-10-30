@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -12,12 +12,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 const (
@@ -78,14 +78,14 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 	registerNodeImpact(r, d)
 	need := rbac.Requirement{Perm: rbac.PermNodesManage, Scope: rbac.ScopeEnvironment}
 	const changeErrors = "A node whose version is not the one sent is 409 node_changed, and nothing is retried. 404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected. " +
-		"Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Bayplan itself never blocks a change that was confirmed by typing the node's name. " +
+		"Docker's own refusals come back mapped: 409 last_manager for the demotion of the last manager, 502 node_update_failed with Docker's words for any other. Coaming itself never blocks a change that was confirmed by typing the node's name. " +
 		"Needs nodes.manage (Admin) on the environment."
 
 	httpx.Register(r, huma.Operation{
 		OperationID: "setNodeAvailability", Method: http.MethodPost, Path: "/api/env/{envId}/nodes/{nodeId}/availability",
 		Summary: "Drain, pause or activate a node",
 		Description: "Sets the availability of one node to active, pause or drain, once. The server reads the node fresh and sends its whole spec with only the availability changed and the version sent, " +
-			"so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Bayplan or of the only connected manager agent) " +
+			"so nothing else about the node changes. Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a drain of the node that runs Coaming or of the only connected manager agent) " +
 			"the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.availability_changed with the name, from, to, whether the name was typed, the warnings and the code.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
 	}, need, func(ctx context.Context, in *NodeAvailabilityInput) (*struct{}, error) {
@@ -107,7 +107,7 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 		OperationID: "setNodeRole", Method: http.MethodPost, Path: "/api/env/{envId}/nodes/{nodeId}/role",
 		Summary: "Promote a worker or demote a manager",
 		Description: "Sets the role of one node to manager or worker, once. The server reads the node fresh and sends its whole spec with only the role changed and the version sent. " +
-			"Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Bayplan, of the only connected manager agent, " +
+			"Before it writes, the server judges the change as getNodeActionImpact does; when that says needsConfirm (a demote that puts quorum at risk, of the node that runs Coaming, of the only connected manager agent, " +
 			"or with the managers' state unreadable) the body's confirm must be the node's host name, else 422 confirmation_required and nothing is sent. " + changeErrors + " Every attempt on a node that exists is audited as node.role_changed with the name, from, to, whether the name was typed, the warnings and the code.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
 	}, need, func(ctx context.Context, in *NodeRoleInput) (*struct{}, error) {
@@ -130,7 +130,7 @@ func registerNodeActions(r *httpx.Router, d NodesDeps) {
 		Summary: "Remove a node that is down",
 		Description: "Removes one node from the swarm, never forced. Only a worker whose state is down is removed: a manager is refused 409 node_is_manager (demote it first) and a node that is not down 409 node_not_down, both before anything is written, " +
 			"and the query's confirm must be the node's host name, else 422 confirmation_required. The remove is sent once on a manager and never retried; the request to the agent carries no force key, so a node that is still up cannot be removed by any means. " +
-			"The swarm forgets the node, and Bayplan revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; " +
+			"The swarm forgets the node, and Coaming revokes the agent that ran on it at once with the reason node_removed and without blocking the host, so a host that rejoins the swarm can enrol again; " +
 			"a revoke that fails after the node is gone is logged and left to the reaper, which revokes the agent of a node missing from two node lists. " +
 			"404 node_not_found when the swarm has no such node; 409 not_a_swarm for a standalone host; 503 no_manager_connected when no manager is connected; Docker's own refusal comes back as 409 node_not_down or 502 node_remove_failed with Docker's words. " +
 			"Every attempt on a node that exists is audited as node.removed with the host name, the agent revoked and the code. Needs nodes.manage (Admin) on the environment.",

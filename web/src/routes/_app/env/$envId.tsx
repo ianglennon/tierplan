@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
@@ -103,7 +103,7 @@ const AGENT_ONLY: ReadonlySet<string> = new Set([
   "cluster_changed",
 ]);
 
-// isAgentEnvironment says whether the offline wording is the agent's ("Bayplan
+// isAgentEnvironment says whether the offline wording is the agent's ("Coaming
 // lost contact with the agent") or the local socket's. The list knows; until it
 // has answered, the reason code tells.
 function isAgentEnvironment(item: EnvironmentItem | undefined, problem: EnvironmentProblemError) {
@@ -203,7 +203,7 @@ interface ClusterChangedProps extends StateProps {
 }
 
 // ClusterChangedPage is a swarm that was re-initialised: its agents report a
-// different cluster, so Bayplan refused them and changed nothing. Someone who may
+// different cluster, so Coaming refused them and changed nothing. Someone who may
 // manage the environment can adopt the new cluster (the primary action); someone
 // who may delete it can remove it instead (D-14).
 function ClusterChangedPage({ envId, name, item, canConfigure, canDelete }: ClusterChangedProps) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -7,11 +7,11 @@ import { apiUrl, basePath, resetBasePathForTests, stripBase, withBase } from "@/
 
 // The server writes this tag into the index.html it serves (plan 02-03).
 function setBaseMeta(content: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="bayplan-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
   resetBasePathForTests();
   if (content === null) return;
   const meta = document.createElement("meta");
-  meta.name = "bayplan-base";
+  meta.name = "coaming-base";
   meta.content = content;
   document.head.append(meta);
 }
@@ -22,8 +22,8 @@ afterEach(() => {
 
 describe("basePath", () => {
   it("is the meta content when the server announces a base", () => {
-    setBaseMeta("/bayplan");
-    expect(basePath()).toBe("/bayplan");
+    setBaseMeta("/coaming");
+    expect(basePath()).toBe("/coaming");
   });
 
   it("is empty without the meta tag (Vite dev server, tests)", () => {
@@ -37,8 +37,8 @@ describe("basePath", () => {
   });
 
   it("strips one trailing slash", () => {
-    setBaseMeta("/bayplan/");
-    expect(basePath()).toBe("/bayplan");
+    setBaseMeta("/coaming/");
+    expect(basePath()).toBe("/coaming");
   });
 
   it("treats a lone slash as no base", () => {
@@ -47,18 +47,18 @@ describe("basePath", () => {
   });
 
   it("is read once and then remembered", () => {
-    setBaseMeta("/bayplan");
-    expect(basePath()).toBe("/bayplan");
-    document.head.querySelector('meta[name="bayplan-base"]')?.setAttribute("content", "/other");
-    expect(basePath()).toBe("/bayplan");
+    setBaseMeta("/coaming");
+    expect(basePath()).toBe("/coaming");
+    document.head.querySelector('meta[name="coaming-base"]')?.setAttribute("content", "/other");
+    expect(basePath()).toBe("/coaming");
   });
 });
 
 describe("withBase", () => {
   it("prefixes the base", () => {
-    setBaseMeta("/bayplan");
-    expect(withBase("/env/a")).toBe("/bayplan/env/a");
-    expect(withBase("/")).toBe("/bayplan/");
+    setBaseMeta("/coaming");
+    expect(withBase("/env/a")).toBe("/coaming/env/a");
+    expect(withBase("/")).toBe("/coaming/");
   });
 
   it("leaves the path alone under no base", () => {
@@ -69,24 +69,24 @@ describe("withBase", () => {
 
 describe("stripBase", () => {
   it("removes the base from a path under it", () => {
-    setBaseMeta("/bayplan");
-    expect(stripBase("/bayplan/env/a")).toBe("/env/a");
+    setBaseMeta("/coaming");
+    expect(stripBase("/coaming/env/a")).toBe("/env/a");
   });
 
   it("maps the base itself to the root", () => {
-    setBaseMeta("/bayplan");
-    expect(stripBase("/bayplan")).toBe("/");
-    expect(stripBase("/bayplan/")).toBe("/");
+    setBaseMeta("/coaming");
+    expect(stripBase("/coaming")).toBe("/");
+    expect(stripBase("/coaming/")).toBe("/");
   });
 
   it("leaves a path that only shares the prefix unchanged", () => {
-    setBaseMeta("/bayplan");
-    expect(stripBase("/bayplanx")).toBe("/bayplanx");
-    expect(stripBase("/bayplanx/env")).toBe("/bayplanx/env");
+    setBaseMeta("/coaming");
+    expect(stripBase("/coamingx")).toBe("/coamingx");
+    expect(stripBase("/coamingx/env")).toBe("/coamingx/env");
   });
 
   it("leaves a path outside the base unchanged", () => {
-    setBaseMeta("/bayplan");
+    setBaseMeta("/coaming");
     expect(stripBase("/env/a")).toBe("/env/a");
   });
 
@@ -98,9 +98,9 @@ describe("stripBase", () => {
 
 describe("apiUrl", () => {
   it("prefixes API and stream URLs with the base", () => {
-    setBaseMeta("/bayplan");
-    expect(apiUrl("/api/env/a/events/stream")).toBe("/bayplan/api/env/a/events/stream");
-    expect(apiUrl("/api/audit/export?format=csv")).toBe("/bayplan/api/audit/export?format=csv");
+    setBaseMeta("/coaming");
+    expect(apiUrl("/api/env/a/events/stream")).toBe("/coaming/api/env/a/events/stream");
+    expect(apiUrl("/api/audit/export?format=csv")).toBe("/coaming/api/audit/export?format=csv");
   });
 
   it("is the identity under no base", () => {

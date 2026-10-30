@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -78,7 +78,7 @@ type AgentState struct {
 	ClockOffset  time.Duration
 	// UpdateFailed is true when the agent's last update did not finish.
 	UpdateFailed bool
-	// ManualUpdate is true when the agent is behind and Bayplan cannot update it.
+	// ManualUpdate is true when the agent is behind and Coaming cannot update it.
 	ManualUpdate bool
 }
 

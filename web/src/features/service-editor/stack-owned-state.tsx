@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Link } from "@tanstack/react-router";
 import { Layers } from "lucide-react";
@@ -24,9 +24,9 @@ interface StackOwnedStateProps {
   // The service's name and the stack that owns it. Text from Docker, drawn as text.
   name: string;
   stack: string;
-  // The Bayplan stack it is, when the server says Bayplan manages it. Empty for a stack made some other
+  // The Coaming stack it is, when the server says Coaming manages it. Empty for a stack made some other
   // way, which has no page here.
-  bayplanStackId?: string;
+  coamingStackId?: string;
   // The spec as the server stated it, with hidden values withheld.
   spec: SpecValue;
 }
@@ -34,7 +34,7 @@ interface StackOwnedStateProps {
 // StackOwnedState is what the edit page becomes for a service a stack owns (D-05): a stack's next
 // deploy would overwrite any change made here, so the page says to change it through the stack and
 // shows the spec read-only, in the format the person last chose. Scale, force update and roll
-// back stay on the service's own page. For a stack Bayplan manages the state offers Open stack (the
+// back stay on the service's own page. For a stack Coaming manages the state offers Open stack (the
 // accent button) beside the outline Back to {name}; a stack made some other way has no page, so no
 // button.
 export function StackOwnedState({
@@ -42,7 +42,7 @@ export function StackOwnedState({
   serviceId,
   name,
   stack,
-  bayplanStackId,
+  coamingStackId,
   spec,
 }: StackOwnedStateProps) {
   const t = useT();
@@ -61,9 +61,9 @@ export function StackOwnedState({
           <EmptyDescription>{t("specEditor.stackOwned.body")}</EmptyDescription>
         </EmptyHeader>
         <EmptyContent>
-          {bayplanStackId ? (
+          {coamingStackId ? (
             <Button asChild className="max-md:h-11">
-              <Link to="/env/$envId/stacks/$stackId" params={{ envId, stackId: bayplanStackId }}>
+              <Link to="/env/$envId/stacks/$stackId" params={{ envId, stackId: coamingStackId }}>
                 {t("stackLinks.open")}
               </Link>
             </Button>

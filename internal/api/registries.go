@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -20,13 +20,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 const (
@@ -69,7 +69,7 @@ type RegistriesDeps struct {
 	// Clients keeps the registry clients. Nil makes a cache from Egress and Version, so the
 	// test routes work in a deployment that does not share one.
 	Clients *registry.ClientCache
-	// Version is the build version, sent as the user agent bayplan/<version>.
+	// Version is the build version, sent as the user agent coaming/<version>.
 	Version string
 	// Now is the clock the credential alerts count their days by. Nil means time.Now.
 	Now func() time.Time
@@ -87,8 +87,8 @@ type CredentialRequest struct {
 	Secret      string `json:"secret,omitempty" maxLength:"4096" doc:"The password or token. It is sealed with the vault and never returned by any route; only its last 4 characters can be shown, and only when it has 12 or more. 422 secret_required"`
 	HubFallback bool   `json:"hubFallback,omitempty" doc:"Use this credential for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)"`
 	Expires     string `json:"expires,omitempty" maxLength:"32" doc:"An optional day, YYYY-MM-DD. It lasts to the end of that day, UTC. 422 expiry_invalid, and expiry_past for a day that has gone"`
-	CAPEM       string `json:"caPem,omitempty" maxLength:"262144" doc:"An optional certificate authority, in PEM, that Bayplan's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node"`
-	Insecure    bool   `json:"insecure,omitempty" doc:"Let Bayplan's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup"`
+	CAPEM       string `json:"caPem,omitempty" maxLength:"262144" doc:"An optional certificate authority, in PEM, that Coaming's own tests and tag browsing trust for this registry. At most 64 KiB and it must hold a certificate: 422 ca_invalid. Public material, returned to people who may manage the credential. It never changes the server's trust store and does nothing on a node"`
+	Insecure    bool   `json:"insecure,omitempty" doc:"Let Coaming's own tests and tag browsing reach this registry without verifying its certificate, and over plain HTTP when it answers plain HTTP. Off by default. It does nothing on a node: each node's Docker daemon needs its own insecure-registries or certs.d setup"`
 }
 
 // CreateCredentialInput is the body of the create route.
@@ -119,7 +119,7 @@ type CredentialPatchRequest struct {
 	HubFallback *bool   `json:"hubFallback,omitempty" doc:"Whether it is used for every Docker Hub pull no more specific credential matches. Docker Hub only (422 hub_fallback_not_hub), one per layer (409 hub_fallback_taken)"`
 	Expires     *string `json:"expires,omitempty" maxLength:"32" doc:"A day, YYYY-MM-DD, or an empty string for none. 422 expiry_invalid, and expiry_past for a day that has gone (the credential's own unchanged day is never refused)"`
 	CAPEM       *string `json:"caPem,omitempty" maxLength:"262144" doc:"A new custom certificate authority in PEM, or an empty string for none. 422 ca_invalid for more than 64 KiB or text that holds no certificate"`
-	Insecure    *bool   `json:"insecure,omitempty" doc:"Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry"`
+	Insecure    *bool   `json:"insecure,omitempty" doc:"Whether Coaming's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry"`
 }
 
 // UpdateCredentialInput is the request of the update route.
@@ -188,7 +188,7 @@ type CredentialBody struct {
 	HubFallback bool                            `json:"hubFallback" doc:"Whether it is used for every Docker Hub pull no more specific credential matches"`
 	CAPEM       string                          `json:"caPem" doc:"The custom certificate authority in PEM, public material, for people who may manage the credential; empty for everyone else and when there is none"`
 	HasCA       bool                            `json:"hasCa" doc:"Whether the credential carries a custom certificate authority, whoever is asking"`
-	Insecure    bool                            `json:"insecure" doc:"Whether Bayplan's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected"`
+	Insecure    bool                            `json:"insecure" doc:"Whether Coaming's own tests and tag browsing skip certificate verification and may use plain HTTP for this registry. Nodes are not affected"`
 	ExpiresAt   *string                         `json:"expiresAt" nullable:"true" format:"date-time" doc:"The end of the last day it is valid; null when it does not expire"`
 	LastTest    Nullable[CredentialTestBody]    `json:"lastTest" doc:"The last test of the credential; null when it was never tested"`
 	LastFailure Nullable[CredentialFailureBody] `json:"lastFailure" doc:"The last sign-in failure with it; null when there was none"`
@@ -779,7 +779,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		node, ok := checkNode(agg)
 		if !ok {
-			return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to Bayplan.")
+			return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to Coaming.")
 		}
 		header := registry.EncodeAuth(pt.in.Username, pt.secret, pt.in.Host)
 		nctx, cancel := context.WithTimeout(ctx, testBudget)
@@ -805,7 +805,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		}
 		if refused {
 			// The node's engine makes this call, outside the server's egress policy, so a host the
-			// policy refuses (cloud metadata, the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS) is not
+			// policy refuses (cloud metadata, the operator's COAMING_REGISTRY_BLOCK_CIDRS) is not
 			// sent to it: it reads as unreachable, as it does from the server (WR-B02).
 			code = dockerx.PullCodeRegistryUnreachable
 		} else if err = d.Aggregator.OnNode(nctx, runEnvID, node.ID, func(c *dockerx.Client) error {
@@ -956,12 +956,12 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/registries/test",
 		Summary:     "Test a registry sign-in from the server",
-		Description: "Runs the registry's own flow from the Bayplan server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, " +
+		Description: "Runs the registry's own flow from the Coaming server in three steps and reports each one: whether the registry answers, whether it accepts the sign-in, " +
 			"and, when a test repository is given, whether the sign-in can read it. Works on values that are not saved. A 401 to the unauthenticated ping counts as reachable; a refused sign-in is " +
 			"reported as refused whether the registry says 401 or 403; a registry that asks for no login reports signed in as not_checked. Each step is a state and a code, never text from the registry. " +
 			"The server refuses link-local, unspecified and multicast addresses (cloud metadata included) after DNS, allows private and loopback ranges, and refuses redirects to plain HTTP or local URLs. " +
 			"Needs registries.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names the fields at fault with the codes of adding a credential, " +
-			"ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's BAYPLAN_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. " +
+			"ca_invalid and test_repository_invalid. caPem and insecure apply the credential's own CA and switch to this test only; the operator's COAMING_REGISTRY_BLOCK_CIDRS ranges stay refused even with the switch on. " +
 			"A stored credential's secret is lent only to the host, type, username, CA and insecure switch it was stored with: a test that changes any of them needs a secret typed now (422 secret_required). " +
 			"Audited as registry.credential_tested with each step's result, never the secret.",
 		Tags: []string{"registries"},
@@ -981,7 +981,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/env/{envId}/registries/test",
 		Summary:     "Test an environment registry sign-in from the server",
-		Description: "As testing an instance sign-in, for the credentials of one environment: the same three steps from the Bayplan server, on unsaved values or on a stored credential of this environment " +
+		Description: "As testing an instance sign-in, for the credentials of one environment: the same three steps from the Coaming server, on unsaved values or on a stored credential of this environment " +
 			"(credentialId; 404 credential_not_found for the instance's or another environment's). Needs registries.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. " +
 			"The 10 tests a minute per user are shared with the instance family: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). " +
 			"Audited as registry.credential_tested with the environment, never the secret.",
@@ -1009,7 +1009,7 @@ func RegisterRegistries(r *httpx.Router, d RegistriesDeps) {
 			"image_not_found, registry_unreachable, registry_tls, registry_http, rate_limited, pull_failed, agent_policy_denied when the node's agent is older than this server, node_unavailable when the node " +
 			"did not answer), never any text from the registry. Needs registries.instance. 422 repository_required without a repository; 422 validation_failed names the other fields at fault (tag_invalid, " +
 			"test_repository_invalid and those of adding a credential); 404 environment_not_found; 503 node_unavailable when no node of the environment is connected; 502 agent_policy_denied when the " +
-			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, BAYPLAN_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
+			"environment cannot be read. The 10 tests a minute per user are shared with the server tests: 429 rate_limited. The stored secret is lent only to the host, type, username, CA and insecure switch it was stored with (422 secret_required otherwise). A host that is, or resolves on the server to, an address the server's egress policy refuses (cloud metadata, link-local, COAMING_REGISTRY_BLOCK_CIDRS) is not sent to the node: the answer is failed with registry_unreachable. Audited as registry.credential_tested with the environment, the node and via env, never the secret.",
 		Tags: []string{"registries"},
 	}, rbac.Require(rbac.PermRegistriesInstance), func(ctx context.Context, in *TestInstanceCredentialFromEnvInput) (*CredentialTestFromEnvOutput, error) {
 		p := httpx.PrincipalFrom(ctx)

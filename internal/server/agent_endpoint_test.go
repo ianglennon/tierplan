@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -17,9 +17,9 @@ import (
 
 // TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse is the "never advertise"
 // half of G-02-R4-3 (review WR-02), end to end through a real server and real
-// HTTP. Bayplan hands out only an address its agents will dial. A plain address
+// HTTP. Coaming hands out only an address its agents will dial. A plain address
 // for another host is refused (409 insecure_agent_url, nothing created) unless the
-// server's development switch BAYPLAN_AGENT_ALLOW_INSECURE is on, and then the
+// server's development switch COAMING_AGENT_ALLOW_INSECURE is on, and then the
 // install carries the agent's own switch (plan 02-42). A plain address on this
 // machine needs no switch, and an https address never carries one.
 func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
@@ -32,7 +32,7 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 			Command string `json:"command"`
 		} `json:"standalone"`
 	}
-	const insecure = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	const insecure = "COAMING_AGENT_ALLOW_INSECURE"
 
 	cases := []struct {
 		name string
@@ -47,12 +47,12 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 	}{
 		{
 			name:     "plain to another host, switch off",
-			env:      map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480"},
+			env:      map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480"},
 			wantCode: http.StatusConflict,
 		},
 		{
 			name:         "plain to another host, switch on",
-			env:          map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480", insecure: "true"},
+			env:          map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480", insecure: "true"},
 			wantCode:     http.StatusCreated,
 			wantAgentURL: "ws://10.0.0.5:7480/agent/connect",
 			wantSwitch:   true,
@@ -65,9 +65,9 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 		},
 		{
 			name:         "https",
-			env:          map[string]string{"BAYPLAN_AGENT_URL": "https://bayplan.test"},
+			env:          map[string]string{"COAMING_AGENT_URL": "https://coaming.test"},
 			wantCode:     http.StatusCreated,
-			wantAgentURL: "wss://bayplan.test/agent/connect",
+			wantAgentURL: "wss://coaming.test/agent/connect",
 		},
 	}
 	for _, tc := range cases {
@@ -83,8 +83,8 @@ func TestAddingAnAgentEnvironmentNeedsAnAddressAgentsCanUse(t *testing.T) {
 			addr := ln.Addr().String()
 
 			env := map[string]string{
-				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"BAYPLAN_PUBLIC_URL": "http://" + addr,
+				"COAMING_DATA_DIR":   t.TempDir() + "/data",
+				"COAMING_PUBLIC_URL": "http://" + addr,
 			}
 			for k, v := range tc.env {
 				env[k] = strings.ReplaceAll(v, "%ADDR%", addr)
@@ -202,13 +202,13 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 	}{
 		{
 			name:         "plain to another host, switch off",
-			env:          map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480"},
+			env:          map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480"},
 			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
 			wantRefused:  true,
 		},
 		{
 			name:         "plain to another host, switch on",
-			env:          map[string]string{"BAYPLAN_AGENT_URL": "http://10.0.0.5:7480", "BAYPLAN_AGENT_ALLOW_INSECURE": "true"},
+			env:          map[string]string{"COAMING_AGENT_URL": "http://10.0.0.5:7480", "COAMING_AGENT_ALLOW_INSECURE": "true"},
 			wantEndpoint: "ws://10.0.0.5:7480/agent/connect",
 		},
 		{
@@ -218,8 +218,8 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 		},
 		{
 			name:         "https agent URL",
-			env:          map[string]string{"BAYPLAN_AGENT_URL": "https://bayplan.test"},
-			wantEndpoint: "wss://bayplan.test/agent/connect",
+			env:          map[string]string{"COAMING_AGENT_URL": "https://coaming.test"},
+			wantEndpoint: "wss://coaming.test/agent/connect",
 		},
 	}
 	for _, tc := range cases {
@@ -234,8 +234,8 @@ func TestTheSettingsSayWhenAgentsCannotUseTheirAddress(t *testing.T) {
 			addr := ln.Addr().String()
 
 			env := map[string]string{
-				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"BAYPLAN_PUBLIC_URL": "http://" + addr,
+				"COAMING_DATA_DIR":   t.TempDir() + "/data",
+				"COAMING_PUBLIC_URL": "http://" + addr,
 			}
 			for k, v := range tc.env {
 				env[k] = v

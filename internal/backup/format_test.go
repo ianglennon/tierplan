@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -280,7 +280,7 @@ func TestNewerFormat(t *testing.T) {
 func TestNotBackup(t *testing.T) {
 	for name, in := range map[string][]byte{
 		"empty":   nil,
-		"short":   []byte("BAYPLAN"),
+		"short":   []byte("COAMING"),
 		"random":  randomBytes(t, 512),
 		"sqlite":  append([]byte("SQLite format 3\x00"), randomBytes(t, 512)...),
 		"age":     []byte("age-encryption.org/v1\n-> scrypt abc 18\n"),
@@ -468,7 +468,7 @@ func TestPayloadEntries(t *testing.T) {
 		"no entries":           {},
 		"third entry":          {manifest, db, {"extra", []byte("x")}},
 		"duplicate manifest":   {manifest, manifest},
-		"nested name":          {manifest, {"dir/bayplan.db", db.data}},
+		"nested name":          {manifest, {"dir/coaming.db", db.data}},
 	}
 	for name, entries := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -567,7 +567,7 @@ func TestWriterRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := w.Add(EntryDB, 1, bytes.NewReader([]byte{1})); err == nil {
-		t.Error("bayplan.db accepted before manifest.json")
+		t.Error("coaming.db accepted before manifest.json")
 	}
 	if err := w.Add("other", 1, bytes.NewReader([]byte{1})); err == nil {
 		t.Error("an unknown entry name was accepted")

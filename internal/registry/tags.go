@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry
 
@@ -153,7 +153,7 @@ type TagService struct {
 }
 
 // NewTagService returns a TagService whose registry calls dial through egress and carry the
-// user agent bayplan/<version>.
+// user agent coaming/<version>.
 func NewTagService(clients *ClientCache, egress EgressPolicy, version string, log *slog.Logger) *TagService {
 	if log == nil {
 		log = slog.Default()

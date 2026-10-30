@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -277,7 +277,7 @@ describe("the revision card of a git stack", () => {
     expect(cell("Compose files").textContent).toBe("compose.yamlcompose.prod.yaml");
     expect(
       screen.getByText(
-        "A roll back restores this revision from what Bayplan stored. It never needs the repository.",
+        "A roll back restores this revision from what Coaming stored. It never needs the repository.",
       ),
     ).toBeTruthy();
   });

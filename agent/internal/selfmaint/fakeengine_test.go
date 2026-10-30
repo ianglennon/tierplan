@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package selfmaint
 
@@ -24,7 +24,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // fakeEngine is a small Docker Engine API on a Unix socket: enough of the
@@ -93,7 +93,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	t.Helper()
 	// A short path: the limit of a Unix socket address is about 100 bytes, and a
 	// test name makes t.TempDir() longer than that.
-	dir, err := os.MkdirTemp("", "bp")
+	dir, err := os.MkdirTemp("", "cm")
 	if err != nil {
 		t.Fatal(err)
 	}

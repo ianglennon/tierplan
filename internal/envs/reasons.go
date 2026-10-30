@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -8,8 +8,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The D-40 reason codes, as the wire protocol names them. Nothing an agent says

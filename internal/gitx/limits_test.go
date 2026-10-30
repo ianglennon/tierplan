@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx_test
 
@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
 )
 
 // What a server may stream is bounded on every path (WR-A06): a listing is read into memory and a fetch goes to the

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
 // Creating a user (plan 03-11, AUTH-04, D-22a, D-24). Negative cases are
@@ -88,7 +88,7 @@ func TestCreateUserAnswers201WithTheUserAndAnInviteLinkInTheFragment(t *testing.
 	if u.ID == "" || u.Username != "alice" || u.DisplayName != "" || u.Email != "" || u.InstanceAdmin || u.Status != "invite_pending" || u.Teams == nil {
 		t.Fatalf("user = %+v", u)
 	}
-	// No public URL is set: the link is relative to this Bayplan.
+	// No public URL is set: the link is relative to this Coaming.
 	if !strings.HasPrefix(got.Link.URL, "/invite#token=") || !tokenInLink.MatchString(got.Link.URL) {
 		t.Fatalf("link url = %q", got.Link.URL)
 	}
@@ -99,7 +99,7 @@ func TestCreateUserAnswers201WithTheUserAndAnInviteLinkInTheFragment(t *testing.
 
 func TestCreateUserLinkStartsWithThePublicURLWhenOneIsSet(t *testing.T) {
 	t.Parallel()
-	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example/sub/"})
+	f := newAuthFixture(t, config.Config{PublicURL: "https://coaming.example/sub/"})
 	cookie, csrf := f.signIn(t, "admin", false)
 
 	rec := f.createUser(t, cookie, csrf, map[string]any{"username": "alice"})
@@ -110,7 +110,7 @@ func TestCreateUserLinkStartsWithThePublicURLWhenOneIsSet(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(got.Link.URL, "https://bayplan.example/sub/invite#token=") {
+	if !strings.HasPrefix(got.Link.URL, "https://coaming.example/sub/invite#token=") {
 		t.Fatalf("link url = %q, want it under the public URL", got.Link.URL)
 	}
 }
@@ -633,7 +633,7 @@ func TestResetPasswordEndsEverySessionIssuesAResetLinkAndTheLinkChoosesANewPassw
 
 func TestResetPasswordBuildsTheLinkOnThePublicURLAndBasePath(t *testing.T) {
 	t.Parallel()
-	f := newAuthFixture(t, config.Config{PublicURL: "https://bayplan.example.test/base"})
+	f := newAuthFixture(t, config.Config{PublicURL: "https://coaming.example.test/base"})
 	cookie, csrf := f.signIn(t, "admin", false)
 	id := f.addUser(t, "alice", false)
 	rec := f.resetPassword(t, cookie, csrf, id)
@@ -641,7 +641,7 @@ func TestResetPasswordBuildsTheLinkOnThePublicURLAndBasePath(t *testing.T) {
 		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
 	}
 	var link struct{ URL string }
-	if err := json.Unmarshal(rec.Body.Bytes(), &link); err != nil || !strings.HasPrefix(link.URL, "https://bayplan.example.test/base/invite#token=") {
+	if err := json.Unmarshal(rec.Body.Bytes(), &link); err != nil || !strings.HasPrefix(link.URL, "https://coaming.example.test/base/invite#token=") {
 		t.Fatalf("link = %q (%v), want it on the public URL and base path", link.URL, err)
 	}
 }

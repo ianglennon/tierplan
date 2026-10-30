@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
@@ -148,7 +148,7 @@ interface Upload {
 interface Refusal {
   text: string;
   hint?: string;
-  // The stack, not managed by Bayplan, that holds the name: its environment and its name.
+  // The stack, not managed by Coaming, that holds the name: its environment and its name.
   existing?: { envId: string; name: string };
 }
 

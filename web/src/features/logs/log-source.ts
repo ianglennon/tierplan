@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // What a log viewer reads (plan 06-29, D-35): one container, on the node it is on, one
 // swarm service, whose tasks the server merges into a single stream, or a whole stack (plan
@@ -11,7 +11,7 @@ export type LogSource =
   | { kind: "service"; id: string }
   | { kind: "stack"; id: string; target: StackTarget; unmanaged?: true };
 
-// The path segment a source's routes are under: a stack Bayplan did not make is read under its name and has its own
+// The path segment a source's routes are under: a stack Coaming did not make is read under its name and has its own
 // routes (plan 08-09), but is the same merged log.
 export function logRoute(src: LogSource): string {
   if (src.kind === "stack") return src.unmanaged ? "unmanaged-stacks" : "stacks";
@@ -32,7 +32,7 @@ export const stackSource = (id: string, target: StackTarget): LogSource => ({
   target,
 });
 
-// unmanagedStackSource is the log of a stack Bayplan did not make, which is its name and not an ID.
+// unmanagedStackSource is the log of a stack Coaming did not make, which is its name and not an ID.
 export const unmanagedStackSource = (
   name: string,
   target: StackTarget,

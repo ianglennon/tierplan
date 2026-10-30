@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -16,7 +16,7 @@ func TestIsMissingNetworkRecognisesTheEnginesWords(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{errors.New("Error response from daemon: network bp-no-such-network not found"), true},
+		{errors.New("Error response from daemon: network cm-no-such-network not found"), true},
 		{errors.New("update service on tcp://x: Error response from daemon: network web_default not found"), true},
 		{errors.New("Error response from daemon: service web not found"), false},
 		{errors.New("Error response from daemon: network web_default is in use"), false},

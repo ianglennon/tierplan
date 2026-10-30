@@ -1,8 +1,8 @@
-# Create the secret first:  printf %s 'bpjt_E_S' | docker secret create bayplan-agent-token-g1 -
-# Then deploy this file:  docker stack deploy -c bayplan-agent.yml bayplan
+# Create the secret first:  printf %s 'cmjt_E_S' | docker secret create coaming-agent-token-g1 -
+# Then deploy this file:  docker stack deploy -c coaming-agent.yml coaming
 services:
-  bayplan-agent:
-    image: ghcr.io/ianglennon/bayplan-agent:0.2.0
+  coaming-agent:
+    image: ghcr.io/ianglennon/coaming-agent:0.2.0
     read_only: true
     cap_drop:
       - ALL
@@ -10,17 +10,17 @@ services:
       - SETUID
       - SETGID
     labels:
-      bayplan.agent: "true"
+      coaming.agent: "true"
     environment:
-      BAYPLAN_AGENT_URL: "wss://example.com/bayplan/agent/connect"
-      BAYPLAN_AGENT_PIN: "sha256/P"
-      BAYPLAN_AGENT_JOIN_TOKEN_FILE: /run/secrets/bayplan-agent-token
+      COAMING_AGENT_URL: "wss://example.com/coaming/agent/connect"
+      COAMING_AGENT_PIN: "sha256/P"
+      COAMING_AGENT_JOIN_TOKEN_FILE: /run/secrets/coaming-agent-token
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - bayplan-agent:/var/lib/bayplan-agent
+      - coaming-agent:/var/lib/coaming-agent
     secrets:
-      - source: bayplan-agent-token-g1
-        target: bayplan-agent-token
+      - source: coaming-agent-token-g1
+        target: coaming-agent-token
         mode: 0400
     deploy:
       mode: global
@@ -31,10 +31,10 @@ services:
         parallelism: 1
         delay: 10s
       labels:
-        bayplan.agent: "true"
+        coaming.agent: "true"
 volumes:
-  bayplan-agent:
-    name: bayplan-agent
+  coaming-agent:
+    name: coaming-agent
 secrets:
-  bayplan-agent-token-g1:
+  coaming-agent-token-g1:
     external: true

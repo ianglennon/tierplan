@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package server assembles Bayplan from its configuration. Later plans add
+// Package server assembles Coaming from its configuration. Later plans add
 // their dependencies (database, sessions, Docker transport) in Build.
 package server
 
@@ -18,33 +18,33 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/api"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/buildinfo"
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/datadir"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/shells"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/internal/vault"
-	"github.com/ianglennon/bayplan/internal/webui"
-	"github.com/ianglennon/bayplan/web"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/api"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/buildinfo"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/shells"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/coaming/internal/webui"
+	"github.com/ianglennon/coaming/web"
 )
 
 const (
@@ -70,7 +70,7 @@ const defaultReadTimeout = 30 * time.Second
 // in a refusal, for one). 64 KiB is far above any real cookie or URL.
 const maxHeaderBytes = 64 << 10
 
-// newHTTPServer returns the http.Server Bayplan serves with. huma already caps
+// newHTTPServer returns the http.Server Coaming serves with. huma already caps
 // JSON bodies (MaxBodyBytes), so no MaxBytesReader is added here. Production
 // passes defaultReadTimeout.
 func newHTTPServer(h http.Handler, tlsCfg *tls.Config, readTimeout time.Duration) *http.Server {
@@ -272,7 +272,7 @@ func WithRefusalClock(now func() time.Time) Option {
 	return func(o *buildOptions) { o.refusalClock = now }
 }
 
-// WithSelfContainerID supplies the ID of the container Bayplan runs in. The
+// WithSelfContainerID supplies the ID of the container Coaming runs in. The
 // command line reads it from /proc/self/mountinfo before the privilege drop
 // (RESEARCH A9, D-27) and passes it in, so Build never probes /proc itself.
 // Without it nothing is badged "this instance".
@@ -283,8 +283,8 @@ func WithSelfContainerID(id string) Option {
 // checkActiveKey refuses to start on a master key other than the one the
 // database was last rotated to (app_meta active_key_id). A database that was
 // never rotated names none and is not checked. When the key comes from
-// BAYPLAN_ENCRYPTION_KEY the usual cause is a variable that still holds the old
-// key, and bayplan.key.new holds the one to use.
+// COAMING_ENCRYPTION_KEY the usual cause is a variable that still holds the old
+// key, and coaming.key.new holds the one to use.
 func checkActiveKey(ctx context.Context, st *store.Store, vlt *vault.Vault, dataDir string) error {
 	active, err := backup.ActiveKeyID(ctx, st)
 	if err != nil {
@@ -296,11 +296,11 @@ func checkActiveKey(ctx context.Context, st *store.Store, vlt *vault.Vault, data
 	if vlt.KeySource() == "env" {
 		newFile := filepath.Join(dataDir, vault.NewKeyFile)
 		if key, rerr := vault.ReadKeyFile(dataDir, vault.NewKeyFile); rerr == nil && vault.KeyIDOf(key) == active {
-			return fmt.Errorf("the master key was rotated and BAYPLAN_ENCRYPTION_KEY still holds the old one (%s). "+
-				"Set BAYPLAN_ENCRYPTION_KEY to the contents of %s, restart Bayplan, then delete the file", vlt.KeyID(), newFile)
+			return fmt.Errorf("the master key was rotated and COAMING_ENCRYPTION_KEY still holds the old one (%s). "+
+				"Set COAMING_ENCRYPTION_KEY to the contents of %s, restart Coaming, then delete the file", vlt.KeyID(), newFile)
 		}
-		return fmt.Errorf("the master key was rotated to %s but BAYPLAN_ENCRYPTION_KEY holds %s: set it to the key that "+
-			"`bayplan key rotate` wrote to %s", active, vlt.KeyID(), newFile)
+		return fmt.Errorf("the master key was rotated to %s but COAMING_ENCRYPTION_KEY holds %s: set it to the key that "+
+			"`coaming key rotate` wrote to %s", active, vlt.KeyID(), newFile)
 	}
 	return fmt.Errorf("the database was rotated to the master key %s but %s holds %s: restore the key file that "+
 		"matches the database (the previous one is kept as %s after a rotation)",
@@ -319,7 +319,7 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 	if log == nil {
 		log = slog.Default()
 	}
-	log.Info("starting bayplan",
+	log.Info("starting coaming",
 		"version", buildinfo.Get().Display,
 		"config", cfg.Redacted(),
 	)
@@ -340,12 +340,12 @@ func Build(ctx context.Context, cfg config.Config, log *slog.Logger, opts ...Opt
 			"path", info.Path, "reason", info.Reason)
 	}
 
-	// One server per data directory, and no offline `bayplan restore` beside it:
+	// One server per data directory, and no offline `coaming restore` beside it:
 	// the lock is held until Close, and by every error path below it. It comes
 	// before the key and the database, so a refused start writes nothing.
 	unlock, err := datadir.Lock(info.Path)
 	if err != nil {
-		return nil, fmt.Errorf("another Bayplan is using the data directory %s: %w", info.Path, err)
+		return nil, fmt.Errorf("another Coaming is using the data directory %s: %w", info.Path, err)
 	}
 	defer func() {
 		if err != nil {
@@ -455,7 +455,7 @@ func rollbackRestore(ctx context.Context, cfg config.Config, log *slog.Logger, d
 // server on the prepared, locked data directory. It closes what it opened when it
 // fails, and leaves the lock to its caller.
 func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo buildOptions, info datadir.Info, unlock func() error, socketPath string) (srv *Server, err error) {
-	// The master key comes before the database: a bad BAYPLAN_ENCRYPTION_KEY
+	// The master key comes before the database: a bad COAMING_ENCRYPTION_KEY
 	// should stop startup before anything is written (D-13).
 	vlt, err := vault.LoadOrCreate(cfg.EncryptionKey, info.Path, log)
 	if err != nil {
@@ -530,7 +530,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 
 	// The instance name and public URL come from the settings table, with
-	// BAYPLAN_PUBLIC_URL winning (D-04). The Origin guard reads the cached
+	// COAMING_PUBLIC_URL winning (D-04). The Origin guard reads the cached
 	// origin on every mutation, so a change made at setup applies at once.
 	inst, err := instance.Load(ctx, st, cfg)
 	if err != nil {
@@ -557,7 +557,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	switch {
 	case tlsCfg == nil:
-		log.Info("serving plain HTTP; set BAYPLAN_TLS_CERT_FILE and BAYPLAN_TLS_KEY_FILE, BAYPLAN_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
+		log.Info("serving plain HTTP; set COAMING_TLS_CERT_FILE and COAMING_TLS_KEY_FILE, COAMING_TLS_SELF_SIGNED=true, or put a TLS-terminating proxy in front")
 	case cfg.TLSSelfSigned:
 		log.Info("serving HTTPS with a self-signed certificate; compare this fingerprint in your browser",
 			"sha256", fingerprint(tlsCfg), "tls_pin", spkiPin(tlsCfg),
@@ -594,7 +594,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	// The environment registry and its health monitors. Nothing is added here:
 	// the local host becomes an environment only when an admin asks (D-19).
-	// Bayplan's own container was identified before the privilege drop and is
+	// Coaming's own container was identified before the privilege drop and is
 	// handed in with WithSelfContainerID (RESEARCH A9).
 	monitor := envs.NewMonitor(log, nil, nil)
 	selfID := bo.selfContainerID
@@ -662,7 +662,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// connect. The address is read at start only; the hub's own refusal line covers
 	// a later change in Settings (G-02-R4-3).
 	if base := inst.AgentBase(); tunnel.PlainAddressRefused(base, cfg.AgentAllowInsecure) {
-		log.Warn("agents cannot connect: the address they are given is plain http for a host that is not this machine, so agents refuse it and so does Bayplan. Set an https BAYPLAN_PUBLIC_URL or BAYPLAN_AGENT_URL (or change it in Settings); BAYPLAN_AGENT_ALLOW_INSECURE=true allows it, for development only",
+		log.Warn("agents cannot connect: the address they are given is plain http for a host that is not this machine, so agents refuse it and so does Coaming. Set an https COAMING_PUBLIC_URL or COAMING_AGENT_URL (or change it in Settings); COAMING_AGENT_ALLOW_INSECURE=true allows it, for development only",
 			"agent_base", base)
 	}
 	// A revoke commits first and then closes the agent's live session through the hub.
@@ -721,7 +721,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	}
 	restart := newRestarter()
 
-	// Scheduled backups go to BAYPLAN_BACKUP_DIR, or the backups folder of the data
+	// Scheduled backups go to COAMING_BACKUP_DIR, or the backups folder of the data
 	// directory, which the pre-migration and pre-restore snapshots share (D-32).
 	backupDir := cfg.BackupDir
 	if backupDir == "" {
@@ -792,7 +792,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 			Logger:         log,
 			// Strict-Transport-Security when the request came over TLS or the
 			// public URL is https, which also covers a TLS-terminating proxy (D-37).
-			// Not for Bayplan's own self-signed certificate: a browser pinned to it
+			// Not for Coaming's own self-signed certificate: a browser pinned to it
 			// could not click through a regenerated one (WR-09).
 			HSTS: func(r *http.Request) bool {
 				if r.TLS != nil {
@@ -1005,9 +1005,9 @@ func (s *Server) Hub() *envs.Hub { return s.hub }
 // calls Refresh.
 func (s *Server) Clusters() *envs.Clusters { return s.clusters }
 
-// TLSPin is the SPKI pin ("sha256/" and base64) of the certificate Bayplan
+// TLSPin is the SPKI pin ("sha256/" and base64) of the certificate Coaming
 // generated for itself, which an install command carries so the agent can trust
-// it (D-06). It is empty when Bayplan serves a supplied certificate or plain
+// it (D-06). It is empty when Coaming serves a supplied certificate or plain
 // HTTP: the first is the operator's to pin, the second has nothing to pin.
 func (s *Server) TLSPin() string { return firstSelfSignedPin(s.cfg, s.tlsConfig) }
 
@@ -1113,7 +1113,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer func() { _ = s.Close() }()
 	ln, err := net.Listen("tcp", s.cfg.Listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s (BAYPLAN_LISTEN): %w", s.cfg.Listen, err)
+		return fmt.Errorf("listen on %s (COAMING_LISTEN): %w", s.cfg.Listen, err)
 	}
 	s.listeningOnce.Do(func() { close(s.listening) })
 	return s.run(ctx, ln)
@@ -1134,7 +1134,7 @@ func (s *Server) run(ctx context.Context, ln net.Listener) error {
 	if ctx.Err() != nil {
 		// A stop signal arrived as well. A process that was told to stop does not
 		// start another one; the staged restore is cleared at the next start.
-		s.log.Warn("a restore asked for a restart but Bayplan is stopping; the restore was not applied")
+		s.log.Warn("a restore asked for a restart but Coaming is stopping; the restore was not applied")
 		return err
 	}
 	if err != nil {
@@ -1182,7 +1182,7 @@ func (s *Server) serve(ctx context.Context, ln net.Listener) error {
 	// The message and the "addr" key are a contract: scripts/smoke.sh binds port 0
 	// and reads the port the kernel assigned from this line (WR-07). ln.Addr is the
 	// bound address, so ":0" shows as the real port.
-	s.log.Info("bayplan listening", "addr", ln.Addr().String(), "scheme", scheme)
+	s.log.Info("coaming listening", "addr", ln.Addr().String(), "scheme", scheme)
 
 	select {
 	case err := <-errc:

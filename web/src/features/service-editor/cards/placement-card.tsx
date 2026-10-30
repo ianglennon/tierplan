@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Plus, TriangleAlert, X } from "lucide-react";
@@ -58,7 +58,7 @@ function matchesOf(text: string, nodes: readonly PlacementNode[]): number | null
 // when the shared parser (the one the Placement page and the scheduler's rules follow) can't read
 // it and each followed by how many of the swarm's nodes it lets the service onto; Spread over is
 // the node label the first spread preference spreads over; Max replicas per node is a whole
-// number. Platforms are not here: Bayplan sets them when it pins the image.
+// number. Platforms are not here: Coaming sets them when it pins the image.
 export function PlacementCard({ spec, set, unset, change, envId, report }: CardProps) {
   const t = useT();
   const ids = useId();

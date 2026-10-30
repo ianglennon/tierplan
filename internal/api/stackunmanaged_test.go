@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// The read-only page of a stack Bayplan did not make (plan 08-09, STK-12, D-09, D-10, D-47): found by its
+// The read-only page of a stack Coaming did not make (plan 08-09, STK-12, D-09, D-10, D-47): found by its
 // labels, read now, with nothing stored and nothing written to an engine.
 
 type unmanagedAnswer struct {
@@ -70,7 +70,7 @@ func TestUnmanagedStackDetail(t *testing.T) {
 	viewer := f.caller(t, e, "viewer-1", "viewer")
 	newStack(t, admin, "web")
 	reconfigureSwarm(t, f, e,
-		foreignSecretService("legacy", "app", 2, 2, map[string]string{"io.portainer.accesscontrol.teams": "x", "bayplan.stack.id": "stack-old"}),
+		foreignSecretService("legacy", "app", 2, 2, map[string]string{"io.portainer.accesscontrol.teams": "x", "coaming.stack.id": "stack-old"}),
 		foreignSwarmService("legacy", "db", 0, 1, nil),
 		foreignSwarmService("other", "app", 1, 1, nil),
 	)
@@ -197,7 +197,7 @@ func TestUnmanagedStackGoneOrManaged(t *testing.T) {
 	reconfigureSwarm(t, f, e, foreignSwarmService("web", "app", 1, 1, nil))
 	rec = viewer.do(http.MethodGet, unmanagedPath("legacy", ""), "")
 	if rec.Code != http.StatusNotFound || problemType(t, rec) != "unmanaged_stack_not_found" {
-		t.Errorf("a stack removed outside Bayplan: %d %s, want 404 unmanaged_stack_not_found", rec.Code, rec.Body)
+		t.Errorf("a stack removed outside Coaming: %d %s, want 404 unmanaged_stack_not_found", rec.Code, rec.Body)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestUnmanagedResourcesOfAStackThatIsGoneOrManagedIs404(t *testing.T) {
 }
 
 // legacyLogs is the log fixture of an unmanaged stack: the tasks and lines of the stack-log tests, under the
-// namespace legacy that Bayplan did not make.
+// namespace legacy that Coaming did not make.
 func newLegacyLogsFix(t *testing.T) *stackLogsFix {
 	t.Helper()
 	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), nil)
@@ -401,7 +401,7 @@ func TestUnmanagedLogsRefuseACallerWithoutStacksReadAndAStackThatIsGoneOrManaged
 	if w := downloadAt(t, f.envFix, f.unmanagedPath("legacy", "/logs/download", ""), cookie); w.code() != http.StatusForbidden && w.code() != http.StatusNotFound {
 		t.Errorf("download, a user with no role: status = %d, want a refusal", w.code())
 	}
-	// shop is a stack of Bayplan's, and nothing carries the name nowhere.
+	// shop is a stack of Coaming's, and nothing carries the name nowhere.
 	for _, name := range []string{"shop", "nowhere"} {
 		if c := openSSE(t, f.authFixture, f.unmanagedPath(name, "/logs/stream", "sid="+sidA), f.user.cookie, ""); c.status0() != http.StatusNotFound {
 			t.Errorf("stream of %s: status = %d: %s, want 404", name, c.status0(), c.bodyString())
@@ -469,7 +469,7 @@ func TestUnmanagedStackWithAnUnusualName(t *testing.T) {
 	}
 	for _, name := range []string{"My App", "a/b"} {
 		u := by[name].Unmanaged
-		want := "Bayplan can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
+		want := "Coaming can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
 		if u == nil || u.Adoptable || u.Reason != want {
 			t.Errorf("%q = %+v, want listed, not adoptable, with the swarm reason", name, by[name])
 		}
@@ -509,7 +509,7 @@ type generatedAnswer struct {
 }
 
 // TestGeneratedCompose is the Generated compose tab (plan 08-11, STK-12, D-09, D-12, D-47): the compose file
-// that rebuilds the running services of a stack Bayplan did not make, masked for a caller without
+// that rebuilds the running services of a stack Coaming did not make, masked for a caller without
 // secrets.reveal, with nothing stored and nothing written to an engine.
 func TestGeneratedCompose(t *testing.T) {
 	t.Parallel()
@@ -706,8 +706,8 @@ func TestGeneratedComposeStandaloneNotes(t *testing.T) {
 		notes = append(notes, note{n.Service, n.Code, n.Message})
 	}
 	want := []note{
-		{"api", "image_local", "api runs an image built on this host. It is pinned to its image ID; Bayplan can't look it up in a registry."},
-		{"shop_data", "object_external_hash", "shop_data is kept external: Bayplan couldn't match its settings, so a deploy leaves it as it is."},
+		{"api", "image_local", "api runs an image built on this host. It is pinned to its image ID; Coaming can't look it up in a registry."},
+		{"shop_data", "object_external_hash", "shop_data is kept external: Coaming couldn't match its settings, so a deploy leaves it as it is."},
 	}
 	if !slices.Equal(notes, want) {
 		t.Errorf("notes = %+v, want %+v", notes, want)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
@@ -92,7 +92,7 @@ interface UpdatesCardProps {
   git: StackGit;
 }
 
-// UpdatesCard is the Updates card of the Git tab (UI-SPEC "Git tab", D-14): whether Bayplan checks the repository on a
+// UpdatesCard is the Updates card of the Git tab (UI-SPEC "Git tab", D-14): whether Coaming checks the repository on a
 // schedule and how often, saved with its own button, and Check now with the time of the last check. A stack that
 // follows a fixed commit has nothing to check, so it shows a line saying so and neither control. A person who may not
 // deploy sees the settings and cannot change them.

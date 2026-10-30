@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/web"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/web"
 )
 
 // TestBasePathInvariant runs the same assertions at the root and under a base
@@ -28,24 +28,24 @@ func TestBasePathInvariant(t *testing.T) {
 		name, publicURL, base string
 		wantCookie, wantPath  string
 	}{
-		{"root over http", "http://bayplan.test", "", "bayplan_session", "/"},
-		{"root over https", "https://bayplan.test", "", "__Host-bayplan_session", "/"},
-		{"base over http", "http://bayplan.test/bayplan", "/bayplan", "bayplan_session", "/bayplan"},
-		{"base over https", "https://bayplan.test/bayplan", "/bayplan", "__Secure-bayplan_session", "/bayplan"},
+		{"root over http", "http://coaming.test", "", "coaming_session", "/"},
+		{"root over https", "https://coaming.test", "", "__Host-coaming_session", "/"},
+		{"base over http", "http://coaming.test/coaming", "/coaming", "coaming_session", "/coaming"},
+		{"base over https", "https://coaming.test/coaming", "/coaming", "__Secure-coaming_session", "/coaming"},
 	}
 	_, err := fs.Stat(web.FS(), "index.html")
 	spaBuilt := err == nil
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := map[string]string{
-				"BAYPLAN_DATA_DIR":   t.TempDir() + "/data",
-				"BAYPLAN_PUBLIC_URL": tc.publicURL,
+				"COAMING_DATA_DIR":   t.TempDir() + "/data",
+				"COAMING_PUBLIC_URL": tc.publicURL,
 			}
 			if strings.HasPrefix(tc.publicURL, "http://") {
 				// An http public URL for another host is a plain agent address that
 				// only the development switch hands out (G-02-R4-3), and this test is
 				// about the base path, so the http cases turn the switch on.
-				env["BAYPLAN_AGENT_ALLOW_INSECURE"] = "true"
+				env["COAMING_AGENT_ALLOW_INSECURE"] = "true"
 			}
 			srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 			if err != nil {
@@ -77,16 +77,16 @@ func TestBasePathInvariant(t *testing.T) {
 				if rec.Code != http.StatusOK {
 					t.Fatalf("GET %s/ = %d", tc.base, rec.Code)
 				}
-				if want := `<meta name="bayplan-base" content="` + tc.base + `">`; !strings.Contains(rec.Body.String(), want) {
+				if want := `<meta name="coaming-base" content="` + tc.base + `">`; !strings.Contains(rec.Body.String(), want) {
 					t.Errorf("index lacks %s:\n%s", want, rec.Body)
 				}
 				// A proxy that strips: the same index at the root.
-				if rec := do(http.MethodGet, "/", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
+				if rec := do(http.MethodGet, "/", ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "coaming-base") {
 					t.Errorf("GET / = %d", rec.Code)
 				}
 				// The base with no trailing slash.
 				if tc.base != "" {
-					if rec := do(http.MethodGet, tc.base, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "bayplan-base") {
+					if rec := do(http.MethodGet, tc.base, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "coaming-base") {
 						t.Errorf("GET %s = %d", tc.base, rec.Code)
 					}
 				}
@@ -162,13 +162,13 @@ func TestBasePathInvariant(t *testing.T) {
 			if strings.HasPrefix(tc.publicURL, "http://") {
 				wantScheme = "ws://"
 			}
-			if want := wantScheme + "bayplan.test" + tc.base + "/agent/connect"; added.Install.AgentURL != want {
+			if want := wantScheme + "coaming.test" + tc.base + "/agent/connect"; added.Install.AgentURL != want {
 				t.Errorf("install.agentUrl = %q, want %q", added.Install.AgentURL, want)
 			}
 			if !strings.HasSuffix(added.Install.AgentURL, tc.base+"/agent/connect") {
 				t.Errorf("install.agentUrl = %q does not end in %q", added.Install.AgentURL, tc.base+"/agent/connect")
 			}
-			if !strings.Contains(added.Install.Swarm.Command, "BAYPLAN_AGENT_URL="+added.Install.AgentURL) {
+			if !strings.Contains(added.Install.Swarm.Command, "COAMING_AGENT_URL="+added.Install.AgentURL) {
 				t.Errorf("the swarm command does not dial %q:\n%s", added.Install.AgentURL, added.Install.Swarm.Command)
 			}
 		})

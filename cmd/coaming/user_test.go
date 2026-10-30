@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // lockedAdmin adds a user named admin who is locked out for another half hour.
@@ -82,7 +82,7 @@ func TestUserUnlockNeedsAnArgumentAndNeverGeneratesAKey(t *testing.T) {
 	if err == nil || !strings.Contains(errOut, "no encryption key") {
 		t.Fatalf("unlock without a key = %v, stderr %q", err, errOut)
 	}
-	if matches, _ := bayplanKeyFiles(other); len(matches) != 0 {
+	if matches, _ := coamingKeyFiles(other); len(matches) != 0 {
 		t.Fatalf("unlock created a key file: %v", matches)
 	}
 }
@@ -163,11 +163,11 @@ func TestUserResetPasswordPrintsOneLinkEndsSessionsAndRecordsSystemCLI(t *testin
 func TestUserResetPasswordBuildsTheLinkOnTheStoredPublicURLAndBasePath(t *testing.T) {
 	dir, st := seedDataDir(t, 0)
 	activeAdmin(t, st)
-	if _, err := st.Write.Exec(`INSERT INTO settings (key, value, updated_at) VALUES ('public_url', 'https://bayplan.example.test/base', 1)`); err != nil {
+	if _, err := st.Write.Exec(`INSERT INTO settings (key, value, updated_at) VALUES ('public_url', 'https://coaming.example.test/base', 1)`); err != nil {
 		t.Fatal(err)
 	}
 	out, errOut, err := runCLI(t, dir, "user", "reset-password", "admin")
-	if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "https://bayplan.example.test/base/invite#token=") {
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(out), "https://coaming.example.test/base/invite#token=") {
 		t.Fatalf("reset-password = %q, %q, %v; want a link on the stored public URL", out, errOut, err)
 	}
 	if strings.Count(strings.TrimSpace(out), "\n") != 0 {
@@ -185,7 +185,7 @@ func TestUserResetPasswordWithoutAPublicURLPrintsTheFragmentFormAndSaysWhereToOp
 	if !strings.Contains(out, "/invite#token=") || strings.Contains(out, "http") {
 		t.Fatalf("stdout = %q, want the fragment form with no address", out)
 	}
-	if !strings.Contains(out+errOut, "Open it on your Bayplan address") {
+	if !strings.Contains(out+errOut, "Open it on your Coaming address") {
 		t.Fatalf("output %q / %q does not say where to open the link", out, errOut)
 	}
 }
@@ -240,7 +240,7 @@ func TestUserResetPasswordNeedsAnArgumentAndNeverGeneratesAKey(t *testing.T) {
 	if err == nil || !strings.Contains(errOut, "no encryption key") {
 		t.Fatalf("reset-password without a key = %v, stderr %q", err, errOut)
 	}
-	if matches, _ := bayplanKeyFiles(other); len(matches) != 0 {
+	if matches, _ := coamingKeyFiles(other); len(matches) != 0 {
 		t.Fatalf("reset-password created a key file: %v", matches)
 	}
 }

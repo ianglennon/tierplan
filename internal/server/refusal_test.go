@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server_test
 
@@ -18,10 +18,10 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/server"
-	"github.com/ianglennon/bayplan/internal/server/servertest"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/server"
+	"github.com/ianglennon/coaming/internal/server/servertest"
 )
 
 // Plan 03-10, D-20: a signed-in user's identical refusals cost one full audit row
@@ -48,7 +48,7 @@ func (c *stepClock) advance(d time.Duration) {
 func TestRepeatedRefusalsAreCoalescedIntoOneEntry(t *testing.T) {
 	fl := pflag.NewFlagSet("refusal", pflag.ContinueOnError)
 	config.BindFlags(fl)
-	env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+	env := map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}
 	cfg, err := config.Load(fl, func(k string) string { return env[k] }, os.ReadFile)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestRepeatedRefusalsAreCoalescedIntoOneEntry(t *testing.T) {
 func TestRecentEnvironmentProbesAreAuditedThroughTheCoalescerWithABoundedEnvID(t *testing.T) {
 	fl := pflag.NewFlagSet("refusal", pflag.ContinueOnError)
 	config.BindFlags(fl)
-	env := map[string]string{"BAYPLAN_DATA_DIR": t.TempDir() + "/data"}
+	env := map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data"}
 	cfg, err := config.Load(fl, func(k string) string { return env[k] }, os.ReadFile)
 	if err != nil {
 		t.Fatal(err)

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Bayplan can be served under a path prefix behind a reverse proxy (D-50). The
-// server announces the prefix in <meta name="bayplan-base"> when it renders
+// Coaming can be served under a path prefix behind a reverse proxy (D-50). The
+// server announces the prefix in <meta name="coaming-base"> when it renders
 // index.html (plan 02-03); every URL the SPA builds goes through the helpers
 // here, so nothing else needs to know about it. Without the tag (the Vite dev
 // server, tests) the base is empty and the SPA runs at the root.
@@ -14,7 +14,7 @@ let cached: string | null = null;
 export function basePath(): string {
   if (cached !== null) return cached;
   const raw =
-    document.querySelector<HTMLMetaElement>('meta[name="bayplan-base"]')?.content.trim() ?? "";
+    document.querySelector<HTMLMetaElement>('meta[name="coaming-base"]')?.content.trim() ?? "";
   cached = raw.endsWith("/") ? raw.slice(0, -1) : raw;
   return cached;
 }
@@ -30,7 +30,7 @@ export function withBase(path: string): string {
 }
 
 // stripBase is the reverse of withBase for a path taken from the address bar
-// or a request URL. A path that only shares the prefix ("/bayplanx") is not
+// or a request URL. A path that only shares the prefix ("/coamingx") is not
 // under the base and comes back unchanged.
 export function stripBase(path: string): string {
   const base = basePath();

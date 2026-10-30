@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 -- name: InsertSession :exec
 INSERT INTO sessions (id_hash, user_id, created_at, last_seen_at, absolute_expires_at, remember, ip, user_agent, public_id)

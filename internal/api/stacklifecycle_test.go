@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/jobs"
 )
 
 // Stop and Start of a stack (plan 07-26, STK-11, D-19): a job on the operation lock, audited, that parks
@@ -70,7 +70,7 @@ func TestStopAndStartAStackKeepEveryServicesDigestAndReplicaCount(t *testing.T) 
 			t.Errorf("stop update for %s: mode %+v, want 0 replicas", u.Spec.Name, u.Spec.Mode)
 		}
 		want := map[string]string{"pause_web": "3", "pause_api": "1"}[u.Spec.Name]
-		if got := u.Spec.Labels["bayplan.stack.stopped-replicas"]; got != want {
+		if got := u.Spec.Labels["coaming.stack.stopped-replicas"]; got != want {
 			t.Errorf("%s remembers %q, want %q", u.Spec.Name, got, want)
 		}
 	}
@@ -97,7 +97,7 @@ func TestStopAndStartAStackKeepEveryServicesDigestAndReplicaCount(t *testing.T) 
 		if rep == nil || *rep.Replicas != want {
 			t.Errorf("start update for %s: mode %+v, want %d replicas", u.Spec.Name, u.Spec.Mode, want)
 		}
-		if _, left := u.Spec.Labels["bayplan.stack.stopped-replicas"]; left {
+		if _, left := u.Spec.Labels["coaming.stack.stopped-replicas"]; left {
 			t.Errorf("%s still carries the stopped-replicas label after a start", u.Spec.Name)
 		}
 		if got := u.Spec.TaskTemplate.ContainerSpec.Image; got != images[u.Spec.Name] {
@@ -394,7 +394,7 @@ func standaloneHost(t *testing.T, state string) (*envFix, *roleCaller, stackAnsw
 		ID: "c1", Names: []string{"/solo-web-1"}, Image: "nginx", State: state,
 		Labels: map[string]string{
 			"com.docker.compose.project": "solo", "com.docker.compose.service": "web",
-			"com.docker.compose.oneoff": "False", "bayplan.stack.id": st.ID,
+			"com.docker.compose.oneoff": "False", "coaming.stack.id": st.ID,
 		},
 	}}
 	f.fake.Reconfigure(cfg)

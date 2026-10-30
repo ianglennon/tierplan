@@ -1,13 +1,13 @@
 {
   "stackRetention": {
     "title": "Stack history",
-    "caption": "How many revisions Bayplan keeps for each stack.",
+    "caption": "How many revisions Coaming keeps for each stack.",
     "label": "Revisions kept per stack",
     "helper": "The deployed revision and the last good one are always kept, even when older. Older revisions are deleted, along with their variables and secret files.",
     "error": "Use a whole number from 5 to 200.",
     "loading": "Loading the stack history setting…",
     "loadFailed": "Couldn't load the stack history setting.",
-    "note": "Bayplan keeps the last {{count, number}} revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.",
+    "note": "Coaming keeps the last {{count, number}} revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.",
     "openSettings": "Open settings",
     "confirm": {
       "title": "Delete older revisions?",

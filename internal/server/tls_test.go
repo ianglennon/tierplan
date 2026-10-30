@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
 var fixedNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
@@ -84,7 +84,7 @@ func TestTLSConfigRefusesFilesTogetherWithSelfSigned(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error")
 	}
-	for _, want := range []string{"BAYPLAN_TLS_SELF_SIGNED", "BAYPLAN_TLS_CERT_FILE", "BAYPLAN_TLS_KEY_FILE"} {
+	for _, want := range []string{"COAMING_TLS_SELF_SIGNED", "COAMING_TLS_CERT_FILE", "COAMING_TLS_KEY_FILE"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not name %s", err, want)
 		}
@@ -93,7 +93,7 @@ func TestTLSConfigRefusesFilesTogetherWithSelfSigned(t *testing.T) {
 
 func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	got, err := TLSConfig(cfg, "https://bayplan.example.com:7480", "", nowFn(fixedNow))
+	got, err := TLSConfig(cfg, "https://coaming.example.com:7480", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestTLSSelfSignedWritesTheSANSetAndAPrivateKey(t *testing.T) {
 	if want := fixedNow.AddDate(1, 0, 0); leaf.NotAfter.Sub(want).Abs() > 2*time.Minute {
 		t.Errorf("NotAfter = %v, want about %v (one year)", leaf.NotAfter, want)
 	}
-	for _, name := range []string{"localhost", "bayplan.example.com"} {
+	for _, name := range []string{"localhost", "coaming.example.com"} {
 		if !slices.Contains(leaf.DNSNames, name) {
 			t.Errorf("DNS SANs %v lack %q", leaf.DNSNames, name)
 		}
@@ -261,8 +261,8 @@ func TestTLSConfigLoadsASuppliedCertificatePair(t *testing.T) {
 func TestTLSConfigNamesTheSettingWhenTheFilesCannotBeLoaded(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir(), TLSCertFile: "/nonexistent/c.pem", TLSKeyFile: "/nonexistent/k.pem"}
 	_, err := TLSConfig(cfg, "", "", nowFn(fixedNow))
-	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_TLS_CERT_FILE") {
-		t.Fatalf("err = %v, want one naming BAYPLAN_TLS_CERT_FILE", err)
+	if err == nil || !strings.Contains(err.Error(), "COAMING_TLS_CERT_FILE") {
+		t.Fatalf("err = %v, want one naming COAMING_TLS_CERT_FILE", err)
 	}
 }
 
@@ -283,9 +283,9 @@ func TestTLSFingerprintIsTheSHA256OfTheLeaf(t *testing.T) {
 
 func TestHealthcheckWorksAgainstTheServersOwnSelfSignedTLS(t *testing.T) {
 	cfg := testConfig(t, map[string]string{
-		"BAYPLAN_DATA_DIR":        t.TempDir() + "/data",
-		"BAYPLAN_TLS_SELF_SIGNED": "true",
-		"BAYPLAN_PUBLIC_URL":      "https://bayplan.example.com",
+		"COAMING_DATA_DIR":        t.TempDir() + "/data",
+		"COAMING_TLS_SELF_SIGNED": "true",
+		"COAMING_PUBLIC_URL":      "https://coaming.example.com",
 	})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -393,12 +393,12 @@ func TestLooksLikeContainerID(t *testing.T) {
 func TestTLSSelfSignedIsKeptWhenTheContainerIsRecreated(t *testing.T) {
 	cfg := selfSignedConfig(t)
 	setHostname(t, "aaaaaaaaaaaa", nil)
-	first, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://coaming.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
 	setHostname(t, "bbbbbbbbbbbb", nil)
-	second, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow.Add(time.Hour)))
+	second, err := TLSConfig(cfg, "https://coaming.example.com", "", nowFn(fixedNow.Add(time.Hour)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,7 +644,7 @@ func TestSPKIPinIsEmptyWithoutACertificate(t *testing.T) {
 func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 	build := func(env map[string]string) *Server {
 		t.Helper()
-		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
@@ -653,7 +653,7 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 		return srv
 	}
 
-	self := build(map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"})
+	self := build(map[string]string{"COAMING_TLS_SELF_SIGNED": "true"})
 	if got, want := self.TLSPin(), spkiPin(self.tlsConfig); got == "" || got != want {
 		t.Errorf("self-signed TLSPin() = %q, want %q", got, want)
 	}
@@ -663,8 +663,8 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	supplied := build(map[string]string{
-		"BAYPLAN_TLS_CERT_FILE": filepath.Join(src, selfSignedDir, selfSignedCertFile),
-		"BAYPLAN_TLS_KEY_FILE":  filepath.Join(src, selfSignedDir, selfSignedKeyFile),
+		"COAMING_TLS_CERT_FILE": filepath.Join(src, selfSignedDir, selfSignedCertFile),
+		"COAMING_TLS_KEY_FILE":  filepath.Join(src, selfSignedDir, selfSignedKeyFile),
 	})
 	if got := supplied.TLSPin(); got != "" {
 		t.Errorf("supplied certificate TLSPin() = %q, want empty", got)
@@ -677,7 +677,7 @@ func TestServerTLSPinIsPublishedOnlyForTheSelfSignedCertificate(t *testing.T) {
 
 func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
 	self := func(env map[string]string) *Server {
-		env["BAYPLAN_DATA_DIR"] = t.TempDir() + "/data"
+		env["COAMING_DATA_DIR"] = t.TempDir() + "/data"
 		srv, err := Build(context.Background(), testConfig(t, env), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
@@ -685,7 +685,7 @@ func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
 		t.Cleanup(func() { _ = srv.Close() })
 		return srv
 	}
-	srv := self(map[string]string{"BAYPLAN_TLS_SELF_SIGNED": "true"})
+	srv := self(map[string]string{"COAMING_TLS_SELF_SIGNED": "true"})
 	if got := srv.Tunnel().Pins(); len(got) != 1 || got[0] != srv.TLSPin() || !strings.HasPrefix(got[0], "sha256/") {
 		t.Errorf("self-signed welcome pins = %v, want exactly [%s]", got, srv.TLSPin())
 	}
@@ -696,7 +696,7 @@ func TestServerWelcomePinsComeFromTheSelfSignedPin(t *testing.T) {
 
 func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
 	cfg := selfSignedConfig(t)
-	first, err := TLSConfig(cfg, "https://bayplan.example.com", "", nowFn(fixedNow))
+	first, err := TLSConfig(cfg, "https://coaming.example.com", "", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +707,7 @@ func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
 
 	// Naming an agent URL on another host re-signs the certificate for both
 	// hosts. The key is the same, so the pin installed agents hold still matches.
-	second, err := TLSConfig(cfg, "https://bayplan.example.com", "https://bayplan.lan:7480", nowFn(fixedNow))
+	second, err := TLSConfig(cfg, "https://coaming.example.com", "https://coaming.lan:7480", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,7 +715,7 @@ func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
 	if l.SerialNumber.Cmp(leafOf(t, first).SerialNumber) == 0 {
 		t.Fatal("the certificate was reused although the agent URL host is new")
 	}
-	for _, name := range []string{"bayplan.example.com", "bayplan.lan"} {
+	for _, name := range []string{"coaming.example.com", "coaming.lan"} {
 		if !slices.Contains(l.DNSNames, name) {
 			t.Errorf("DNS SANs %v lack %q", l.DNSNames, name)
 		}
@@ -725,7 +725,7 @@ func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
 	}
 
 	// An agent URL given as an address is an IP SAN.
-	third, err := TLSConfig(cfg, "https://bayplan.example.com", "http://192.0.2.44:7480", nowFn(fixedNow))
+	third, err := TLSConfig(cfg, "https://coaming.example.com", "http://192.0.2.44:7480", nowFn(fixedNow))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +739,7 @@ func TestTLSSelfSignedCoversTheAgentURLHostAndKeepsThePin(t *testing.T) {
 
 func TestWantedNamesTakesBothURLs(t *testing.T) {
 	setHostname(t, "", errors.New("no hostname"))
-	got := wantedNames("https://a.example.com/bayplan", "https://b.example.com:7480")
+	got := wantedNames("https://a.example.com/coaming", "https://b.example.com:7480")
 	if !slices.Equal(got.dns, []string{"a.example.com", "b.example.com", "localhost"}) {
 		t.Errorf("dns = %v, want both hosts and localhost", got.dns)
 	}

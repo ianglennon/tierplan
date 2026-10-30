@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // The roll-up of one service of a stack, from its tasks or containers. It is what the stack's own state
@@ -135,7 +135,7 @@ func swarmPorts(ps []dockerx.ServicePort) []string {
 }
 
 // SwarmRows are the services a stack owns among the services of a swarm, by Ownership: for a managed stack
-// those in its namespace that carry its ID, so a service of the same name that Bayplan did not make is never
+// those in its namespace that carry its ID, so a service of the same name that Coaming did not make is never
 // the stack's; for a discovered one every service of its namespace. They are in name order.
 func SwarmRows(stack Stack, all []dockerx.ServiceRow) []ServiceRow {
 	own := OwnershipOf(stack)
@@ -204,7 +204,7 @@ func standaloneRollup(cs []ContainerRow) string {
 
 // StandaloneRows are the services a stack owns among the containers of a host, by Ownership: for a managed
 // stack those of its Compose project that carry its ID, and those the host CLI added to the project without
-// Bayplan's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6); for a
+// Coaming's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6); for a
 // discovered one every container of the project. Another stack's containers and a project the stack owns none of
 // stay out, and so do one-off containers (`compose run`). A service is the containers that share the service
 // label, so a service with none has no row.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 const (
@@ -57,7 +57,7 @@ func registerStackLifecycle(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "stopStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/stop",
 		Summary: "Stop a stack",
-		Description: "Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label bayplan.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. " +
+		Description: "Parks the stack as a job, answering 202 with the job ID at once. On a swarm every replicated service is scaled to 0 and its count is remembered in the service-level label coaming.stack.stopped-replicas (the label is not part of the task template, so no task is replaced), and the global and job services are removed. On a standalone host the Compose SDK stops the stack's containers. Networks, volumes, secrets and configs are never removed. " +
 			"The stack is marked stopped once everything has stopped; a stop that fails stops where it failed and what already stopped stays stopped. " +
 			"A stack that is stopped already, was never deployed or has nothing running is 409 nothing_running. " +
 			"Only one stack operation at a time runs on an environment: while one does, the answer is 409 operation_locked naming it and nothing is stored. " +

@@ -2,8 +2,8 @@
   "dashboard": {
     "tabTitle": "Dashboard",
     "environmentFallback": "this environment",
-    "selfBadge": "Bayplan (this instance)",
-    "workerNotice": "This host is a swarm worker. Pin Bayplan to a manager node to manage the swarm. Showing node-local data only.",
+    "selfBadge": "Coaming (this instance)",
+    "workerNotice": "This host is a swarm worker. Pin Coaming to a manager node to manage the swarm. Showing node-local data only.",
     "tiles": {
       "containers": "Containers",
       "containersSubline": "{{running}} running · {{stopped}} stopped",
@@ -37,7 +37,7 @@
         "node": "Node",
         "secret": "Secret",
         "config": "Config",
-        "bayplan": "Bayplan"
+        "coaming": "Coaming"
       },
       "live": "Live",
       "reconnecting": "Reconnecting…",
@@ -61,15 +61,15 @@
       "attempted": "Attempted {{when}}",
       "offline": {
         "heading": "Docker isn't reachable",
-        "body": "Bayplan lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the Bayplan container and that the Docker daemon is running.",
-        "bodyNoTime": "Bayplan lost its connection to {{name}}. Check that /var/run/docker.sock is mounted into the Bayplan container and that the Docker daemon is running."
+        "body": "Coaming lost its connection to {{name}} at {{time}}. Check that /var/run/docker.sock is mounted into the Coaming container and that the Docker daemon is running.",
+        "bodyNoTime": "Coaming lost its connection to {{name}}. Check that /var/run/docker.sock is mounted into the Coaming container and that the Docker daemon is running."
       },
       "unsupported": {
         "heading": "This engine isn't supported",
-        "body": "{{engine}} {{version}} (API {{api}}) is below the minimum Bayplan supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
-        "bodyOther": "{{engine}} {{version}} (API {{api}}) isn't a setup Bayplan supports. Bayplan manages Docker Engine 24 or later.",
+        "body": "{{engine}} {{version}} (API {{api}}) is below the minimum Coaming supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
+        "bodyOther": "{{engine}} {{version}} (API {{api}}) isn't a setup Coaming supports. Coaming manages Docker Engine 24 or later.",
         "podmanHeading": "Podman isn't supported",
-        "podmanBody": "Bayplan manages Docker Engine only.",
+        "podmanBody": "Coaming manages Docker Engine only.",
         "engineFallback": "This engine"
       }
     },

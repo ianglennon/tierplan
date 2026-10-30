@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
@@ -7,22 +7,22 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// A stack Bayplan does not manage is never taken over (plan 07-14, D-12): a name that is in use
+// A stack Coaming does not manage is never taken over (plan 07-14, D-12): a name that is in use
 // on the target, under the swarm namespace or the Compose project, by something without this
 // stack's ID is a clash.
 
 var (
 	swarmNS    = map[string]string{"com.docker.stack.namespace": "web"}
-	swarmOwned = map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stack-web"}
-	swarmOther = map[string]string{"com.docker.stack.namespace": "blog", "bayplan.stack.id": "stack-blog"}
+	swarmOwned = map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stack-web"}
+	swarmOther = map[string]string{"com.docker.stack.namespace": "blog", "coaming.stack.id": "stack-blog"}
 	projNS     = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app"}
-	projOwned  = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "bayplan.stack.id": "stack-web"}
+	projOwned  = map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "coaming.stack.id": "stack-web"}
 	projOther  = map[string]string{"com.docker.compose.project": "blog"}
 )
 
@@ -106,7 +106,7 @@ func TestForeignStackOnAStandaloneHostFindsAComposeProjectOfTheNameWithoutThisSt
 }
 
 // TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded: a container the host CLI adds to a managed standalone
-// stack's Compose project (docker compose up --scale) carries the project and no bayplan.stack.id. Beside a container
+// stack's Compose project (docker compose up --scale) carries the project and no coaming.stack.id. Beside a container
 // that carries the stack's ID and runs the same service it is no name clash; another stack's ID, a project the stack holds
 // no container of, or a service no container of the stack runs, still is (G-08-6, WR-03, user decisions 2026-10-27;
 // P7 D-12, T-08-47, T-08-107, T-08-113).
@@ -116,7 +116,7 @@ func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 		return dockertest.FakeContainer{ID: id, Names: []string{"/web-app-" + id}, Image: "x", State: "running", Labels: labels}
 	}
 	oneOff := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "app", "com.docker.compose.oneoff": "True"}
-	anotherStack := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stack-other"}
+	anotherStack := map[string]string{"com.docker.compose.project": "web", "coaming.stack.id": "stack-other"}
 	otherService := map[string]string{"com.docker.compose.project": "web", "com.docker.compose.service": "postgres"}
 	for name, tc := range map[string]struct {
 		containers []dockertest.FakeContainer
@@ -150,8 +150,8 @@ func TestForeignStackOfCountsOnlyWhatTheHostCLICouldNotHaveAdded(t *testing.T) {
 // being created, and a stored stack that is not adopted still owns only what carries its own ID (plan 08-18).
 func TestCreateClashStaysStrict(t *testing.T) {
 	t.Parallel()
-	stale := map[string]string{"com.docker.stack.namespace": "web", "bayplan.stack.id": "stale-id"}
-	staleProj := map[string]string{"com.docker.compose.project": "web", "bayplan.stack.id": "stale-id"}
+	stale := map[string]string{"com.docker.stack.namespace": "web", "coaming.stack.id": "stale-id"}
+	staleProj := map[string]string{"com.docker.compose.project": "web", "coaming.stack.id": "stale-id"}
 	ctx := testsupport.Context(t)
 
 	for name, labels := range map[string]map[string]string{"no ID": swarmNS, "a stale ID": stale} {

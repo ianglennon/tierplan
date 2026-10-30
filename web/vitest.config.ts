@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { defineConfig } from "vitest/config";
 
@@ -11,7 +11,7 @@ export default defineConfig({
   },
   define: {
     // Same build-time constant vite.config.ts defines, fixed for tests.
-    __BAYPLAN_SOURCE_URL__: JSON.stringify("https://github.com/ianglennon/bayplan"),
+    __COAMING_SOURCE_URL__: JSON.stringify("https://github.com/ianglennon/coaming"),
   },
   test: {
     environment: "jsdom",

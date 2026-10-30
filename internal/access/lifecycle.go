@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package access
 
@@ -13,16 +13,16 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 var (
-	// ErrLastInstanceAdmin is a change that would leave Bayplan with no active
+	// ErrLastInstanceAdmin is a change that would leave Coaming with no active
 	// instance admin: demoting, disabling or deleting the last one (D-02). It is
 	// counted after the change, inside the same write transaction, so concurrent
 	// attempts cannot both succeed.
-	ErrLastInstanceAdmin = errors.New("access: Bayplan needs at least one active instance admin")
+	ErrLastInstanceAdmin = errors.New("access: Coaming needs at least one active instance admin")
 	// ErrStaleChange is a profile save based on a version of the user that has
 	// since changed (T-03-57).
 	ErrStaleChange = errors.New("access: the user changed since it was read")

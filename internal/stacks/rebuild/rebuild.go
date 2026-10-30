@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package rebuild is the reverse of internal/stacks/convert: it turns what a stack is running into the compose
 // file that would run the same thing. The Generated compose tab shows it as a preview and adoption starts from it
-// (D-09, D-12), so what a person sees there is what Bayplan would store.
+// (D-09, D-12), so what a person sees there is what Coaming would store.
 //
 // It is pure: no HTTP, no store and no Docker client, only the moby API types and the compose-go types. The
 // caller reads the engine and hands in typed data, and a secret or a config is only ever a name here, so a rebuild

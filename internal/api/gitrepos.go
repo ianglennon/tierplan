@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -18,15 +18,15 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/instance"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // problemGitUnavailable is the problem type of a server built without git support.
@@ -62,7 +62,7 @@ type GitDeps struct {
 	// the origin the request came to.
 	Instance *instance.Instance
 	// OnCheck, when set, is called when the sync check a request started has ended, with the stack, what it found and
-	// the error of Bayplan's own storage if there was one. Tests use it to know that a check is over.
+	// the error of Coaming's own storage if there was one. Tests use it to know that a check is over.
 	OnCheck func(stackID string, outcome gitsync.Outcome, err error)
 }
 
@@ -111,7 +111,7 @@ type GitTestFailureBody struct {
 
 // GitTestHostKeyBody is what a test of an ssh address found out about the machine it talked to.
 type GitTestHostKeyBody struct {
-	State            string `json:"state" enum:"none,builtin,trusted,untrusted,changed" doc:"none for an https address, or an ssh host Bayplan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically"`
+	State            string `json:"state" enum:"none,builtin,trusted,untrusted,changed" doc:"none for an https address, or an ssh host Coaming holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically"`
 	Type             string `json:"type" doc:"The key type the host showed (ssh-ed25519); empty when it showed none"`
 	Fingerprint      string `json:"fingerprint" doc:"The SHA256 fingerprint of the key the host showed (SHA256:...)"`
 	Key              string `json:"key" doc:"The key the host showed in authorized_keys form, set when state is untrusted or changed: send it back as hostKey, or to trust-host-key, after comparing the fingerprint"`
@@ -335,7 +335,7 @@ func RegisterGit(r *httpx.Router, d GitDeps) {
 		Method:      http.MethodPost,
 		Path:        "/api/git/repos/test",
 		Summary:     "Test a git repository address from the server",
-		Description: "Lists the branches and tags of a repository over HTTPS from the Bayplan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), " +
+		Description: "Lists the branches and tags of a repository over HTTPS from the Coaming server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), " +
 			"the first 20 branch names and tag names with their counts, and the default branch. " +
 			"It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. " +
 			"The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA " +
@@ -372,7 +372,7 @@ type GitRepoRequest struct {
 	URL          string  `json:"url,omitempty" maxLength:"2048" doc:"The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it"`
 	CredentialID *string `json:"credentialId,omitempty" maxLength:"64" doc:"The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope"`
 	CAPEM        string  `json:"caPem,omitempty" maxLength:"262144" doc:"A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification"`
-	HostKey      string  `json:"hostKey,omitempty" maxLength:"4096" doc:"For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Bayplan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh"`
+	HostKey      string  `json:"hostKey,omitempty" maxLength:"4096" doc:"For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Coaming. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh"`
 }
 
 // GitRepoCredentialBody is the credential a repository uses.

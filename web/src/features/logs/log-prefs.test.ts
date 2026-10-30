@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -36,8 +36,8 @@ describe("log preferences", () => {
     saveLogPrefs({ wrap: true, timestamps: true, utc: false });
     expect(loadLogPrefs()).toEqual({ wrap: true, timestamps: true, utc: false });
     const keys = Object.keys(localStorage);
-    expect(keys).toEqual(["bayplan.logs.view"]);
-    expect(JSON.parse(localStorage.getItem("bayplan.logs.view") ?? "")).toEqual({
+    expect(keys).toEqual(["coaming.logs.view"]);
+    expect(JSON.parse(localStorage.getItem("coaming.logs.view") ?? "")).toEqual({
       wrap: true,
       timestamps: true,
       utc: false,
@@ -45,9 +45,9 @@ describe("log preferences", () => {
   });
 
   it("fall back to the defaults when what was saved is damaged", () => {
-    localStorage.setItem("bayplan.logs.view", "{not json");
+    localStorage.setItem("coaming.logs.view", "{not json");
     expect(loadLogPrefs()).toEqual(DEFAULT_LOG_PREFS);
-    localStorage.setItem("bayplan.logs.view", JSON.stringify({ wrap: "yes", utc: 1 }));
+    localStorage.setItem("coaming.logs.view", JSON.stringify({ wrap: "yes", utc: 1 }));
     expect(loadLogPrefs()).toEqual(DEFAULT_LOG_PREFS);
   });
 
@@ -158,9 +158,9 @@ describe("the Task names choice", () => {
   it("is kept with the other choices, and adds nothing to what they are read as", () => {
     saveLogPrefs({ wrap: true, timestamps: false, utc: false });
     saveTaskNames(false);
-    expect(Object.keys(localStorage)).toEqual(["bayplan.logs.view"]);
+    expect(Object.keys(localStorage)).toEqual(["coaming.logs.view"]);
     expect(loadLogPrefs()).toEqual({ wrap: true, timestamps: false, utc: false });
-    expect(JSON.parse(localStorage.getItem("bayplan.logs.view") ?? "")).toEqual({
+    expect(JSON.parse(localStorage.getItem("coaming.logs.view") ?? "")).toEqual({
       wrap: true,
       timestamps: false,
       utc: false,
@@ -176,9 +176,9 @@ describe("the Task names choice", () => {
   });
 
   it("is on when what was saved is damaged, and does not stop the page when storage is off", () => {
-    localStorage.setItem("bayplan.logs.view", "{not json");
+    localStorage.setItem("coaming.logs.view", "{not json");
     expect(loadTaskNames()).toBe(true);
-    localStorage.setItem("bayplan.logs.view", JSON.stringify({ taskNames: "no" }));
+    localStorage.setItem("coaming.logs.view", JSON.stringify({ taskNames: "no" }));
     expect(loadTaskNames()).toBe(true);
     vi.stubGlobal("localStorage", {
       getItem: () => {

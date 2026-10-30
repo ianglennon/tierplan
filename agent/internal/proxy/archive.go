@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package proxy
 
@@ -127,7 +127,7 @@ func archiveNameOK(name string) error {
 // archiveTargetOK refuses an archive write into any container that Compose did not create or
 // that is running. The Compose SDK writes a secret or config only between create and start; a
 // write into a running container, or into one that is not a compose container, is not a thing
-// Bayplan does (STK-02). A container the engine does not have is a refusal; an engine that does
+// Coaming does (STK-02). A container the engine does not have is a refusal; an engine that does
 // not answer is an error wrapping errContainerLookup, never an allow.
 func archiveTargetOK(ctx context.Context, id string, inspect containerLookup) error {
 	if inspect == nil {

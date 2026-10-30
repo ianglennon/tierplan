@@ -28,7 +28,7 @@
 {"Time":"2026-10-16T21:26:15.572138422Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\n"}
 {"Time":"2026-10-16T21:26:15.572139689Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"goroutine 7 [select (no cases)]:\n"}
 {"Time":"2026-10-16T21:26:15.572140958Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"example.test/summaryfix/c.TestCHangsForever(0xc000144248?)\n"}
-{"Time":"2026-10-16T21:26:15.572142299Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/tmp/claude-1000/-home-glennog-projects-bayplan/a8dbcbc0-3111-4b8a-aeab-7a64b8c408c5/scratchpad/fix/c/c_test.go:5 +0x1d\n"}
+{"Time":"2026-10-16T21:26:15.572142299Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/tmp/claude-1000/-home-glennog-projects-coaming/a8dbcbc0-3111-4b8a-aeab-7a64b8c408c5/scratchpad/fix/c/c_test.go:5 +0x1d\n"}
 {"Time":"2026-10-16T21:26:15.572143532Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"testing.tRunner(0xc000144248, 0x7e61f8)\n"}
 {"Time":"2026-10-16T21:26:15.572144719Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"\t/usr/local/go/src/testing/testing.go:2193 +0x21d\n"}
 {"Time":"2026-10-16T21:26:15.572147053Z","Action":"output","Package":"example.test/summaryfix/c","Test":"TestCHangsForever","Output":"created by testing.(*T).Run in goroutine 1\n"}

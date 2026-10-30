@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Only the files a stack refers to are part of the stack (D-27): the compose files, the root .env and

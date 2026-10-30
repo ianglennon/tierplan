@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -18,14 +18,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 const (
@@ -83,7 +83,7 @@ func (d SecretsDeps) services() ServicesDeps {
 }
 
 // SecretItem is one swarm secret as the list shows it. There is no value: the swarm never
-// returns one, and Bayplan keeps none.
+// returns one, and Coaming keeps none.
 type SecretItem struct {
 	ID             string            `json:"id" doc:"The secret ID"`
 	Name           string            `json:"name" doc:"The secret name"`
@@ -93,7 +93,7 @@ type SecretItem struct {
 	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the secret, whatever their tasks are doing, a service scaled to 0 included"`
 	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
 	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
-	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	CoamingStackID string            `json:"coamingStackId" doc:"The ID of the Coaming stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
 }
 
 // SecretListBody is the answer of the secrets list.
@@ -137,7 +137,7 @@ type SecretDetailBody struct {
 	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the secret"`
 	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the secret has none"`
 	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the secret has no owner"`
-	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	CoamingStackID string            `json:"coamingStackId" doc:"The ID of the Coaming stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
 	UsedByRows     []SecretUserBody  `json:"usedByRows" doc:"Every service whose spec references the secret, sorted by service name then ID"`
 }
 
@@ -268,7 +268,7 @@ func RegisterSecrets(r *httpx.Router, d SecretsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "createSecret", Method: http.MethodPost, Path: "/api/env/{envId}/secrets",
 		Summary: "Create a swarm secret",
-		Description: "Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Bayplan does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. " +
+		Description: "Creates a secret once, through a manager, and never retries. The value goes to the swarm's encrypted store and nowhere else: Coaming does not return, log, audit, cache or store it, and the answer holds the new secret's ID and name only. " +
 			"A name that is not 1 to 64 letters, numbers, dots, dashes and underscores starting and ending with a letter or number is 422 name_invalid; a value that is missing or empty is 422 value_required; one of 512,000 bytes or more is 422 value_too_large (a value of 511,999 bytes is accepted); more than 64 labels is 422, and a label key over 256 or value over 4096 characters is 422 labels_invalid. All are checked before anything is sent. " +
 			"A request body over 1 MiB is refused. 409 name_taken when the swarm has the name already, 409 not_a_swarm for a standalone host, 409 host_read_only on a read-only host. " +
 			"Needs secrets.manage (Admin) on the environment. Every attempt is audited as secret.created with the name, the number of labels, the size in bytes and where the request came from, never the value; a refusal is a failure row with its code.",
@@ -318,7 +318,7 @@ func secretItem(row dockerx.SecretRow, used int, known stackIDs) SecretItem {
 	owner, kind := secretOwner(row.Labels)
 	return SecretItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
-		UsedBy: used, Owner: owner, OwnerKind: kind, BayplanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
+		UsedBy: used, Owner: owner, OwnerKind: kind, CoamingStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 
@@ -469,7 +469,7 @@ func getSecret(ctx context.Context, d SecretsDeps, envID, id string) (SecretDeta
 	it := secretItem(row, len(users), loadStackIDs(ctx, d.Store, envID, d.Log))
 	return SecretDetailBody{
 		ID: it.ID, Name: it.Name, Labels: it.Labels, CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt,
-		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, BayplanStackID: it.BayplanStackID, UsedByRows: users,
+		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, CoamingStackID: it.CoamingStackID, UsedByRows: users,
 	}, nil
 }
 

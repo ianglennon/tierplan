@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +20,7 @@ function row(name: string, extra: Partial<ContainerRow> = {}): ContainerRow {
     isSelf: false,
     project: "",
     stack: "",
-    bayplanStackId: "",
+    coamingStackId: "",
     service: "",
     health: "none",
     selfKind: "",

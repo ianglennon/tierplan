@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -19,12 +19,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
 )
 
 const (
@@ -126,7 +126,7 @@ type VolumeDeleteResult struct {
 	NodeID string `json:"nodeId" doc:"The node ID the request named"`
 	Name   string `json:"name" doc:"The volume name the request named"`
 	Result string `json:"result" enum:"done,failed" doc:"done: the engine removed the volume. failed: it was refused or could not be sent; code says why"`
-	Code   string `json:"code,omitempty" enum:"volume_in_use,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set BAYPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
+	Code   string `json:"code,omitempty" enum:"volume_in_use,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed. volume_in_use: a container on the node, running or not, or a swarm service, mounts the volume; nothing was removed and detail names up to 5 of them. not_found: the node has no such volume, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"A plain sentence, or for action_failed the engine's message, at most 300 characters"`
 }
 
@@ -328,7 +328,7 @@ func RegisterVolumes(r *httpx.Router, d VolumesDeps) {
 			"Volumes are node-local: nodeId names the node (the nodeId of a row of a list) and may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
 			"The driver is local unless one is named. " +
 			"409 name_taken when the node already has a volume of that name (the engine would silently reuse it), 409 host_read_only on a read-only host, " +
-			"409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true, " +
+			"409 agent_host_policy when the node's agent refuses a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device or uses a volume plugin, because its owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true, " +
 			"503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs volumes.create (Admin) on the environment. Every attempt is audited as volume.created, with result failure and the code when it was refused. " +
 			"The audit row carries the driver option names and values with any password-like part replaced.",
@@ -378,7 +378,7 @@ func volumeSizes(ctx context.Context, d VolumesDeps, envID, nodeID string) (Volu
 	if nodeID != "" {
 		nodes = slices.DeleteFunc(nodes, func(n envs.NodeRef) bool { return n.ID != nodeID })
 		if len(nodes) == 0 {
-			return VolumeSizesBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+			return VolumeSizesBody{}, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 		}
 	}
 	slices.SortFunc(nodes, func(a, b envs.NodeRef) int {
@@ -464,7 +464,7 @@ func readVolume(ctx context.Context, d VolumesDeps, envID string, in *VolumeDeta
 	case dockerx.IsNotFound(err):
 		return agg, node, detail, nil, httpx.Problem(http.StatusNotFound, problemVolumeNotFound, "This volume does not exist on that node. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return agg, node, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return agg, node, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	}
 	return agg, node, detail, nil, snapshotProblem(d.Log, envID, err)
 }
@@ -623,8 +623,8 @@ func volumeCreateProblem(log *slog.Logger, envID, name string, err error) (strin
 	var denied *envs.AgentPolicyDeniedError
 	if errors.As(envs.ClassifyDockerError(err), &denied) && denied.HostPolicy {
 		return codeAgentHostPolicy, httpx.Problem(http.StatusConflict, codeAgentHostPolicy,
-			"This host's agent doesn't let Bayplan create a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device, or uses a volume plugin. "+
-				"Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.")
+			"This host's agent doesn't let Coaming create a volume that mounts a host folder outside /srv, /mnt and /media, mounts a device, or uses a volume plugin. "+
+				"Its owner can allow it by setting COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.")
 	}
 	return networkWriteProblem(log, envID, err)
 }

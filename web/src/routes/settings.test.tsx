@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -387,19 +387,19 @@ describe("Environments tab", () => {
     expect(within(row).getByText("Standalone")).toBeTruthy();
     expect(within(row).getByText("Online")).toBeTruthy();
     expect(within(row).getByText("29.8.2")).toBeTruthy();
-    expect(within(row).getByText("Bayplan (this instance)")).toBeTruthy();
+    expect(within(row).getByText("Coaming (this instance)")).toBeTruthy();
     expect(within(row).getByRole("button", { name: "Rename lab-1" })).toBeTruthy();
     expect(within(row).getByRole("button", { name: "Remove host lab-1" })).toBeTruthy();
     // A managed host has nothing to add.
     expect(screen.queryByRole("button", { name: "Manage this host" })).toBeNull();
   });
 
-  it("leaves the own-instance badge off a host that is not Bayplan's own", async () => {
+  it("leaves the own-instance badge off a host that is not Coaming's own", async () => {
     environments = [environment({ isSelfHost: false })];
     renderAt("/settings/environments");
     await screen.findByRole("tab", { name: "Environments" });
     await main().findByText("lab-1");
-    expect(screen.queryByText("Bayplan (this instance)")).toBeNull();
+    expect(screen.queryByText("Coaming (this instance)")).toBeNull();
   });
 });
 
@@ -516,7 +516,7 @@ describe("remove", () => {
     expect(within(dialog).getByText("Remove lab-1?")).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "Bayplan will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
+        "Coaming will stop managing this host. Containers, images, volumes and networks on it are not changed. You can add it again in Settings.",
       ),
     ).toBeTruthy();
     await waitFor(() =>

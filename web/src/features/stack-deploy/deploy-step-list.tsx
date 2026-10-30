@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Check, CircleX, Minus } from "lucide-react";
 
@@ -59,7 +59,7 @@ export interface FailureContext {
 // not settle in time (and how many tasks still waited for an address), the swarm stopped its update,
 // the swarm will not start its tasks again, and its network has no free addresses.
 // Docker's rejection of a service reads as one sentence naming the service. Both are text from
-// outside Bayplan and are drawn as text.
+// outside Coaming and are drawn as text.
 export function failureOf(
   t: Translate,
   item: StackJobItem,

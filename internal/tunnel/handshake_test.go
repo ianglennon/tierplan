@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel_test
 
@@ -17,11 +17,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // enrolled enrols one agent, lets its connection go and waits for the hub to
@@ -382,7 +382,7 @@ func TestSimultaneousHellosForOneAgentLeaveExactlyOneSession(t *testing.T) {
 
 // trustLoopback puts the hub behind the client-address middleware with
 // 127.0.0.0/8 as a trusted proxy, so the test client counts as a TLS-terminating
-// proxy in front of Bayplan.
+// proxy in front of Coaming.
 func trustLoopback(h http.Handler) http.Handler {
 	return httpx.ClientIPMiddleware([]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")})(h)
 }
@@ -441,14 +441,14 @@ func TestCompatibleRefusalCarriesTheUpdateHintWhenOneIsSet(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{Configure: func(h *tunnel.Hub) *tunnel.Hub {
 		return h.WithServerVersion("v0.3.1").WithUpdateHint(func(tooOld bool, _ string) string {
 			if tooOld {
-				return "run: docker pull bayplan-agent"
+				return "run: docker pull coaming-agent"
 			}
 			return ""
 		})
 	}})
 	env := srv.NewEnvironment(t, "Production")
 	c := srv.Dial(t, tunneltest.Agent{Token: env.Token, Version: "0.1.0"})
-	if c.Refuse == nil || !strings.Contains(c.Refuse.Detail, "run: docker pull bayplan-agent") {
+	if c.Refuse == nil || !strings.Contains(c.Refuse.Detail, "run: docker pull coaming-agent") {
 		t.Fatalf("refusal = %+v, want the update command in the detail", c.Refuse)
 	}
 }
@@ -537,7 +537,7 @@ func TestClockSkewOfFortySecondsIsAcceptedWithAWarningAndTwentyWithout(t *testin
 	}
 }
 
-func TestExporterBindingIsCheckedWhenBayplanTerminatesTLSItself(t *testing.T) {
+func TestExporterBindingIsCheckedWhenCoamingTerminatesTLSItself(t *testing.T) {
 	srv := tunneltest.Start(t, tunneltest.Options{})
 	env := srv.NewEnvironment(t, "Production")
 

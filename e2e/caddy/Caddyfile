@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
-# Caddy in front of Bayplan for the end-to-end run (plan 02-32, D-59). It is
+# Caddy in front of Coaming for the end-to-end run (plan 02-32, D-59). It is
 # docs/proxy/Caddyfile's subpath site with two differences that only a test
 # needs: the certificate is a file `make e2e` generated (scripts/e2e-cert.go),
 # because no public CA can sign 127.0.0.1, and the site has no host name, so it
@@ -19,8 +19,8 @@
 
 # The browser of the run lives in this container's network namespace (see the
 # browser service in compose.yaml) and opens the address people use, so the site
-# also answers on the published port, BAYPLAN_E2E_HTTPS_PORT.
-https://:443, https://:{$BAYPLAN_E2E_HTTPS_PORT:8443} {
+# also answers on the published port, COAMING_E2E_HTTPS_PORT.
+https://:443, https://:{$COAMING_E2E_HTTPS_PORT:8443} {
 	tls /certs/cert.pem /certs/key.pem
 
 	# The access log is how the run shows that the agent's WebSocket and the event
@@ -31,10 +31,10 @@ https://:443, https://:{$BAYPLAN_E2E_HTTPS_PORT:8443} {
 		format json
 	}
 
-	# handle_path removes /bayplan before the request reaches Bayplan, which is
-	# told its public URL ends in /bayplan and serves both forms.
-	handle_path /bayplan/* {
-		reverse_proxy bayplan:7480
+	# handle_path removes /coaming before the request reaches Coaming, which is
+	# told its public URL ends in /coaming and serves both forms.
+	handle_path /coaming/* {
+		reverse_proxy coaming:7480
 	}
-	redir /bayplan /bayplan/ permanent
+	redir /coaming /coaming/ permanent
 }

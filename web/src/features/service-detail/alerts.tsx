@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -125,7 +125,7 @@ export function ServiceAlerts({ envId, detail }: ServiceAlertsProps) {
         <ManagedByStackNotice
           envId={envId}
           stack={detail.stack}
-          bayplanStackId={detail.bayplanStackId}
+          coamingStackId={detail.coamingStackId}
         />
       ) : null}
       {detail.agent ? (

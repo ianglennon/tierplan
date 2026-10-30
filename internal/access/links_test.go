@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package access_test
 
@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
 )
 
 // One-time links (plan 03-11, AUTH-04, D-22a). Negative cases are mandatory (D-81).
@@ -326,11 +326,11 @@ func TestRegenerateInviteRefusesAnUnknownOrDeletedUser(t *testing.T) {
 func TestLinkURLPutsTheTokenInTheFragmentAfterThePublicURLOrTheBasePath(t *testing.T) {
 	const tok = "TOKEN"
 	for _, c := range []struct{ public, base, want string }{
-		{"https://bayplan.example.test", "", "https://bayplan.example.test/invite#token=TOKEN"},
-		{"https://bayplan.example.test/", "", "https://bayplan.example.test/invite#token=TOKEN"},
-		{"https://example.test/bayplan", "/bayplan", "https://example.test/bayplan/invite#token=TOKEN"},
+		{"https://coaming.example.test", "", "https://coaming.example.test/invite#token=TOKEN"},
+		{"https://coaming.example.test/", "", "https://coaming.example.test/invite#token=TOKEN"},
+		{"https://example.test/coaming", "/coaming", "https://example.test/coaming/invite#token=TOKEN"},
 		{"", "", "/invite#token=TOKEN"},
-		{"", "/bayplan", "/bayplan/invite#token=TOKEN"},
+		{"", "/coaming", "/coaming/invite#token=TOKEN"},
 	} {
 		if got := access.LinkURL(c.public, c.base, tok); got != c.want {
 			t.Errorf("LinkURL(%q, %q) = %q, want %q", c.public, c.base, got, c.want)

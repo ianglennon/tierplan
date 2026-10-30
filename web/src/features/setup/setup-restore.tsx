@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -38,7 +38,7 @@ interface SetupRestoreProps {
 
 // SetupRestore is the wizard's restore branch (D-30, path 1): the same check as
 // Settings, then one press of "Restore backup" with no name to type, because a
-// fresh install has nothing to lose. Once Bayplan is back it goes to sign-in with
+// fresh install has nothing to lose. Once Coaming is back it goes to sign-in with
 // a notice. A 409 setup_complete means someone finished setup meanwhile.
 export function SetupRestore({ token, onBack }: SetupRestoreProps) {
   const t = useT();

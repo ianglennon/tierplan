@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // The driver options the create dialog's Type presets write for the local driver
 // (UI-SPEC "Volume list, detail and create", D-44). The same options are what the

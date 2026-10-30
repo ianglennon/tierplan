@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration
 
 package dockerx_test
@@ -18,9 +18,9 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // screen collects what a session prints, so a test can wait for a piece of text
@@ -107,7 +107,7 @@ func pullImage(t *testing.T, ctx context.Context, raw *client.Client, ref string
 
 func runningContainer(t *testing.T, ctx context.Context, raw *client.Client, image string) string {
 	t.Helper()
-	name := "bp-exec-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-exec-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:   name,
 		Config: &container.Config{Image: image, Cmd: []string{"sleep", "300"}},
@@ -154,10 +154,10 @@ func TestIntegrationExecSession(t *testing.T) {
 		t.Cleanup(func() { _ = s.Close() })
 		out := watch(s)
 
-		if _, err := s.Write([]byte("echo hello-$((1+2))-bayplan\n")); err != nil {
+		if _, err := s.Write([]byte("echo hello-$((1+2))-coaming\n")); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
-		out.awaitOutput(t, "hello-3-bayplan")
+		out.awaitOutput(t, "hello-3-coaming")
 
 		if _, err := s.Write([]byte("stty size\n")); err != nil {
 			t.Fatal(err)

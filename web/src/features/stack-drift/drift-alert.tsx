@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Link } from "@tanstack/react-router";
 import { GitCompareArrows } from "lucide-react";
@@ -22,7 +22,7 @@ interface DriftAlertProps {
 // DriftAlert is the Overview's notice that what runs no longer matches the deployed revision (UI-SPEC "Drift"). It is
 // a polite status and not an alert: a check can raise or clear it while the person reads, and focus never moves
 // because of it. It draws nothing for any other state: a stopped stack, a stack that was never deployed and a check that
-// could not be made do not drift. It says why when the audit log knows, and that the change came from outside Bayplan
+// could not be made do not drift. It says why when the audit log knows, and that the change came from outside Coaming
 // when it does not (D-24). The name is text.
 export function DriftAlert({ envId, stackId, name, drift }: DriftAlertProps) {
   const t = useT();

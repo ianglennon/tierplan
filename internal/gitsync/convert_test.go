@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync_test
 
@@ -9,11 +9,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitsync"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // Pointing an inline stack at a repository (plan 09-30, GIT-02, D-24): the draft is written and nothing is applied; a good

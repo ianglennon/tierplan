@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // The credential sheet after a failed test or a refused save (UAT G-05-4a and
 // G-05-4b). A box that appeared next to the form's FieldGroup (an inline-size

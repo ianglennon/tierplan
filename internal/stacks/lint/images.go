@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package lint
 
@@ -9,7 +9,7 @@ import (
 	"github.com/distribution/reference"
 )
 
-// buildRules reports a service that sets build (A5). Bayplan deploys images and does not build
+// buildRules reports a service that sets build (A5). Coaming deploys images and does not build
 // them, and stacks.Check strips build from the project before any engine sees it, so a build key
 // is never acted on. With an image set it is a warning, worded for the target; with no image
 // there is nothing to deploy, and it is an error on both targets.

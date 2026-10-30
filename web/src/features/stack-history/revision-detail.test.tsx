@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -393,7 +393,7 @@ describe("loading, errors and a gone revision", () => {
     expect(await screen.findByText("That revision is gone")).toBeTruthy();
     expect(
       screen.getByText(
-        "Bayplan keeps the last 20 revisions of each stack, and this one was deleted.",
+        "Coaming keeps the last 20 revisions of each stack, and this one was deleted.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to history" }).getAttribute("href")).toBe(
@@ -409,7 +409,7 @@ describe("loading, errors and a gone revision", () => {
 
     expect(
       await screen.findByText(
-        "Bayplan keeps the last 20 revisions of each stack, and this one was deleted.",
+        "Coaming keeps the last 20 revisions of each stack, and this one was deleted.",
       ),
     ).toBeTruthy();
   });

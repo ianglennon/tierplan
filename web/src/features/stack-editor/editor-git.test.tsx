@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -23,7 +23,7 @@ import { editorText, typeIntoEditor } from "@/test-editor";
 import { makeMe } from "@/test-me";
 
 // The Files tab of a stack from a git repository (plan 09-21, GIT-08, D-09, D-11): the repository's files are shown
-// read-only, Bayplan's overlay files are sealed cards, and the only things to edit are overlays and variables. The
+// read-only, Coaming's overlay files are sealed cards, and the only things to edit are overlays and variables. The
 // server is a stubbed fetch; the router, the query cache and the page are the real ones.
 
 const ENV = "e1";

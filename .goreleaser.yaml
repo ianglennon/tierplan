@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Release configuration for goreleaser v2 (pinned in the Makefile and in
 # release.yml). A v* tag runs it from .github/workflows/release.yml and
-# publishes ghcr.io/ianglennon/bayplan:X.Y.Z and :X.Y and the agent image
-# ghcr.io/ianglennon/bayplan-agent with the same tags, built from the agent/
-# module at the same version. Pushes to main publish :edge of both from ci.yml. No floating catch-all tag is ever published while Bayplan
+# publishes ghcr.io/ianglennon/coaming:X.Y.Z and :X.Y and the agent image
+# ghcr.io/ianglennon/coaming-agent with the same tags, built from the agent/
+# module at the same version. Pushes to main publish :edge of both from ci.yml. No floating catch-all tag is ever published while Coaming
 # is 0.x (D-75), and no release is cut in Phase 1.
 #
 # Validate with `make release-check`; build the image locally with `make image`.
 version: 2
 
-project_name: bayplan
+project_name: coaming
 
 before:
   hooks:
@@ -19,9 +19,9 @@ before:
     - make web
 
 builds:
-  - id: bayplan
-    main: ./cmd/bayplan
-    binary: bayplan
+  - id: coaming
+    main: ./cmd/coaming
+    binary: coaming
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -31,17 +31,17 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X github.com/ianglennon/bayplan/internal/buildinfo.Version=v{{ .Version }}
-      - -X github.com/ianglennon/bayplan/internal/buildinfo.Commit={{ .FullCommit }}
-      - -X github.com/ianglennon/bayplan/internal/buildinfo.SourceURL=https://github.com/ianglennon/bayplan
+      - -X github.com/ianglennon/coaming/internal/buildinfo.Version=v{{ .Version }}
+      - -X github.com/ianglennon/coaming/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/ianglennon/coaming/internal/buildinfo.SourceURL=https://github.com/ianglennon/coaming
 
   # The agent: its own Go module (agent/), the same flags and platforms, and the
   # same version as the server so an agent never reports a version the server
   # did not ship with (D-16).
-  - id: bayplan-agent
+  - id: coaming-agent
     dir: agent
-    main: ./cmd/bayplan-agent
-    binary: bayplan-agent
+    main: ./cmd/coaming-agent
+    binary: coaming-agent
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -51,13 +51,13 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X github.com/ianglennon/bayplan/agent/internal/version.Version=v{{ .Version }}
+      - -X github.com/ianglennon/coaming/agent/internal/version.Version=v{{ .Version }}
 
 archives:
-  - id: bayplan
-    ids: [bayplan]
+  - id: coaming
+    ids: [coaming]
     formats: [tar.gz]
-    name_template: "bayplan_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "coaming_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README*
@@ -75,13 +75,13 @@ sboms:
     documents: ["${artifact}.spdx.json"]
 
 # The multi-arch image. goreleaser lays the binaries out as
-# $TARGETPLATFORM/bayplan in the build context for the Dockerfile.
+# $TARGETPLATFORM/coaming in the build context for the Dockerfile.
 dockers_v2:
-  - id: bayplan
-    ids: [bayplan]
+  - id: coaming
+    ids: [coaming]
     dockerfile: Dockerfile
     images:
-      - ghcr.io/ianglennon/bayplan
+      - ghcr.io/ianglennon/coaming
     # X.Y.Z always, X.Y for a final release. An empty tag is skipped, so a
     # prerelease gets only its full version.
     tags:
@@ -100,11 +100,11 @@ dockers_v2:
   # copies an extra file to the same relative path in the build context, so the
   # Dockerfile reads agent/image/state/. The image is published as its own
   # repository with the same tag rules (never a floating catch-all tag).
-  - id: bayplan-agent
-    ids: [bayplan-agent]
+  - id: coaming-agent
+    ids: [coaming-agent]
     dockerfile: agent/Dockerfile
     images:
-      - ghcr.io/ianglennon/bayplan-agent
+      - ghcr.io/ianglennon/coaming-agent
     tags:
       - "{{ .Version }}"
       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"

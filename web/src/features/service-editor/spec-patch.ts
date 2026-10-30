@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Path patching over plain JSON values (D-01, RESEARCH Pattern 2). The form never
 // rebuilds a spec from its fields: each control reads and writes one path of the

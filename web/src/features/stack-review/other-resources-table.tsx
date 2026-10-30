@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { StackReviewObject } from "@/api/stacks";
 import {
@@ -21,7 +21,7 @@ const GLYPH = { added: "+", changed: "~", removed: "−", external: "" } as cons
 
 // OtherResourcesTable is the Other resources card of the Changes tab (STK-06, D-07, D-11): the
 // networks, secrets and configs a deploy would add, change or remove, and the external ones the
-// stack only names. A secret or config Bayplan names by a hash of its content is a new object
+// stack only names. A secret or config Coaming names by a hash of its content is a new object
 // when its content changed, and the detail says the old one goes after the deploy. Names and
 // details are text. A stack with none of these draws no card.
 export function OtherResourcesTable({ objects }: OtherResourcesTableProps) {

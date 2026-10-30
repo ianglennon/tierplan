@@ -44,7 +44,7 @@
       "errors": {
         "notEligible": "That user no longer has enough access to run this. Choose someone else.",
         "gone": "{{automation}} doesn't exist any more.",
-        "generic": "Couldn't transfer {{automation}}. Try again, and check the Bayplan logs if it keeps happening."
+        "generic": "Couldn't transfer {{automation}}. Try again, and check the Coaming logs if it keeps happening."
       }
     },
     "disable": {

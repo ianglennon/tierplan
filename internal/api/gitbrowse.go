@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,10 +11,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/gitx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/gitx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // browseEntryLimit is how many entries of one folder a tree answers with.
@@ -128,7 +128,7 @@ func (d GitDeps) browseProblem(repo gitconn.Repo, kind gitx.RefKind, ref, path s
 	case gitx.CodeHostKeyUntrusted:
 		detail = "The host key of " + host + " isn't trusted yet."
 	case gitx.CodeEgressBlocked:
-		detail = "Bayplan isn't allowed to connect to " + host + "."
+		detail = "Coaming isn't allowed to connect to " + host + "."
 	case gitx.CodeTimeout:
 		detail = host + " took too long to answer."
 	case gitx.CodeTooLarge:

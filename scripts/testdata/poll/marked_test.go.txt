@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Fixture for scripts/test-scripts.sh (poll-check): stored as .txt so the tree's
 // Go tools never compile it. Both calls carry the marker, one on the line above.
@@ -8,7 +8,7 @@ package zzpollprobe
 import (
 	"testing"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 func TestPollsForAnExternalCondition(t *testing.T) {

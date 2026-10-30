@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -93,7 +93,7 @@ describe("NodeRemoveDialog", () => {
     const dialog = await dialogOpen();
     expect(
       within(dialog).getByText(
-        "wkr-1 is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Bayplan also marks its agent as gone.",
+        "wkr-1 is down, so Swarm forgets it. If it comes back, it has to join the swarm again. Coaming also marks its agent as gone.",
       ),
     ).toBeTruthy();
     expect(within(dialog).getByText("Type wkr-1 to confirm")).toBeTruthy();
@@ -236,7 +236,7 @@ describe("NodeRemoveDialog", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove node" }));
     expect(await within(dialog).findByRole("alert")).toBeTruthy();
     expect(within(dialog).getByRole("alert").textContent).toBe(
-      "The connection dropped before Bayplan answered. The list shows whether it happened.",
+      "The connection dropped before Coaming answered. The list shows whether it happened.",
     );
   });
 });

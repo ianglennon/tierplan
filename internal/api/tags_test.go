@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 )
 
 // Browsing a repository's tags (plan 05-18, IMG-03, D-19, D-24a, T-05-60). The router,
@@ -660,7 +660,7 @@ func TestBrowseTagDetailsSayWhichReadableEnvironmentsRunTheDigestAndNoOthers(t *
 	f.storeCredential(t, credentialUser{f.cookie, f.csrf}, reg.credentialBody("fake-inst"))
 	a := f.add(t)
 	awaitOnline(t, f.mon, a.ID)
-	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	f.inst.Apply("Coaming", "https://example.com/coaming")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("add the agent environment: %d %s", rec.code, rec.body)
@@ -824,7 +824,7 @@ func TestEnvBrowseTagsRunningHereRoutesNeedImagesReadOnThatEnvironmentAndUseOnly
 	f.storeCredential(t, admin, reg.credentialBody("fake-inst"))
 	a := f.add(t)
 	awaitOnline(t, f.mon, a.ID)
-	f.inst.Apply("Bayplan", "https://example.com/bayplan")
+	f.inst.Apply("Coaming", "https://example.com/coaming")
 	bEnv, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("add the agent environment: %d %s", rec.code, rec.body)

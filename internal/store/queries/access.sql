@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors
+   SPDX-FileCopyrightText: 2026 The Coaming Authors
 
    Queries of the access service (internal/access): users, one-time links, teams
    and grants. Each Phase 3 access plan adds its own section below. */

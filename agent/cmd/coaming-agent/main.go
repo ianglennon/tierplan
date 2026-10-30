@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Command bayplan-agent connects one Docker host to a Bayplan server. It dials
+// Command coaming-agent connects one Docker host to a Coaming server. It dials
 // out, so the host needs no inbound port, and it passes a read-only set of
 // Docker calls from the server to the local socket.
 //
@@ -29,12 +29,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ianglennon/bayplan/agent/internal/config"
-	"github.com/ianglennon/bayplan/agent/internal/connect"
-	"github.com/ianglennon/bayplan/agent/internal/privdrop"
-	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
-	"github.com/ianglennon/bayplan/agent/internal/state"
-	"github.com/ianglennon/bayplan/agent/internal/version"
+	"github.com/ianglennon/coaming/agent/internal/config"
+	"github.com/ianglennon/coaming/agent/internal/connect"
+	"github.com/ianglennon/coaming/agent/internal/privdrop"
+	"github.com/ianglennon/coaming/agent/internal/selfmaint"
+	"github.com/ianglennon/coaming/agent/internal/state"
+	"github.com/ianglennon/coaming/agent/internal/version"
 )
 
 // deps are the process-level effects run uses, so a test can drive it without
@@ -73,7 +73,7 @@ func run(d deps) int {
 	// without capabilities cannot open it (G-02-5).
 	cfg, err := config.Load(d.getenv, d.readFile)
 	if err != nil {
-		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		_, _ = fmt.Fprintln(d.stderr, "coaming-agent:", err)
 		return 2
 	}
 
@@ -86,11 +86,11 @@ func run(d deps) int {
 	// As UID 1000 now, the agent can read its own state: a token-less start needs
 	// an identity there (D-03).
 	if err := cfg.CheckEnrolled(d.readFile); err != nil {
-		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		_, _ = fmt.Fprintln(d.stderr, "coaming-agent:", err)
 		return 2
 	}
 
-	log.Info("starting bayplan-agent",
+	log.Info("starting coaming-agent",
 		"version", version.Version,
 		"server", hostOf(cfg.URL),
 		"socket", cfg.SocketPath,
@@ -141,7 +141,7 @@ func run(d deps) int {
 }
 
 // runHelper is the short-lived helper of a standalone self-update (D-24):
-// `bayplan-agent helper recreate --target <container ID>`. The agent started it
+// `coaming-agent helper recreate --target <container ID>`. The agent started it
 // from the new image with the Docker socket and its state volume. It dials no
 // server, so it reads no URL and no token, but it drops its privileges the same way
 // the agent does. Exit 0 means the agent was replaced; 1 means it was not (the old
@@ -151,7 +151,7 @@ func runHelper(d deps, log *slog.Logger) int {
 		return runRemoveVolume(d, log)
 	}
 	if len(d.args) < 2 || d.args[1] != "recreate" {
-		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>\n       bayplan-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]")
+		_, _ = fmt.Fprintln(d.stderr, "usage: coaming-agent helper recreate --target <container ID>\n       coaming-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]")
 		return 2
 	}
 	flags := flag.NewFlagSet("helper recreate", flag.ContinueOnError)
@@ -161,12 +161,12 @@ func runHelper(d deps, log *slog.Logger) int {
 		return 2
 	}
 	if *target == "" || flags.NArg() != 0 {
-		_, _ = fmt.Fprintln(d.stderr, "usage: bayplan-agent helper recreate --target <container ID>")
+		_, _ = fmt.Fprintln(d.stderr, "usage: coaming-agent helper recreate --target <container ID>")
 		return 2
 	}
 	cfg, err := config.LoadHelper(d.getenv)
 	if err != nil {
-		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		_, _ = fmt.Fprintln(d.stderr, "coaming-agent:", err)
 		return 2
 	}
 	if _, err := d.drop(privdrop.Options{SocketPath: cfg.SocketPath, DockerGID: cfg.DockerGID}); err != nil {
@@ -188,14 +188,14 @@ func runHelper(d deps, log *slog.Logger) int {
 }
 
 // runRemoveVolume is the helper of an uninstall (D-30):
-// `bayplan-agent helper remove-volume --wait <container ID> [--volume <name>]
+// `coaming-agent helper remove-volume --wait <container ID> [--volume <name>]
 // [--remove-container] [--keep-volume]`. The agent started it from its own image with
 // the Docker socket and nothing else mounted. It waits until the agent's container no
 // longer exists, removing it itself with --remove-container (a standalone agent), and
 // then removes the named state volume. Exit 0 means it is done; 1 that something is left
 // that the admin's manual cleanup command removes; 2 is a bad command line.
 func runRemoveVolume(d deps, log *slog.Logger) int {
-	usage := "usage: bayplan-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]"
+	usage := "usage: coaming-agent helper remove-volume --wait <container ID> [--volume <name>] [--remove-container] [--keep-volume]"
 	flags := flag.NewFlagSet("helper remove-volume", flag.ContinueOnError)
 	flags.SetOutput(d.stderr)
 	wait := flags.String("wait", "", "ID of the agent container to wait for")
@@ -211,7 +211,7 @@ func runRemoveVolume(d deps, log *slog.Logger) int {
 	}
 	cfg, err := config.LoadHelper(d.getenv)
 	if err != nil {
-		_, _ = fmt.Fprintln(d.stderr, "bayplan-agent:", err)
+		_, _ = fmt.Fprintln(d.stderr, "coaming-agent:", err)
 		return 2
 	}
 	if _, err := d.drop(privdrop.Options{SocketPath: cfg.SocketPath, DockerGID: cfg.DockerGID}); err != nil {

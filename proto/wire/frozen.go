@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package wire
 
@@ -45,7 +45,7 @@ const (
 )
 
 // Update asks the agent to run another image of its own repository. Image is a
-// full reference, a tag or a digest ("ghcr.io/ianglennon/bayplan-agent:0.2.1" or
+// full reference, a tag or a digest ("ghcr.io/ianglennon/coaming-agent:0.2.1" or
 // "...@sha256:..."), so a digest needs no format change. The agent parses it with
 // the standard reference grammar and refuses any repository but its own. ID is
 // optional and opaque; the answer echoes it.
@@ -94,18 +94,18 @@ const (
 	UpdateErrImageInvalid = "image_invalid"
 	// UpdateErrNotAManager means a swarm agent without control of the swarm was asked to update the service.
 	UpdateErrNotAManager = "not_a_manager"
-	// UpdateErrSelfUpdateDisabled means the host owner set BAYPLAN_AGENT_SELF_UPDATE=false.
+	// UpdateErrSelfUpdateDisabled means the host owner set COAMING_AGENT_SELF_UPDATE=false.
 	UpdateErrSelfUpdateDisabled = "self_update_disabled"
 	// UpdateErrBusy means an update is already running on this agent.
 	UpdateErrBusy = "busy"
-	// UpdateErrOwnContainerUnknown means the agent could not identify its own container, or it lacks the bayplan.agent=true label.
+	// UpdateErrOwnContainerUnknown means the agent could not identify its own container, or it lacks the coaming.agent=true label.
 	UpdateErrOwnContainerUnknown = "own_container_unknown"
 	// UpdateErrFailed means a Docker call failed; the detail is in the agent's log.
 	UpdateErrFailed = "update_failed"
 	// UpdateErrNotImplemented means this agent does not implement the request.
 	UpdateErrNotImplemented = "not_implemented"
 	// UpdateErrInsecureSession means the agent's session is not TLS-verified (plain
-	// ws:// under BAYPLAN_AGENT_ALLOW_INSECURE), so it refused to update or uninstall
+	// ws:// under COAMING_AGENT_ALLOW_INSECURE), so it refused to update or uninstall
 	// itself on the word of a server it could not verify. It made no Docker call.
 	UpdateErrInsecureSession = "insecure_session"
 )

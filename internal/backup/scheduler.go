@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup
 
@@ -18,10 +18,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // The sources of a backup run, as backup_runs records them.
@@ -62,7 +62,7 @@ type Scheduler struct {
 	Store *store.Store
 	Vault *vault.Vault
 	Audit *audit.Writer
-	// Dir is the folder the backups are written into (BAYPLAN_BACKUP_DIR).
+	// Dir is the folder the backups are written into (COAMING_BACKUP_DIR).
 	Dir string
 	// DataDir is where an export keeps its private work directory, on the same
 	// volume as the database.
@@ -110,7 +110,7 @@ func (s *Scheduler) Notify() {
 }
 
 // busyRetryDelay is how long a run waits to try again when another backup holds
-// the export slot (the bayplan backup command, or someone pressing Download).
+// the export slot (the coaming backup command, or someone pressing Download).
 const busyRetryDelay = time.Minute
 
 // run is one scheduled backup, from the instant it was due to its end.
@@ -378,6 +378,6 @@ func call(f func() string) string {
 
 // The temporary file a scheduled backup is written to before it gets its name.
 const (
-	tempPrefix = ".bayplan-schedule-"
+	tempPrefix = ".coaming-schedule-"
 	tempSuffix = ".tmp"
 )

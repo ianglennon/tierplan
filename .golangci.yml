@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # golangci-lint v2 (pinned in the Makefile). Besides the usual correctness and
 # security linters this file carries the architectural guard rails: they turn
@@ -101,7 +101,7 @@ linters:
             - "!**/internal/store/storetest/**"
             - "!**/proto/testsupport/**"
           deny:
-            - pkg: github.com/ianglennon/bayplan/proto/testsupport
+            - pkg: github.com/ianglennon/coaming/proto/testsupport
               desc: test helpers are for _test.go files and the test helper packages (dockertest, tunneltest, servertest, storetest) only, so they never reach a shipped binary (docs/testing.md)
         forbidden-libraries:
           list-mode: lax
@@ -115,7 +115,7 @@ linters:
             - pkg: github.com/mattn/go-sqlite3
               desc: needs CGO, which breaks static multi-arch builds; use modernc.org/sqlite (CLAUDE.md "What NOT to Use")
             - pkg: github.com/docker/cli/cli/compose/loader
-              desc: legacy v3.13 schema; Bayplan loads with compose-go v2 in internal/stacks
+              desc: legacy v3.13 schema; Coaming loads with compose-go v2 in internal/stacks
 
   exclusions:
     generated: lax

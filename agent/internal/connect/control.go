@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package connect
 
@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ianglennon/bayplan/agent/internal/selfmaint"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/agent/internal/selfmaint"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 const (

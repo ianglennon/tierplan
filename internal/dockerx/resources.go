@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -73,7 +73,7 @@ type ContainerNet struct {
 // ImageRow is one image. RepoTags is ["<none>"] for an untagged image. It carries no
 // count of the containers that use the image: the engine does not compute one in a list
 // by default (it answers -1), so usage is counted from the containers and service specs
-// Bayplan reads itself.
+// Coaming reads itself.
 type ImageRow struct {
 	ID       string
 	RepoTags []string

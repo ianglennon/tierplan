@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -37,7 +37,7 @@ const detail = (extra: Partial<ConfigDetail> = {}): ConfigDetail => ({
   labels: { team: "web", env: "prod" },
   owner: "",
   ownerKind: "",
-  bayplanStackId: "",
+  coamingStackId: "",
   templating: "none",
   size: YAML_TEXT.length,
   data: btoa(YAML_TEXT),

@@ -8,7 +8,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "bayplan.stack.id": "id-volumes",
+        "coaming.stack.id": "id-volumes",
         "com.docker.stack.namespace": "volumes"
       },
       "DriverOpts": null,
@@ -24,7 +24,7 @@
       "Spec": {
         "Name": "volumes_db",
         "Labels": {
-          "bayplan.stack.id": "id-volumes",
+          "coaming.stack.id": "id-volumes",
           "com.docker.stack.image": "postgres:16",
           "com.docker.stack.namespace": "volumes"
         },
@@ -32,7 +32,7 @@
           "ContainerSpec": {
             "Image": "postgres:16",
             "Labels": {
-              "bayplan.stack.id": "id-volumes",
+              "coaming.stack.id": "id-volumes",
               "com.docker.stack.namespace": "volumes"
             },
             "Privileges": {
@@ -47,7 +47,7 @@
                 "Target": "/var/lib/postgresql/data",
                 "VolumeOptions": {
                   "Labels": {
-                    "bayplan.stack.id": "id-volumes",
+                    "coaming.stack.id": "id-volumes",
                     "com.docker.stack.namespace": "volumes"
                   }
                 }
@@ -59,7 +59,7 @@
                 "VolumeOptions": {
                   "NoCopy": true,
                   "Labels": {
-                    "bayplan.stack.id": "id-volumes",
+                    "coaming.stack.id": "id-volumes",
                     "com.docker.stack.namespace": "volumes",
                     "purpose": "cache"
                   },
@@ -79,7 +79,7 @@
                 "VolumeOptions": {
                   "NoCopy": true,
                   "Labels": {
-                    "bayplan.stack.id": "id-volumes",
+                    "coaming.stack.id": "id-volumes",
                     "com.docker.stack.namespace": "volumes"
                   },
                   "Subpath": "sub",

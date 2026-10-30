@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // fitHeight is the height that lets a scrolling box reach the bottom of the window
 // with everything that follows it still on the page: what the page shows after the

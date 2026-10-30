@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx_test
 
@@ -14,9 +14,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 func serviceFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
@@ -26,7 +26,7 @@ func serviceFake(t *testing.T) (*dockerx.Client, *dockertest.Fake) {
 		ServiceRows: []dockertest.FakeService{
 			{ID: "web-id", Name: "web", Mode: "replicated", Running: 2, Desired: 2, Image: "registry.example.com/web:1", Version: 7,
 				Labels: map[string]string{"com.docker.stack.namespace": "shop"}},
-			{ID: "agent-id", Name: "bayplan-agent", Mode: "global", Running: 3, Desired: 3},
+			{ID: "agent-id", Name: "coaming-agent", Mode: "global", Running: 3, Desired: 3},
 			{ID: "job-id", Name: "migrate", Mode: "replicated-job"},
 		},
 	})
@@ -283,7 +283,7 @@ func TestServiceForceUpdateBumpsTheCounterPinsTheImageAndChangesNothingElse(t *t
 		t.Errorf("the rest of the spec changed: %+v", u.Spec)
 	}
 	if got := fake.DistributionRefs(); len(got) != 0 {
-		t.Errorf("the update asked the registry %q itself; Bayplan resolves the digest, not the engine", got)
+		t.Errorf("the update asked the registry %q itself; Coaming resolves the digest, not the engine", got)
 	}
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Confines the switch that turns off Go's built-in TLS certificate verification
 # to one reviewed file, agent/internal/connect/tls.go (D-06, T-02-32). Any other

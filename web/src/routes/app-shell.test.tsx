@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -196,7 +196,7 @@ describe("app shell", () => {
     renderAt("/");
     expect(await screen.findByText("No environments yet")).toBeTruthy();
     expect(
-      screen.getByText(/Bayplan gives you one command that installs a small agent on it/),
+      screen.getByText(/Coaming gives you one command that installs a small agent on it/),
     ).toBeTruthy();
     expect(document.title).toBe("Environments · Lab");
   });
@@ -259,11 +259,11 @@ describe("version footer (PLAT-05)", () => {
     expect(document.querySelector("main")?.parentElement?.contains(sourceLinks()[0] ?? null)).toBe(
       true,
     );
-    expect(window.localStorage.getItem("bayplan-sidebar")).toBe("collapsed");
+    expect(window.localStorage.getItem("coaming-sidebar")).toBe("collapsed");
   });
 
   it("starts collapsed when the browser remembers that", async () => {
-    window.localStorage.setItem("bayplan-sidebar", "collapsed");
+    window.localStorage.setItem("coaming-sidebar", "collapsed");
     renderAt("/");
     await screen.findByText("No environments yet");
     await waitFor(() => expect(sourceLinks()).toHaveLength(1));
@@ -305,11 +305,11 @@ describe("user menu", () => {
     expect(screen.getByRole("menuitem", { name: "Log out" })).toBeTruthy();
   });
 
-  it("remembers the theme in bayplan-theme and applies it", async () => {
+  it("remembers the theme in coaming-theme and applies it", async () => {
     renderAt("/");
     await openUserMenu();
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Dark" }));
-    expect(window.localStorage.getItem("bayplan-theme")).toBe("dark");
+    expect(window.localStorage.getItem("coaming-theme")).toBe("dark");
     expect(document.documentElement.classList.contains("dark")).toBe(true);
   });
 

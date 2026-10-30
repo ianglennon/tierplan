@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 -- name: InsertStackGit :exec
 -- The git settings of a stack made from a repository folder (D-06). The sync settings keep their defaults:

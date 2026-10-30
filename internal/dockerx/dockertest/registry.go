@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockertest
 
@@ -29,8 +29,8 @@ const (
 	// trusted over plain HTTP by default.
 	swarmRegistryHost = "127.0.0.1:5000"
 
-	registryName = "bp-registry"
-	registryDir  = "/tmp/bp-registry"
+	registryName = "cm-registry"
+	registryDir  = "/tmp/cm-registry"
 )
 
 // RegistryOptions turns a fixture registry's authentication and transport on.
@@ -43,7 +43,7 @@ type RegistryOptions struct {
 }
 
 // Login is a user and password for a fixture registry. Only test setup signs in
-// with it, on the node that pushes; Bayplan never does.
+// with it, on the node that pushes; Coaming never does.
 type Login struct {
 	User, Password string
 }
@@ -55,7 +55,7 @@ func (o RegistryOptions) env() []string {
 	if len(o.Htpasswd) > 0 {
 		env = append(env,
 			"REGISTRY_AUTH=htpasswd",
-			"REGISTRY_AUTH_HTPASSWD_REALM=bayplan-test",
+			"REGISTRY_AUTH_HTPASSWD_REALM=coaming-test",
 			"REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd")
 	}
 	if len(o.TLSCert) > 0 && len(o.TLSKey) > 0 {
@@ -179,7 +179,7 @@ func StartSwarmRegistry(t testing.TB, s *Swarm, o RegistryOptions) string {
 
 // PushImage copies src (from this machine's engine, pulled there first when it is
 // missing) into the node, tags it as target and pushes it from that node. It signs
-// in on that node only when login is given: this is test setup, never Bayplan. It
+// in on that node only when login is given: this is test setup, never Coaming. It
 // returns the digest the registry answered with.
 func PushImage(t testing.TB, node *Node, src, target string, login *Login) string {
 	t.Helper()
@@ -227,7 +227,7 @@ func pushTagged(t testing.TB, node *Node, target string, login *Login) string {
 }
 
 // HtpasswdFor returns the content of an htpasswd file with one user, hashed with bcrypt as the
-// registry requires. It is for test setup only: Bayplan never writes one.
+// registry requires. It is for test setup only: Coaming never writes one.
 func HtpasswdFor(user, password string) []byte {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	if err != nil {

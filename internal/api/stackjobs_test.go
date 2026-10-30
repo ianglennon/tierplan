@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/jobs"
+	"github.com/ianglennon/coaming/internal/jobs"
 )
 
 // The jobs indicator lists the stack operations a person may follow (plan 07-19, UI-SPEC Defaults 4):

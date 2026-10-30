@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops_test
 
 import (
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops"
 )
 
 // The state of a stack (plan 07-23, STK-10, UI-SPEC Defaults 11): one priority order, so the state never

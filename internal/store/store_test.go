@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package store_test
 
@@ -19,8 +19,8 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 // plus returns the embedded baseline migration plus n extra migrations, each
@@ -71,7 +71,7 @@ func open(t *testing.T, dir string) *store.Store {
 
 func snapshots(t *testing.T, dir string) []string {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(dir, "backups", "bayplan-*.db"))
+	files, err := filepath.Glob(filepath.Join(dir, "backups", "coaming-*.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,8 +134,8 @@ func TestMigrateSnapshotsBeforePendingMigration(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("got %d snapshots, want 1: %v", len(files), files)
 	}
-	if !regexp.MustCompile(`bayplan-v1-20261001T123005Z\.db$`).MatchString(files[0]) || files[0] != res.SnapshotPath {
-		t.Errorf("snapshot %q (result %q) does not match backups/bayplan-<oldver>-<ts>.db", files[0], res.SnapshotPath)
+	if !regexp.MustCompile(`coaming-v1-20261001T123005Z\.db$`).MatchString(files[0]) || files[0] != res.SnapshotPath {
+		t.Errorf("snapshot %q (result %q) does not match backups/coaming-<oldver>-<ts>.db", files[0], res.SnapshotPath)
 	}
 	if st, err := os.Stat(files[0]); err != nil || st.Size() == 0 || st.Mode().Perm() != 0o600 {
 		t.Errorf("snapshot stat = %v, %v; want a non-empty 0600 file", st, err)
@@ -172,7 +172,7 @@ func TestMigrateKeepsNewestThreeSnapshots(t *testing.T) {
 		if f == newest {
 			found = true
 		}
-		if strings.Contains(f, "bayplan-v1-") {
+		if strings.Contains(f, "coaming-v1-") {
 			t.Errorf("the oldest snapshot %s should have been pruned", f)
 		}
 	}
@@ -192,8 +192,8 @@ func TestMigrateRefusesWhenFreeSpaceIsLow(t *testing.T) {
 	_, err := store.Migrate(ctx, s, store.MigrateOptions{
 		AppVersion: "v2", DataDir: dir, Migrations: plus(t, 1), FreeBytes: low,
 	})
-	if err == nil || !strings.Contains(err.Error(), "BAYPLAN_SKIP_PRE_MIGRATE_BACKUP") {
-		t.Fatalf("error = %v, want one naming BAYPLAN_SKIP_PRE_MIGRATE_BACKUP", err)
+	if err == nil || !strings.Contains(err.Error(), "COAMING_SKIP_PRE_MIGRATE_BACKUP") {
+		t.Fatalf("error = %v, want one naming COAMING_SKIP_PRE_MIGRATE_BACKUP", err)
 	}
 	if len(snapshots(t, dir)) != 0 {
 		t.Error("a refused migration must not leave a snapshot")
@@ -268,7 +268,7 @@ func TestPragmas(t *testing.T) {
 	if n := s.Read.Stats().MaxOpenConnections; n != 4 {
 		t.Errorf("read pool MaxOpenConnections = %d, want 4", n)
 	}
-	if s.Path != filepath.Join(dir, "bayplan.db") {
+	if s.Path != filepath.Join(dir, "coaming.db") {
 		t.Errorf("Path = %q", s.Path)
 	}
 }
@@ -419,7 +419,7 @@ func TestFileURIMakesARelativePathAbsolute(t *testing.T) {
 	}
 
 	t.Run("a relative path gets no host and an absolute path", func(t *testing.T) {
-		got, err := store.FileURI(".devdata/bayplan.db", "_pragma=foreign_keys(1)")
+		got, err := store.FileURI(".devdata/coaming.db", "_pragma=foreign_keys(1)")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -430,7 +430,7 @@ func TestFileURIMakesARelativePathAbsolute(t *testing.T) {
 		if u.Host != "" {
 			t.Errorf("host = %q, want empty (%s)", u.Host, got)
 		}
-		if want := filepath.Join(wdReal, ".devdata", "bayplan.db"); u.Path != want {
+		if want := filepath.Join(wdReal, ".devdata", "coaming.db"); u.Path != want {
 			t.Errorf("path = %q, want %q", u.Path, want)
 		}
 		if u.RawQuery != "_pragma=foreign_keys(1)" {
@@ -439,7 +439,7 @@ func TestFileURIMakesARelativePathAbsolute(t *testing.T) {
 	})
 
 	t.Run("?, # and % in a directory name are escaped", func(t *testing.T) {
-		p := filepath.Join(t.TempDir(), "a?b#c%d", "bayplan.db")
+		p := filepath.Join(t.TempDir(), "a?b#c%d", "coaming.db")
 		got, err := store.FileURI(p, "")
 		if err != nil {
 			t.Fatal(err)

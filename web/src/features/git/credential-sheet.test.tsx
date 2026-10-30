@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -54,7 +54,7 @@ const sshCredential = (extra: Record<string, unknown> = {}) =>
     username: "git",
     last4: "",
     fingerprint: "SHA256:AbCdEfGh0123456789",
-    publicKey: "ssh-ed25519 AAAAC3Nza deploy@bayplan",
+    publicKey: "ssh-ed25519 AAAAC3Nza deploy@coaming",
     ...extra,
   });
 
@@ -308,7 +308,7 @@ describe("CredentialSheet add mode", () => {
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(requests[0]?.body).toEqual({ name: "deploy-key", type: "ssh", secret: PEM_KEY });
     // The sheet stays open on the saved credential, so the public key can be copied.
-    expect(await screen.findByText("ssh-ed25519 AAAAC3Nza deploy@bayplan")).toBeTruthy();
+    expect(await screen.findByText("ssh-ed25519 AAAAC3Nza deploy@coaming")).toBeTruthy();
     expect(screen.getByText("SHA256:AbCdEfGh0123456789")).toBeTruthy();
     expect(document.body.textContent).not.toContain("BEGIN OPENSSH PRIVATE KEY");
     expect(saved).toHaveLength(1);
@@ -344,7 +344,7 @@ describe("CredentialSheet server refusals", () => {
 
   it("words key_invalid", async () => {
     await refuse("key_invalid");
-    expect(await screen.findByText("That isn't a private key Bayplan can read.")).toBeTruthy();
+    expect(await screen.findByText("That isn't a private key Coaming can read.")).toBeTruthy();
     expect(field("Private key").getAttribute("aria-invalid")).toBe("true");
   });
 
@@ -399,7 +399,7 @@ describe("CredentialSheet edit mode", () => {
     mount("edit", sshCredential());
     await screen.findByText("Edit gitea-homelab");
     expect(screen.getByText("Public key")).toBeTruthy();
-    expect(screen.getByText("ssh-ed25519 AAAAC3Nza deploy@bayplan")).toBeTruthy();
+    expect(screen.getByText("ssh-ed25519 AAAAC3Nza deploy@coaming")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy the public key" })).toBeTruthy();
     expect(screen.getByText("SHA256:AbCdEfGh0123456789")).toBeTruthy();
     expect(screen.getByText("Add this to your repository's deploy keys.")).toBeTruthy();

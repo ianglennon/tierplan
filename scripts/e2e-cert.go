@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 //go:build ignore
 
@@ -12,8 +12,8 @@
 //	go run scripts/e2e-cert.go -out .devdata/e2e-tls
 //
 // It writes cert.pem, key.pem and pin.txt. pin.txt holds the SPKI pin the agent
-// is given in BAYPLAN_AGENT_PIN, written by authn.SPKIPin, the same function that
-// writes the pin Bayplan shows for its own certificate. An existing, unexpired
+// is given in COAMING_AGENT_PIN, written by authn.SPKIPin, the same function that
+// writes the pin Coaming shows for its own certificate. An existing, unexpired
 // certificate is kept, so a second run does not move the pin under a stack that
 // is already up.
 package main
@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ianglennon/bayplan/proto/authn"
+	"github.com/ianglennon/coaming/proto/authn"
 )
 
 const (
@@ -83,7 +83,7 @@ func run(dir string) error {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "bayplan-e2e-proxy", Organization: []string{"Bayplan end-to-end harness"}},
+		Subject:               pkix.Name{CommonName: "coaming-e2e-proxy", Organization: []string{"Coaming end-to-end harness"}},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(validFor),
 		KeyUsage:              x509.KeyUsageDigitalSignature,

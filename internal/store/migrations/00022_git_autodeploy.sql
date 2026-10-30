@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Bayplan Authors
+-- SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 -- +goose Up
 -- The lines a deploy of a git stack put back to what the repository says, as a JSON array of strings: when an

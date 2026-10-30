@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitsync"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitsync"
 )
 
 // Changing what a git stack follows (plan 09-29, GIT-02, GIT-04, D-11, D-12): the change writes the draft as a pending

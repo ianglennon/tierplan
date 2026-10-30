@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
@@ -93,7 +93,7 @@ function taskName(service: string, slot: number): string {
 // the server what the change will do and shows it: for a drain, where each task goes; for a
 // demote, the managers that would be left. A spinner row stands in until the answer arrives and
 // the confirm stays off, so a warning is never skipped. When the server says the node's name is
-// needed (quorum at risk, the node that runs Bayplan, the only manager agent) the dialog asks for
+// needed (quorum at risk, the node that runs Coaming, the only manager agent) the dialog asks for
 // it and its confirm turns destructive and carries the name; the server asks for it too, so a
 // stale page cannot skip it. A refusal stays inside the dialog in words, and the change is sent
 // once, with the version the answer carried, and never retried.
@@ -306,7 +306,7 @@ function Impact({ t, mode, name, impact }: ImpactProps) {
         });
       case "quorum_at_risk":
         return t("nodes.action.warning.quorum_at_risk", { reachable, total });
-      case "runs_bayplan":
+      case "runs_coaming":
       case "only_manager_agent":
         return t(`nodes.action.warning.${code}`, { name, doing });
       case "facts_unreadable":

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package servertest
 
@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/server"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/server"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 // Archetype names a kind of caller the enforcement test drives every route as.

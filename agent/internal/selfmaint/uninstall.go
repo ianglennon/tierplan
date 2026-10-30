@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package selfmaint
 
@@ -17,13 +17,13 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // tokenSecretPrefix starts the name of every generation of the join token secret the
-// install creates (bayplan-agent-token-g1, g2, ...). Only a secret with this name, in
+// install creates (coaming-agent-token-g1, g2, ...). Only a secret with this name, in
 // the agent's own service, is removed with it.
-const tokenSecretPrefix = "bayplan-agent-token-g"
+const tokenSecretPrefix = "coaming-agent-token-g"
 
 // Uninstall removes the agent from its host (D-30). Like an update it only ever acts
 // on what the agent itself is: its own container, the swarm service that container
@@ -42,7 +42,7 @@ const tokenSecretPrefix = "bayplan-agent-token-g"
 func (m *Maint) Uninstall(ctx context.Context, msg wire.Uninstall) wire.UpdateResult {
 	res := result(msg.ID)
 	if !m.cfg.SelfUpdate {
-		m.log.Warn("the server asked this agent to uninstall, and BAYPLAN_AGENT_SELF_UPDATE=false refuses it")
+		m.log.Warn("the server asked this agent to uninstall, and COAMING_AGENT_SELF_UPDATE=false refuses it")
 		return refuse(res, wire.UpdateErrSelfUpdateDisabled)
 	}
 	if !m.running.CompareAndSwap(false, true) {
@@ -204,14 +204,14 @@ func (m *Maint) startRemovalHelper(ctx context.Context, cli *client.Client, self
 	if _, err := rand.Read(suffix); err != nil {
 		return wire.UpdateErrFailed
 	}
-	env := []string{"BAYPLAN_AGENT_SOCKET=" + m.cfg.SocketPath}
+	env := []string{"COAMING_AGENT_SOCKET=" + m.cfg.SocketPath}
 	for _, e := range self.Config.Env {
-		if strings.HasPrefix(e, "BAYPLAN_AGENT_DOCKER_GID=") {
+		if strings.HasPrefix(e, "COAMING_AGENT_DOCKER_GID=") {
 			env = append(env, e)
 		}
 	}
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: "bayplan-agent-helper-" + hex.EncodeToString(suffix),
+		Name: "coaming-agent-helper-" + hex.EncodeToString(suffix),
 		Config: &container.Config{
 			Image:  self.Config.Image,
 			Cmd:    args,

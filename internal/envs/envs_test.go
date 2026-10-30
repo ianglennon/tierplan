@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -16,14 +16,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The environment registry and monitor (plan 16, ENV-04, PLAT-06, D-19 to
@@ -740,10 +740,10 @@ func TestDetectSelfContainerID(t *testing.T) {
 		{"hostname file mount", noise + hostnameLine, "whatever", id},
 		{"resolv.conf mount only", noise + resolvLine, "", id},
 		{"prefers the identity mounts over a foreign directory", foreign + hostnameLine, "", id},
-		{"a foreign directory alone is not Bayplan's own", foreign, "", ""},
+		{"a foreign directory alone is not Coaming's own", foreign, "", ""},
 		{"a foreign directory alone falls back to a short hostname", foreign, "0123456789ab", "0123456789ab"},
 		{"no match and a 12 hex hostname", noise, "0123456789ab", "0123456789ab"},
-		{"no match and a hostname that is not a short ID", noise, "bayplan", ""},
+		{"no match and a hostname that is not a short ID", noise, "coaming", ""},
 		{"no match and a 12 character non-hex hostname", noise, "zzzzzzzzzzzz", ""},
 		{"no match and an upper-case hex hostname", noise, "0123456789AB", ""},
 		{"a 63 character directory is not an ID", "1 2 8:1 /var/lib/docker/containers/" + id[:63] + "/hostname /etc/hostname rw - ext4 x rw\n", "", ""},
@@ -768,7 +768,7 @@ func TestASlowSnapshotNeitherFlapsTheEngineNorDelaysStop(t *testing.T) {
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{ListHold: hold})
 	m := NewMonitor(slog.New(slog.DiscardHandler), nil, func(context.Context, time.Duration) error { return nil })
 	// Well under the observation window below, and well over a slowed ping
-	// (BAYPLAN_TEST_PROBE_DELAY sweeps), so only a probe that waits for the snapshot can
+	// (COAMING_TEST_PROBE_DELAY sweeps), so only a probe that waits for the snapshot can
 	// time out.
 	m.probeTimeout = time.Second
 	if err := m.Start(context.Background(), "e", fake); err != nil {

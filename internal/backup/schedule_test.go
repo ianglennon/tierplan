@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // The saved backup schedule and its sealed passphrase (plan 03-27, D-32).

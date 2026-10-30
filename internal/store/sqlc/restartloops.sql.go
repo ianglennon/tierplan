@@ -29,7 +29,7 @@ func (q *Queries) DeleteRestartLoopMute(ctx context.Context, arg DeleteRestartLo
 
 const getRestartLoopSettings = `-- name: GetRestartLoopSettings :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 SELECT restart_loop_failures, restart_loop_window_minutes FROM environments WHERE id = ?
 `

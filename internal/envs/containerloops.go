@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // Detecting a standalone container that keeps dying (plan 06-36, RES-13, D-15, RESEARCH

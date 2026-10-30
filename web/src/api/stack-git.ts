@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -544,7 +544,7 @@ export class StackGitDetachError extends Error {
 }
 
 // useDetachStackGit turns a git stack back into an inline stack (D-25): the files of the deployed revision become its
-// draft, and Bayplan stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running
+// draft, and Coaming stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running
 // changes. It is never retried. Once the server has answered, the stack is an inline one: the page's copy says so at once
 // (the Git tab has nothing left to read, and leads to the Overview), the git summary is dropped rather than read again,
 // and the draft, the lists and the warnings are read again.

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package dockerx is the only package that imports the Docker (moby) client.
-// It exposes typed, read-only methods that return Bayplan types, never moby
+// It exposes typed, read-only methods that return Coaming types, never moby
 // types, and has no raw passthrough to the Docker API: that is what keeps a
 // compromise of the web layer from becoming arbitrary Docker access (D-52,
 // Pitfall 1). Plugin and swarm init/join/leave/unlock calls have no method at
@@ -15,7 +15,7 @@ import (
 
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/bayplan/internal/engine"
+	"github.com/ianglennon/coaming/internal/engine"
 )
 
 // hostURL is only used by the moby client to build request URLs. The Transport
@@ -41,7 +41,7 @@ type Client struct {
 
 // New builds a Client over t. It never reads DOCKER_* environment variables:
 // the options are explicit, so a stray DOCKER_API_VERSION or DOCKER_CERT_PATH
-// in the container cannot change how Bayplan talks to Docker (Pitfall 1).
+// in the container cannot change how Coaming talks to Docker (Pitfall 1).
 func New(t engine.Transport) (*Client, error) {
 	c, err := newMoby(t)
 	if err != nil {

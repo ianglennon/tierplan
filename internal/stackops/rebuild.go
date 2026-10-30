@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -14,10 +14,10 @@ import (
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/rebuild"
 )
 
 // RebuildOptions say how a live rebuild is made.
@@ -313,7 +313,7 @@ func hashLabel(in rebuild.StandaloneInput, o rebuild.Object) string {
 // hashOfObject is the hash the SDK would compute for an object of a rebuilt file: the file is loaded the way
 // every deploy loads it (stacks.Deployable) and prepared the way a standalone deploy prepares it
 // (stacks.PrepareStandalone), so the name the SDK gives the object, and whatever else preparation sets, is what is
-// hashed. Bayplan's own labels on the object are custom labels and are not in the hash. A loaded project that does
+// hashed. Coaming's own labels on the object are custom labels and are not in the hash. A loaded project that does
 // not hold the object (the default network a file leaves implicit is always held) is a rebuild that cannot be used.
 func hashOfObject(ctx context.Context, st Stack, res rebuild.Result, o rebuild.Object, beside stacks.WorkingCopy) (string, error) {
 	copy := composeBeside(beside, res.YAML)

@@ -23,7 +23,7 @@
     "passphrase": {
       "label": "Passphrase",
       "confirm": "Confirm passphrase",
-      "helper": "Stored encrypted in Bayplan so backups can run unattended. Anyone who can read /data and the master key can read it.",
+      "helper": "Stored encrypted in Coaming so backups can run unattended. Anyone who can read /data and the master key can read it.",
       "saved": "Saved. Leave empty to keep it.",
       "show": "Show passphrase",
       "hide": "Hide passphrase",

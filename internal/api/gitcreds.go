@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -15,10 +15,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/gitconn"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/gitconn"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 const (
@@ -35,7 +35,7 @@ type GitCredentialRequest struct {
 	Name     string `json:"name,omitempty" maxLength:"256" doc:"What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid"`
 	Type     string `json:"type,omitempty" maxLength:"32" doc:"https for a token, ssh for a deploy key; 422 type_invalid for anything else"`
 	Username string `json:"username,omitempty" maxLength:"512" doc:"The user name the git server expects with a token (required for https: 422 username_required). Your host decides what it needs here. Defaults to git for an ssh key"`
-	Secret   string `json:"secret,omitempty" maxLength:"65536" doc:"The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key Bayplan can read, key_too_large over 16 KiB"`
+	Secret   string `json:"secret,omitempty" maxLength:"65536" doc:"The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key Coaming can read, key_too_large over 16 KiB"`
 }
 
 // GitCredentialBody is a git credential as the browser sees it. It has no secret field: the token

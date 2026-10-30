@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package convert
 
@@ -22,7 +22,7 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // convertService converts one service and returns the keys of the networks it joins.
@@ -178,7 +178,7 @@ func classifyFields(svc composetypes.ServiceConfig) ([]string, error) {
 }
 
 // environment converts the explicit environment of a service to KEY=value strings, sorted. A
-// variable the file names without a value is left out: Bayplan resolves values from the stack's
+// variable the file names without a value is left out: Coaming resolves values from the stack's
 // table only (D-01), so there is no host environment to pass it through from. (docker stack
 // deploy would pass the bare name through; with no host environment that sets nothing either.)
 func environment(env composetypes.MappingWithEquals) []string {

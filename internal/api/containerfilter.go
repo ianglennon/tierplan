@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
 )
 
 // The labels the container list reads. They are the only labels that reach a
@@ -20,8 +20,8 @@ const (
 	labelProject = "com.docker.compose.project"
 	labelStack   = "com.docker.stack.namespace"
 	labelService = "com.docker.swarm.service.name"
-	// labelAgent marks a Bayplan agent's own container (install.go labelPair).
-	labelAgent = "bayplan.agent"
+	// labelAgent marks a Coaming agent's own container (install.go labelPair).
+	labelAgent = "coaming.agent"
 )
 
 // The values of the status filter. Unhealthy is a health, the others are states.
@@ -100,7 +100,7 @@ func statusCounts(rows []envs.ContainerRow) StatusCountsBody {
 	return c
 }
 
-// selfKindOf says whether a container is Bayplan's own server ("server"), one of
+// selfKindOf says whether a container is Coaming's own server ("server"), one of
 // its agents ("agent") or neither (""). A label can be set by anyone, so this only
 // adds care in the UI; the action endpoint decides ownership again from a fresh
 // inspect (T-04-32).

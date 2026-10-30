@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package agents_test
 
@@ -12,11 +12,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/tunnel"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/authn"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 func standalone(engine, host string) wire.Facts {

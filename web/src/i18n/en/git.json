@@ -1,7 +1,7 @@
 {
   "git": {
     "title": "Git",
-    "caption": "Repositories and credentials Bayplan uses to create stacks from git. Each repository uses the credential you pick, never a guess.",
+    "caption": "Repositories and credentials Coaming uses to create stacks from git. Each repository uses the credential you pick, never a guess.",
     "tabs": {
       "label": "Git",
       "repositories": "Repositories",
@@ -162,11 +162,11 @@
       "usernameInvalid": "That isn't a valid username.",
       "secretRequired": "Enter a token.",
       "secretRequiredKey": "Enter a private key.",
-      "secretInvalid": "That isn't a token Bayplan can use. Remove any spaces.",
+      "secretInvalid": "That isn't a token Coaming can use. Remove any spaces.",
       "keyPassphrase": "That key needs a passphrase. Use a key without one.",
-      "keyInvalid": "That isn't a private key Bayplan can read.",
+      "keyInvalid": "That isn't a private key Coaming can read.",
       "keyTooLarge": "That key is too large.",
-      "hostKeyInvalid": "That isn't a host key Bayplan can read.",
+      "hostKeyInvalid": "That isn't a host key Coaming can read.",
       "permission": "You don't have permission to do that.",
       "generic": "Something went wrong. Try again."
     },
@@ -174,7 +174,7 @@
       "title": "Test",
       "button": "Test repository",
       "pending": "Testing…",
-      "caption": "Runs from the Bayplan server, where the repositories are kept. It lists the branches and tags and checks the sign-in.",
+      "caption": "Runs from the Coaming server, where the repositories are kept. It lists the branches and tags and checks the sign-in.",
       "needAddress": "Enter a valid address to test it.",
       "steps": {
         "reachable": "Repository reachable",
@@ -203,13 +203,13 @@
         "auth_refused": "{{host}} refused the credential. Check the token or the deploy key.",
         "not_found": "{{host}} says the repository doesn't exist or this credential can't read it.",
         "cert_untrusted": "The certificate from {{host}} isn't trusted. Add the CA certificate under Advanced.",
-        "host_key_changed": "The host key for {{host}} has changed. Bayplan stopped. If you expected this, an administrator can trust the new key.",
-        "host_key_untrusted": "Bayplan hasn't trusted the host key for {{host}}. Test the repository and confirm its key.",
-        "egress_blocked": "Bayplan's network policy doesn't allow connections to {{host}}.",
+        "host_key_changed": "The host key for {{host}} has changed. Coaming stopped. If you expected this, an administrator can trust the new key.",
+        "host_key_untrusted": "Coaming hasn't trusted the host key for {{host}}. Test the repository and confirm its key.",
+        "egress_blocked": "Coaming's network policy doesn't allow connections to {{host}}.",
         "ref_missing": "That branch or tag no longer exists in the repository on {{host}}.",
         "timeout": "{{host}} took too long to answer. Try again.",
-        "too_large": "The repository on {{host}} is too large for Bayplan to read.",
-        "unknown": "Bayplan couldn't test the repository. Try again."
+        "too_large": "The repository on {{host}} is too large for Coaming to read.",
+        "unknown": "Coaming couldn't test the repository. Try again."
       },
       "short": {
         "unreachable": "Couldn't reach the server",
@@ -238,7 +238,7 @@
         "copied": "Copied",
         "trust": "Trust this key",
         "dismiss": "Don't trust it",
-        "helper": "Bayplan keeps this key with the repository and stops if it ever changes."
+        "helper": "Coaming keeps this key with the repository and stops if it ever changes."
       },
       "confirmed": "Key trusted. It is saved with the repository.",
       "builtin": "Matches the built-in key for {{host}}.",
@@ -246,14 +246,14 @@
       "trustedKey": "Trusted key",
       "changed": {
         "title": "The host key for {{host}} has changed",
-        "body": "Bayplan stopped, because this can mean someone is intercepting the connection.",
+        "body": "Coaming stopped, because this can mean someone is intercepting the connection.",
         "saved": "Saved key",
         "presented": "Presented key",
         "retrust": "Re-trust host key…"
       },
       "retrust": {
         "title": "Trust the new key for {{host}}?",
-        "body": "The key for {{host}} changed. Only continue if you know why, for example you rebuilt the server. Bayplan will record who trusted it.",
+        "body": "The key for {{host}} changed. Only continue if you know why, for example you rebuilt the server. Coaming will record who trusted it.",
         "saved": "Saved key",
         "new": "New key",
         "keep": "Keep the old key",
@@ -263,7 +263,7 @@
         "unchanged": "The host key for {{host}} matches the saved key again.",
         "permission": "You don't have permission to trust this host key.",
         "gone": "This repository no longer exists.",
-        "invalid": "That isn't a host key Bayplan can read.",
+        "invalid": "That isn't a host key Coaming can read.",
         "generic": "Couldn't trust the key. Try again."
       }
     },
@@ -301,7 +301,7 @@
         "thisScope": "This scope",
         "instance": "Instance",
         "add": "Add a credential…",
-        "helper": "Bayplan uses exactly this credential. It never picks one from the address.",
+        "helper": "Coaming uses exactly this credential. It never picks one from the address.",
         "sshWithHttps": "This credential is an SSH key. Use an HTTPS token with an https:// address, or change the address to the ssh form.",
         "httpsWithSsh": "This credential is an HTTPS token. Use an SSH deploy key with an ssh address.",
         "gone": "The credential this repository used is no longer listed."
@@ -313,7 +313,7 @@
           "placeholder": "-----BEGIN CERTIFICATE-----",
           "helper": "For a self-hosted https server with its own certificate authority. Used by every fetch of this repository."
         },
-        "noSkip": "Bayplan has no option to skip certificate checks."
+        "noSkip": "Coaming has no option to skip certificate checks."
       },
       "cancel": "Cancel",
       "close": "Close",
@@ -399,7 +399,7 @@
         "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----",
         "keepStored": "Leave empty to keep the saved key",
         "choose": "Choose file",
-        "helper": "Use a key without a passphrase. Bayplan seals it and never shows it again.",
+        "helper": "Use a key without a passphrase. Coaming seals it and never shows it again.",
         "retype": "Type the new secret now: switching the type needs one."
       },
       "publicKey": {

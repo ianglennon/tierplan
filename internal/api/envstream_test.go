@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api_test
 
@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
-	"github.com/ianglennon/bayplan/proto/wire"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The global environments stream (plan 02-12, ENV-06, D-36, D-37, D-54, T-02-46,
@@ -307,7 +307,7 @@ func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
 	nextFrame(t, c) // the snapshot
 
 	// The same environment's token with a wrong secret: its first character changed.
-	i := len("bpjt_") + 36 + 1
+	i := len("cmjt_") + 36 + 1
 	swap := "A"
 	if env.Token[i:i+1] == "A" {
 		swap = "B"

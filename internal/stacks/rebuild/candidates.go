@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rebuild
 
@@ -22,11 +22,11 @@ type VolumeInfo struct {
 func engineName(project, key string) string { return project + "_" + key }
 
 // userObjectLabels are the labels a person put on a network or a volume: not the SDK's own
-// (com.docker.compose.*), Bayplan's, or the engine's mark of an anonymous volume.
+// (com.docker.compose.*), Coaming's, or the engine's mark of an anonymous volume.
 func userObjectLabels(in map[string]string) types.Labels {
 	var out types.Labels
 	for k, v := range in {
-		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "bayplan.") || k == "com.docker.volume.anonymous" {
+		if strings.HasPrefix(k, "com.docker.compose.") || strings.HasPrefix(k, "coaming.") || k == "com.docker.volume.anonymous" {
 			continue
 		}
 		if out == nil {

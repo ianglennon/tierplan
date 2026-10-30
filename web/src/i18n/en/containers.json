@@ -52,8 +52,8 @@
       },
       "unhealthy": "Unhealthy",
       "self": {
-        "server": "Bayplan (this instance)",
-        "agent": "Bayplan agent"
+        "server": "Coaming (this instance)",
+        "agent": "Coaming agent"
       },
       "ports": {
         "more": "+{{count}}"

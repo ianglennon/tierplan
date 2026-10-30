@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { CopyableCode } from "@/components/copyable-code";
 import { TickedText } from "@/components/ticked-text";
@@ -82,8 +82,8 @@ const TEXT_MIDDLE: Record<string, { suffix: string; needs: string[] }> = {
   duplicate_environment: { suffix: "Host", needs: ["host"] },
 };
 
-const STANDALONE_CHECK = "docker ps --filter name=bayplan-agent";
-const SWARM_CHECK = "docker service ps bayplan-agent";
+const STANDALONE_CHECK = "docker ps --filter name=coaming-agent";
+const SWARM_CHECK = "docker service ps coaming-agent";
 
 type Translate = ReturnType<typeof useT>;
 

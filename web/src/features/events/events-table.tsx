@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -260,7 +260,7 @@ const EventRows = memo(function EventRows({
 }: RowsProps) {
   const t = useT();
   const columns = swarm ? 8 : 7;
-  const own = event.type === "bayplan";
+  const own = event.type === "coaming";
   const subject = event.name || event.actorId.slice(0, SHORT_ID);
   const attributes = expanded
     ? Object.entries(event.attributes).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

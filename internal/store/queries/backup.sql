@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 -- name: GetBackupSchedule :one
 -- The one schedule row; no row means the schedule was never saved.

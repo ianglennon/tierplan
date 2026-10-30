@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The merge of a service's log (plan 06-29, OBS-02, D-37, RESEARCH E1): the engine answers

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
@@ -24,7 +24,7 @@ export function useBlockUnload(active: boolean): void {
   }, [active]);
 }
 
-// RestoringOverlay covers the page while Bayplan restarts into the backup. It is
+// RestoringOverlay covers the page while Coaming restarts into the backup. It is
 // a status, not an alert: nothing has gone wrong. It holds the beforeunload
 // prompt for as long as it is mounted.
 export function RestoringOverlay() {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package envs
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The per-environment events hub (plan 21, ENV-07, D-57, Pattern 8, Pitfall 7).
@@ -650,7 +650,7 @@ func TestHubSubscribeToAnUnknownEnvironmentGivesAnEmptyBacklogAndAClosedChannel(
 	}
 }
 
-// A row of Bayplan's own, such as a manager failover (plan 02-20, D-43).
+// A row of Coaming's own, such as a manager failover (plan 02-20, D-43).
 
 func TestInjectedRowsAppearInTheBacklogAndToSubscribersAndRepeatsShowOnce(t *testing.T) {
 	r := newHubRig(t, dockertest.FakeConfig{})
@@ -658,28 +658,28 @@ func TestInjectedRowsAppearInTheBacklogAndToSubscribersAndRepeatsShowOnce(t *tes
 	_, ch, _ := r.subscribe(t)
 
 	row := dockerx.EventRow{
-		ID: "bayplan-1", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(),
-		Type: "bayplan", Action: "failover", ActorID: hubEnv, Name: "Manager a unreachable, using b",
+		ID: "coaming-1", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(),
+		Type: "coaming", Action: "failover", ActorID: hubEnv, Name: "Manager a unreachable, using b",
 	}
 	if !r.hub.Inject(hubEnv, row) {
 		t.Fatal("Inject reported no feed for a monitored target")
 	}
-	if got := recvEvent(t, ch); got.ID != "bayplan-1" || got.Name != row.Name {
+	if got := recvEvent(t, ch); got.ID != "coaming-1" || got.Name != row.Name {
 		t.Fatalf("subscriber got %+v, want the injected row", got)
 	}
 	if !r.hub.Inject(hubEnv, row) {
 		t.Fatal("a repeated Inject reported no feed")
 	}
-	sentinel := dockerx.EventRow{ID: "bayplan-2", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(), Type: "bayplan", Action: "failover", ActorID: hubEnv, Name: "sentinel"}
+	sentinel := dockerx.EventRow{ID: "coaming-2", Time: time.Now().UTC(), TimeNano: time.Now().UnixNano(), Type: "coaming", Action: "failover", ActorID: hubEnv, Name: "sentinel"}
 	if !r.hub.Inject(hubEnv, sentinel) {
 		t.Fatal("Inject of the sentinel reported no feed")
 	}
-	expectNext(t, ch, "bayplan-2")
-	if rows := r.hub.Recent(hubEnv, 10); len(rows) != 2 || rows[0].ID != "bayplan-2" || rows[1].Type != "bayplan" || rows[1].ID != "bayplan-1" {
+	expectNext(t, ch, "coaming-2")
+	if rows := r.hub.Recent(hubEnv, 10); len(rows) != 2 || rows[0].ID != "coaming-2" || rows[1].Type != "coaming" || rows[1].ID != "coaming-1" {
 		t.Fatalf("Recent = %+v, want the sentinel, then the injected row once (newest first)", rows)
 	}
 	backlog, _, _ := r.hub.Subscribe(context.Background(), hubEnv)
-	if len(backlog) != 2 || backlog[0].ID != "bayplan-1" {
+	if len(backlog) != 2 || backlog[0].ID != "coaming-1" {
 		t.Fatalf("backlog of a later subscriber = %+v, want the injected row once, then the sentinel", backlog)
 	}
 }
@@ -691,9 +691,9 @@ func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheRe
 		t.Error("Inject reported a feed for a target that has none")
 	}
 	// The resume point is the time of the newest event the daemon sent; a row of
-	// Bayplan's own, however new, must not move it past events the daemon has yet to send.
+	// Coaming's own, however new, must not move it past events the daemon has yet to send.
 	future := time.Now().Add(time.Hour).UnixNano()
-	r.hub.Inject(hubEnv, dockerx.EventRow{ID: "bp", Time: time.Now().Add(time.Hour).UTC(), TimeNano: future, Type: "bayplan", Action: "failover"})
+	r.hub.Inject(hubEnv, dockerx.EventRow{ID: "cm", Time: time.Now().Add(time.Hour).UTC(), TimeNano: future, Type: "coaming", Action: "failover"})
 	r.hub.mu.Lock()
 	f := r.hub.feeds[hubEnv]
 	r.hub.mu.Unlock()
@@ -704,7 +704,7 @@ func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheRe
 
 // The merged feed of an environment (plan 02-21, ENV-06, D-46, D-43, Pitfall 18):
 // every present target's events with their node, a swarm-scoped event from the
-// manager in use only, and Bayplan's own rows. The agents are real sessions over
+// manager in use only, and Coaming's own rows. The agents are real sessions over
 // real tunnels with a fake daemon behind each, as in cluster_test.go.
 
 // nodeSink reads a feed in the background and keeps what it saw.
@@ -936,7 +936,7 @@ func TestMergedFeedRecentSinceKeepsRowsAtOrAfterTheTimeNewestFirstAndAtMostN(t *
 	}
 }
 
-func TestMergedFeedCarriesTheFailoverRowAsBayplanWithTheNewManagerAsNode(t *testing.T) {
+func TestMergedFeedCarriesTheFailoverRowAsCoamingWithTheNewManagerAsNode(t *testing.T) {
 	s := newMergedRig(t)
 	sink := s.subscribeMerged(t)
 	s.kick(t, s.m[1])
@@ -944,7 +944,7 @@ func TestMergedFeedCarriesTheFailoverRowAsBayplanWithTheNewManagerAsNode(t *test
 		t.Fatalf("Refresh: %v", err)
 	}
 	to := s.failovers(t)[0].ToNode
-	isFailover := func(e NodeEvent) bool { return e.Type == "bayplan" && e.Action == "failover" }
+	isFailover := func(e NodeEvent) bool { return e.Type == "coaming" && e.Action == "failover" }
 	sink.await(t, "the failover row", isFailover, 1)
 	if got := sink.where(isFailover); len(got) != 1 || got[0].Node != to {
 		t.Fatalf("failover rows = %+v, want one with node %s, the manager that took over", got, to)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -516,7 +516,7 @@ describe("the follow cap", () => {
 
     expect(
       await screen.findByText(
-        "This stack has 50 tasks. Bayplan follows 32 at a time. Filter by service, node or task to see the others.",
+        "This stack has 50 tasks. Coaming follows 32 at a time. Filter by service, node or task to see the others.",
       ),
     ).toBeTruthy();
   });
@@ -533,7 +533,7 @@ describe("the follow cap", () => {
 
     expect(
       await screen.findByText(
-        "This stack has 40 containers. Bayplan follows 32 at a time. Filter by service or container to see the others.",
+        "This stack has 40 containers. Coaming follows 32 at a time. Filter by service or container to see the others.",
       ),
     ).toBeTruthy();
   });

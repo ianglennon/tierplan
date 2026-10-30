@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package registry_test
 
@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/storetest"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 const longSecret = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"

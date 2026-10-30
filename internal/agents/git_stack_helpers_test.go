@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build integration || swarm
 
 package agents_test
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/gitx/gittest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The part of the git stack suites (plan 09-33) that the standalone and the swarm test share: a real git server
@@ -23,7 +23,7 @@ import (
 // gitDeployWait is how long a deploy job, a pull or a check gets to end on a real engine.
 const gitDeployWait = 5 * time.Minute
 
-// gitHarness is a git repository served over TLS and saved in one environment of a running Bayplan.
+// gitHarness is a git repository served over TLS and saved in one environment of a running Coaming.
 type gitHarness struct {
 	t     *testing.T
 	do    func(method, path string, body any) (int, []byte)
@@ -31,7 +31,7 @@ type gitHarness struct {
 
 	repo   *gittest.Repo
 	server *gittest.HTTPServer
-	// repoID is the saved repository's ID in Bayplan.
+	// repoID is the saved repository's ID in Coaming.
 	repoID string
 }
 

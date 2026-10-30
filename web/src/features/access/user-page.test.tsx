@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -350,7 +350,7 @@ describe("Disable user and Enable user", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Disable user" }));
     const alert = await within(confirm).findByRole("alert");
     expect(alert.textContent).toBe(
-      "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
+      "Coaming needs at least one active instance admin. Make someone else an instance admin first.",
     );
     // The page reads the user again.
     await waitFor(() =>
@@ -572,7 +572,7 @@ describe("the Instance administrator card", () => {
   it("guards the last active instance admin: the switch, Disable user and Delete user are aria-disabled with the reason", async () => {
     user = userBody({ instanceAdmin: true, lastInstanceAdmin: true });
     renderAt(PAGE);
-    const reason = "Bayplan needs at least one active instance admin";
+    const reason = "Coaming needs at least one active instance admin";
     const sw = await adminSwitch();
     const disable = screen.getByRole("button", { name: "Disable user" });
     const del = screen.getByRole("button", { name: "Delete user…" });
@@ -597,7 +597,7 @@ describe("the Instance administrator card", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Remove instance admin" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
+      "Coaming needs at least one active instance admin. Make someone else an instance admin first.",
     );
     await waitFor(() =>
       expect(seen.filter((s) => s === "GET /api/users/u1").length).toBeGreaterThan(1),
@@ -695,7 +695,7 @@ describe("Delete user", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete user" }));
     const alert = await within(dialog).findByRole("alert");
     expect(alert.textContent).toBe(
-      "Bayplan needs at least one active instance admin. Make someone else an instance admin first.",
+      "Coaming needs at least one active instance admin. Make someone else an instance admin first.",
     );
   });
 

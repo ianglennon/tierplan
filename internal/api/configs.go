@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -17,15 +17,15 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/registry"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 const (
@@ -71,7 +71,7 @@ func (d ConfigsDeps) services() ServicesDeps {
 }
 
 // ConfigItem is one swarm config as the list shows it. There is no content: the manager sends
-// every config's content with the list, and Bayplan drops it on the way in. The content is read
+// every config's content with the list, and Coaming drops it on the way in. The content is read
 // on the detail route.
 type ConfigItem struct {
 	ID             string            `json:"id" doc:"The config ID"`
@@ -83,7 +83,7 @@ type ConfigItem struct {
 	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the config, whatever their tasks are doing, a service scaled to 0 included"`
 	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
 	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
-	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	CoamingStackID string            `json:"coamingStackId" doc:"The ID of the Coaming stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
 }
 
 // ConfigListBody is the answer of the configs list.
@@ -131,7 +131,7 @@ type ConfigDetailBody struct {
 	UsedBy         int               `json:"usedBy" doc:"How many services' specs reference the config"`
 	Owner          string            `json:"owner" doc:"The stack (com.docker.stack.namespace) label value; empty when the config has none"`
 	OwnerKind      string            `json:"ownerKind" enum:"stack," doc:"stack, or empty when the config has no owner"`
-	BayplanStackID string            `json:"bayplanStackId" doc:"The ID of the Bayplan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (bayplan.stack.id). Empty for a stack Bayplan does not manage"`
+	CoamingStackID string            `json:"coamingStackId" doc:"The ID of the Coaming stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (coaming.stack.id). Empty for a stack Coaming does not manage"`
 	UsedByRows     []ConfigUserBody  `json:"usedByRows" doc:"Every service whose spec references the config, sorted by service name then ID"`
 }
 
@@ -204,7 +204,7 @@ func RegisterConfigs(r *httpx.Router, d ConfigsDeps) {
 		OperationID: "listConfigs", Method: http.MethodGet, Path: "/api/env/{envId}/configs",
 		Summary: "List the swarm configs of an environment",
 		Description: "The configs of a swarm environment with their labels, times, templating, owner and how many services use each, at most 500 rows sorted by name then ID, read through a manager. " +
-			"No row has content: the manager sends every config's content with the list and Bayplan drops it, so the content is read on one config's own route. " +
+			"No row has content: the manager sends every config's content with the list and Coaming drops it, so the content is read on one config's own route. " +
 			"Optionally a search (q) that runs before the 500-row cap. " +
 			"502 config_list_too_large when the configs are too many or too large for one answer; 409 not_a_swarm when the environment is a standalone host; 503 no_manager_connected when no manager is connected. " +
 			"Needs configs.read (Viewer) on the environment.",
@@ -321,7 +321,7 @@ func configItem(row dockerx.ConfigRow, used int, known stackIDs) ConfigItem {
 	return ConfigItem{
 		ID: row.ID, Name: row.Name, Labels: row.Labels, CreatedAt: rfc3339(row.CreatedAt), UpdatedAt: rfc3339(row.UpdatedAt),
 		Templating: configTemplatingLabel(row.Templating), UsedBy: used, Owner: owner, OwnerKind: kind,
-		BayplanStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
+		CoamingStackID: known.confirmObject(owner, row.Labels[stacks.LabelStackID]),
 	}
 }
 
@@ -483,7 +483,7 @@ func getConfig(ctx context.Context, d ConfigsDeps, envID, id string) (ConfigDeta
 	return ConfigDetailBody{
 		ID: it.ID, Name: it.Name, Labels: it.Labels, CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt, Templating: it.Templating,
 		Size: len(detail.Data), Data: base64.StdEncoding.EncodeToString(detail.Data), Text: text,
-		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, BayplanStackID: it.BayplanStackID, UsedByRows: users,
+		UsedBy: it.UsedBy, Owner: it.Owner, OwnerKind: it.OwnerKind, CoamingStackID: it.CoamingStackID, UsedByRows: users,
 	}, nil
 }
 

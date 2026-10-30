@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -30,7 +30,7 @@ type EnvFileError struct {
 	Service string
 	Path    string
 	Line    int
-	// Format is set when the file asked for a format Bayplan does not read.
+	// Format is set when the file asked for a format Coaming does not read.
 	Format string
 	Err    error
 }

@@ -1,6 +1,6 @@
 # The secrets and configs of the parity corpus (plan 07-11). The content is in files beside this
-# one. docker stack deploy names each object <stack>_<name>; Bayplan adds a short hash of the content
-# to the end, which the normaliser removes. Every object is used by a service, because Bayplan (unlike
+# one. docker stack deploy names each object <stack>_<name>; Coaming adds a short hash of the content
+# to the end, which the normaliser removes. Every object is used by a service, because Coaming (unlike
 # docker stack deploy) creates only the objects a service uses.
 services:
   app:

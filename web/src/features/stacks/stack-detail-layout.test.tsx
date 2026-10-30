@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -292,7 +292,7 @@ describe("the failed deploy alert", () => {
     // Above the tabs, in the page's order.
     expect(alert.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      screen.getByText("Bayplan stopped at tracer_web: Docker rejected the service."),
+      screen.getByText("Coaming stopped at tracer_web: Docker rejected the service."),
     ).toBeTruthy();
   });
 
@@ -521,7 +521,7 @@ describe("the Git strip", () => {
     expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
   });
 
-  it("is not on the page of a stack made in Bayplan", async () => {
+  it("is not on the page of a stack made in Coaming", async () => {
     detail = { ...detail, source: "inline", git: undefined };
     mount();
     await screen.findByRole("heading", { name: "tracer", level: 2 });
@@ -572,7 +572,7 @@ describe("the unmanaged variant", () => {
     }
   });
 
-  it("leaves the page of a stack Bayplan manages as it was", async () => {
+  it("leaves the page of a stack Coaming manages as it was", async () => {
     mount();
     expect(await screen.findByRole("tab", { name: "Editor" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "History" })).toBeTruthy();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -206,7 +206,7 @@ describe("ChangePasswordDialog", () => {
     fill("old password here", GOOD);
     submit();
     expect((await screen.findByRole("alert")).textContent).toBe(
-      "Can't reach Bayplan. Check your connection and try again.",
+      "Can't reach Coaming. Check your connection and try again.",
     );
   });
 

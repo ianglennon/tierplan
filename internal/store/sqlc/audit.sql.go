@@ -118,7 +118,7 @@ func (q *Queries) InsertAudit(ctx context.Context, arg InsertAuditParams) (int64
 
 const lastAuditHMAC = `-- name: LastAuditHMAC :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 SELECT hmac FROM audit_log ORDER BY seq DESC LIMIT 1
 `

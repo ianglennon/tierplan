@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ import { OverlayFilesCard } from "@/features/git-source/overlay-files-card";
 import "@/i18n";
 
 // The Overlay files card and the Add overlay file dialog of the From git page (plan 09-16, GIT-08,
-// D-09): files the repository must not hold, such as a secret, supplied in Bayplan and kept
+// D-09): files the repository must not hold, such as a secret, supplied in Coaming and kept
 // encrypted. The contents are write-only and live in this state alone.
 
 afterEach(cleanup);
@@ -55,7 +55,7 @@ describe("OverlayFilesCard", () => {
     expect(screen.getByRole("heading", { name: "Overlay files" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Files the repository doesn't have, such as a secret or a config. Bayplan keeps them encrypted.",
+        "Files the repository doesn't have, such as a secret or a config. Coaming keeps them encrypted.",
       ),
     ).toBeTruthy();
     const row = screen.getByText("secrets/db_pw.txt").closest("li") as HTMLElement;

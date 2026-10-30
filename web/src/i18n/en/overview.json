@@ -55,14 +55,14 @@
       "states": {
         "pending": {
           "text": "No agent has connected yet.",
-          "hint": "Install the Bayplan agent on a host to start managing it."
+          "hint": "Install the Coaming agent on a host to start managing it."
         },
         "reconnecting": {
-          "text": "Bayplan just started and is waiting for the agent to reconnect.",
+          "text": "Coaming just started and is waiting for the agent to reconnect.",
           "hint": "This usually takes under a minute."
         },
         "offline": {
-          "text": "Bayplan can't reach this environment.",
+          "text": "Coaming can't reach this environment.",
           "hint": "Open it to see why."
         },
         "degraded": {
@@ -79,7 +79,7 @@
         },
         "unsupported": {
           "text": "This Docker setup isn't supported.",
-          "hint": "Bayplan manages Docker Engine 24 or later."
+          "hint": "Coaming manages Docker Engine 24 or later."
         }
       }
     }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { hasPermission, type Me, requirementFor, useMe } from "@/hooks/use-me";
 import i18n from "@/i18n";

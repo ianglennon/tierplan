@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel_test
 
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 // The compatibility window (D-25, Pitfall 23): protocol 1 only; for a release

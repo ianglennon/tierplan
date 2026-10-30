@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -18,16 +18,16 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/auth"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/config"
-	"github.com/ianglennon/bayplan/internal/datadir"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/server"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/store/sqlc"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/auth"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/coaming/internal/datadir"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/server"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 const (
@@ -97,7 +97,7 @@ func newInstanceA(t *testing.T) instanceA {
 		t.Fatal(err)
 	}
 
-	file := filepath.Join(t.TempDir(), "alpha.bayplan")
+	file := filepath.Join(t.TempDir(), "alpha.coaming")
 	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // a path the test made
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func buildServer(t *testing.T, dir string) *server.Server {
 	t.Helper()
 	fl := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	config.BindFlags(fl)
-	env := map[string]string{"BAYPLAN_DATA_DIR": dir}
+	env := map[string]string{"COAMING_DATA_DIR": dir}
 	cfg, err := config.Load(fl, func(k string) string { return env[k] }, os.ReadFile)
 	if err != nil {
 		t.Fatal(err)
@@ -345,7 +345,7 @@ func TestRestoreOfAWrongPassphraseOrANonBackupChangesNothingAndSaysWhy(t *testin
 		t.Fatal(err)
 	}
 	_, errOut, err = runCLIWith(t, dir, cliPass+"\n", "", "restore", "--yes", text)
-	if err == nil || !strings.Contains(errOut, "is not a Bayplan backup file") {
+	if err == nil || !strings.Contains(errOut, "is not a Coaming backup file") {
 		t.Fatalf("a text file = %v, stderr %q", err, errOut)
 	}
 	if fileSum(t, db) != before {
@@ -356,7 +356,7 @@ func TestRestoreOfAWrongPassphraseOrANonBackupChangesNothingAndSaysWhy(t *testin
 	}
 }
 
-func TestRestoreWhileTheDataDirectoryIsLockedSaysToStopBayplanAndChangesNothing(t *testing.T) {
+func TestRestoreWhileTheDataDirectoryIsLockedSaysToStopCoamingAndChangesNothing(t *testing.T) {
 	a, dir := liveInstallOn(t)
 	keyBefore := fileSum(t, filepath.Join(dir, vault.KeyFile))
 
@@ -366,8 +366,8 @@ func TestRestoreWhileTheDataDirectoryIsLockedSaysToStopBayplanAndChangesNothing(
 		t.Fatal("restore ran while a server holds the data directory")
 	}
 	for _, want := range []string{
-		"Bayplan is running",
-		"stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/bayplan restore --yes <file>",
+		"Coaming is running",
+		"stop it, then run: docker run --rm -i -v <volume>:/data ghcr.io/ianglennon/coaming restore --yes <file>",
 	} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr lacks %q:\n%s", want, errOut)
@@ -398,7 +398,7 @@ func TestRestoreWhileAnotherHolderHasTheLockLeavesEverythingAsItWas(t *testing.T
 	defer func() { _ = release() }()
 
 	_, errOut, err := runCLIWith(t, dir, cliPass+"\n", "", "restore", a.file)
-	if err == nil || !strings.Contains(errOut, "Bayplan is running") {
+	if err == nil || !strings.Contains(errOut, "Coaming is running") {
 		t.Fatalf("restore = %v, stderr %q", err, errOut)
 	}
 	entries, rerr := os.ReadDir(dir)

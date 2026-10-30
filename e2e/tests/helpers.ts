@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { execFileSync } from "node:child_process";
 import {
@@ -26,20 +26,20 @@ export function compose(...args: string[]): string {
 }
 
 // docker runs the docker CLI on the machine running the suite, against the
-// engine that hosts the Compose stack (not the dind one Bayplan manages).
+// engine that hosts the Compose stack (not the dind one Coaming manages).
 export function docker(...args: string[]): string {
   return execFileSync("docker", args, { encoding: "utf8", timeout: 60_000 }).trim();
 }
 
 // setupToken reads the first-run token the way a self-hoster does:
-// `docker exec <container> bayplan setup-token`. The command runs as root in the
+// `docker exec <container> coaming setup-token`. The command runs as root in the
 // container, so it also proves the CLI drops privileges and leaves /data usable
 // by the server (D-17).
 export function setupToken(): string {
-  return compose("exec", "-T", "bayplan", "bayplan", "setup-token").trim();
+  return compose("exec", "-T", "coaming", "coaming", "setup-token").trim();
 }
 
-// dind runs a shell command inside the dind service, against the engine Bayplan
+// dind runs a shell command inside the dind service, against the engine Coaming
 // manages. Its DOCKER_HOST points the docker CLI at the shared socket.
 export function dind(cmd: string): string {
   return compose("exec", "-T", "dind", "sh", "-c", cmd).trim();
@@ -72,7 +72,7 @@ export function importShellImage(): void {
 
 // runLogger starts a container that writes "line-N" to stdout and "err-N" to
 // stderr once a second, removing any container of that name a retried attempt
-// left behind. It is started on the engine behind Bayplan's back, the way a
+// left behind. It is started on the engine behind Coaming's back, the way a
 // person at a prompt on the host would.
 export function runLogger(name: string): void {
   dind(`docker rm -f ${name} >/dev/null 2>&1 || true`);
@@ -82,7 +82,7 @@ export function runLogger(name: string): void {
   );
 }
 
-// swarmInit makes the dind engine Bayplan manages a one-node swarm, the way a person
+// swarmInit makes the dind engine Coaming manages a one-node swarm, the way a person
 // would on a fresh host: `docker swarm init --advertise-addr 127.0.0.1`. It leaves any
 // swarm a failed earlier attempt left behind first, so it can run twice. The dind has no
 // route to a registry, so a swarm service has to use an image that is already there.
@@ -103,7 +103,7 @@ export function swarmLeave(): void {
 // dockerExec runs a shell script inside one service of the stack with
 // `docker compose exec -T <service> sh -c <script>`, as a person at a prompt on
 // that machine would. For "agenthost" it is a shell on the remote Docker host:
-// the golden path pastes the install command Bayplan showed into it. It returns
+// the golden path pastes the install command Coaming showed into it. It returns
 // what the script printed; a non-zero exit throws with the script's output.
 export function dockerExec(container: string, script: string): string {
   return execFileSync(
@@ -122,7 +122,7 @@ export function dindCount(cmd: string): number {
 
 // PageTracker watches one page for the two things a unit test cannot see: a
 // Content-Security-Policy violation (T-01-113) and a request that leaves the
-// Bayplan origin (T-01-114, D-16).
+// Coaming origin (T-01-114, D-16).
 export interface PageTracker {
   // Every request URL the page made, in order.
   readonly requests: readonly string[];
@@ -138,19 +138,19 @@ export async function trackPage(page: Page): Promise<PageTracker> {
 
   // A navigation throws away the page's own window.__csp, so each violation is
   // also handed to this side as it happens and survives every route change.
-  await page.exposeFunction("__bayplanCspReport", (line: string) => {
+  await page.exposeFunction("__coamingCspReport", (line: string) => {
     cspViolations.push(line);
   });
   await page.addInitScript(() => {
     const w = window as unknown as {
       __csp: string[];
-      __bayplanCspReport?: (line: string) => void;
+      __coamingCspReport?: (line: string) => void;
     };
     w.__csp = [];
     document.addEventListener("securitypolicyviolation", (e) => {
       const line = `${e.violatedDirective} blocked ${e.blockedURI || "inline"} at ${e.sourceFile}:${e.lineNumber}`;
       w.__csp.push(line);
-      w.__bayplanCspReport?.(line);
+      w.__coamingCspReport?.(line);
     });
   });
   // Chromium also logs every enforced violation to the console. Reading that as
@@ -206,7 +206,7 @@ export { expect };
 // on a dashboard (D-31: "/" goes to the environment last opened, and a page needs
 // a couple of seconds on screen to count), so the specs go through the overview
 // the way that person would. Before the agent spec there is exactly one, the
-// Docker host Bayplan manages through its socket.
+// Docker host Coaming manages through its socket.
 export async function openFirstEnvironment(page: Page): Promise<string> {
   await page.goto(at("/environments"));
   // The first page a test opens can be slow on a busy runner (a cold browser and
@@ -217,15 +217,15 @@ export async function openFirstEnvironment(page: Page): Promise<string> {
   // The name link carries the whole name as its title, in the table and in the
   // stacked rows under 768px alike.
   await page.getByRole("main").locator("a[title]").first().click();
-  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/);
+  await expect(page).toHaveURL(/\/coaming\/env\/[^/]+$/);
   const id = /\/env\/([^/]+)$/.exec(new URL(page.url()).pathname)?.[1];
   if (!id) throw new Error(`no environment id in ${page.url()}`);
   return id;
 }
 
-// What the version footer says: "Bayplan v0.1.0" for a release, "Bayplan dev
+// What the version footer says: "Coaming v0.1.0" for a release, "Coaming dev
 // (abc1234)" for a build without a version.
-export const VERSION_TEXT = /Bayplan (v\d|dev)/;
+export const VERSION_TEXT = /Coaming (v\d|dev)/;
 
 // expectVersionFooter asserts the AGPL section 13 footer is on screen exactly
 // once: the version, and a "Source code" link that opens in a new tab (PLAT-05).
@@ -446,7 +446,7 @@ interface EnvironmentRow {
 
 // environmentsOf lists the environments the signed-in context can see, through
 // the API: the specs that follow the agent spec need the id of the Docker host
-// Bayplan manages and of the agent environment it left revoked.
+// Coaming manages and of the agent environment it left revoked.
 export async function environmentsOf(context: BrowserContext): Promise<EnvironmentRow[]> {
   const res = await context.request.get(at("/api/environments"));
   expect(res.ok(), "GET /api/environments").toBe(true);
@@ -465,7 +465,7 @@ const REGISTRY_IMAGE = "registry:2";
 const REGISTRY_NAME = "e2e-registry";
 export const REGISTRY_HOST = "localhost:5000";
 
-// StackHost names the engine a stack is deployed to: the dind Bayplan reaches through its socket,
+// StackHost names the engine a stack is deployed to: the dind Coaming reaches through its socket,
 // or the agent host behind a real agent.
 export type StackHost = "dind" | "agenthost";
 
@@ -556,7 +556,7 @@ export async function createStack(page: Page, envId: string, name: string): Prom
   await dialog.getByRole("radio", { name: /Empty file/ }).click();
   await dialog.getByRole("button", { name: "Create stack" }).click();
   await expect(page.getByRole("dialog", { name: "Create a stack" })).toHaveCount(0);
-  await expect(page).toHaveURL(new RegExp(`/bayplan/env/${envId}/stacks/[^/]+`));
+  await expect(page).toHaveURL(new RegExp(`/coaming/env/${envId}/stacks/[^/]+`));
 }
 
 // typeInEditor replaces the whole content of the open file's editor with `text`. The editor is a
@@ -598,7 +598,7 @@ export async function enrollAgentHost(page: Page, name: string, pin: string): Pr
   expect(pin, "make e2e writes .devdata/e2e-tls/pin.txt").toMatch(/^sha256\/.{44}$/);
   dockerExec(
     "agenthost",
-    "docker rm -f bayplan-agent >/dev/null 2>&1; docker volume rm -f bayplan-agent >/dev/null 2>&1; true",
+    "docker rm -f coaming-agent >/dev/null 2>&1; docker volume rm -f coaming-agent >/dev/null 2>&1; true",
   );
   await page.goto(at("/environments"));
   await expect(page.getByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
@@ -610,16 +610,16 @@ export async function enrollAgentHost(page: Page, name: string, pin: string): Pr
   await dialog.getByRole("tab", { name: "Standalone" }).click();
   await dialog.getByRole("button", { name: "Show token" }).click();
   const code = dialog.getByRole("region", { name: "command" }).locator("code");
-  await expect(code).toContainText("docker run -d --name bayplan-agent");
+  await expect(code).toContainText("docker run -d --name coaming-agent");
   const command = ((await code.textContent()) ?? "").trim();
   const image = command.split(/\s+/).at(-1) ?? "";
-  expect(image, "the last word of the command is the agent image").toMatch(/bayplan-agent:/);
+  expect(image, "the last word of the command is the agent image").toMatch(/coaming-agent:/);
   const cut = command.lastIndexOf(image);
-  const pinned = `${command.slice(0, cut)}-e 'BAYPLAN_AGENT_PIN=${pin}' ${command.slice(cut)}`;
+  const pinned = `${command.slice(0, cut)}-e 'COAMING_AGENT_PIN=${pin}' ${command.slice(cut)}`;
   const out = dockerExec("agenthost", pinned);
   expect(out, "docker run prints the container id").toMatch(/^[0-9a-f]{64}$/m);
   await expect(dialog.getByText(`${name} is online`)).toBeVisible({ timeout: 90_000 });
-  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/coaming\/env\/[^/]+$/, { timeout: 15_000 });
   const id = /\/env\/([^/]+)$/.exec(new URL(page.url()).pathname)?.[1] ?? "";
   expect(id).not.toBe("");
   return id;

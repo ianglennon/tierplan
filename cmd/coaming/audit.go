@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 func newAuditCmd() *cobra.Command {
@@ -57,7 +57,7 @@ func runAuditVerify(cmd *cobra.Command) error {
 	// entries the server signed.
 	v, err := vault.Load(cfg.EncryptionKey, cfg.DataDir)
 	if errors.Is(err, vault.ErrNoKey) {
-		return fail(fmt.Errorf("no encryption key: set BAYPLAN_ENCRYPTION_KEY (or _FILE), or point BAYPLAN_DATA_DIR at the "+
+		return fail(fmt.Errorf("no encryption key: set COAMING_ENCRYPTION_KEY (or _FILE), or point COAMING_DATA_DIR at the "+
 			"directory that holds %s (looked in %s)", vault.KeyFile, cfg.DataDir))
 	}
 	if err != nil {
@@ -67,7 +67,7 @@ func runAuditVerify(cmd *cobra.Command) error {
 	// Open would create an empty database; verifying a path that has none is a mistake to report.
 	dbPath := filepath.Join(cfg.DataDir, store.DatabaseFile)
 	if _, err := os.Stat(dbPath); err != nil {
-		return fail(fmt.Errorf("no database at %s: set BAYPLAN_DATA_DIR to the directory Bayplan stores its data in", dbPath))
+		return fail(fmt.Errorf("no database at %s: set COAMING_DATA_DIR to the directory Coaming stores its data in", dbPath))
 	}
 	st, err := store.Open(ctx, cfg.DataDir)
 	if err != nil {
@@ -78,7 +78,7 @@ func runAuditVerify(cmd *cobra.Command) error {
 	res, err := audit.Verify(ctx, st, v)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table") {
-			err = errors.New("the database has no audit log yet: start Bayplan once so it can migrate the database")
+			err = errors.New("the database has no audit log yet: start Coaming once so it can migrate the database")
 		}
 		return fail(err)
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -28,7 +28,7 @@ function stub(who: Who) {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (path === "/api/instance") {
-        return Response.json({ instanceName: "Bayplan Home", needsSetup: false, rememberDays: 30 });
+        return Response.json({ instanceName: "Coaming Home", needsSetup: false, rememberDays: 30 });
       }
       if (path === "/api/me") {
         if (who === "signed-out") return Response.json({ status: 401 }, { status: 401 });
@@ -90,8 +90,8 @@ function stub(who: Who) {
           version: "",
           commit: "abc1234",
           display: "dev (abc1234)",
-          sourceUrl: "https://github.com/ianglennon/bayplan",
-          sourceTreeUrl: "https://github.com/ianglennon/bayplan/tree/abc1234",
+          sourceUrl: "https://github.com/ianglennon/coaming",
+          sourceTreeUrl: "https://github.com/ianglennon/coaming/tree/abc1234",
         });
       }
       return Response.json({}, { status: 404 });
@@ -152,7 +152,7 @@ describe("the logs pop-out", () => {
   it("titles the window with the container and the instance", async () => {
     stub("viewer");
     visit(PATH);
-    await waitFor(() => expect(document.title).toBe("web-1 logs · Bayplan Home"));
+    await waitFor(() => expect(document.title).toBe("web-1 logs · Coaming Home"));
   });
 
   it("opens the stream for the container on the node named, and reads the settings from its address", async () => {
@@ -208,7 +208,7 @@ describe("the service logs pop-out", () => {
   it("titles the window with the service and the instance", async () => {
     stub("viewer");
     visit(SERVICE_PATH);
-    await waitFor(() => expect(document.title).toBe("web logs · Bayplan Home"));
+    await waitFor(() => expect(document.title).toBe("web logs · Coaming Home"));
   });
 
   it("opens the stream of the service narrowed as the address says, and reads the settings from it", async () => {
@@ -268,7 +268,7 @@ describe("the stack logs pop-out", () => {
   it("titles the window with the stack and the instance", async () => {
     stub("viewer");
     visit(STACK_PATH);
-    await waitFor(() => expect(document.title).toBe("tracer logs · Bayplan Home"));
+    await waitFor(() => expect(document.title).toBe("tracer logs · Coaming Home"));
   });
 
   it("opens the stream of the stack narrowed as the address says, and reads the settings from it", async () => {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package agents_test
 
@@ -18,16 +18,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/agents"
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/tunnel/tunneltest"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/agents"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // PLAT-07 (D-55, D-56): no join token and no CA private key can be read back out
-// of Bayplan's data directory, in any file, in any common encoding. The search is
+// of Coaming's data directory, in any file, in any common encoding. The search is
 // over raw bytes with no checkpoint, so a page that still lives only in the WAL,
-// or in a free page, counts. bayplan.key is the master key and is the one file
+// or in a free page, counts. coaming.key is the master key and is the one file
 // that is allowed to hold a secret: it is what protects the rest.
 
 // encodings gives the raw bytes of a secret and the text forms it could be stored
@@ -156,7 +156,7 @@ func TestNoPlaintextSecrets(t *testing.T) {
 		// Prove the search looked at the database and its write-ahead log, and never
 		// at the master key.
 		have := strings.Join(scanned, " ")
-		for _, want := range []string{"bayplan.db", "bayplan.db-wal"} {
+		for _, want := range []string{"coaming.db", "coaming.db-wal"} {
 			if !strings.Contains(" "+have+" ", " "+want+" ") {
 				t.Errorf("the search did not read %s; it read %v", want, scanned)
 			}

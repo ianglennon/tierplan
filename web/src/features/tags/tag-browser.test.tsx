@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -318,7 +318,7 @@ describe("TagBrowser errors", () => {
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain(
-      "Bayplan couldn't sign in to ghcr.io with credential “ghcr-acme” (Instance). Test it.",
+      "Coaming couldn't sign in to ghcr.io with credential “ghcr-acme” (Instance). Test it.",
     );
     expect(within(alert).getByRole("link", { name: "Test credential" }).getAttribute("href")).toBe(
       "/registries?credential=c1",
@@ -388,7 +388,7 @@ describe("TagBrowser errors", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("words Bayplan's own 429 as too many requests, not as the registry limiting them", async () => {
+  it("words Coaming's own 429 as too many requests, not as the registry limiting them", async () => {
     answer = () => problem(429, "rate_limited", []);
     mount(<TagBrowser repo="ghcr.io/acme/app" variant="full" />);
     const alert = await screen.findByRole("alert");

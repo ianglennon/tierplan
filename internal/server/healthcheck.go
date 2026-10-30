@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package server
 
@@ -16,17 +16,17 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/config"
+	"github.com/ianglennon/coaming/internal/config"
 )
 
 const healthcheckTimeout = 3 * time.Second
 
 // Healthcheck probes /healthz on the address the server listens on. A listen
-// address with a concrete host (BAYPLAN_LISTEN=192.0.2.10:7480) is dialled as
+// address with a concrete host (COAMING_LISTEN=192.0.2.10:7480) is dialled as
 // given, because a listener bound to one interface does not answer on
 // loopback; an empty or wildcard host (":7480", "0.0.0.0:7480", "[::]:7480")
 // is dialled on 127.0.0.1. It returns nil only for a 200 answer. A distroless
-// image has no curl, so the container HEALTHCHECK runs `bayplan healthcheck`
+// image has no curl, so the container HEALTHCHECK runs `coaming healthcheck`
 // (D-17, D-86, WR-10).
 //
 // An empty certFile probes over plain HTTP. Otherwise the probe speaks https and
@@ -66,7 +66,7 @@ func HealthcheckCertFile(cfg config.Config) string {
 // ownCertificateTrust is a TLS configuration that trusts exactly the
 // certificates in certFile and expects the first of them to name the host.
 func ownCertificateTrust(certFile string) (*tls.Config, error) {
-	data, err := os.ReadFile(certFile) //nolint:gosec // the operator-configured certificate path, or Bayplan's own under its data directory
+	data, err := os.ReadFile(certFile) //nolint:gosec // the operator-configured certificate path, or Coaming's own under its data directory
 	if err != nil {
 		return nil, fmt.Errorf("read the listener's certificate for the healthcheck: %w", err)
 	}

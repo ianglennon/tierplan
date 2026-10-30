@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package backup_test
 
@@ -20,10 +20,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/backup"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 // The scheduler writes the scheduled backups (plan 03-27, D-32).
@@ -98,7 +98,7 @@ func newSchedFixture(t *testing.T, now time.Time) *schedFixture {
 		Store: f.st, Vault: f.live, Audit: f.aud, Dir: f.dir, DataDir: f.exportFixture.dir,
 		Now: f.clock.Now, NewTimer: f.clock.NewTimer, Log: slog.New(slog.DiscardHandler),
 		AppVersion: func() string { return "v9.9.9" }, InstanceName: func() string { return "Home lab" },
-		PublicURL: func() string { return "https://bayplan.example" },
+		PublicURL: func() string { return "https://coaming.example" },
 	}
 	return f
 }
@@ -151,7 +151,7 @@ func TestSchedulerWritesADailyBackupAtTheSetTimeThatOpensWithThePassphrase(t *te
 		first.c <- f.clock.Now()
 		f.runsUntil(t, 1)
 
-		const name = "bayplan-backup-20261008-0300.bayplan"
+		const name = "coaming-backup-20261008-0300.coaming"
 		path := filepath.Join(f.dir, name)
 		info, err := os.Stat(path)
 		if err != nil {
@@ -207,7 +207,7 @@ func TestSchedulerWritesADailyBackupAtTheSetTimeThatOpensWithThePassphrase(t *te
 	})
 }
 
-// A scheduled backup must work when BAYPLAN_DATA_DIR and the backups folder
+// A scheduled backup must work when COAMING_DATA_DIR and the backups folder
 // are relative, the form make dev uses (UAT gap G-03-4, plan 03-27).
 func TestSchedulerRunsWithARelativeDataDirectory(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -223,7 +223,7 @@ func TestSchedulerRunsWithARelativeDataDirectory(t *testing.T) {
 		}
 		f.runOnce(t)
 
-		const name = "bayplan-backup-20261008-0300.bayplan"
+		const name = "coaming-backup-20261008-0300.coaming"
 		var ok int64
 		var file, runErr string
 		if err := f.st.Read.QueryRow(`SELECT ok, file_name, error FROM backup_runs`).Scan(&ok, &file, &runErr); err != nil {
@@ -245,12 +245,12 @@ func TestSchedulerRunsWithARelativeDataDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".bayplan-backup-") {
+			if strings.HasPrefix(e.Name(), ".coaming-backup-") {
 				t.Errorf("the data directory kept the work directory %q", e.Name())
 			}
 		}
 		for _, n := range f.names(t) {
-			if strings.HasPrefix(n, ".bayplan-schedule-") {
+			if strings.HasPrefix(n, ".coaming-schedule-") {
 				t.Errorf("the backups folder kept the temporary file %q", n)
 			}
 		}
@@ -353,20 +353,20 @@ func TestPruneKeepsTheNewestBackupsAndTouchesNoOtherFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		others := []string{
-			"bayplan-20260901T030000Z.db", "bayplan-20260902T030000Z.db", "bayplan-20260903T030000Z.db",
-			"prerestore-20260901T030000Z.db", "prerestore-20260902T030000Z.db", "notes.txt", "bayplan-backup-20261001-0300.bayplan.bak",
+			"coaming-20260901T030000Z.db", "coaming-20260902T030000Z.db", "coaming-20260903T030000Z.db",
+			"prerestore-20260901T030000Z.db", "prerestore-20260902T030000Z.db", "notes.txt", "coaming-backup-20261001-0300.coaming.bak",
 		}
 		for _, n := range others {
 			writeFile(t, f.dir, n, "keep me")
 		}
 		for _, d := range []string{"20261001", "20261002", "20261003", "20261004", "20261005"} {
-			writeFile(t, f.dir, "bayplan-backup-"+d+"-0300.bayplan", "old")
+			writeFile(t, f.dir, "coaming-backup-"+d+"-0300.coaming", "old")
 		}
 		f.runOnce(t)
 
 		got := f.names(t)
 		want := append([]string{
-			"bayplan-backup-20261004-0300.bayplan", "bayplan-backup-20261005-0300.bayplan", "bayplan-backup-20261008-0300.bayplan",
+			"coaming-backup-20261004-0300.coaming", "coaming-backup-20261005-0300.coaming", "coaming-backup-20261008-0300.coaming",
 		}, others...)
 		slices.Sort(want)
 		slices.Sort(got)
@@ -376,7 +376,7 @@ func TestPruneKeepsTheNewestBackupsAndTouchesNoOtherFile(t *testing.T) {
 	})
 }
 
-// T-03-113: a backup made by hand with "bayplan backup" lands in the same folder under
+// T-03-113: a backup made by hand with "coaming backup" lands in the same folder under
 // a name of its own, which retention must neither count nor delete.
 func TestPruneLeavesManualBackupsAloneAndDoesNotCountThem(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -396,11 +396,11 @@ func TestPruneLeavesManualBackupsAloneAndDoesNotCountThem(t *testing.T) {
 			}
 			writeFile(t, f.dir, n, "manual")
 		}
-		writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "old scheduled")
+		writeFile(t, f.dir, "coaming-backup-20261001-0300.coaming", "old scheduled")
 		f.runOnce(t)
 
 		got := f.names(t)
-		want := append([]string{"bayplan-backup-20261008-0300.bayplan"}, manual...)
+		want := append([]string{"coaming-backup-20261008-0300.coaming"}, manual...)
 		slices.Sort(want)
 		slices.Sort(got)
 		if !slices.Equal(got, want) {
@@ -418,8 +418,8 @@ func TestPruneRunsOnlyAfterABackupSucceeded(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.exec(t, `UPDATE backup_schedule SET passphrase_sealed = 'not a sealed value'`)
-		writeFile(t, f.dir, "bayplan-backup-20261001-0300.bayplan", "the only good one")
-		writeFile(t, f.dir, "bayplan-backup-20261002-0300.bayplan", "another")
+		writeFile(t, f.dir, "coaming-backup-20261001-0300.coaming", "the only good one")
+		writeFile(t, f.dir, "coaming-backup-20261002-0300.coaming", "another")
 		f.runOnce(t)
 		if got := f.names(t); len(got) != 2 {
 			t.Fatalf("a failed run deleted backups: %v", got)
@@ -449,7 +449,7 @@ func TestRunFailureIsRecordedAuditedAndLeavesNoPartialFile(t *testing.T) {
 			f.exec(t, `UPDATE backup_schedule SET passphrase_sealed = 'not a sealed value'`)
 		}, "passphrase"},
 		{"the file cannot be given its name", "write", func(t *testing.T, f *schedFixture) {
-			writeFile(t, filepath.Join(f.dir, "bayplan-backup-20261008-0300.bayplan"), "in-the-way", "x")
+			writeFile(t, filepath.Join(f.dir, "coaming-backup-20261008-0300.coaming"), "in-the-way", "x")
 		}, "name the backup file"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -566,7 +566,7 @@ func TestRunFailureIsNotDeclaredWhileAnotherBackupIsBeingPreparedBecauseItIsRetr
 			t.Fatalf("runs = %d (ok %d), %v; want the one run to have succeeded on retry", runs, ok, err)
 		}
 		// It is still named for the instant it was due.
-		if got := f.names(t); len(got) != 1 || got[0] != "bayplan-backup-20261008-0300.bayplan" {
+		if got := f.names(t); len(got) != 1 || got[0] != "coaming-backup-20261008-0300.coaming" {
 			t.Fatalf("the folder holds %v", got)
 		}
 	})

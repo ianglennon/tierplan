@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks_test
 
@@ -13,8 +13,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 // The service as it runs (plan 07-22, STK-06, STK-09, Pitfall 5): a container's inspect document is read back
@@ -220,12 +220,12 @@ func TestTheImagesOwnValuesAreNoDifference(t *testing.T) {
 	}
 }
 
-func TestTheComposeLabelsAndBayplansOwnAreNotTheFilesLabels(t *testing.T) {
+func TestTheComposeLabelsAndCoamingsOwnAreNotTheFilesLabels(t *testing.T) {
 	t.Parallel()
 	p := preparedProject(t, "services:\n  web:\n    image: nginx:1.27-alpine\n    labels:\n      team: a\n")
 	c := replica(t, p, "web", strings.Repeat("e", 64))
-	if c.Config.Labels["com.docker.compose.project"] == "" || c.Config.Labels["bayplan.stack.id"] == "" {
-		t.Fatalf("the container lacks the labels of the SDK and Bayplan: %v", c.Config.Labels)
+	if c.Config.Labels["com.docker.compose.project"] == "" || c.Config.Labels["coaming.stack.id"] == "" {
+		t.Fatalf("the container lacks the labels of the SDK and Coaming: %v", c.Config.Labels)
 	}
 	_, running := compareService(t, p, "web", c, nil)
 	if !slices.Equal(labelKeys(running), []string{"team"}) {

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rbac
 
-import "github.com/ianglennon/bayplan/internal/audit"
+import "github.com/ianglennon/coaming/internal/audit"
 
 // PrincipalType says what kind of caller a Principal is.
 type PrincipalType string

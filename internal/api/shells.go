@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -18,14 +18,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/shells"
-	"github.com/ianglennon/bayplan/internal/store"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/shells"
+	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 // Problem types and limits of the browser shell.
@@ -83,7 +83,7 @@ type ShellsDeps struct {
 	// Checker is the permission checker; the routes themselves are judged by the
 	// route harness (containers.exec).
 	Checker *rbac.Checker
-	// SelfContainerID is Bayplan's own container ID; empty when it cannot tell. A shell
+	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A shell
 	// is never opened in that container, nor in an agent's (D-36).
 	SelfContainerID string
 	// Instance says which origin the WebSocket may be opened from, and the idle limit
@@ -164,7 +164,7 @@ func RegisterShells(r *httpx.Router, d ShellsDeps) {
 			"The session is single use and bound to the caller and the caller's sign-in; the upgrade is accepted only from the instance's public origin. " +
 			"The container lives on one node, named by nodeId, with the same rules and problems as the container detail route (422 node_required, 404 container_not_found, 503 node_unavailable). " +
 			"422 invalid_shell when a custom command cannot be read. Refused before any exec is made: 429 shell_limit_reached when the caller already holds as many shells as the instance allows (the limit is the errors entry located at limit), " +
-			"409 host_read_only on a read-only host, 409 own_container for Bayplan's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, " +
+			"409 host_read_only on a read-only host, 409 own_container for Coaming's own server or an agent's container (decided from a fresh inspect), 409 container_not_running, " +
 			"502 agent_policy_denied when the node's agent is too old to run an exec, 409 no_shell when the engine cannot find the command, " +
 			"503 stream_busy when the host's agent serves as many logs and shells as it can. " +
 			"What is typed and printed is never recorded: the start is audited as shell.opened and the end as shell.closed. " +
@@ -241,7 +241,7 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 	}
 	fullID, name, image := shellContainerRow(agg, nodeID, in.ContainerID)
 
-	// Bayplan's own server and agent containers are refused from a fresh inspect: the
+	// Coaming's own server and agent containers are refused from a fresh inspect: the
 	// list can be seconds old and the label can be set by anyone, so neither decides
 	// (D-36, T-04-84). A container that is not running is refused here too.
 	var own dockerx.ContainerOwnership
@@ -263,7 +263,7 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 	}
 	if (len(d.SelfContainerID) >= minSelfIDLen && strings.HasPrefix(own.ID, d.SelfContainerID)) ||
 		own.Labels[ownerLabelAgent] == ownerLabelAgentValue {
-		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "Bayplan doesn't open shells in its own containers.")
+		return nil, httpx.Problem(http.StatusConflict, codeOwnContainer, "Coaming doesn't open shells in its own containers.")
 	}
 	if !own.Running {
 		return nil, httpx.Problem(http.StatusConflict, problemContainerNotRunning, "The container is not running. Start it to open a shell.")
@@ -294,7 +294,7 @@ func openShell(ctx context.Context, d ShellsDeps, in *ShellOpenInput) (*ShellOpe
 		return nil, shellLimitProblem(limit)
 	}
 	if s == nil {
-		return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Bayplan is stopping, so it cannot open a shell now.")
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemShellUnavailable, "Coaming is stopping, so it cannot open a shell now.")
 	}
 	// The row is written before the browser can attach. A shell the log does not know
 	// about is not allowed to run, so a failed write ends the session.
@@ -350,9 +350,9 @@ func shellStartProblem(log *slog.Logger, envID string, err error) error {
 	var denied *envs.AgentPolicyDeniedError
 	switch {
 	case errors.Is(err, envs.ErrHostReadOnly):
-		return httpx.Problem(http.StatusConflict, codeHostReadOnly, "This host is read-only, so Bayplan cannot open a shell on it. Logs still work.")
+		return httpx.Problem(http.StatusConflict, codeHostReadOnly, "This host is read-only, so Coaming cannot open a shell on it. Logs still work.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Bayplan.")
+		return httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
 	case errors.Is(err, tunnel.ErrBusy):
 		return httpx.Problem(http.StatusServiceUnavailable, problemStreamBusy,
 			"This host's agent is serving as many logs and shells as it can. Close one and try again.")

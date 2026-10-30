@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stacks
 
@@ -48,7 +48,7 @@ type ServiceChange struct {
 	// restarted row. Swarm never sets it.
 	Because string `json:"because,omitempty"`
 	// OwnershipOnly is set by MarkOwnershipOnly (and by an adoption check of a standalone host) on a changed
-	// service whose only differences are Bayplan's ownership labels: the first deploy recreates it to put them on
+	// service whose only differences are Coaming's ownership labels: the first deploy recreates it to put them on
 	// and changes nothing else (D-16).
 	OwnershipOnly bool `json:"ownershipOnly,omitempty"`
 }
@@ -490,18 +490,18 @@ func keyEntries(list []any, key func(any) (string, bool)) (map[string]any, bool)
 	return out, true
 }
 
-// ownershipLabelPaths are the path prefixes of Bayplan's own labels on a swarm service spec: on the service and on
+// ownershipLabelPaths are the path prefixes of Coaming's own labels on a swarm service spec: on the service and on
 // its containers.
-var ownershipLabelPaths = []string{"Labels.bayplan.", "TaskTemplate.ContainerSpec.Labels.bayplan."}
+var ownershipLabelPaths = []string{"Labels.coaming.", "TaskTemplate.ContainerSpec.Labels.coaming."}
 
-// mountsPath and mountLabelPath bound the path of Bayplan's label on a volume mount. The mounts are a keyed list, so
-// a path reads TaskTemplate.ContainerSpec.Mounts[<target>].VolumeOptions.Labels.bayplan.<name>.
+// mountsPath and mountLabelPath bound the path of Coaming's label on a volume mount. The mounts are a keyed list, so
+// a path reads TaskTemplate.ContainerSpec.Mounts[<target>].VolumeOptions.Labels.coaming.<name>.
 const (
 	mountsPath     = "TaskTemplate.ContainerSpec.Mounts["
-	mountLabelPath = "].VolumeOptions.Labels.bayplan."
+	mountLabelPath = "].VolumeOptions.Labels.coaming."
 )
 
-// ownershipLabelPath reports whether a path is a label of Bayplan's own bookkeeping: on the service, on its
+// ownershipLabelPath reports whether a path is a label of Coaming's own bookkeeping: on the service, on its
 // containers or on one of its volume mounts (the converter puts the stack's ID on the mount of a named volume).
 func ownershipLabelPath(path string) bool {
 	if slices.ContainsFunc(ownershipLabelPaths, func(prefix string) bool { return strings.HasPrefix(path, prefix) }) {
@@ -517,15 +517,15 @@ func ownershipLabelPath(path string) bool {
 	return i >= 0 && strings.HasPrefix(rest[i:], mountLabelPath)
 }
 
-// OwnershipOnlyPaths reports whether a service differs from its twin only in Bayplan's ownership labels: it has
-// at least one difference and every difference is a bayplan.* label of the service, of its containers or of one of
+// OwnershipOnlyPaths reports whether a service differs from its twin only in Coaming's ownership labels: it has
+// at least one difference and every difference is a coaming.* label of the service, of its containers or of one of
 // its volume mounts. Any other difference keeps the service a gap (T-08-55).
 func OwnershipOnlyPaths(paths []PathChange) bool {
 	return len(paths) > 0 && !slices.ContainsFunc(paths, func(p PathChange) bool { return !ownershipLabelPath(p.Path) })
 }
 
 // MarkOwnershipOnly sets OwnershipOnly on each changed service of changes whose differences from the running
-// service, both normalised as DiffServices compares them, are all Bayplan ownership labels. desired and running are
+// service, both normalised as DiffServices compares them, are all Coaming ownership labels. desired and running are
 // the maps DiffServices was given; the decision is made on the raw values, before anything is masked.
 //
 // The paths are read first, and then confirmed on the specs themselves: the two normalised specs must be equal once

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -35,7 +35,7 @@ type SecretRow struct {
 	CreatedAt, UpdatedAt time.Time
 }
 
-// SecretSpec is a secret to create. Data is the value, which crosses Bayplan exactly once, on
+// SecretSpec is a secret to create. Data is the value, which crosses Coaming exactly once, on
 // its way to the manager; it is never logged, audited or kept.
 type SecretSpec struct {
 	Name   string

@@ -25,8 +25,8 @@
       "started": "Started {{name}}.",
       "stopped": "Stopped {{name}}.",
       "failed": "Couldn't {{verb}} {{name}}. {{reason}}",
-      "lost": "The connection dropped before Bayplan answered the request to {{verb}} {{name}}. The list shows whether it happened.",
-      "lostMany": "The connection dropped before Bayplan answered the request to {{verb}} {{count}} containers. The list shows what happened.",
+      "lost": "The connection dropped before Coaming answered the request to {{verb}} {{name}}. The list shows whether it happened.",
+      "lostMany": "The connection dropped before Coaming answered the request to {{verb}} {{count}} containers. The list shows what happened.",
       "restarted": "Restarted {{name}}.",
       "paused": "Paused {{name}}.",
       "unpaused": "Unpaused {{name}}.",
@@ -66,15 +66,15 @@
       "confirmBulk_other": "Stop {{count}} containers"
     },
     "refusal": {
-      "own_container": "{{name}} is one of Bayplan's own containers. Stopping it would cut Bayplan off from the host, so it can't be done from this list.",
+      "own_container": "{{name}} is one of Coaming's own containers. Stopping it would cut Coaming off from the host, so it can't be done from this list.",
       "node_unreachable": "{{node}} isn't reachable right now. Try again when it's back.",
       "not_found": "{{name}} no longer exists. The list has been refreshed.",
       "agent_policy_denied": "This host's agent needs an update",
       "permission": "You no longer have permission to do that. Your access may have changed.",
-      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
-      "lost": "The connection dropped before Bayplan answered. The list shows whether it happened.",
+      "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+      "lost": "The connection dropped before Coaming answered. The list shows whether it happened.",
       "confirmation": "Type the container's name to confirm this.",
-      "host_read_only": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "host_read_only": "This host is read-only. Changes are turned off on the host itself, so Coaming can only read from it.",
       "container_running": "{{name}} is running. Tick Force to remove it."
     },
     "agentUpdate": {
@@ -114,7 +114,7 @@
       "all": "Select all containers",
       "row": "Select {{name}}",
       "group": "Select {{name}}",
-      "own": "Bayplan's own containers can't be part of a bulk action."
+      "own": "Coaming's own containers can't be part of a bulk action."
     },
     "pending": {
       "start": "Starting…",
@@ -210,8 +210,8 @@
       "projects_other": "{{count}} of these belong to projects. The next deploy will recreate them."
     },
     "own": {
-      "server": "This is Bayplan's own container. {{gerund}} it cuts Bayplan off from this host, and you can't start it again from here.",
-      "agent": "This is the Bayplan agent on {{node}}. {{gerund}} it cuts Bayplan off from {{node}}.",
+      "server": "This is Coaming's own container. {{gerund}} it cuts Coaming off from this host, and you can't start it again from here.",
+      "agent": "This is the Coaming agent on {{node}}. {{gerund}} it cuts Coaming off from {{node}}.",
       "gerund": {
         "stop": "Stopping",
         "kill": "Killing",
@@ -221,11 +221,11 @@
       },
       "confirm": {
         "server": {
-          "stop": "Stop Bayplan",
-          "kill": "Kill Bayplan",
-          "restart": "Restart Bayplan",
-          "pause": "Pause Bayplan",
-          "remove": "Remove Bayplan"
+          "stop": "Stop Coaming",
+          "kill": "Kill Coaming",
+          "restart": "Restart Coaming",
+          "pause": "Pause Coaming",
+          "remove": "Remove Coaming"
         },
         "agent": {
           "stop": "Stop agent",

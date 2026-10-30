@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package main
 
@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/bayplan/internal/auth"
+	"github.com/ianglennon/coaming/internal/auth"
 )
 
 // errNoSetupToken is returned when there is no active token to print.
-var errNoSetupToken = errors.New("no active setup token: setup is already complete, or the Bayplan server has not started yet")
+var errNoSetupToken = errors.New("no active setup token: setup is already complete, or the Coaming server has not started yet")
 
 // newSetupTokenCmd prints the active setup token (D-01). It reads the file the
 // running server wrote into the data directory and never opens the database, so
@@ -22,8 +22,8 @@ var errNoSetupToken = errors.New("no active setup token: setup is already comple
 func newSetupTokenCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup-token",
-		Short: "Print the active setup token, for example: docker exec <container> bayplan setup-token",
-		Long: "Prints the one-time token that claims a new Bayplan instance. It is the same token the server logs at start.\n" +
+		Short: "Print the active setup token, for example: docker exec <container> coaming setup-token",
+		Long: "Prints the one-time token that claims a new Coaming instance. It is the same token the server logs at start.\n" +
 			"Exits 1 when there is no active token because setup is complete or the server has not started.",
 		Args: cobra.NoArgs,
 		// The explanation below is the output; cobra's "Error:" prefix would only repeat it.

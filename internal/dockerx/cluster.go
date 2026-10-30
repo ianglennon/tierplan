@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockerx
 
@@ -29,20 +29,20 @@ func IsQuorumLoss(err error) bool {
 
 // agentServiceName is the name the install command gives the swarm service.
 // Its tasks are the agents, one per node. A service installed from the stack file
-// is named <stack>_bayplan-agent and the stack name is the user's, so the name
+// is named <stack>_coaming-agent and the stack name is the user's, so the name
 // alone cannot find it; agentServiceLabel does.
-const agentServiceName = "bayplan-agent"
+const agentServiceName = "coaming-agent"
 
 // agentServiceLabel and agentServiceLabelValue are the label both installs put on
 // the service (--label of the command, deploy.labels of the stack file). It is
-// how Bayplan recognises its agent service. A service the install command created
+// how Coaming recognises its agent service. A service the install command created
 // before the label existed is still found by agentServiceName.
 const (
-	agentServiceLabel      = "bayplan.agent"
+	agentServiceLabel      = "coaming.agent"
 	agentServiceLabelValue = "true"
 )
 
-// isAgentService reports whether s is a Bayplan agent service: it carries the
+// isAgentService reports whether s is a Coaming agent service: it carries the
 // label, or it has the exact name the install command gives it. The image is
 // never looked at; anyone can run it under any name.
 func isAgentService(s swarm.Service) bool {
@@ -86,7 +86,7 @@ type ServiceRow struct {
 	// Stack is the stack the service belongs to (the com.docker.stack.namespace label of
 	// its spec), empty for a service made on its own.
 	Stack string
-	// Agent is true for a Bayplan agent service (see isAgentService).
+	// Agent is true for a Coaming agent service (see isAgentService).
 	Agent bool
 	// Ports are the ports the service publishes, sorted by published port, then target
 	// port, then protocol. Never nil.

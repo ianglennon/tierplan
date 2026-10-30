@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/dockerx/dockertest"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
-// The stack suites (plan 07-11, STK-02, STK-09) run a stack deploy through Bayplan's API and a real
+// The stack suites (plan 07-11, STK-02, STK-09) run a stack deploy through Coaming's API and a real
 // agent on a swarm of three managers and a worker, and hold the result against what the engine does
 // with the same compose file when the docker CLI deploys it.
 
@@ -59,14 +59,14 @@ var parityCorpus = []parityCase{
 
 // sharedStackDeployParity is the differential oracle for the converter (STK-02, RESEARCH "Parity
 // oracle", Pitfall 3). Each file of the corpus is deployed once by the real docker stack deploy
-// --resolve-image=never on a manager and once by Bayplan, through the API and the agents, and what
+// --resolve-image=never on a manager and once by Coaming, through the API and the agents, and what
 // the engine holds (services, networks, secrets and configs) is compared after the normaliser. The
 // image is named by digest, so neither deploy has a lookup to make and both write the same text. The
 // two stacks run one after the other (the first is removed and gone before the second starts), so a
 // published port or a subnet is the same in both. Each case leaves nothing of either stack behind.
 //
 // The agents are installed with the one setting a host owner adds to let services that give tasks
-// host access through (BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES), because the corpus adds a
+// host access through (COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES), because the corpus adds a
 // capability (cap_add), which the default policy refuses on purpose; docker stack deploy has no such policy.
 func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 	f.installPrivileged(t)
@@ -76,8 +76,8 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 	digest := dockertest.PushImage(t, mgr, dockertest.ServiceTestImage, addr+"/parity/app:1", nil)
 
 	for i, c := range parityCorpus {
-		// Bayplan keeps a stack's record after its services are gone, so each file has a stack name of its own.
-		bayplanStack := fmt.Sprintf("%s%d", parityBayplanStack, i+1)
+		// Coaming keeps a stack's record after its services are gone, so each file has a stack name of its own.
+		coamingStack := fmt.Sprintf("%s%d", parityCoamingStack, i+1)
 		t.Run(c.file, func(t *testing.T) {
 			values := map[string]string{"IMAGE": addr + "/parity/app@" + digest, "EXTERNAL_NETWORK": c.external}
 			if c.external != "" {
@@ -85,7 +85,7 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 				t.Cleanup(func() { removeNetwork(t, f, c.external) })
 			}
 			// Whatever happens below, neither stack outlives the case.
-			t.Cleanup(func() { removeStackCLI(t, f, bayplanStack) })
+			t.Cleanup(func() { removeStackCLI(t, f, coamingStack) })
 			t.Cleanup(func() { removeStackCLI(t, f, parityCLIStack) })
 			src := paritySource{Compose: readCorpus(t, c.file, values), Files: c.files}
 			askedPools := strings.Contains(src.Compose, "subnet:")
@@ -99,14 +99,14 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 			}
 			removeStackCLI(t, f, parityCLIStack)
 
-			deployWithBayplan(t, f, bayplanStack, src)
-			bp, err := snapshotStack(execCtx(t, time.Minute), mgr, bayplanStack, askedPools)
+			deployWithCoaming(t, f, coamingStack, src)
+			cm, err := snapshotStack(execCtx(t, time.Minute), mgr, coamingStack, askedPools)
 			if err != nil {
 				t.Fatal(err)
 			}
-			removeStackCLI(t, f, bayplanStack)
+			removeStackCLI(t, f, coamingStack)
 
-			compareSnapshots(t, cli, bp)
+			compareSnapshots(t, cli, cm)
 		})
 	}
 }
@@ -120,7 +120,7 @@ var idempotentCorpus = []parityCase{
 	{file: "parity-objects.yaml", files: parityCorpus[3].files},
 }
 
-// sharedStackRedeployIdempotent deploys each file through Bayplan, waits for its tasks to run, deploys
+// sharedStackRedeployIdempotent deploys each file through Coaming, waits for its tasks to run, deploys
 // the same draft again with no edit and shows that no task of any service was replaced and no service
 // spec moved (STK-09: an unchanged redeploy restarts nothing). The image is named by tag, so the
 // first deploy pins it and the second keeps the pin through the lookup rules, not by luck of a file
@@ -145,7 +145,7 @@ func sharedStackRedeployIdempotent(t *testing.T, f *swarmFix) {
 			t.Cleanup(func() { removeStackCLI(t, f, stack) })
 			src := paritySource{Compose: readCorpus(t, c.file, values), Files: c.files}
 
-			id := deployWithBayplan(t, f, stack, src)
+			id := deployWithCoaming(t, f, stack, src)
 			waitStackConverged(t, f, stack)
 			tasksBefore := stackTaskIDs(t, f, stack)
 			names, err := stackServiceNames(execCtx(t, time.Minute), mgr, stack)
@@ -160,7 +160,7 @@ func sharedStackRedeployIdempotent(t *testing.T, f *swarmFix) {
 				t.Fatalf("stack %s has no tasks after its deploy", stack)
 			}
 
-			f.deployStackBayplan(t, id)
+			f.deployStackCoaming(t, id)
 
 			barrier := stack + "_barrier"
 			sh(t, mgr, "docker service create --name "+barrier+" --detach --no-resolve-image --stop-grace-period 1s "+addr+"/idem/app:1 sleep 3600")
@@ -190,7 +190,7 @@ func sharedStackRedeployIdempotent(t *testing.T, f *swarmFix) {
 // deploys it, pushes another image to the same tag, redeploys with no edit (the service keeps the
 // first digest and no task is replaced), then changes the reference to app:2 and deploys (the service
 // moves to that image's digest). A last case runs an image no registry has and the nodes hold under a
-// name of their own, which Bayplan pins to the image ID: the swarm has to take that as a service image.
+// name of their own, which Coaming pins to the image ID: the swarm has to take that as a service image.
 func sharedStackPin(t *testing.T, f *swarmFix) {
 	f.stackEnvReady(t)
 	mgr := f.sw.Managers[0]
@@ -202,8 +202,8 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 
 	t.Run("TagMoves", func(t *testing.T) {
 		digestA := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, ref1, "A", nil)
-		id := f.createStackBayplan(t, "pin1", composeOf(ref1))
-		f.deployStackBayplan(t, id)
+		id := f.createStackCoaming(t, "pin1", composeOf(ref1))
+		f.deployStackCoaming(t, id)
 		const svc = "pin1_app"
 		wantImage := func(ref, digest string) {
 			t.Helper()
@@ -223,7 +223,7 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 		if digestB == digestA {
 			t.Fatalf("the second push gave the same digest %s: the tag did not move", digestA)
 		}
-		f.deployStackBayplan(t, id)
+		f.deployStackCoaming(t, id)
 		wantImage(ref1, digestA)
 		f.waitTasksOn(t, svc, digestA, 1, taskWait)
 		if got := stackTaskIDs(t, f, "pin1"); !slices.Equal(got, tasks) {
@@ -232,8 +232,8 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 
 		// The reference changes; the new text is looked up once and the service moves to it.
 		digestC := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, ref2, "C", nil)
-		f.saveStackBayplan(t, id, paritySource{Compose: composeOf(ref2)})
-		f.deployStackBayplan(t, id)
+		f.saveStackCoaming(t, id, paritySource{Compose: composeOf(ref2)})
+		f.deployStackCoaming(t, id)
 		wantImage(ref2, digestC)
 		f.waitTasksOn(t, svc, digestC, 1, taskWait)
 	})
@@ -241,7 +241,7 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 	t.Run("LocalOnlyImage", func(t *testing.T) {
 		// The image is busybox under a name of its own, on every node, in a registry that does not have
 		// the repository (and answers 404 manifest unknown for it, as Docker Hub answers 401 for a
-		// repository that is not there). Bayplan then has no digest to pin and falls back to the image ID
+		// repository that is not there). Coaming then has no digest to pin and falls back to the image ID
 		// (D-18, plan 07-09), if the engine says the image has no repository digest.
 		local := addr + "/local/only:1"
 		dockertest.LoadImage(t, dockertest.ServiceTestImage, f.sw.Nodes()...)
@@ -250,7 +250,7 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 		}
 		imageID := strings.TrimSpace(sh(t, mgr, "docker image inspect --format '{{.Id}}' "+local))
 
-		// What the swarm itself does with an image ID as a service image, whatever Bayplan decides: it
+		// What the swarm itself does with an image ID as a service image, whatever Coaming decides: it
 		// takes it, and the tasks run on nodes that hold the image.
 		sh(t, mgr, "docker service create --name byid --detach --no-resolve-image --stop-grace-period 1s --replicas 2 "+imageID+" sleep 3600")
 		testsupport.Poll(t, taskWait, "the service whose image is an image ID to run", func() (bool, string) {
@@ -262,17 +262,17 @@ func sharedStackPin(t *testing.T, f *swarmFix) {
 		}
 		sh(t, mgr, "docker service rm byid")
 
-		// Bayplan's part needs an engine that says a never-pushed image has no repository digest. The
+		// Coaming's part needs an engine that says a never-pushed image has no repository digest. The
 		// containerd image store (the default of a new Engine 29) lists name@digest for every image,
 		// built here or not, so the rule cannot tell this image from one a registry lost, and the lookup
 		// is refused as image_unresolved instead (reported in the 07-11 summary for a decision).
 		for _, n := range f.sw.Nodes() {
 			if digests := strings.TrimSpace(sh(t, n, "docker image inspect --format '{{.RepoDigests}}' "+local)); digests != "[]" {
-				t.Skipf("%s lists repository digests %s for an image no registry ever gave it, so Bayplan cannot take it for a local image on this engine's image store", n.Hostname, digests)
+				t.Skipf("%s lists repository digests %s for an image no registry ever gave it, so Coaming cannot take it for a local image on this engine's image store", n.Hostname, digests)
 			}
 		}
-		id := f.createStackBayplan(t, "pin2", composeOf(local))
-		f.deployStackBayplan(t, id)
+		id := f.createStackCoaming(t, "pin2", composeOf(local))
+		f.deployStackCoaming(t, id)
 		const svc = "pin2_app"
 		if got := serviceField(t, f, svc, "{{.Spec.TaskTemplate.ContainerSpec.Image}}"); got != imageID {
 			t.Errorf("the service image is %q, want the local image ID %s", got, imageID)
@@ -299,8 +299,8 @@ func sharedStackUpdateImages(t *testing.T, f *swarmFix) {
 	appA := dockertest.PushVariant(t, mgr, dockertest.ServiceTestImage, refApp, "A", nil)
 	compose := "services:\n  web:\n    image: " + refWeb + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n      replicas: 1\n" +
 		"  app:\n    image: " + refApp + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n    deploy:\n      replicas: 1\n"
-	id := f.createStackBayplan(t, "upd1", compose)
-	f.deployStackBayplan(t, id)
+	id := f.createStackCoaming(t, "upd1", compose)
+	f.deployStackCoaming(t, id)
 	const web, app = "upd1_web", "upd1_app"
 	image := func(svc string) string {
 		return serviceField(t, f, svc, "{{.Spec.TaskTemplate.ContainerSpec.Image}}")
@@ -420,8 +420,8 @@ type reviewBody struct {
 	} `json:"objects"`
 }
 
-// reviewStackBayplan reviews the stack's saved draft through the API.
-func (f *swarmFix) reviewStackBayplan(t *testing.T, stackID string) reviewBody {
+// reviewStackCoaming reviews the stack's saved draft through the API.
+func (f *swarmFix) reviewStackCoaming(t *testing.T, stackID string) reviewBody {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+stackID+"/review", map[string]any{})
 	var rv reviewBody
@@ -482,7 +482,7 @@ func leafDiff(path string, a, b any, out *[]string) {
 }
 
 // sharedStackReviewEmptyAfterDeploy is the idempotence oracle of the review (STK-06): each file of
-// the parity corpus is deployed through Bayplan, and a review of the same draft right afterwards
+// the parity corpus is deployed through Coaming, and a review of the same draft right afterwards
 // lists no service, network, secret, config or volume change. The engine stores a service with
 // defaults of its own (a runtime, an isolation, a virtual IP endpoint, network IDs for names), and
 // the review has to read the running spec and the one a deploy would send as the same thing. When
@@ -506,9 +506,9 @@ func sharedStackReviewEmptyAfterDeploy(t *testing.T, f *swarmFix) {
 			}
 			t.Cleanup(func() { removeStackCLI(t, f, stack) })
 			src := paritySource{Compose: readCorpus(t, c.file, values), Files: c.files}
-			id := deployWithBayplan(t, f, stack, src)
+			id := deployWithCoaming(t, f, stack, src)
 
-			rv := f.reviewStackBayplan(t, id)
+			rv := f.reviewStackCoaming(t, id)
 			for _, p := range rv.Problems {
 				if p.Severity == "error" {
 					t.Errorf("the review of %s found an error: %s (%s, line %d)", c.file, p.Message, p.Code, p.Line)
@@ -603,8 +603,8 @@ func sharedStackLifecycle(t *testing.T, f *swarmFix) {
 		"  mon:\n" + service("      mode: global\n") +
 		"networks:\n  back: {}\n  ext:\n    external: true\n    name: " + external + "\n" +
 		"volumes:\n  data: {}\n  keep: {}\n  extvol:\n    external: true\n    name: " + externalVolume + "\n"
-	id := f.createStackBayplan(t, stack, compose)
-	f.deployStackBayplan(t, id)
+	id := f.createStackCoaming(t, stack, compose)
+	f.deployStackCoaming(t, id)
 	waitStackConverged(t, f, stack)
 
 	type shape struct{ image, replicas string }
@@ -637,7 +637,7 @@ func sharedStackLifecycle(t *testing.T, f *swarmFix) {
 		return slices.Equal(rows, []string{"life_api", "0/0", "life_web", "0/0"}) || slices.Equal(rows, []string{"life_web", "0/0", "life_api", "0/0"}), strings.TrimSpace(out)
 	})
 	for n, want := range map[string]string{"life_web": "2", "life_api": "1"} {
-		if got := serviceField(t, f, n, `{{index .Spec.Labels "bayplan.stack.stopped-replicas"}}`); got != want {
+		if got := serviceField(t, f, n, `{{index .Spec.Labels "coaming.stack.stopped-replicas"}}`); got != want {
 			t.Errorf("%s remembers %q after a stop, want %s", n, got, want)
 		}
 	}
@@ -651,7 +651,7 @@ func sharedStackLifecycle(t *testing.T, f *swarmFix) {
 		if got != was {
 			t.Errorf("%s after a stop and a start: %+v, want exactly what it was, %+v", n, got, was)
 		}
-		if label := serviceField(t, f, n, `{{index .Spec.Labels "bayplan.stack.stopped-replicas"}}`); label != "" && label != "<no value>" {
+		if label := serviceField(t, f, n, `{{index .Spec.Labels "coaming.stack.stopped-replicas"}}`); label != "" && label != "<no value>" {
 			t.Errorf("%s still carries the stopped-replicas label %q after a start", n, label)
 		}
 	}

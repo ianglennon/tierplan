@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -28,7 +28,7 @@ const node = (extra: Partial<NodeItem> = {}): NodeItem => ({
   hostname: "mgr-1",
   role: "manager",
   leader: true,
-  runsBayplan: true,
+  runsCoaming: true,
   state: "ready",
   availability: "active",
   reachability: "reachable",
@@ -52,7 +52,7 @@ const NODES: NodeItem[] = [
     hostname: "wkr-active",
     role: "worker",
     leader: false,
-    runsBayplan: false,
+    runsCoaming: false,
     reachability: "",
   }),
   node({
@@ -60,7 +60,7 @@ const NODES: NodeItem[] = [
     hostname: "wkr-drained",
     role: "worker",
     leader: false,
-    runsBayplan: false,
+    runsCoaming: false,
     availability: "drain",
     reachability: "",
     tasksRunning: 0,
@@ -70,7 +70,7 @@ const NODES: NodeItem[] = [
     hostname: "wkr-paused",
     role: "worker",
     leader: false,
-    runsBayplan: false,
+    runsCoaming: false,
     availability: "pause",
     reachability: "",
   }),
@@ -409,7 +409,7 @@ describe("the node row menu", () => {
         hostname: "wkr-down",
         role: "worker",
         leader: false,
-        runsBayplan: false,
+        runsCoaming: false,
         state: "down",
         reachability: "",
         tasksRunning: 0,
@@ -444,7 +444,7 @@ describe("the node row menu", () => {
         hostname: "wkr-down",
         role: "worker",
         leader: false,
-        runsBayplan: false,
+        runsCoaming: false,
         state: "down",
         reachability: "",
         tasksRunning: 0,

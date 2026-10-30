@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package tunnel
 
@@ -33,12 +33,12 @@ type AgentLive struct {
 	ClockOffset  time.Duration
 	ClockWarning bool
 	// ReadOnly is true while the connected agent reported that its host owner set
-	// BAYPLAN_AGENT_READ_ONLY. It is a fact of the live session, so it is false for
+	// COAMING_AGENT_READ_ONLY. It is a fact of the live session, so it is false for
 	// an agent that is not connected: nothing is known then, and nothing can be
 	// written anyway.
 	ReadOnly bool
 	// PrivilegedServices is true while the connected agent reported that its host
-	// owner set BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
+	// owner set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
 	// that give tasks host access. Like ReadOnly it is a fact of the live session.
 	PrivilegedServices bool
 }

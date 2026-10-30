@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package rebuild_test
 
@@ -10,10 +10,10 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/bayplan/internal/stackops/stackopstest"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/rebuild"
-	"github.com/ianglennon/bayplan/proto/testsupport"
+	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/rebuild"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // baseOf is the base of a deployed revision: its file loaded as every deploy loads it.
@@ -85,7 +85,7 @@ volumes:
 
 func objectLabels(key string) map[string]string {
 	return map[string]string{
-		"com.docker.stack.namespace": "shop", "bayplan.stack.id": "stack-1", "bayplan.stack.object": key, "bayplan.stack.object.hash": "abc123",
+		"com.docker.stack.namespace": "shop", "coaming.stack.id": "stack-1", "coaming.stack.object": key, "coaming.stack.object.hash": "abc123",
 	}
 }
 

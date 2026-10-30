@@ -1,3 +1,3 @@
-module github.com/ianglennon/bayplan/proto
+module github.com/ianglennon/coaming/proto
 
 go 1.27

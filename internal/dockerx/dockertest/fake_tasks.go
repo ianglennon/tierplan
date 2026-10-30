@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package dockertest
 
@@ -215,7 +215,7 @@ func scriptedTasks(fs FakeService, script []FakeServiceTask) []swarm.Task {
 // lists nothing, which is not what a real daemon does (it lists every task) but keeps a
 // test that forgets to filter from passing by accident.
 //
-// The tasks are those of AgentTasks, each a task of the service named bayplan-agent
+// The tasks are those of AgentTasks, each a task of the service named coaming-agent
 // unless it says otherwise, then those of Tasks, which are whole swarm tasks.
 func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
 	out := []swarm.Task{}
@@ -258,7 +258,7 @@ func (c FakeConfig) taskList(rawFilters string) []swarm.Task {
 	for _, ft := range c.AgentTasks {
 		svc := ft.Service
 		if svc == "" {
-			svc = "bayplan-agent"
+			svc = "coaming-agent"
 		}
 		t := swarm.Task{ID: ft.ID, NodeID: ft.NodeID, ServiceID: svc}
 		t.CreatedAt = ft.Created

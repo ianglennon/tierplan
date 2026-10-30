@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -302,10 +302,10 @@ describe("the remembered format", () => {
     expect(loadSpecFormat()).toBe("yaml");
   });
 
-  it("remembers the choice under bayplan.spec-format", () => {
+  it("remembers the choice under coaming.spec-format", () => {
     saveSpecFormat("json");
     expect(localStorage.getItem(SPEC_FORMAT_KEY)).toBe("json");
-    expect(SPEC_FORMAT_KEY).toBe("bayplan.spec-format");
+    expect(SPEC_FORMAT_KEY).toBe("coaming.spec-format");
     expect(loadSpecFormat()).toBe("json");
     saveSpecFormat("yaml");
     expect(loadSpecFormat()).toBe("yaml");

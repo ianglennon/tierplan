@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import createClient, { type Middleware } from "openapi-fetch";
 
@@ -7,7 +7,7 @@ import { basePath, stripBase } from "@/lib/base-path";
 import type { paths } from "./schema";
 
 // Same-origin typed client generated from the committed openapi.json. The base
-// URL is the page origin plus the base path Bayplan is served under (D-50), so
+// URL is the page origin plus the base path Coaming is served under (D-50), so
 // `new Request()` always gets an absolute URL (relative ones are rejected
 // outside a browser, for example under Vitest).
 // fetch is looked up per call, not captured at import time, so tests can stub it.
@@ -49,7 +49,7 @@ export function getCsrfToken(): string | null {
   return csrfToken;
 }
 
-// While a restore restarts Bayplan, every request is expected to be refused: the
+// While a restore restarts Coaming, every request is expected to be refused: the
 // session it ran under is gone. The caller holds the reactions to that off until
 // it has decided what the refusals mean, so the 401s of the restart do not send
 // the browser to sign-in or refetch an access list. It returns the function that

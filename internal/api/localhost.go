@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,10 +11,10 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/engine"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // defaultProbeTimeout bounds one look at the local engine, so a daemon that
@@ -31,7 +31,7 @@ type LocalHostDeps struct {
 	// Log receives probe failures. Nil means slog.Default().
 	Log *slog.Logger
 	// Envs says whether the local host is already an environment and what
-	// Bayplan's own container is. Nil means neither is known.
+	// Coaming's own container is. Nil means neither is known.
 	Envs LocalHostEnvs
 }
 
@@ -45,12 +45,12 @@ type LocalHostEnvs interface {
 // LocalHostBody says whether this server's own Docker socket exists, and what
 // engine is behind it.
 type LocalHostBody struct {
-	SocketPath string `json:"socketPath" doc:"The Docker socket path Bayplan was configured with"`
+	SocketPath string `json:"socketPath" doc:"The Docker socket path Coaming was configured with"`
 	Detected   bool   `json:"detected" doc:"Whether a unix socket exists at that path"`
 	// Managed is true once an admin has added this host as an environment.
 	Managed bool `json:"managed" doc:"Whether this host is already an environment (D-19)"`
-	// OwnContainerID is Bayplan's own container, so the UI can badge it "Bayplan (this instance)".
-	OwnContainerID string `json:"ownContainerId,omitempty" doc:"The ID of the container Bayplan runs in, when it can tell (D-27)"`
+	// OwnContainerID is Coaming's own container, so the UI can badge it "Coaming (this instance)".
+	OwnContainerID string `json:"ownContainerId,omitempty" doc:"The ID of the container Coaming runs in, when it can tell (D-27)"`
 	// Probe is only present when a socket was detected.
 	Probe *dockerx.ProbeResult `json:"probe,omitempty" doc:"What the engine behind the socket reported; absent when no socket exists"`
 }

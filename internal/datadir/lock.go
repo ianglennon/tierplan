@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package datadir
 
@@ -14,14 +14,14 @@ import (
 
 // LockFile is the lock's file name inside the data directory. It holds no
 // content: the lock is the advisory flock on the open file, not what is in it.
-const LockFile = ".bayplan.lock"
+const LockFile = ".coaming.lock"
 
 // ErrLocked is returned by Lock when another process, or another holder in this
 // one, has the data directory.
-var ErrLocked = errors.New("the data directory is in use by another Bayplan process")
+var ErrLocked = errors.New("the data directory is in use by another Coaming process")
 
-// Lock takes the exclusive lock on <dir>/.bayplan.lock without waiting. The
-// server holds it from startup to shutdown, and an offline `bayplan restore`
+// Lock takes the exclusive lock on <dir>/.coaming.lock without waiting. The
+// server holds it from startup to shutdown, and an offline `coaming restore`
 // holds it from staging until the swap, so the two can never write one database
 // at the same time and two servers cannot share a volume. The returned release
 // func drops the lock and may be called more than once. The lock is also dropped

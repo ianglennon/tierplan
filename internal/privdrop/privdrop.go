@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-// Package privdrop takes a Bayplan process that started as root down to the
+// Package privdrop takes a Coaming process that started as root down to the
 // unprivileged user the image runs as (D-17).
 //
 // The image has no USER instruction. The binary starts as root so it can fix
 // the ownership of /data (a fresh bind mount is root-owned, Pitfall 9), then
 // joins the Docker socket's group and becomes UID and GID 1000. Every
-// subcommand does the same, because `docker exec <c> bayplan user unlock`
+// subcommand does the same, because `docker exec <c> coaming user unlock`
 // also starts as root and would otherwise leave root-owned database files the
 // server cannot open (RESEARCH A8).
 package privdrop
@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	// UID and GID are the identity Bayplan runs as after the drop.
+	// UID and GID are the identity Coaming runs as after the drop.
 	UID = 1000
 	GID = 1000
 
@@ -44,7 +44,7 @@ type Options struct {
 	DataDir string
 	// SocketPath is the Docker socket whose group is joined. It may not exist.
 	SocketPath string
-	// GIDOverride is BAYPLAN_DOCKER_GID and wins over the socket's group.
+	// GIDOverride is COAMING_DOCKER_GID and wins over the socket's group.
 	GIDOverride *int
 
 	Geteuid func() int

@@ -130,7 +130,7 @@ func (q *Queries) InsertEnvironment(ctx context.Context, arg InsertEnvironmentPa
 
 const listEnvironments = `-- name: ListEnvironments :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Bayplan Authors */
+   SPDX-FileCopyrightText: 2026 The Coaming Authors */
 
 SELECT id, kind, name, socket_path, enabled, created_at, updated_at, env_type, swarm_cluster_id, engine_id, cluster_changed_at, auto_update, pending_cluster_id, name_auto, local_node_id, local_socket_path, restart_loop_failures, restart_loop_window_minutes FROM environments ORDER BY created_at, id
 `

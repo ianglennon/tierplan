@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/ianglennon/bayplan/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stackops"
 )
 
 // Deployed is told that a revision of a stack ended good. For a revision made from a repository it makes the stack's

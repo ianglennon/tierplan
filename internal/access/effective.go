@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package access
 
@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // EnvRow is a user's effective access to one environment, the "why" view of the

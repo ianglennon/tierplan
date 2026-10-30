@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { Lock } from "lucide-react";
 
@@ -7,13 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { useT } from "@/i18n/use-t";
 
 interface SelfContainerBadgeProps {
-  // server for the container Bayplan runs in, agent for an agent's container, and
+  // server for the container Coaming runs in, agent for an agent's container, and
   // agent-service for the swarm service whose tasks are the agents.
   kind: "server" | "agent" | "agent-service";
 }
 
-// SelfContainerBadge marks a container Bayplan itself depends on: a neutral
-// outline badge with a lock, "Bayplan (this instance)" or "Bayplan agent".
+// SelfContainerBadge marks a container Coaming itself depends on: a neutral
+// outline badge with a lock, "Coaming (this instance)" or "Coaming agent".
 // Acting on one asks for more care (D-11), and the lock says so before anyone
 // opens the menu. It is never coloured.
 export function SelfContainerBadge({ kind }: SelfContainerBadgeProps) {

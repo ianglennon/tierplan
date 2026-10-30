@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useRef, useState } from "react";
 
@@ -143,7 +143,7 @@ interface RemoveWebhookDialogProps {
   envId: string;
   stackId: string;
   stackName: string;
-  // Whether the stack is polled, and every how many minutes: what still tells Bayplan about a push once the webhook
+  // Whether the stack is polled, and every how many minutes: what still tells Coaming about a push once the webhook
   // is gone.
   pollEnabled: boolean;
   pollMinutes: number;

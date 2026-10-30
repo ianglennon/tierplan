@@ -33,7 +33,7 @@
       "not_stopped": "This stack isn't stopped.",
       "operation_locked": "Another stack operation is running on this environment. Try again when it finishes.",
       "privileged_compose": "This stack uses settings that need Admin.",
-      "unreachable": "Bayplan couldn't reach the server.",
+      "unreachable": "Coaming couldn't reach the server.",
       "other": "The server refused."
     },
     "console": {

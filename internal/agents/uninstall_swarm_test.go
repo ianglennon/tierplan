@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 //go:build swarm
 
 package agents_test
@@ -14,8 +14,8 @@ import (
 
 // sharedUninstallOnRemove removes an environment with uninstallAgents on a real
 // swarm of three managers and a worker (D-30): every node's agent starts a helper that
-// removes its own bayplan-agent volume once the agent's container is gone, and one
-// manager agent removes its own bayplan-agent service and the token secret that service
+// removes its own coaming-agent volume once the agent's container is gone, and one
+// manager agent removes its own coaming-agent service and the token secret that service
 // names. A secret and volumes that are somebody else's are still there afterwards. The
 // removal is audited per agent. Everything happens inside the dind nodes.
 func sharedUninstallOnRemove(t *testing.T, f *swarmFix) {
@@ -27,8 +27,8 @@ func sharedUninstallOnRemove(t *testing.T, f *swarmFix) {
 	sh(t, mgr, "printf x | docker secret create decoy-secret -")
 	for _, n := range f.sw.Nodes() {
 		sh(t, n, "docker volume create decoy-data")
-		if got := strings.Fields(sh(t, n, "docker volume ls -q")); !slices.Contains(got, "bayplan-agent") {
-			t.Fatalf("%s has no bayplan-agent volume before the removal: %v", n.Hostname, got)
+		if got := strings.Fields(sh(t, n, "docker volume ls -q")); !slices.Contains(got, "coaming-agent") {
+			t.Fatalf("%s has no coaming-agent volume before the removal: %v", n.Hostname, got)
 		}
 	}
 	secretsBefore := strings.Fields(sh(t, mgr, "docker secret ls --format '{{.Name}}'"))

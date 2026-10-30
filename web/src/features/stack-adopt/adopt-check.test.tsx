@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -13,7 +13,7 @@ import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
 // The check on the Adopt page (plan 08-14, STK-13, D-16, D-20): what the first deploy of the adopted stack would change,
-// with Bayplan's ownership labels counted apart, the way each piece is treated, and the settings that need an Admin.
+// with Coaming's ownership labels counted apart, the way each piece is treated, and the settings that need an Admin.
 // The check changes nothing and never blocks Adopt.
 
 vi.mock("@/lib/toast", () => ({ toastSuccess: vi.fn(), toastError: vi.fn(), toastInfo: vi.fn() }));
@@ -209,7 +209,7 @@ describe("the check card: a clean round trip", () => {
     const card = await settled();
 
     expect(
-      within(card).getByText("Nothing will change except Bayplan's ownership labels."),
+      within(card).getByText("Nothing will change except Coaming's ownership labels."),
     ).toBeTruthy();
     expect(within(card).queryByText(/will change on the first deploy/)).toBeNull();
     expect(within(card).queryByRole("table")).toBeNull();
@@ -221,7 +221,7 @@ describe("the check card: a clean round trip", () => {
     const card = await settled();
 
     const sentence = within(card).getAllByText(
-      "Nothing will change except Bayplan's ownership labels.",
+      "Nothing will change except Coaming's ownership labels.",
     );
     expect(sentence).toHaveLength(1);
     const region = sentence[0]?.closest("[aria-live]");
@@ -236,7 +236,7 @@ describe("the check card: a clean round trip", () => {
 
     expect(
       within(card).getByText(
-        "2 services will be recreated to take Bayplan ownership labels (brief restart).",
+        "2 services will be recreated to take Coaming ownership labels (brief restart).",
       ),
     ).toBeTruthy();
     expect(within(card).queryByText("db")).toBeNull();
@@ -250,7 +250,7 @@ describe("the check card: a clean round trip", () => {
     mount();
     expect(
       within(await settled()).getByText(
-        "1 service will be recreated to take Bayplan ownership labels (brief restart).",
+        "1 service will be recreated to take Coaming ownership labels (brief restart).",
       ),
     ).toBeTruthy();
     cleanup();
@@ -261,7 +261,7 @@ describe("the check card: a clean round trip", () => {
     mount();
     expect(
       within(await settled()).getByText(
-        "3 containers will be recreated to take Bayplan ownership labels (brief restart).",
+        "3 containers will be recreated to take Coaming ownership labels (brief restart).",
       ),
     ).toBeTruthy();
   });
@@ -289,7 +289,7 @@ describe("the check card: gaps", () => {
       within(card).getByText("You can still adopt. Nothing changes until you deploy."),
     ).toBeTruthy();
     expect(
-      within(card).queryByText("Nothing will change except Bayplan's ownership labels."),
+      within(card).queryByText("Nothing will change except Coaming's ownership labels."),
     ).toBeNull();
     await waitFor(() => expect(adoptButton().getAttribute("aria-disabled")).toBeNull());
   });
@@ -432,7 +432,7 @@ describe("the check card: when the check fails", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Retry check" }));
 
     expect(
-      await within(card).findByText("Nothing will change except Bayplan's ownership labels."),
+      await within(card).findByText("Nothing will change except Coaming's ownership labels."),
     ).toBeTruthy();
     expect(within(card).queryByText("Couldn't check legacy against what's running.")).toBeNull();
     await waitFor(() => expect(adoptButton().getAttribute("aria-disabled")).toBeNull());
@@ -474,7 +474,7 @@ describe("the check card: when the check fails", () => {
     };
     mount();
 
-    expect(await screen.findByText("legacy is already managed by Bayplan.")).toBeTruthy();
+    expect(await screen.findByText("legacy is already managed by Coaming.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
       "/env/e1/stacks/s7",
     );
@@ -551,9 +551,9 @@ describe("the ownership card: how the pieces are treated", () => {
     const row = (name: string) => within(table).getByText(name).closest("tr") as HTMLElement;
     expect(within(row("legacy_default")).getByText("Owned by the stack")).toBeTruthy();
     expect(within(row("legacy_data")).getByText("Owned by the stack")).toBeTruthy();
-    expect(within(row("shared")).getByText("External. Bayplan doesn't change it.")).toBeTruthy();
+    expect(within(row("shared")).getByText("External. Coaming doesn't change it.")).toBeTruthy();
     for (const name of ["legacy_pw", "legacy_conf"]) {
-      expect(within(row(name)).getByText("External. Bayplan doesn't change it.")).toBeTruthy();
+      expect(within(row(name)).getByText("External. Coaming doesn't change it.")).toBeTruthy();
       expect(
         within(row(name)).getByText("Not stack-owned. Move it to a stack file to rotate it."),
       ).toBeTruthy();
@@ -652,7 +652,7 @@ describe("the alerts", () => {
     await settled();
 
     const titles = [
-      "Created by Bayplan (another instance or a lost record)",
+      "Created by Coaming (another instance or a lost record)",
       "This stack looks like it was created by Portainer",
       "Deploying this stack needs Admin",
       "Environment values are copied in as they are",

@@ -67,7 +67,7 @@
       "subnet": {
         "label": "Subnet",
         "placeholder": "10.20.0.0/24",
-        "helper": "In CIDR form. Bayplan warns if it overlaps another network but doesn't pick one for you."
+        "helper": "In CIDR form. Coaming warns if it overlaps another network but doesn't pick one for you."
       },
       "gateway": {
         "label": "Gateway"
@@ -112,7 +112,7 @@
       "titleContainer": "Connect {{container}} to a network",
       "body": "The container is on the network straight away.",
       "notAttachable": "{{name}} isn't attachable, so standalone containers can't join it. Only swarm services can.",
-      "own": "This is one of Bayplan's own containers. Putting it on another network changes what can reach it, so its name has to be typed first.",
+      "own": "This is one of Coaming's own containers. Putting it on another network changes what can reach it, so its name has to be typed first.",
       "container": {
         "label": "Container",
         "placeholder": "Find a container…",
@@ -165,17 +165,17 @@
       "done": "Disconnected {{container}} from {{network}}.",
       "notConnected": "{{container}} isn't on {{network}} any more.",
       "gone": "{{container}} or {{network}} is already gone.",
-      "own": "This is one of Bayplan's own containers. Taking it off a network can cut Bayplan off from this host, and Bayplan can't put it back once that happens.",
-      "ownAsked": "This is one of Bayplan's own containers, so its name has to be typed first."
+      "own": "This is one of Coaming's own containers. Taking it off a network can cut Coaming off from this host, and Coaming can't put it back once that happens.",
+      "ownAsked": "This is one of Coaming's own containers, so its name has to be typed first."
     },
     "errors": {
       "nameRequired": "Enter a name.",
       "nameInvalid": "Use letters, numbers, dot, dash or underscore.",
       "nameTaken": "A network named {{name}} already exists.",
-      "generic": "Something went wrong on the server. Try again, and check the Bayplan logs if it keeps happening.",
+      "generic": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
       "permission": "You no longer have permission to do that. Your access may have changed.",
       "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
-      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Bayplan can only read from it.",
+      "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Coaming can only read from it.",
       "nodeRequired": "Choose a node.",
       "subnetInvalid": "Enter a subnet like 10.20.0.0/24.",
       "gatewayOutside": "The gateway must be inside the subnet.",

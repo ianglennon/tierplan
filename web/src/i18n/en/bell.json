@@ -15,8 +15,8 @@
       },
       "cert": {
         "title": "An agent certificate isn't renewing",
-        "body": "{{node}} on {{env}}: the certificate expires {{when}}. Check that the agent can reach Bayplan.",
-        "bodyExpired": "{{node}} on {{env}}: the certificate expired {{when}}. Check that the agent can reach Bayplan.",
+        "body": "{{node}} on {{env}}: the certificate expires {{when}}. Check that the agent can reach Coaming.",
+        "bodyExpired": "{{node}} on {{env}}: the certificate expired {{when}}. Check that the agent can reach Coaming.",
         "view": "View nodes"
       },
       "manualUpdate": {
@@ -27,7 +27,7 @@
       },
       "clock": {
         "title": "The clock is off on {{node}}",
-        "body": "{{node}} on {{env}} is {{offset}} out of step. Bayplan refuses agents beyond 5 minutes.",
+        "body": "{{node}} on {{env}} is {{offset}} out of step. Coaming refuses agents beyond 5 minutes.",
         "view": "View nodes"
       },
       "pending": {
@@ -103,7 +103,7 @@
       "docs": "Reverse proxy docs",
       "untrustedForwarded": {
         "title": "Forwarded headers from an untrusted address",
-        "body": "Bayplan got X-Forwarded headers from {{ip}}, which isn't in BAYPLAN_TRUSTED_PROXIES. They were ignored."
+        "body": "Coaming got X-Forwarded headers from {{ip}}, which isn't in COAMING_TRUSTED_PROXIES. They were ignored."
       },
       "urlMismatch": {
         "title": "Requests don't match the public URL",
@@ -151,8 +151,8 @@
       }
     },
     "unknownAgents": {
-      "title_one": "{{count}} agent isn't known to this Bayplan",
-      "title_other": "{{count}} agents aren't known to this Bayplan",
+      "title_one": "{{count}} agent isn't known to this Coaming",
+      "title_other": "{{count}} agents aren't known to this Coaming",
       "description_one": "It was installed after the backup you restored.",
       "description_other": "They were installed after the backup you restored.",
       "link": "View"

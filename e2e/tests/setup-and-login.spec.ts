@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Golden paths 1 and 2 (D-80): the setup wizard claims the instance with the
 // token read through `docker compose exec`, /welcome opts the dind host in,
@@ -53,8 +53,8 @@ base.afterAll(async () => {
 
 base("a fresh instance sends every address to the setup wizard", async () => {
   await page.goto(at("/"));
-  await expect(page).toHaveURL(/\/bayplan\/setup$/);
-  await expect(page.getByRole("heading", { name: "Set up Bayplan", level: 2 })).toBeVisible();
+  await expect(page).toHaveURL(/\/coaming\/setup$/);
+  await expect(page.getByRole("heading", { name: "Set up Coaming", level: 2 })).toBeVisible();
   await expectVersionFooter(page);
 });
 
@@ -96,9 +96,9 @@ base("/welcome offers the dind host and managing it opens the dashboard", async 
   await page.getByRole("button", { name: "Manage this host" }).click();
   // Nothing has been opened yet, so home is the overview (D-31), with the one
   // host it just added; its dashboard is a click away.
-  await expect(page).toHaveURL(/\/bayplan\/environments$/);
+  await expect(page).toHaveURL(/\/coaming\/environments$/);
   await page.getByRole("main").locator("a[title]").first().click();
-  await expect(page).toHaveURL(/\/bayplan\/env\/[^/]+$/);
+  await expect(page).toHaveURL(/\/coaming\/env\/[^/]+$/);
   await expect(page.getByRole("region", { name: "Dashboard" })).toBeVisible();
   await expectVersionFooter(page);
 });
@@ -137,7 +137,7 @@ base("the right password signs in with Keep me signed in and a refresh keeps the
 
   // Home is the environment this admin last opened, else the overview (D-31);
   // either way the signed-in shell is up.
-  const home = /\/bayplan\/(environments|env\/[^/]+)$/;
+  const home = /\/coaming\/(environments|env\/[^/]+)$/;
   await expect(page).toHaveURL(home);
   await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
 
@@ -146,12 +146,12 @@ base("the right password signs in with Keep me signed in and a refresh keeps the
   await expect(page.getByRole("button", { name: "User menu" })).toBeVisible();
 
   // Behind a subpath over https the session cookie is __Secure- (a __Host- cookie
-  // must be at the root) and is sent to /bayplan only, so another application on
+  // must be at the root) and is sent to /coaming only, so another application on
   // the same host never receives it (D-50, D-59).
   const cookies = await page.context().cookies();
-  const session = cookies.find((c) => c.name.endsWith("bayplan_session"));
-  expect(session?.name).toBe("__Secure-bayplan_session");
-  expect(session?.path).toBe("/bayplan");
+  const session = cookies.find((c) => c.name.endsWith("coaming_session"));
+  expect(session?.name).toBe("__Secure-coaming_session");
+  expect(session?.path).toBe("/coaming");
   expect(session?.secure).toBe(true);
   expect(session?.httpOnly).toBe(true);
   expect(session?.sameSite).toBe("Lax");

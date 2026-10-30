@@ -1,25 +1,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
-# Caddy in front of Bayplan. See docs/reverse-proxy.md.
+# Caddy in front of Coaming. See docs/reverse-proxy.md.
 #
 # Caddy gets and renews a certificate for any site address that has no scheme,
 # sets X-Forwarded-For, X-Forwarded-Proto and Host by itself, passes WebSocket
 # upgrades through and flushes text/event-stream responses at once, so there is
-# nothing else to add. BAYPLAN_SCHEME is empty in normal use. The smoke test
+# nothing else to add. COAMING_SCHEME is empty in normal use. The smoke test
 # (scripts/proxy-smoke.sh) sets it to "http://" to run this same file without a
 # certificate.
 
-# A dedicated host name (recommended). Set BAYPLAN_PUBLIC_URL=https://bayplan.example.com.
-{$BAYPLAN_SCHEME}bayplan.example.com {
-	reverse_proxy bayplan:7480
+# A dedicated host name (recommended). Set COAMING_PUBLIC_URL=https://coaming.example.com.
+{$COAMING_SCHEME}coaming.example.com {
+	reverse_proxy coaming:7480
 }
 
-# A subpath on a host you share. Set BAYPLAN_PUBLIC_URL=https://example.com/bayplan.
-# handle_path removes /bayplan before the request reaches Bayplan.
-{$BAYPLAN_SCHEME}example.com {
-	handle_path /bayplan/* {
-		reverse_proxy bayplan:7480
+# A subpath on a host you share. Set COAMING_PUBLIC_URL=https://example.com/coaming.
+# handle_path removes /coaming before the request reaches Coaming.
+{$COAMING_SCHEME}example.com {
+	handle_path /coaming/* {
+		reverse_proxy coaming:7480
 	}
-	redir /bayplan /bayplan/ permanent
+	redir /coaming /coaming/ permanent
 }

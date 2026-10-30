@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { ArrowRight, ChevronRight, RotateCcw, RotateCw } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
@@ -271,7 +271,7 @@ export function ServiceDiffList({
   context,
   driftedPaths,
 }: ServiceDiffListProps) {
-  // The services that differ in nothing but Bayplan's ownership labels are their own group above the list
+  // The services that differ in nothing but Coaming's ownership labels are their own group above the list
   // (UI-SPEC "Review additions"); a service with a real change as well stays in the list.
   const labelsOnly = useMemo(() => services.filter((s) => s.ownershipOnly), [services]);
   // The server lists added and changed services by name, then the ones a recreate carries, then

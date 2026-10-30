@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
@@ -23,7 +23,7 @@ interface UnmanagedLogsProps {
   onParamsChange: (params: LogViewParams) => void;
 }
 
-// UnmanagedLogs is the Logs tab of a stack Bayplan did not make (UI-SPEC "Unmanaged stack page"): the stack log
+// UnmanagedLogs is the Logs tab of a stack Coaming did not make (UI-SPEC "Unmanaged stack page"): the stack log
 // viewer over the services found by the label, merged by time, under the same permission as a managed stack's log.
 // The stream is opened at the stack's name; the viewer owns the stream, the toolbar, the search and the download.
 export function UnmanagedLogs({ envId, name, params, onParamsChange }: UnmanagedLogsProps) {

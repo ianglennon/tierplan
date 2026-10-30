@@ -15,7 +15,7 @@
       "count_one": "{{count, number}} stack",
       "count_other": "{{count, number}} stacks",
       "empty": "No stacks",
-      "emptyBody": "A stack is a compose file that Bayplan deploys and keeps tidy. Its services, networks, secrets and configs go together, and nothing is left behind when you remove it.",
+      "emptyBody": "A stack is a compose file that Coaming deploys and keeps tidy. Its services, networks, secrets and configs go together, and nothing is left behind when you remove it.",
       "error": "Couldn't load stacks.",
       "errorRetry": "Retry loading stacks",
       "columns": {

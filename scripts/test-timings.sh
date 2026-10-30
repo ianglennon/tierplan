@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Bayplan Authors
+# SPDX-FileCopyrightText: 2026 The Coaming Authors
 #
 # Timings report from `go test -json` output (gotestsum's --jsonfile has the same
 # format). For every FILE it reads the package-level pass/fail events and prints

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,16 +11,16 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/access"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
+	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
 )
 
 // ProfileBody is the signed-in user's own profile.
 type ProfileBody struct {
 	Username    string `json:"username" doc:"The lower-cased username. It can never be changed"`
 	DisplayName string `json:"displayName" doc:"The name shown for the user; empty when none was set"`
-	Email       string `json:"email" doc:"The user's email address; empty when none was set. Bayplan never sends mail to it"`
+	Email       string `json:"email" doc:"The user's email address; empty when none was set. Coaming never sends mail to it"`
 	UpdatedAt   string `json:"updatedAt" format:"date-time" doc:"The version of the profile a save is based on; send it back unchanged to PATCH"`
 }
 
@@ -37,7 +37,7 @@ type UpdateMyProfileInput struct {
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
 		DisplayName *string   `json:"displayName,omitempty" maxLength:"256" doc:"The name shown for you; at most 64 characters. Send an empty string to clear it; leave it out to keep it"`
-		Email       *string   `json:"email,omitempty" maxLength:"254" doc:"A bare address, or empty to clear it; leave it out to keep it. Bayplan never sends mail"`
+		Email       *string   `json:"email,omitempty" maxLength:"254" doc:"A bare address, or empty to clear it; leave it out to keep it. Coaming never sends mail"`
 		UpdatedAt   time.Time `json:"updatedAt" format:"date-time" doc:"The updatedAt of the profile this edit is based on. If it changed since, the answer is 409 stale_change"`
 	}
 }

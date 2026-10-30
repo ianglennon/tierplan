@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -194,7 +194,7 @@ describe("the launcher", () => {
     expect(await screen.findByRole("heading", { name: "Open a shell in web" })).toBeTruthy();
     expect(
       screen.getByText(
-        "You get a terminal inside the container. Nothing you type or see is recorded. Bayplan records that the session happened.",
+        "You get a terminal inside the container. Nothing you type or see is recorded. Coaming records that the session happened.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open shell" }).getAttribute("data-variant")).toBe(
@@ -208,7 +208,7 @@ describe("the launcher", () => {
     renderPanel({ node: "node-1" });
     expect(
       await screen.findByText(
-        "You get a terminal inside the container, on node-1. Nothing you type or see is recorded. Bayplan records that the session happened.",
+        "You get a terminal inside the container, on node-1. Nothing you type or see is recorded. Coaming records that the session happened.",
       ),
     ).toBeTruthy();
   });
@@ -608,7 +608,7 @@ const rowFixture = (over: Partial<ContainerRow> = {}): ContainerRow => ({
   ports: [],
   project: "",
   stack: "",
-  bayplanStackId: "",
+  coamingStackId: "",
   service: "",
   ...over,
 });
@@ -715,7 +715,7 @@ describe("an image with no shell (D-34)", () => {
     expect(await screen.findByRole("heading", { name: "No shell in this image" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Bayplan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
+        "Coaming couldn't find bash or sh in this container. If the image has one somewhere else, enter its path.",
       ),
     ).toBeTruthy();
     const field = screen.getByLabelText("Command");
@@ -779,12 +779,12 @@ describe("a read-only host (D-35)", () => {
   });
 });
 
-describe("Bayplan's own containers (D-36)", () => {
-  it("says Bayplan does not open shells in them, for the server and for an agent, with no way to open one", async () => {
+describe("Coaming's own containers (D-36)", () => {
+  it("says Coaming does not open shells in them, for the server and for an agent, with no way to open one", async () => {
     for (const kind of ["server", "agent"] as const) {
       const view = renderPanel({ row: rowFixture({ selfKind: kind }) });
       expect(
-        await screen.findByText("Bayplan doesn't open shells in its own containers."),
+        await screen.findByText("Coaming doesn't open shells in its own containers."),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Open shell" })).toBeNull();
       view.unmount();
@@ -797,7 +797,7 @@ describe("Bayplan's own containers (D-36)", () => {
     renderPanel({ row: rowFixture() });
     await clickOpen();
     expect(
-      await screen.findByText("Bayplan doesn't open shells in its own containers."),
+      await screen.findByText("Coaming doesn't open shells in its own containers."),
     ).toBeTruthy();
   });
 });
@@ -964,7 +964,7 @@ describe("the toolbar (plan 04-24, D-33)", () => {
     ]);
     fireEvent.click(screen.getByRole("option", { name: "16" }));
     await waitFor(() => expect(term.props?.fontSize).toBe(16));
-    expect(localStorage.getItem("bayplan-terminal-font-size")).toBe("16");
+    expect(localStorage.getItem("coaming-terminal-font-size")).toBe("16");
 
     // The next terminal in this browser starts there.
     cleanup();
@@ -974,7 +974,7 @@ describe("the toolbar (plan 04-24, D-33)", () => {
   });
 
   it("starts at 14 when the stored size is not one of the three", async () => {
-    localStorage.setItem("bayplan-terminal-font-size", "40");
+    localStorage.setItem("coaming-terminal-font-size", "40");
     await connected();
     expect(term.props?.fontSize).toBe(14);
   });
@@ -1010,7 +1010,7 @@ describe("the toolbar (plan 04-24, D-33)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Keyboard" }));
     fireEvent.click(await screen.findByRole("switch", { name: "Screen reader support" }));
     await waitFor(() => expect(term.props?.screenReader).toBe(true));
-    expect(localStorage.getItem("bayplan-terminal-screen-reader")).toBe("true");
+    expect(localStorage.getItem("coaming-terminal-screen-reader")).toBe("true");
   });
 
   it("opens the terminal's search from the Search button", async () => {
@@ -1076,7 +1076,7 @@ describe("the toolbar (plan 04-24, D-33)", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Font size" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "12" }));
     await waitFor(() => expect(set).toHaveBeenCalled());
-    expect(set.mock.calls.map((c) => c[0])).toEqual(["bayplan-terminal-font-size"]);
+    expect(set.mock.calls.map((c) => c[0])).toEqual(["coaming-terminal-font-size"]);
     expect(JSON.stringify(set.mock.calls)).not.toContain("hunter2");
     expect(sessionStorage.length).toBe(0);
   });

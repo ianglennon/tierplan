@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/store"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/store"
 )
 
 // What a drift cause says was done (D-24).
@@ -27,7 +27,7 @@ const (
 	CauseAdopted = "adopted"
 )
 
-// DriftCause is what the audit log knows about why a service differs from the deployed revision: Bayplan itself changed
+// DriftCause is what the audit log knows about why a service differs from the deployed revision: Coaming itself changed
 // its spec (a scale, a roll back, an edit), or the difference was there when the stack was adopted. Only the action,
 // the actor's display name, the time and, for a scale, the replica counts are kept: no audit detail leaves with it
 // (T-08-78). A restart and a force update do not change the spec, so they are neither drift nor a cause.
@@ -55,7 +55,7 @@ const (
 	scaleUnchanged = "unchanged"
 )
 
-// DriftCauses reads, for each service in services (service ID to name), the newest spec-changing action of Bayplan's
+// DriftCauses reads, for each service in services (service ID to name), the newest spec-changing action of Coaming's
 // own on it since the given time, from the audit log and nowhere else (D-24). Only successful rows of the environment
 // count, matched to the service by the row's target. The result is keyed by service ID; a service nothing is known
 // about is absent. It pages a bounded number of times and stops as soon as every service has its cause.
@@ -156,7 +156,7 @@ func (d Deps) attachCauses(ctx context.Context, in DriftInput, res *DriftResult,
 	}
 
 	adopted := in.Stack.Adoption.Pending
-	var bayplan []DriftCause
+	var coaming []DriftCause
 	var firstAdopted *DriftCause
 	for i := range res.Services {
 		s := &res.Services[i]
@@ -167,7 +167,7 @@ func (d Deps) attachCauses(ctx context.Context, in DriftInput, res *DriftResult,
 		if c, ok := found[ids[s.Name]]; ok && explains(c, *s) {
 			c.Service = short
 			s.Cause = &c
-			bayplan = append(bayplan, c)
+			coaming = append(coaming, c)
 			continue
 		}
 		if adopted && inGaps(in.Stack.Adoption.Gaps, *s) {
@@ -177,11 +177,11 @@ func (d Deps) attachCauses(ctx context.Context, in DriftInput, res *DriftResult,
 			}
 		}
 	}
-	res.Causes = len(bayplan)
+	res.Causes = len(coaming)
 	switch {
-	case len(bayplan) > 0:
-		latest := bayplan[0]
-		for _, c := range bayplan[1:] {
+	case len(coaming) > 0:
+		latest := coaming[0]
+		for _, c := range coaming[1:] {
 			if c.At.After(latest.At) {
 				latest = c
 			}
@@ -193,7 +193,7 @@ func (d Deps) attachCauses(ctx context.Context, in DriftInput, res *DriftResult,
 	}
 }
 
-// explains says whether an action of Bayplan's can be why the service differs: a scale only when the replica count
+// explains says whether an action of Coaming's can be why the service differs: a scale only when the replica count
 // is one of the settings that differ, so a service whose image was changed from outside after a scale is not blamed
 // on the scale.
 func explains(c DriftCause, s DriftService) bool {

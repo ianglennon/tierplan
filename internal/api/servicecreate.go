@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/swarmops"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/swarmops"
 )
 
 // ServiceCreateReviewRequest is the body of the create review route.
@@ -51,7 +51,7 @@ type ServiceCreateBody struct {
 	Name     string                 `json:"name" doc:"The service's name"`
 	Image    string                 `json:"image" doc:"The image the service was created with: tag@sha256:digest when the tag was resolved"`
 	Digest   string                 `json:"digest" doc:"The digest the image is pinned to; empty when it names none"`
-	Pinned   bool                   `json:"pinned" doc:"True when Bayplan resolved the tag and wrote the digest into the spec"`
+	Pinned   bool                   `json:"pinned" doc:"True when Coaming resolved the tag and wrote the digest into the spec"`
 	Warnings []string               `json:"warnings" doc:"The manager's warnings about the creation, scrubbed of masked values; empty when there are none"`
 	Steps    []ServiceApplyStepBody `json:"steps" doc:"The steps of the create in order: the image, each object created, the service"`
 	Cleanup  ServiceCleanupBody     `json:"cleanup" doc:"Empty after a successful create. A failed create answers a problem whose errors carry the same lists"`

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package stackops
 
@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/ianglennon/bayplan/internal/jobs"
-	"github.com/ianglennon/bayplan/internal/stacks"
-	"github.com/ianglennon/bayplan/internal/stacks/convert"
+	"github.com/ianglennon/coaming/internal/jobs"
+	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/convert"
 )
 
 // The kinds of item a swarm deploy puts in its job. A step is a line of the console's step list, a

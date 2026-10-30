@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 // Package config reads the agent's settings from its environment.
 //
@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/bayplan/agent/internal/state"
+	"github.com/ianglennon/coaming/agent/internal/state"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 	DefaultSocket = "/var/run/docker.sock"
 	// DefaultStateDir is the agent's state directory; the image pre-creates it
 	// owned by UID and GID 1000.
-	DefaultStateDir = "/var/lib/bayplan-agent"
+	DefaultStateDir = "/var/lib/coaming-agent"
 
 	// DefaultBackoffMin and DefaultBackoffMax bound the reconnect delay (D-41).
 	DefaultBackoffMin = time.Second
@@ -38,29 +38,29 @@ const (
 
 	// envReadOnly makes the agent refuse every Docker call that is not a GET or
 	// HEAD, whatever the server's allowlist says (D-28). The default is false.
-	envReadOnly = "BAYPLAN_AGENT_READ_ONLY"
+	envReadOnly = "COAMING_AGENT_READ_ONLY"
 	// envSelfUpdate says whether the agent may update or uninstall itself when the
 	// server asks (D-28). The default is true; a later plan implements what it gates.
-	envSelfUpdate = "BAYPLAN_AGENT_SELF_UPDATE"
+	envSelfUpdate = "COAMING_AGENT_SELF_UPDATE"
 	// envAllowPrivilegedServices lets a manager's agent forward service specs that
 	// give tasks host access: a bind of the Docker socket or of a host path outside
 	// the data roots, an added capability, a lowered sandbox, the host network
 	// (D-36). The default is false. On managers it covers service writes,
 	// including the volumes they name; on every agent-managed host it also covers
 	// volume creates (a worker's agent forwards no service write).
-	envAllowPrivilegedServices = "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"
+	envAllowPrivilegedServices = "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES"
 	// envAllowInsecure lets the agent dial plain ws:// to a host that is not
 	// loopback. For development only: the join token, the proof and every Docker
 	// answer then cross the network unencrypted to a server the agent cannot check
 	// (T-02-31). The default is false; wss:// is verified whatever its value.
-	envAllowInsecure = "BAYPLAN_AGENT_ALLOW_INSECURE"
+	envAllowInsecure = "COAMING_AGENT_ALLOW_INSECURE"
 
 	// envPin is the pin of the server's certificate, or several separated by
 	// commas, as "sha256/" and a base64 SPKI hash. The install command carries it
-	// when Bayplan serves its own certificate; a pin on a certificate authority of
+	// when Coaming serves its own certificate; a pin on a certificate authority of
 	// a private proxy works too (D-06). Without it the server must present a
 	// certificate the system trusts.
-	envPin = "BAYPLAN_AGENT_PIN"
+	envPin = "COAMING_AGENT_PIN"
 )
 
 // Config is what the agent needs to start.
@@ -83,7 +83,7 @@ type Config struct {
 	// ReadOnly refuses every Docker call that is not a read, and SelfUpdate says
 	// whether the agent may update itself (D-28).
 	ReadOnly, SelfUpdate bool
-	// AllowPrivilegedServices is BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES: on a
+	// AllowPrivilegedServices is COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES: on a
 	// manager it lets the agent forward service specs that give tasks host access,
 	// and on every agent-managed host it also covers volume creates.
 	AllowPrivilegedServices bool
@@ -102,24 +102,24 @@ type Config struct {
 // an agent with no token has an identity is decided by CheckEnrolled once the
 // process has dropped its privileges.
 //
-//	BAYPLAN_AGENT_URL              required, wss://; ws:// only to a loopback host, or with BAYPLAN_AGENT_ALLOW_INSECURE=true
-//	BAYPLAN_AGENT_ALLOW_INSECURE   true allows ws:// to another host (development only), default false
-//	BAYPLAN_AGENT_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
-//	BAYPLAN_AGENT_JOIN_TOKEN       the token itself
-//	BAYPLAN_AGENT_SOCKET           default /var/run/docker.sock
-//	BAYPLAN_AGENT_STATE_DIR        default /var/lib/bayplan-agent
-//	BAYPLAN_AGENT_DOCKER_GID       non-negative integer; overrides the socket's group
-//	BAYPLAN_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
-//	BAYPLAN_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
+//	COAMING_AGENT_URL              required, wss://; ws:// only to a loopback host, or with COAMING_AGENT_ALLOW_INSECURE=true
+//	COAMING_AGENT_ALLOW_INSECURE   true allows ws:// to another host (development only), default false
+//	COAMING_AGENT_JOIN_TOKEN_FILE  path of a Docker secret holding the token; wins over the variable
+//	COAMING_AGENT_JOIN_TOKEN       the token itself
+//	COAMING_AGENT_SOCKET           default /var/run/docker.sock
+//	COAMING_AGENT_STATE_DIR        default /var/lib/coaming-agent
+//	COAMING_AGENT_DOCKER_GID       non-negative integer; overrides the socket's group
+//	COAMING_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
+//	COAMING_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
 //
 // The host policy flags (envReadOnly, envSelfUpdate and envAllowPrivilegedServices) and envAllowInsecure are
 // true or false; a value that is neither stops the agent, so that a restriction is
 // never dropped because it was misspelled.
 func Load(env func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
 	cfg := Config{
-		URL:        env("BAYPLAN_AGENT_URL"),
-		SocketPath: env("BAYPLAN_AGENT_SOCKET"),
-		StateDir:   env("BAYPLAN_AGENT_STATE_DIR"),
+		URL:        env("COAMING_AGENT_URL"),
+		SocketPath: env("COAMING_AGENT_SOCKET"),
+		StateDir:   env("COAMING_AGENT_STATE_DIR"),
 	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = DefaultSocket
@@ -136,13 +136,13 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		return Config{}, err
 	}
 
-	gid, err := parseGID(env("BAYPLAN_AGENT_DOCKER_GID"))
+	gid, err := parseGID(env("COAMING_AGENT_DOCKER_GID"))
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.DockerGID = gid
 
-	cfg.BackoffMin, cfg.BackoffMax, err = parseBackoff(env("BAYPLAN_AGENT_BACKOFF_MIN"), env("BAYPLAN_AGENT_BACKOFF_MAX"))
+	cfg.BackoffMin, cfg.BackoffMax, err = parseBackoff(env("COAMING_AGENT_BACKOFF_MIN"), env("COAMING_AGENT_BACKOFF_MAX"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -188,7 +188,7 @@ func (c *Config) CheckEnrolled(readFile func(string) ([]byte, error)) error {
 		if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("read the enrolled state in %s: %w", c.StateDir, err)
 		}
-		return errors.New("no join token: set BAYPLAN_AGENT_JOIN_TOKEN_FILE (a Docker secret) or BAYPLAN_AGENT_JOIN_TOKEN; copy the install command from Bayplan's Add environment screen")
+		return errors.New("no join token: set COAMING_AGENT_JOIN_TOKEN_FILE (a Docker secret) or COAMING_AGENT_JOIN_TOKEN; copy the install command from Coaming's Add environment screen")
 	}
 	c.Enrolled = true
 	return nil
@@ -198,14 +198,14 @@ func (c *Config) CheckEnrolled(readFile func(string) ([]byte, error)) error {
 // state directory and the group override. A helper dials no server, so it needs
 // neither the URL nor a join token, and Load's checks for them do not apply.
 func LoadHelper(env func(string) string) (Config, error) {
-	cfg := Config{SocketPath: env("BAYPLAN_AGENT_SOCKET"), StateDir: env("BAYPLAN_AGENT_STATE_DIR")}
+	cfg := Config{SocketPath: env("COAMING_AGENT_SOCKET"), StateDir: env("COAMING_AGENT_STATE_DIR")}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = DefaultSocket
 	}
 	if cfg.StateDir == "" {
 		cfg.StateDir = DefaultStateDir
 	}
-	gid, err := parseGID(env("BAYPLAN_AGENT_DOCKER_GID"))
+	gid, err := parseGID(env("COAMING_AGENT_DOCKER_GID"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -222,10 +222,10 @@ func LoadHelper(env func(string) string) (Config, error) {
 // over the network unencrypted (T-02-31).
 func checkURL(raw string, allowInsecure bool) error {
 	if raw == "" {
-		return errors.New("BAYPLAN_AGENT_URL must be set to the server's agent address, for example wss://bayplan.example/agent/connect")
+		return errors.New("COAMING_AGENT_URL must be set to the server's agent address, for example wss://coaming.example/agent/connect")
 	}
 	if !state.ValidURL(raw) {
-		msg := "BAYPLAN_AGENT_URL must be a ws:// or wss:// address with a host and no user name, query or fragment"
+		msg := "COAMING_AGENT_URL must be a ws:// or wss:// address with a host and no user name, query or fragment"
 		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
 			msg += " (the host is " + u.Hostname() + ")"
 		}
@@ -236,7 +236,7 @@ func checkURL(raw string, allowInsecure bool) error {
 		if u, err := url.Parse(raw); err == nil {
 			host = u.Hostname()
 		}
-		return fmt.Errorf("BAYPLAN_AGENT_URL is a plain ws:// address for %s: the join token and every Docker answer would cross the network unencrypted, to a server the agent cannot check. Use wss:// with a certificate the agent checks; %s=true allows it, for development only", host, envAllowInsecure)
+		return fmt.Errorf("COAMING_AGENT_URL is a plain ws:// address for %s: the join token and every Docker answer would cross the network unencrypted, to a server the agent cannot check. Use wss:// with a certificate the agent checks; %s=true allows it, for development only", host, envAllowInsecure)
 	}
 	return nil
 }
@@ -264,7 +264,7 @@ func parsePins(raw string) ([]string, error) {
 			continue
 		}
 		if !state.ValidPin(p) {
-			return nil, fmt.Errorf("%s must be sha256/ followed by the 44-character base64 hash, as Bayplan's install command shows it; got %q", envPin, p)
+			return nil, fmt.Errorf("%s must be sha256/ followed by the 44-character base64 hash, as Coaming's install command shows it; got %q", envPin, p)
 		}
 		pins = append(pins, p)
 	}
@@ -277,7 +277,7 @@ func parseGID(raw string) (*int, error) {
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 0 {
-		return nil, fmt.Errorf("BAYPLAN_AGENT_DOCKER_GID must be a non-negative integer, got %q", raw)
+		return nil, fmt.Errorf("COAMING_AGENT_DOCKER_GID must be a non-negative integer, got %q", raw)
 	}
 	return &n, nil
 }
@@ -288,16 +288,16 @@ func parseBackoff(rawMin, rawMax string) (lo, hi time.Duration, err error) {
 	lo, hi = DefaultBackoffMin, DefaultBackoffMax
 	if rawMin != "" {
 		if lo, err = time.ParseDuration(rawMin); err != nil || lo <= 0 {
-			return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MIN must be a positive duration such as 1s, got %q", rawMin)
+			return 0, 0, fmt.Errorf("COAMING_AGENT_BACKOFF_MIN must be a positive duration such as 1s, got %q", rawMin)
 		}
 	}
 	if rawMax != "" {
 		if hi, err = time.ParseDuration(rawMax); err != nil || hi <= 0 {
-			return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MAX must be a positive duration such as 60s, got %q", rawMax)
+			return 0, 0, fmt.Errorf("COAMING_AGENT_BACKOFF_MAX must be a positive duration such as 60s, got %q", rawMax)
 		}
 	}
 	if lo > hi {
-		return 0, 0, fmt.Errorf("BAYPLAN_AGENT_BACKOFF_MIN (%s) must not be longer than BAYPLAN_AGENT_BACKOFF_MAX (%s)", lo, hi)
+		return 0, 0, fmt.Errorf("COAMING_AGENT_BACKOFF_MIN (%s) must not be longer than COAMING_AGENT_BACKOFF_MAX (%s)", lo, hi)
 	}
 	return lo, hi, nil
 }
@@ -306,16 +306,16 @@ func parseBackoff(rawMin, rawMax string) (lo, hi time.Duration, err error) {
 // variable, else "". A named file that cannot give a token is an error rather
 // than a silent fall back to the variable.
 func readToken(env func(string) string, readFile func(string) ([]byte, error)) (string, error) {
-	if path := env("BAYPLAN_AGENT_JOIN_TOKEN_FILE"); path != "" {
+	if path := env("COAMING_AGENT_JOIN_TOKEN_FILE"); path != "" {
 		b, err := readFile(path)
 		if err != nil {
-			return "", fmt.Errorf("BAYPLAN_AGENT_JOIN_TOKEN_FILE: %w", err)
+			return "", fmt.Errorf("COAMING_AGENT_JOIN_TOKEN_FILE: %w", err)
 		}
 		token := strings.TrimSpace(string(b))
 		if token == "" {
-			return "", fmt.Errorf("BAYPLAN_AGENT_JOIN_TOKEN_FILE: %s is empty", path)
+			return "", fmt.Errorf("COAMING_AGENT_JOIN_TOKEN_FILE: %s is empty", path)
 		}
 		return token, nil
 	}
-	return strings.TrimSpace(env("BAYPLAN_AGENT_JOIN_TOKEN")), nil
+	return strings.TrimSpace(env("COAMING_AGENT_JOIN_TOKEN")), nil
 }

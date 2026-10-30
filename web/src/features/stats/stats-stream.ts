@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { EventSourceLike } from "@/features/dashboard/events";
 import type { StatsPoint } from "@/features/stats/use-stats-history";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package vault_test
 
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/vault"
+	"github.com/ianglennon/coaming/internal/vault"
 )
 
 func rotKey(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
@@ -166,10 +166,10 @@ func TestRecoverRotationDiscardsANewKeyTheDatabaseDoesNotName(t *testing.T) {
 			t.Fatalf("%s: RecoverRotation = %v, %v; want it to discard", name, changed, err)
 		}
 		if exists(dir, vault.NewKeyFile) {
-			t.Errorf("%s: bayplan.key.new was kept", name)
+			t.Errorf("%s: coaming.key.new was kept", name)
 		}
 		if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(1)) {
-			t.Errorf("%s: bayplan.key changed", name)
+			t.Errorf("%s: coaming.key changed", name)
 		}
 	}
 }
@@ -198,7 +198,7 @@ func TestRecoverRotationAfterTheFirstRenameMovesTheNewKeyIntoPlaceWithoutAskingT
 		t.Fatalf("RecoverRotation = %v, %v", changed, err)
 	}
 	if !bytes.Equal(content(t, dir, vault.KeyFile), rotKey(2)) || exists(dir, vault.NewKeyFile) {
-		t.Fatal("bayplan.key.new was not moved to bayplan.key")
+		t.Fatal("coaming.key.new was not moved to coaming.key")
 	}
 	// LoadOrCreate now finds that key and mints nothing.
 	v, err := vault.LoadOrCreate("", dir, slog.New(slog.DiscardHandler))
@@ -232,13 +232,13 @@ func TestRecoverRotationReportsAFailureToReadTheDatabase(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := vault.RecoverRotation(context.Background(), dir, false, func(context.Context) (string, error) { return "", boom })
 	if !errors.Is(err, boom) || !exists(dir, vault.NewKeyFile) {
-		t.Fatalf("RecoverRotation = %v; want the error and bayplan.key.new kept", err)
+		t.Fatalf("RecoverRotation = %v; want the error and coaming.key.new kept", err)
 	}
 }
 
 func TestRecoverRotationNeverRenamesIntoTheKeyFileForAnEnvironmentKey(t *testing.T) {
-	// The database names the new key: bayplan.key.new stays for the operator,
-	// and no bayplan.key is made, in either file layout a crash could leave.
+	// The database names the new key: coaming.key.new stays for the operator,
+	// and no coaming.key is made, in either file layout a crash could leave.
 	for name, setup := range map[string]func(dir string){
 		"no key file":  func(dir string) {},
 		"old key file": func(dir string) { put(t, dir, vault.OldKeyFile, rotKey(1)) },
@@ -252,7 +252,7 @@ func TestRecoverRotationNeverRenamesIntoTheKeyFileForAnEnvironmentKey(t *testing
 			t.Fatalf("%s: RecoverRotation = %v, %v; want it left alone", name, changed, err)
 		}
 		if !exists(dir, vault.NewKeyFile) || exists(dir, vault.KeyFile) {
-			t.Errorf("%s: bayplan.key.new must stay and bayplan.key must not appear", name)
+			t.Errorf("%s: coaming.key.new must stay and coaming.key must not appear", name)
 		}
 	}
 }

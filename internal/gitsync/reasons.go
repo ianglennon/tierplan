@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitsync
 
 import (
 	"errors"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx"
 )
 
 // ReasonCode says why a git stack's sync is in error, or why it is behind with a note (D-16, D-19). The set is fixed
@@ -88,7 +88,7 @@ func detailOf(code ReasonCode, err error) string {
 		case gitx.CodeCertUntrusted:
 			return "The server's certificate isn't trusted."
 		case gitx.CodeEgressBlocked:
-			return "Bayplan isn't allowed to connect to this address."
+			return "Coaming isn't allowed to connect to this address."
 		case gitx.CodeUnreachable:
 			return "The server couldn't be reached."
 		case gitx.CodeTimeout:

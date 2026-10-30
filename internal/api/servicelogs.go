@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -18,12 +18,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/dockerx"
-	"github.com/ianglennon/bayplan/internal/envs"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/tunnel"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/tunnel"
 )
 
 // The merged log stream of one swarm service (plan 06-29, OBS-02, D-35, D-37). One
@@ -449,7 +449,7 @@ func parseSvcRec(stream string, b []byte) (svcRec, bool) {
 // the heartbeats. Every heartbeat re-checks access; a user who lost it is told with a closed
 // event, and the stream never outlives MaxLifetime.
 //
-// No line of the log is stored, audited or written to Bayplan's own log; only the fact that a
+// No line of the log is stored, audited or written to Coaming's own log; only the fact that a
 // stream was opened is recorded (D-35).
 func serveServiceLogStream(w http.ResponseWriter, req *http.Request, d ServiceLogsDeps, lim *streamLimiter, mem *logAuditMemory) {
 	ctx := req.Context()

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package gitx_test
 
@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/bayplan/internal/gitx"
+	"github.com/ianglennon/coaming/internal/gitx"
 )
 
 // The address validator runs before go-git sees an address: transport.NewEndpoint accepts file://,
 // bare paths and git:// (RESEARCH Pitfall 3).
 
-func TestValidateURLAcceptsTheAddressesBayplanTalksTo(t *testing.T) {
+func TestValidateURLAcceptsTheAddressesCoamingTalksTo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		in   string

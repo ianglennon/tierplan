@@ -210,14 +210,14 @@
       "toast": "Updated {{name}}.",
       "cleanup": {
         "removed": "Couldn't update {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
-        "notRemoved": "Couldn't update {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
+        "notRemoved": "Couldn't update {{name}}. {{reason}} Coaming couldn't remove {{list}}. Remove them under Networks, Secrets or Configs.",
         "item": {
           "network": "network {{name}}",
           "secret": "secret {{name}}",
           "config": "config {{name}}"
         },
         "createRemoved": "Couldn't create {{name}}. {{reason}} The {{count}} objects created for this change were removed.",
-        "createNotRemoved": "Couldn't create {{name}}. {{reason}} Bayplan couldn't remove {{list}}. Remove them under Networks, Secrets or Configs."
+        "createNotRemoved": "Couldn't create {{name}}. {{reason}} Coaming couldn't remove {{list}}. Remove them under Networks, Secrets or Configs."
       }
     },
     "refusal": {
@@ -230,7 +230,7 @@
       "mode_immutable": "A service's mode can't change.",
       "stack_label_reserved": "Labels starting with com.docker.stack. are reserved.",
       "placeholder_unmatched": "A hidden value in the spec has nothing behind it: {{path}} isn't in the service. Type its value or remove it.",
-      "placeholder_reserved": "<hidden> is what Bayplan shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
+      "placeholder_reserved": "<hidden> is what Coaming shows for a value it withholds, so it can't be a value. Type the real value or remove it.",
       "objects_missing": "The spec names objects that don't exist: {{list}}. Create them first, then review again.",
       "missingKinds": {
         "networks": "networks {{names}}",
@@ -248,7 +248,7 @@
       "description": "Set up a service Swarm runs for you. Review it before anything is created.",
       "review": {
         "title": "Review {{name}}",
-        "body": "Check the service Bayplan will create, then create it.",
+        "body": "Check the service Coaming will create, then create it.",
         "confirm": "Create service"
       },
       "apply": {

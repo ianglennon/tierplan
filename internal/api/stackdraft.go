@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/bayplan/internal/audit"
-	"github.com/ianglennon/bayplan/internal/httpx"
-	"github.com/ianglennon/bayplan/internal/rbac"
-	"github.com/ianglennon/bayplan/internal/redact"
-	"github.com/ianglennon/bayplan/internal/stackops"
-	"github.com/ianglennon/bayplan/internal/stacks"
+	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/coaming/internal/stacks"
 )
 
 const (
@@ -36,7 +36,7 @@ type DraftFileBody struct {
 	Path    string `json:"path" doc:"The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid"`
 	Content string `json:"content" doc:"The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content"`
 	Secret  bool   `json:"secret" doc:"True when the file is stored sealed and never shown"`
-	Origin  string `json:"origin,omitempty" enum:"repo,overlay" doc:"Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Bayplan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored"`
+	Origin  string `json:"origin,omitempty" enum:"repo,overlay" doc:"Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Coaming holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored"`
 }
 
 // DraftGitBody is where the repository files of a git stack's draft come from.

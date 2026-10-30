@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Bayplan Authors
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { StackDraft, StackDraftSaveInput } from "@/api/stacks";
 import { HIDDEN } from "@/features/spec-editor/diff";
@@ -15,7 +15,7 @@ export interface WorkingFile {
   content: string;
   secret: boolean;
   hidden: boolean;
-  // Where the file of a git stack came from: the repository (read-only) or Bayplan's own overlay (D-09). A file of
+  // Where the file of a git stack came from: the repository (read-only) or Coaming's own overlay (D-09). A file of
   // any other stack has none.
   origin?: FileOrigin;
 }
