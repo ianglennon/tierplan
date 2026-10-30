@@ -4,7 +4,7 @@
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
 import { useState } from "react";
-
+import { type StackGitCheck, useCheckStackGit } from "@/api/stack-git";
 import type { StackItem } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
@@ -20,15 +20,24 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type Column, TruncatedText } from "@/features/resources/resource-table";
+import { shortSha } from "@/features/stack-git/sha-link";
+import { BehindBadge, GitSourceBadge, SyncErrorBadge } from "@/features/stack-git/sync-badges";
 import { DriftBadge } from "@/features/stacks/drift-badge";
 import { RemoveStackDialog } from "@/features/stacks/remove-stack-dialog";
-import { canStart, canStop, canUpdateImages, useStackStart } from "@/features/stacks/stack-actions";
+import {
+  canStart,
+  canStop,
+  canUpdateImages,
+  usePullAndReview,
+  useStackStart,
+} from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { StopStackDialog } from "@/features/stacks/stop-stack-dialog";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { UpdateImagesDialog } from "@/features/stacks/update-images-dialog";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { toastError } from "@/lib/toast";
 
 // A stack of a list with the environment it is on: the env list fills its own, the All stacks list
 // each group's.
@@ -72,6 +81,32 @@ interface RowActionsProps {
   disabled?: boolean;
 }
 
+// CheckNowItem is Check now in the menu of a git stack (UI-SPEC "Stack lists"): it asks the server to fetch the ref and
+// compare it with what is deployed, and the row's badges follow the answer. The check itself runs in RowActions, which
+// stays mounted when the menu closes: the menu content is unmounted with the click, and a check held here would stop
+// being waited for before the server had answered. Anyone who can read the stack may ask, as on the stack's page; a
+// fixed commit has nothing to check.
+function CheckNowItem({ check, running }: StackGitCheck) {
+  const t = useT();
+  return (
+    <DropdownMenuItem className="max-md:min-h-11" disabled={running} onSelect={() => check()}>
+      {running ? t("stackGit.strip.checking") : t("stackLists.git.checkNow")}
+    </DropdownMenuItem>
+  );
+}
+
+// PullItem is Pull & redeploy… (or, for a stack that is behind, Review update) in the menu of a git stack, in the place
+// of Deploy…: it fetches the newest commit into the draft and opens the Review (D-17). It is its own component so that
+// only a menu that is open, and only for a git stack, holds the pull.
+function PullItem({ row, label }: { row: StackRow; label: string }) {
+  const { pull, pending } = usePullAndReview(row);
+  return (
+    <DropdownMenuItem className="max-md:min-h-11" disabled={pending} onSelect={() => void pull()}>
+      {label}
+    </DropdownMenuItem>
+  );
+}
+
 // RowActions is the row menu of the stack lists: Open stack for everyone, Deploy… (which opens the
 // review) for a user who may deploy and, for anyone else, disabled with the reason, and Stop stack… (which
 // opens its dialog) or Start stack (which starts at once) by the stack's state, off the same way. The server
@@ -80,6 +115,11 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
   const t = useT();
   const deploy = useNeeds("stacks.deploy", row.envId);
   const { start } = useStackStart(row);
+  // The check of a stack from a repository is held here and not in the menu: it goes on, and reads the lists again when
+  // it ends, after the menu has closed.
+  const sourceCheck = useCheckStackGit(row.envId, row.id, {
+    onError: () => toastError(t("stackGit.check.failed")),
+  });
   const remove = useNeeds("stacks.delete", row.envId);
   const [stopping, setStopping] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -108,18 +148,27 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
             </Link>
           </DropdownMenuItem>
           {deploy.allowed ? (
-            <DropdownMenuItem asChild className="max-md:min-h-11">
-              <Link
-                to="/env/$envId/stacks/$stackId/review"
-                params={{ envId: row.envId, stackId: row.id }}
-              >
-                {t("stackReview.deploy.action")}
-              </Link>
-            </DropdownMenuItem>
+            row.git ? (
+              <>
+                <PullItem row={row} label={t("stackGit.pull.action")} />
+                {row.git.status === "behind" ? (
+                  <PullItem row={row} label={t("stackGit.pull.reviewUpdate")} />
+                ) : null}
+              </>
+            ) : (
+              <DropdownMenuItem asChild className="max-md:min-h-11">
+                <Link
+                  to="/env/$envId/stacks/$stackId/review"
+                  params={{ envId: row.envId, stackId: row.id }}
+                >
+                  {t("stackReview.deploy.action")}
+                </Link>
+              </DropdownMenuItem>
+            )
           ) : (
             <NeedsTooltip reason={deploy.reason}>
               <DropdownMenuItem className="max-md:min-h-11">
-                {t("stackReview.deploy.action")}
+                {row.git ? t("stackGit.pull.action") : t("stackReview.deploy.action")}
               </DropdownMenuItem>
             </NeedsTooltip>
           )}
@@ -141,6 +190,7 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
               {t("stackUpdate.actions.update")}
             </DropdownMenuItem>
           </NeedsTooltip>
+          {row.git && row.git.refKind !== "commit" ? <CheckNowItem {...sourceCheck} /> : null}
           {stoppable || canStart(row.state) ? (
             <NeedsTooltip reason={deploy.allowed ? undefined : deploy.reason}>
               <DropdownMenuItem
@@ -291,7 +341,7 @@ export function stackColumns(
         isUnmanaged(s) ? (
           <UnmanagedName row={s} />
         ) : (
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 md:flex-nowrap">
             <Link
               to="/env/$envId/stacks/$stackId"
               params={{ envId: s.envId, stackId: s.id }}
@@ -301,6 +351,8 @@ export function stackColumns(
             </Link>
             {s.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
             <DriftBadge drift={s.drift} />
+            <BehindBadge git={s.git} />
+            <SyncErrorBadge git={s.git} />
           </span>
         ),
     },
@@ -364,6 +416,8 @@ export function stackColumns(
           ) : (
             <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
           )
+        ) : s.source === "git" ? (
+          <GitSourceBadge git={s.git} />
         ) : isManagedSource(s.source) ? (
           <Badge variant="outline">{t(`stacks.source.${s.source}`)}</Badge>
         ) : (
@@ -375,21 +429,7 @@ export function stackColumns(
       header: t("stackLists.columns.lastDeployed"),
       className: "w-40 min-w-40",
       sortKey: "lastDeployed",
-      cell: (s) =>
-        isUnmanaged(s) ? (
-          <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>
-        ) : s.lastDeployedAt ? (
-          <span className="flex flex-col leading-tight">
-            <RelativeTime value={s.lastDeployedAt} />
-            {s.lastDeployedBy ? (
-              <span className="text-xs text-muted-foreground max-md:hidden">
-                {t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
-              </span>
-            ) : null}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{t("stackLists.never")}</span>
-        ),
+      cell: (s) => <LastDeployedCell stack={s} />,
     },
     {
       id: "actions",
@@ -410,4 +450,35 @@ export function stackColumns(
     },
   );
   return columns;
+}
+
+// LastDeployedCell is the Last deployed cell of the stack lists: when, and under it in the muted label who started it. A
+// git stack reads "{short sha} · by {user}", and a deploy that no person started (an automatic one, from the server's
+// lastDeployedTrigger) reads "{short sha} · auto-deploy" and never the name of the system actor (T-09-82).
+export function LastDeployedCell({ stack: s }: { stack: StackItem }) {
+  const t = useT();
+  if (isUnmanaged(s)) {
+    return <span className="text-muted-foreground">{t("stackUnmanaged.missing")}</span>;
+  }
+  if (!s.lastDeployedAt) {
+    return <span className="text-muted-foreground">{t("stackLists.never")}</span>;
+  }
+  const sha = s.git?.deployedSha ? shortSha(s.git.deployedSha) : "";
+  const auto = !!s.lastDeployedTrigger;
+  return (
+    <span className="flex flex-col leading-tight">
+      <RelativeTime value={s.lastDeployedAt} />
+      {auto || s.lastDeployedBy ? (
+        <span className="text-xs text-muted-foreground max-md:hidden">
+          {auto
+            ? sha
+              ? t("stackLists.git.lastDeployedAuto", { sha })
+              : t("stackLists.lastDeployedAuto")
+            : sha
+              ? t("stackLists.git.lastDeployed", { sha, user: s.lastDeployedBy })
+              : t("stackLists.lastDeployedBy", { user: s.lastDeployedBy })}
+        </span>
+      ) : null}
+    </span>
+  );
 }

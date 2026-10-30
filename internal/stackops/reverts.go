@@ -103,6 +103,64 @@ func settingReverts(name string, deployed, desired, live json.RawMessage) []Drif
 	return out
 }
 
+// RevertLines are the rows of a deploy's "reverts drift" as the one line each that an automatic deploy records on its
+// revision, in its audit entry and in the bell (D-23): "web replicas 5 → 3" for a setting, "web created again" for a
+// service the deploy brings back and "web removed" for one it takes away. The rows are the review's, in its order, and
+// should already be redacted for anyone who may not reveal secrets (RedactReverts), since what is recorded is read by
+// others than the owner.
+func RevertLines(rows []DriftRevert) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		switch r.Change {
+		case RevertCreated:
+			out = append(out, r.Service+" created again")
+		case RevertRemoved:
+			out = append(out, r.Service+" removed")
+		default:
+			out = append(out, r.Service+" "+revertLabel(r.Path)+" "+revertValue(r.Live)+" → "+revertValue(r.Desired))
+		}
+	}
+	return out
+}
+
+// revertValue is a side of a row as text: a side the other has and this does not reads "unset".
+func revertValue(v string) string {
+	if v == "" {
+		return "unset"
+	}
+	return v
+}
+
+// revertLabel names the setting at path in a few words: the replica count and the image by name, a keyed entry as its
+// list and key ("Env FOO"), anything else as the last part of its path.
+func revertLabel(path string) string {
+	switch path {
+	case replicasPath, "deploy.replicas", "scale":
+		return "replicas"
+	case "TaskTemplate.ContainerSpec.Image", "image":
+		return "image"
+	}
+	// The last part is cut at the last dot outside brackets, since a key may hold dots (a label's name).
+	depth, cut := 0, -1
+	for i, c := range path {
+		switch c {
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case '.':
+			if depth == 0 {
+				cut = i
+			}
+		}
+	}
+	last := path[cut+1:]
+	if open := strings.Index(last, "["); open >= 0 && strings.HasSuffix(last, "]") {
+		return last[:open] + " " + last[open+1:len(last)-1]
+	}
+	return last
+}
+
 // plainText is the text of a value given as JSON: a string without its quotes, anything else as it is written.
 func plainText(jsonText string) string {
 	if !strings.HasPrefix(jsonText, `"`) {

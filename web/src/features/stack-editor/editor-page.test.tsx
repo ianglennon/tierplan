@@ -266,6 +266,12 @@ describe("the Files pane", () => {
   });
 });
 
+// classTokens splits an element's class list into a set, because a substring check for "h-12"
+// would also match "min-h-12".
+function classTokens(el: Element): Set<string> {
+  return new Set(el.className.split(/\s+/).filter(Boolean));
+}
+
 describe("the footer", () => {
   it("reads No draft yet for a stack whose draft was never saved", async () => {
     mount();
@@ -277,9 +283,13 @@ describe("the footer", () => {
     server.hasDraft = true;
     mount();
     await ready();
-    expect(await screen.findByText(/Saved/)).toBeTruthy();
+    const saved = await screen.findByText(/Saved/);
+    expect(saved).toBeTruthy();
     expect(screen.getByText(/by ada/)).toBeTruthy();
     expect(screen.queryByText("No draft yet")).toBeNull();
+    // The words can shrink and break inside a narrow row instead of spilling out (G-09-10).
+    expect(classTokens(saved).has("min-w-0")).toBe(true);
+    expect(classTokens(saved).has("break-words")).toBe(true);
   });
 
   it("reads Unsaved changes once the text is edited", async () => {
@@ -288,6 +298,26 @@ describe("the footer", () => {
     typeIntoEditor(`${COMPOSE}# more\n`);
     expect(await screen.findByText("Unsaved changes")).toBeTruthy();
     expect(screen.queryByText("No draft yet")).toBeNull();
+  });
+
+  it("keeps Unsaved changes and Discard draft in one bar that wraps (G-09-10)", async () => {
+    server.hasDraft = true;
+    mount();
+    await ready();
+    typeIntoEditor(`${COMPOSE}# more\n`);
+    const unsaved = await screen.findByText("Unsaved changes");
+    // The unsaved words can shrink and break like the saved words, so a row narrower than they are
+    // never draws them under a button.
+    expect(classTokens(unsaved).has("min-w-0")).toBe(true);
+    expect(classTokens(unsaved).has("break-words")).toBe(true);
+    // One bar that wraps, with Discard draft an inline button in it, not inside a menu.
+    const bar = unsaved.closest('[data-slot="editor-footer"]');
+    expect(bar).not.toBeNull();
+    if (!bar) return;
+    expect(classTokens(bar).has("flex-wrap")).toBe(true);
+    expect(classTokens(bar).has("h-12")).toBe(false);
+    const discard = screen.getByRole("button", { name: "Discard draft" });
+    expect(discard.parentElement).toBe(bar);
   });
 
   it("goes back to the saved words when the edit is undone", async () => {

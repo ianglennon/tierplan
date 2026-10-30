@@ -414,6 +414,121 @@ describe("the operation lock", () => {
   });
 });
 
+describe("the Git strip", () => {
+  const git = {
+    repoId: "r1",
+    repoName: "stacks repo",
+    repoHost: "github.com",
+    repoPath: "acme/stacks",
+    refKind: "branch",
+    ref: "main",
+    folder: "",
+    deployedSha: "0123456789abcdef0123456789abcdef01234567",
+    headSha: "0123456789abcdef0123456789abcdef01234567",
+    behind: 0,
+    behindCapped: false,
+    status: "in_sync",
+    checkedAt: "2026-10-28T10:00:00Z",
+    checking: false,
+    autoDeploy: false,
+    autoDeployPaused: false,
+    pollEnabled: true,
+    pollMinutes: 5,
+  };
+
+  beforeEach(() => {
+    detail = { ...detail, source: "git", state: "running", git };
+  });
+
+  it("adds the Git tab last, linking to the Git tab, for a stack from a repository only", async () => {
+    mount();
+    await screen.findByRole("tab", { name: "Git" });
+    // The Editor reads Files for a stack from a repository: the same route, the repository's files read-only.
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
+      "Files",
+      "History",
+      "Resources",
+      "Logs",
+      "Git",
+    ]);
+    expect(screen.getByRole("tab", { name: "Git" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/git",
+    );
+    cleanup();
+    // The second page starts from what the server answers, not from what the first one cached.
+    client.clear();
+    detail = { ...detail, source: "inline", git: undefined };
+    mount();
+    await screen.findByRole("tab", { name: "Overview" });
+    expect(screen.queryByRole("tab", { name: "Git" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Editor" }).getAttribute("href")).toBe(
+      "/env/e1/stacks/s1/editor",
+    );
+    expect(screen.queryByRole("tab", { name: "Files" })).toBeNull();
+  });
+
+  it("is under the header and above the tabs of a git stack, and its Git badge names the repository and the ref", async () => {
+    mount();
+    const strip = await screen.findByRole("region", { name: "Git sync" });
+    const heading = screen.getByRole("heading", { name: "tracer", level: 2 });
+    const tabs = screen.getByRole("tablist");
+    expect(heading.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(strip.compareDocumentPosition(tabs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const badge = screen
+      .getAllByText("Git")
+      .find((el) => el.getAttribute("data-variant") === "outline");
+    expect(badge).toBeTruthy();
+    badge?.focus();
+    fireEvent.pointerMove(badge as HTMLElement);
+    fireEvent.mouseEnter(badge as HTMLElement);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("stacks repo · main");
+  });
+
+  it("shows the sync error alert after the stopped alert and before the draft banner, once, and not on the Review", async () => {
+    detail = {
+      ...detail,
+      stopped: true,
+      hasDraft: true,
+      draftSavedAt: "2026-10-19T10:00:00Z",
+      draftSavedBy: "ada",
+      git: { ...git, status: "error", reasonCode: "ref_gone" },
+    };
+    mount();
+    const title = await screen.findByText("tracer can't sync with stacks repo");
+    const stopped = document.querySelector('[data-slot="stopped-alert"]') as Element;
+    const draft = document.querySelector('[data-slot="draft-banner"]') as Element;
+    const follows = (a: Node, b: Node) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(stopped).toBeTruthy();
+    expect(draft).toBeTruthy();
+    expect(follows(stopped, title)).toBeTruthy();
+    expect(follows(title, draft)).toBeTruthy();
+    expect(screen.getAllByText("tracer can't sync with stacks repo")).toHaveLength(1);
+    cleanup();
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByText("tracer can't sync with stacks repo")).toBeNull();
+  });
+
+  it("is not on the Review and the console, where the flow caption is", async () => {
+    mount("review");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+    cleanup();
+    mount("deploy");
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+  });
+
+  it("is not on the page of a stack made in Bayplan", async () => {
+    detail = { ...detail, source: "inline", git: undefined };
+    mount();
+    await screen.findByRole("heading", { name: "tracer", level: 2 });
+    expect(screen.queryByRole("region", { name: "Git sync" })).toBeNull();
+  });
+});
+
 describe("the unmanaged variant", () => {
   function mountUnmanaged() {
     render(

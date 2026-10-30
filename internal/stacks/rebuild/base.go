@@ -33,27 +33,58 @@ type Base struct {
 // whose image is not one plain word is left out, so a value that could not be put back in place without changing
 // what the file means is never kept.
 func ImageTextOf(compose []byte) map[string]string {
+	plain, _ := imageTexts(compose)
+	return plain
+}
+
+// ImageTextOfFiles is ImageTextOf for the compose files of a stack, in merge order: the image a later file gives a
+// service replaces the earlier one, and a later file that sets the image in a way that is not one plain word leaves
+// the service out, as the merged file would.
+func ImageTextOfFiles(composes ...[]byte) map[string]string {
+	var out map[string]string
+	for _, c := range composes {
+		plain, set := imageTexts(c)
+		for svc := range set {
+			delete(out, svc)
+		}
+		for svc, text := range plain {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[svc] = text
+		}
+	}
+	return out
+}
+
+// imageTexts reads the plain image text of each service of a compose file, and the services that set an image at
+// all, plain or not.
+func imageTexts(compose []byte) (plain map[string]string, set map[string]bool) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(compose, &doc); err != nil || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil
+		return nil, nil
 	}
 	services := mappingValue(doc.Content[0], "services")
 	if services == nil || services.Kind != yaml.MappingNode {
-		return nil
+		return nil, nil
 	}
-	out := map[string]string{}
+	plain, set = map[string]string{}, map[string]bool{}
 	for i := 0; i+1 < len(services.Content); i += 2 {
 		svc := services.Content[i+1]
 		if svc.Kind != yaml.MappingNode {
 			continue
 		}
 		img := mappingValue(svc, "image")
-		if img == nil || img.Kind != yaml.ScalarNode || img.Value == "" || strings.ContainsAny(img.Value, " \t\r\n#'\"") {
+		if img == nil {
 			continue
 		}
-		out[services.Content[i].Value] = img.Value
+		set[services.Content[i].Value] = true
+		if img.Kind != yaml.ScalarNode || img.Value == "" || strings.ContainsAny(img.Value, " \t\r\n#'\"") {
+			continue
+		}
+		plain[services.Content[i].Value] = img.Value
 	}
-	return out
+	return plain, set
 }
 
 // substitutions are the values a rebuild writes into the file as they are, past the escaping every other value

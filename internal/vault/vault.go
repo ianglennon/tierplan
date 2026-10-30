@@ -55,11 +55,17 @@ const (
 	ContextAgentCA        = "agent-ca/v1/"
 	ContextBackupSchedule = "backup-schedule/v1"
 	ContextRegistryCred   = "registry-cred/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A git credential's token or private key is sealed under the credential's ID (Phase 9), so a
+	// value copied into another row does not open.
+	ContextGitCred = "git-cred/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 	// A stack's secret variable is sealed under the snapshot ID and the variable's name, a secret
 	// stack file under the snapshot ID and its path (Phase 7), so a value copied to another row,
 	// another snapshot or another name does not open.
 	ContextStackVar  = "stack-var/v1/"  //nolint:gosec // G101: a sealing context label, not a credential
 	ContextStackFile = "stack-file/v1/" //nolint:gosec // G101: a sealing context label, not a credential
+	// A git stack's webhook secret is sealed under the stack's ID (Phase 9), so a value copied into
+	// another stack's row does not open.
+	ContextGitWebhook = "git-webhook/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
 	keyIDDomain    = "bayplan/key-id/v1"

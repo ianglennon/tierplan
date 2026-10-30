@@ -36,7 +36,7 @@ type SecretUse struct {
 	any  bool
 }
 
-// NewSecretUse indexes the working copy's compose file and finds the values that use one of its
+// NewSecretUse indexes the working copy's compose files and finds the values that use one of its
 // secret variables. When the file cannot be indexed (empty, over MaxFileBytes or not YAML), it
 // answers as if every field used a secret whenever a secret variable has a value.
 //
@@ -44,11 +44,13 @@ type SecretUse struct {
 // reaches a Docker object, or the container environment through env_file), so no loader or
 // converter text can carry it. The masker still hides it everywhere.
 func NewSecretUse(c WorkingCopy) SecretUse {
-	content := c.Compose()
-	if len(content) == 0 || len(content) > MaxFileBytes {
-		return secretUseOf(nil, c.Vars)
+	contents := c.ComposeContents()
+	for _, cf := range contents {
+		if len(cf.Content) == 0 || len(cf.Content) > MaxFileBytes {
+			return secretUseOf(nil, c.Vars)
+		}
 	}
-	ix, err := parseIndex(content)
+	ix, err := parseIndexOf(contents)
 	if err != nil {
 		return secretUseOf(nil, c.Vars)
 	}

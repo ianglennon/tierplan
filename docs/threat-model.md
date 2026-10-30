@@ -1,14 +1,16 @@
-# Bayplan threat model (Phases 1 to 8)
+# Bayplan threat model (Phases 1 to 9)
 
-This describes what Bayplan protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4; registries and image pulls in Phase 5; swarm services in Phase 6, compose stacks in Phase 7, stack history, adoption and drift in Phase 8), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-08-nn) refer to the plans in which each mitigation was designed and tested.
+This describes what Bayplan protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4; registries and image pulls in Phase 5; swarm services in Phase 6, compose stacks in Phase 7, stack history, adoption and drift in Phase 8, git-backed stacks in Phase 9), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-09-nn) refer to the plans in which each mitigation was designed and tested.
 
-This revision covers all eight phases. Phase 4 is described in "What Phase 4 adds": Bayplan's own Docker writes, the agent's route table and read-only flag, the browser shell, masking, stream limits, logs, the Events page, the proxy smoke test and the end-to-end proof. Its accepted risks are residual risks 10 and 25 to 29, and its boundaries are in the trust-boundary table.
+This revision covers all nine phases. Phase 4 is described in "What Phase 4 adds": Bayplan's own Docker writes, the agent's route table and read-only flag, the browser shell, masking, stream limits, logs, the Events page, the proxy smoke test and the end-to-end proof. Its accepted risks are residual risks 10 and 25 to 29, and its boundaries are in the trust-boundary table.
 
 Phase 6 is described in its own section, below the Phase 5 one: the agent's routes for services, nodes, secrets, configs, service and task logs and container stats, the host-policy check on a service spec and the opt-in that lifts it, how the server edits, creates and removes services, and restart-loop detection. It changes the headline below and residual risk 10, and adds residual risks 31 to 36.
 
 Phase 7 is described in the last section before the residual risks: compose stacks, which let Bayplan read a compose file written by a person, deploy it to a swarm and to standalone hosts, and keep stack files and secrets. It adds the agent's container routes, the Compose engine on the server and its guard, and residual risks 37 to 44.
 
 Phase 8 is described in "What Phase 8 adds", after the Phase 7 section: stack history and roll back to any revision, the discovery and adoption of stacks that Bayplan did not make (Portainer, `docker stack deploy`, `docker compose up`), and drift. It adds no agent route and no permission. It extends residual risk 41 (an adopted stack's draft holds environment values as literals) and adds residual risks 45 to 48.
+
+Phase 9 is described in "What Phase 9 adds", after the Phase 8 section: stacks that follow a folder of a git repository, repositories and credentials, the webhook receiver, polling, auto-deploy and the mirrors on disk. It adds one unauthenticated route, a new way for the server to dial out, and residual risks 49 to 55.
 
 ## The headline
 
@@ -277,9 +279,126 @@ Phase 8 lets Bayplan roll a stack back to an earlier revision, list and adopt st
 
 **Names cannot inject (T-08-36, T-08-94, T-08-95).** One rule decides a stack's name for creating and for adopting: letters, numbers, dash and underscore, starting with a letter or number, no dot, at most 61 characters on a swarm and 255 on a standalone host, so a name cannot carry a path, a label filter, a URL fragment or a swarm object name swarm would refuse. A service or network name that swarm would refuse (`{stack}_{key}` over 63 characters, a dot) is a check error before any engine call, and on a swarm two names that differ only in case are one name (409 `stack_name_taken` for creating, 409 `stack_already_managed` for adopting or checking the adoption of an outside `Foo` beside a managed `foo`). Such an outside stack stays in the lists, read-only, with the reason, and is never offered for adoption.
 
+## What Phase 9 adds: git-backed stacks
+
+Phase 9 lets a stack follow a folder of a git repository, and lets a git host, a timer and a commit start a deploy. That
+is three new ways for something outside Bayplan to cause a change on your hosts: the repository's content, a request
+to the webhook address, and the server's own connection to a git server whose address a person typed. This section says
+how each is fenced and where the mitigation is tested. The risks that remain are residual risks 49 to 55.
+
+**The webhook is an unauthenticated route that can start work, and so is treated as a remote-code-execution channel
+(T-09-69 and the webhook plans).** `POST /hooks/git/{token}` needs no session, so the request proves itself. The route can
+do exactly one thing: ask for a fetch and a check of one stack. It decodes nothing it is sent, takes no ref and no commit
+from the body, and cannot deploy by itself; the check fetches the stack's own ref. Whether a check then deploys is the
+separate, opt-in auto-deploy setting, judged on the owner's authority (below). The controls are:
+
+- *Two secrets per webhook, both 256 bits from `crypto/rand`.* The routing token is in the address and is stored only as
+  its SHA-256; the signing secret is sealed under the stack's ID, so it can be used for HMAC but not read back, and the page
+  shows only its last four characters. Rotating replaces both at once. (`TestWebhookSecrets`, `TestWebhookRotate`,
+  `TestWebhookSummaryHasNoSecret`)
+- *The signature is checked per host*: GitHub and Gitea or Forgejo HMAC-SHA256 over the body, GitLab's shared token, or a
+  bearer secret or the token itself for a generic webhook. Every comparison is constant time; an empty secret or digest
+  never verifies. (`TestVerifyGitHub`, `TestVerifyGitLab`, `TestVerifyGitea`, `TestVerifyGeneric`)
+- *No oracle.* An unknown token, a wrong signature and a paused webhook all answer the same empty `404` with nothing
+  recorded for the unknown token. (`TestWebhookNoOracle`)
+- *Limits.* 60 requests a minute per client address, a 5 MiB body cap (the body is read only for a token that names a
+  webhook), and 10 a minute per webhook that only a request whose signature verified spends, so someone who holds only
+  the address cannot use up the budget of the real sender. A burst of pushes collapses into one check and one trailing
+  check. (`TestWebhookLimits`, `TestWebhookRejectionsSpendNothing`, `TestWebhookCoalesces`)
+- *Nothing in the body is believed.* (`TestWebhookIgnoresPayload`)
+- *It runs on its owner's authority.* The webhook is registered to the Admin who set it up; if they no longer hold
+  `git.manage`, requests do nothing until it is handed to another Admin. (`TestWebhookOwnerRecheck`)
+- *Audit without secrets.* A delivery and a rejected signature on a known webhook are audited with the stack and the host
+  flavour, never the address, token, secret or signature. (`TestWebhookAuditAndLogs`) Paths are redacted in the server log.
+  A rejected signature is audited at most 3 times at once and then once a minute per webhook, and it does not change the
+  last delivery shown on the Git tab, so a caller with only the address can neither flood the log nor hide a real
+  delivery. (`TestWebhookRejectionsSpendNothing`)
+
+**A repository address makes the server open a connection, so it is fenced like a registry address (T-09-01).** Only
+`https://`, `ssh://` and `git@host:path` addresses are accepted; `http://`, `git://`, `file://`, a bare path, an option
+look-alike (a leading `-`), a control character, a query and an embedded user name and password are refused before go-git
+sees the address, because go-git would otherwise read the server's own files for a `file://` address and send a token in
+clear text over `http://`. (`TestValidateURLRefusesWhatGoGitWouldHappilyOpen`, `TestPlainHTTPAndTheFileAndGitProtocolsAreNeverSpoken`,
+`FuzzValidateURL`) Every HTTPS connection dials through the registry egress policy, which refuses link-local, unspecified and
+multicast addresses (the cloud metadata services) after DNS has answered, on a redirect as well, and follows at most five
+redirects and only to HTTPS. (`TestLsRemoteEgressBlocked`, `TestLsRemoteRefusesAMetadataAddressAndARedirectToOne`) Private and
+loopback ranges stay allowed because self-hosted git servers live there; `BAYPLAN_REGISTRY_BLOCK_CIDRS` refuses more. The
+certificate is always verified, with the repository's own CA added for that one call, and there is no option to skip it
+(`TestNoOptionSkipsCertificateVerification`). A repository test is limited to 10 a minute per person
+(`TestTheEleventhGitTestInAMinuteIsRateLimited`) and a response to 1 GiB, and a fetch has a 10-minute deadline.
+
+**SSH host keys are trusted on first use, by a person (D-03).** Bayplan pins the keys of github.com, gitlab.com and
+bitbucket.org. For any other host the first test shows a fingerprint and an Admin confirms it; a later difference is a
+hard error and re-trusting is an audited Admin action. The check runs during the key exchange, before any credential is
+sent, so an untrusted or changed server never receives one. Bayplan never reads the server user's `known_hosts` or
+`ssh_config`. (`TestSSHTrustOnFirstUseStopsAtTheHandshake`, `TestSSHNeverReadsTheServersKnownHostsOrConfig`,
+`TestGitSSHChangedKeyStops`, `TestGitSSHRetrustNeedsGitManageOrGitInstance`) The SSH egress check is a little weaker than
+the HTTPS one, and that is residual risk 50. Bayplan opens the ssh connection itself (go-git is handed a dialer for the
+call), so the connect goes through the egress policy, a server that stalls the handshake is cut off at a deadline and
+when the call's context ends, and what a server may send over ssh is counted like what it may send over https.
+(`TestSSHHandshakeHasADeadlineOfItsOwn`, `TestSSHFetchStuckInTheHandshakeDoesNotKeepTheMirrorLocked`,
+`TestSSHListingStopsAtItsLimit`, `TestSSHFetchStopsAtItsLimit`)
+
+**Credentials are sealed, never echoed and never in an error (T-09-92).** A token or a private key is sealed under the
+credential's ID, opened in memory for one call and never put in a response, log or audit row; a mirror holds neither the
+address nor the credential. The formatting of the credential types is redacted. Every go-git, TLS and network error leaves
+the git package as one fixed code and the host, never its text, because that text can carry an address, a token or a
+response body. (`TestSSHCredentialBodyHasNoKey`, `TestGitConnAudit`, `TestClassifyNeverCopiesTheErrorText`) The credentials
+travel in a backup only as ciphertext, re-wrapped under the backup's key. (`TestBackupRestoreGitState`)
+
+**Repository content is hostile input (D-10, D-26, D-27).** Bayplan reads a commit from the object database of a bare
+mirror by its ID and never checks anything out, so a hostile file name or link cannot write outside a directory. Only
+the files the compose files reference are imported, confined to the stack folder; a symlink that leaves the folder, an
+absolute path or `..` is refused, and a symlink inside it is read as the file it names. A submodule or a Git LFS pointer
+that a stack needs is a blocking problem, so a pointer file is never deployed as if it were the content. `include` and
+`extends` are blocked, so a repository cannot pull in a second file from elsewhere. The stack limits apply (50 files, 1 MiB
+each, 8 MiB in all) and the folder walk gives up at 100,000 entries. (`TestReadFolderSymlinks`, `TestReadFolderLimits`,
+`TestGitLintLFSPointer`, `TestSubmoduleProblem`, `TestSymlinkOutsideProblem`, `TestAMirrorIDThatIsNotAUUIDIsRefused`) A mirror's
+directory is named by a repository's UUID, never by anything typed. Commit subjects and author names shown in the interface
+are cut to 200 characters and rendered as text.
+
+**An automatic deploy of a hostile commit is limited to what its owner could do by hand (T-09-77, T-09-99).** Auto-deploy
+is off by default and opt-in per stack. A deploy it starts passes the same lint, rendering, host-access policy and pin
+rules as a person's, as the owner's own principal: an Operator's auto-deploy cannot deploy a bind mount, a privileged
+service or the host network, and a stack that used host access makes the owner hold Admin from then on. The owner's
+rights are rechecked before every run, and it pauses when they are lost. A commit that fails any check is held back and
+shown as an error, not retried in a loop; unreviewed local edits are never deployed over; and a roll back pauses it.
+Everything it does is audited with the commit, the trigger, the owner and what it put back. A commit that is *valid* but
+harmful (a different image, a command) is not caught, which is residual risk 52. (`TestAutoDeployBlockedPolicy`,
+`TestAutoDeployOwnerLostPermission`, `TestAutoDeployNeedsEnvAdmin`, `TestAutoDeployDraftPending`, `TestAutoDeployWebhookActor`,
+`TestAutoDeployRevertsDrift`, `TestGitRollbackKeepsSettings`)
+
+**Instance credentials are shared with every environment Admin (D-02).** An instance credential can be picked by a
+repository of any environment, so every Admin of every environment can aim it at an address of their choosing, and the
+server will send that credential to it. The credential is never shown to them, and a repository that moves to another host must
+choose its credential again (`credential_reselect`), but nothing ties a credential to a host. Create instance credentials
+that are **read-only deploy tokens or read-only deploy keys limited to the repositories they need**, and use an
+environment-level credential when only that environment's Admins should hold it. This is residual risk 49.
+
+**Secret-looking values in a committed `.env` are in the repository already.** A key whose name has a `PASSWORD`, `TOKEN`,
+`SECRET`, `KEY` or similar part raises a warning, names the key and not its value, and the value is masked in responses;
+a secret variable overrides it. Bayplan cannot make a committed secret safe, only say so (residual risk 53).
+(`TestGitLintCheckReportsAMissingRepoFileOnce`, `TestGitLintOverlayClash`, the `env_secret_like` cases of `stackdraft_git_test.go`)
+
+**Mirrors are a cache with a bound.** Untrusted repository objects are stored under `/data/git` (mode `0700`, one bare
+repository per saved repository). A repository's mirror is removed when the repository is deleted, and a daily sweep
+removes one that is unused for 14 days or over 2 GiB (T-09-91). A mirror records a digest of the address, certificate
+authority and sign-in identity (user name, or the deploy key's public key) it was filled from, and a fetch from another
+origin starts it again empty, so a repository pointed at another address cannot answer a pinned commit from the old one
+(`TestFetchFromAnotherOriginStartsTheMirrorAgain`). Only a rotated secret of the same user or key keeps the mirror. A fetch
+waits for a mirror no longer than its context, and a mirror that cannot be had is not a reason for the next fetch, read or
+removal to hang. There is no ceiling on the size of a mirror while a fetch fills it other than the bytes one fetch may read
+(1 GiB a response over https, 1 GiB over ssh); the sweep trims it after. Losing a mirror loses nothing, because every check
+fetches before it reads and a roll back is made from stored revisions. (`TestMirrorGC`, `TestRunMirrorGCLoop`,
+`TestRepoDeleteRemovesMirror`, `TestRollbackWithoutMirror`) The mirrors are not in a backup (T-09-92).
+
+**The git tables are in the backup, the derived state is not.** `git_credentials`, `git_repos` and `stack_git` are
+included, with their sealed values re-wrapped under the backup's key on restore; `stack_git_state` is derived, so every
+git stack starts *unknown* on a restored instance and is checked again. (`TestBackupRestoreGitState`)
+
 ## Residual risks
 
-These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 from Phase 2 and 18 to 24 from Phase 3. Residual risk 10 was rewritten in Phase 4 for logs and shells, and 25 to 29 are new in Phase 4, 30 is new in Phase 5, 31 to 36 are new in Phase 6, 37 to 44 are new in Phase 7, and 45 to 48 are new in Phase 8 (risk 41 is extended).
+These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 from Phase 2 and 18 to 24 from Phase 3. Residual risk 10 was rewritten in Phase 4 for logs and shells, and 25 to 29 are new in Phase 4, 30 is new in Phase 5, 31 to 36 are new in Phase 6, 37 to 44 are new in Phase 7, and 45 to 48 are new in Phase 8, and 49 to 55 are new in Phase 9 (risk 41 is extended).
 
 1. **Audit tail truncation is undetectable without an external anchor (T-01-26).** The HMAC chain proves that entries were not edited or removed from the middle. Someone who can write to the database can delete only the newest entries, which leaves a valid, shorter chain, and `bayplan audit verify` will still pass. Detecting that needs the head of the chain recorded somewhere an attacker with the volume cannot reach, such as a SIEM; streaming the log out is deferred.
 2. **The setup token is visible to anyone who can read the container log or `/data` until setup completes (T-01-37).** It is printed and written to `/data/setup-token` (mode 0600, deleted at completion) by design, so that you can claim the instance without a prior secret. Anyone who has log or volume access already has host admin, but a shared log pipeline can widen that audience. Claim the instance as soon as it starts.
@@ -329,6 +448,13 @@ These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 fr
 46. **A forged Docker event costs one read (T-08-76, accepted).** The background drift worker acts on service and container events and schedules a read-only check of a stack the environment has, found by the service's name or the Compose project. A compromised engine or agent that sends events naming stacks can make Bayplan check them, one at a time per environment, after a 3-second quiet period and never while an operation holds the lock. It cannot make the worker write, and it cannot name a stack the environment does not have. The check does read the engine and, for a swarm, the audit log (bounded), so a flood costs CPU on the server, not data.
 47. **Everyone who can read stacks sees what is on the environment that Bayplan did not make (T-08-29, T-08-35, accepted).** An unmanaged stack's name, services, images, ports, states and logs are shown to every Viewer of the environment, as the Services and Containers pages already show them, and so is the list of stacks the environment holds. The environment values, commands, health check commands and log options of those services are not (D-47), but its labels, and its logs as written, are (risks 26, 27 and 34 apply). Adopting such a stack with its environment values is risk 41.
 48. **The first deploy of an adopted stack restarts it, and a network whose settings differ is recreated (T-08-27, T-08-63, accepted).** Adding Bayplan's labels recreates the services or containers that carry them, which restarts them briefly, and the person who deploys is told how many before they press anything. A standalone network whose settings differ from the file is recreated by the Compose engine, which restarts the containers on it and loses no data; the review of every standalone stack now lists such a network before the deploy. A volume is never recreated, so a change to a volume's settings is not applied (it is left alone and the data stays): a person who needs the change must remove the volume by hand.
+49. **An instance git credential can be aimed at any address by any environment Admin (D-02, accepted).** An environment's repository may pick an instance credential, nothing ties a credential to a host, and the server sends the credential to whatever address the repository has. An Admin of any environment can therefore make Bayplan send an instance token to a server they run (the credential is never shown to them, and moving an existing repository to another host forces a new choice, but a new repository has no such check). Give instance credentials the least access that works: a **read-only** deploy token or deploy key, limited to the repositories it must read, and prefer an environment credential when only that environment needs it. Anyone who can create a repository with it can also read what it can read.
+50. **The SSH connection is fenced at connect time, but the name is resolved twice (accepted; same family as WR-B02).** Bayplan opens the ssh connection itself, through the egress policy's dial hook, so the address actually connected to is checked before any byte is sent, and no proxy of the server's environment (`ALL_PROXY`) is used. It also resolves the host first and refuses an address the policy blocks before it dials; that early lookup is a second, separate resolution, so a name that answers differently each time can pass the early check and is then judged by the dial-time one, which is the one that counts. The handshake has a 15 second deadline, a listing may read 32 MiB and a fetch 1 GiB over ssh. Use https addresses where a host's address policy matters.
+51. **The webhook receiver is rate limited by client address, and a flood can lock out deliveries (accepted).** The per-address limiter fails closed when its table of 65,536 addresses is full, so a flood from very many addresses could stop webhook deliveries until it empties; polling still finds the push. Behind a reverse proxy without `BAYPLAN_TRUSTED_PROXIES` every delivery appears to come from the proxy and shares one budget of 60 a minute. Every check that runs apart from its caller (a poll's, a webhook's, and the automatic deploy that follows) is ended and waited for when the server closes, before the jobs and the database close; the wait is capped at 15 seconds, and a call that ignores its cancellation past that is left to end with the process. Someone who holds a webhook's address and secret can make Bayplan fetch, at most 10 times a minute.
+52. **Whoever can push to the followed ref can change what runs, and auto-deploy does it without a review (accepted, by design).** Bayplan's checks catch a commit that breaks a rule (host access, a missing variable, a clash), not one that is valid and harmful: a different image, a changed command, a new port. With auto-deploy on, push access to the branch is deploy access, on the authority of the stack's owner. Protect the branch or tag in the git host, leave auto-deploy off for anything you do not want a push to reach at once, and use a fixed commit when you want a human to move it. An automatic deploy also puts back changes made by hand (the repository is the source of truth); it records what it reverted and the bell notes it, but the change is gone.
+53. **A secret committed to the repository stays in the repository (accepted).** Bayplan warns when a key of the committed `.env` looks like a secret and a secret variable overrides it, but the value is already in the git history and on the git host, and it is kept as an ordinary file in each revision of the stack. Rotate a value that was committed. Secret file contents belong in overlay files, which are sealed.
+54. **The mirrors hold the fetched repository unencrypted on the data volume (accepted).** Under `/data/git` (mode `0700`) sit the git objects of every ref a stack follows, including those of private repositories, in the clear. Anyone who can read the volume reads what the credentials could read; guard the volume as risk 4 says. A mirror is removed with its repository, after 14 days unused or over 2 GiB, and is not in a backup.
+55. **A restored instance trusts its git state again only after it checks (accepted).** A backup holds the repositories, credentials and git stacks with their sealed secrets re-wrapped, but not the state of the last check or the mirrors, so each git stack reads *unknown* until its first check, and the host keys a person trusted come back with the repository. The webhook addresses keep working only if the instance's public URL is the same.
 
 ## Reporting a problem
 

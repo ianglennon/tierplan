@@ -282,7 +282,7 @@ var phase7DetailKeys = map[string][]string{
 	audit.ActionStackCreated:        {"stack", "target"},
 	audit.ActionStackDraftSaved:     {"stack", "version", "files", "vars"},
 	audit.ActionStackDraftDiscarded: {"stack", "version"},
-	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code"},
+	audit.ActionStackDeployed:       {"stack", "mode", "result", "revision", "job", "services", "code", "commit"},
 	audit.ActionStackStopped:        {"stack", "services", "recreated", "result"},
 	audit.ActionStackStarted:        {"stack", "services", "recreated", "result"},
 	audit.ActionStackRemoved:        {"stack", "volumes", "kept", "definition", "result"},
@@ -358,6 +358,107 @@ func TestEveryPhase8ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 	for key, constant := range map[string]string{
 		"stack.adopted":        audit.ActionStackAdopted,
 		"stack.drift_accepted": audit.ActionStackDriftAccepted,
+	} {
+		if key != constant {
+			t.Errorf("constant = %q, want %q", constant, key)
+		}
+	}
+}
+
+// phase9DetailKeys maps every Phase 9 action to the detail keys the plans that record it must use, for the same
+// reason as phase3DetailKeys. A credential row names what was stored and never the token or the private key, nor
+// any part of it: the name, the layer (instance or environment), the type (https or ssh) and the username; an
+// SSH credential also its fingerprint. An update adds the names of the fields that changed, the secret only as the
+// word secret (plan 09-04, GIT-01). A repository row names the repository, its layer, the host of its address
+// (never the whole address), the credential it uses by name and layer, and whether it has a custom CA; an update
+// adds the changed fields and, when the address moved, the host it pointed at before. A test of a saved
+// repository records its host, the credential used and the code of a failure. Trusting an SSH host key records
+// the repository, its layer, its host and the key's fingerprint (public material, never the key itself); trusting
+// a key again also records the fingerprint it replaced (plan 09-06, D-03). Creating a stack from a repository folder
+// records the stack, the repository's name, the ref and the folder (plan 09-11, GIT-02). A sync that went into error
+// records the stack's name, the reason code, the fixed sentence for it and the short SHA of the head last seen
+// (plan 09-15, D-16). A change of a git stack's polling records the stack and the new and the previous values (plan
+// 09-18, D-14). A webhook that accepted a delivery records the stack's name and the git host's flavour; one that
+// rejected a request also the fixed reason, never the signature or any part of the address (plan 09-22, D-15). Pointing
+// an inline or adopted stack at a repository records the stack, the repository's name, the ref, the folder and how many
+// files were kept as overlay files and how many dropped, never a path or content (plan 09-30, D-24).
+var phase9DetailKeys = map[string][]string{
+	audit.ActionStackCreatedFromGit:  {"stack", "repository", "ref", "folder"},
+	audit.ActionStackPointedAtGit:    {"stack", "repository", "ref", "folder", "kept", "dropped"},
+	audit.ActionGitCredentialCreated: {"name", "layer", "type", "username", "fingerprint"},
+	audit.ActionGitCredentialUpdated: {"name", "layer", "type", "username", "fingerprint", "changed"},
+	audit.ActionGitCredentialDeleted: {"name", "layer", "type", "username", "fingerprint"},
+	audit.ActionGitRepoCreated:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca"},
+	audit.ActionGitRepoUpdated:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca", "changed", "host_from"},
+	audit.ActionGitRepoDeleted:       {"name", "layer", "host", "credential", "credential_layer", "custom_ca"},
+	audit.ActionGitRepoTested:        {"name", "layer", "host", "credential", "credential_layer", "code"},
+	audit.ActionGitHostKeyTrusted:    {"name", "layer", "host", "fingerprint"},
+	audit.ActionGitHostKeyRetrusted:  {"name", "layer", "host", "fingerprint", "fingerprint_from"},
+	audit.ActionGitSyncFailed:        {"stack", "reason_code", "reason", "commit"},
+	audit.ActionGitUpdatesChanged:    {"stack", "poll_enabled", "poll_minutes", "poll_enabled_from", "poll_minutes_from"},
+	audit.ActionGitWebhookDelivered:  {"stack", "flavour"},
+	audit.ActionGitWebhookRejected:   {"stack", "flavour", "reason"},
+	audit.ActionGitWebhookCreated:    {"stack", "flavour", "placement"},
+	audit.ActionGitWebhookRotated:    {"stack", "flavour", "placement"},
+	audit.ActionGitWebhookRemoved:    {"stack", "flavour", "placement"},
+
+	audit.ActionGitAutoDeployEnabled:  {"stack"},
+	audit.ActionGitAutoDeployDisabled: {"stack"},
+	audit.ActionGitAutoDeployed:       {"stack", "commit", "trigger", "owner"},
+	audit.ActionGitAutoDeployPaused:   {"stack", "reason", "revision"},
+	audit.ActionGitStackDetached:      {"stack", "revision", "commit"},
+	audit.ActionGitPulled:             {"stack", "repository", "ref", "folder", "commit", "version"},
+	audit.ActionGitSourceChanged: {"stack", "repository", "ref_kind", "ref", "folder", "commit", "version",
+		"repository_from", "ref_kind_from", "ref_from", "folder_from"},
+}
+
+func TestEveryPhase9ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
+	f := newFixture(t)
+	for action, keys := range phase9DetailKeys {
+		details := make(map[string]string, len(keys))
+		for _, k := range keys {
+			details[k] = "x"
+		}
+		e := ent(action)
+		e.Details = details
+		if err := f.w.Record(context.Background(), e); err != nil {
+			if errors.Is(err, audit.ErrSecretField) {
+				t.Errorf("%s: a documented detail key trips the secret-word filter: %v", action, err)
+			} else {
+				t.Errorf("%s: Record: %v", action, err)
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != len(phase9DetailKeys) {
+		t.Fatalf("verify = %+v", got)
+	}
+	for key, constant := range map[string]string{
+		"stack.created_from_git": audit.ActionStackCreatedFromGit,
+		"stack.pointed_at_git":   audit.ActionStackPointedAtGit,
+		"git.credential_created": audit.ActionGitCredentialCreated,
+		"git.credential_updated": audit.ActionGitCredentialUpdated,
+		"git.credential_deleted": audit.ActionGitCredentialDeleted,
+		"git.repo_created":       audit.ActionGitRepoCreated,
+		"git.repo_updated":       audit.ActionGitRepoUpdated,
+		"git.repo_deleted":       audit.ActionGitRepoDeleted,
+		"git.repo_tested":        audit.ActionGitRepoTested,
+		"git.host_key_trusted":   audit.ActionGitHostKeyTrusted,
+		"git.host_key_retrusted": audit.ActionGitHostKeyRetrusted,
+		"git.sync_failed":        audit.ActionGitSyncFailed,
+		"git.updates_changed":    audit.ActionGitUpdatesChanged,
+		"git.webhook_delivered":  audit.ActionGitWebhookDelivered,
+		"git.webhook_rejected":   audit.ActionGitWebhookRejected,
+		"git.webhook_created":    audit.ActionGitWebhookCreated,
+		"git.webhook_rotated":    audit.ActionGitWebhookRotated,
+		"git.webhook_removed":    audit.ActionGitWebhookRemoved,
+
+		"git.autodeploy_enabled":  audit.ActionGitAutoDeployEnabled,
+		"git.autodeploy_disabled": audit.ActionGitAutoDeployDisabled,
+		"git.autodeployed":        audit.ActionGitAutoDeployed,
+		"git.autodeploy_paused":   audit.ActionGitAutoDeployPaused,
+		"git.stack_detached":      audit.ActionGitStackDetached,
+		"git.pulled":              audit.ActionGitPulled,
+		"git.source_changed":      audit.ActionGitSourceChanged,
 	} {
 		if key != constant {
 			t.Errorf("constant = %q, want %q", constant, key)

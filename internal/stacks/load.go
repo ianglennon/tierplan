@@ -74,7 +74,7 @@ type Loaded struct {
 	Unset []string
 }
 
-// Load reads the working copy's compose file with compose-go, in a sandbox:
+// Load reads the working copy's compose files, merged in order, with compose-go, in a sandbox:
 //
 //   - the content is in memory and the environment is the stack's variable table only, so a
 //     variable set in the Bayplan server's own environment never reaches interpolation (D-01). A
@@ -84,24 +84,33 @@ type Loaded struct {
 //   - paths are not resolved, and the working directory does not exist;
 //   - the ports: and expose: ranges are measured before compose-go expands them (PortBudget).
 //
-// A compose file over MaxFileBytes is refused with ErrTooLarge before it is parsed. compose-go runs
+// A stack made from a repository also takes the repository's .env as defaults below the table (RepoEnv).
+//
+// A compose file over MaxFileBytes is refused with ErrTooLarge (in a *FileError naming it) before it is parsed. compose-go runs
 // on its own goroutine: Load returns at the deadline without waiting for it, and a panic inside it
 // is ErrLoadPanicked.
 func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
-	content := in.Copy.Compose()
-	if len(content) > MaxFileBytes {
-		return nil, ErrTooLarge
+	contents := in.Copy.ComposeContents()
+	for _, c := range contents {
+		if len(c.Content) > MaxFileBytes {
+			return nil, &FileError{Path: c.Path, Err: ErrTooLarge}
+		}
 	}
 	// compose-go expands a port range into one entry per port and does not stop when its context
 	// ends, so the ranges are measured first.
-	if err := PortBudget(content, in.Copy.Vars); err != nil {
+	if err := portBudgetFiles(contents, in.Copy.Vars); err != nil {
 		return nil, err
 	}
-	env := make(types.Mapping, len(in.Copy.Vars))
-	for _, v := range in.Copy.Vars {
-		if v.Value != "" {
-			env[v.Name] = v.Value
-		}
+	// The environment is the repository's .env under the table (D-07): a stack made from a repository
+	// takes its defaults from the committed .env, and a value in the table beats it. A .env that cannot
+	// be read refuses the load, so a deploy never goes ahead with half of its defaults.
+	interp, err := InterpolationEnv(in.Copy)
+	if err != nil {
+		return nil, err
+	}
+	env := make(types.Mapping, len(interp))
+	for name, value := range interp {
+		env[name] = value
 	}
 	unset := &unsetNames{}
 	deadline := in.Deadline
@@ -110,9 +119,15 @@ func Load(ctx context.Context, in LoadInput) (*Loaded, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
+	// One config file per ComposePaths() entry, in order: compose-go merges them like docker compose -f a -f b,
+	// from the content it is given and never from disk.
+	configFiles := make([]types.ConfigFile, len(contents))
+	for i, c := range contents {
+		configFiles[i] = types.ConfigFile{Filename: c.Path, Content: c.Content}
+	}
 	details := types.ConfigDetails{
 		WorkingDir:  sandboxDir,
-		ConfigFiles: []types.ConfigFile{{Filename: ComposeFile, Content: content}},
+		ConfigFiles: configFiles,
 		Environment: env,
 	}
 	// compose-go does not stop when its context ends, so it runs on its own goroutine and the

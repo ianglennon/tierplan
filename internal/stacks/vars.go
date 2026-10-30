@@ -19,10 +19,12 @@ import (
 // server, so the text is written here and a test in package api holds the two equal.
 const Hidden = "<hidden>"
 
-// The sources a resolved variable's value comes from (D-01): the stack's table, the default written
-// in the compose file, or nowhere.
+// The sources a resolved variable's value comes from (D-01, D-07): the stack's table, the .env
+// committed in the repository a git stack came from, the default written in the compose file, or
+// nowhere.
 const (
 	SourceTable   = "table"
+	SourceRepoEnv = "repo-env"
 	SourceDefault = "default"
 	SourceUnset   = "unset"
 )
@@ -54,10 +56,13 @@ type VarRef struct {
 // for a variable of the table that no file refers to; Required is true when the variable has no
 // value in the table and no default, so a deploy cannot go ahead.
 type ResolvedVar struct {
-	Name       string
-	Value      string
-	Source     string
-	Secret     bool
+	Name   string
+	Value  string
+	Source string
+	Secret bool
+	// SecretLike is true for a value taken from the repository's .env whose name looks like a secret
+	// (SecretLikeName). Its Value is Hidden, as a secret variable's is.
+	SecretLike bool
 	Required   bool
 	Unused     bool
 	Default    string
@@ -67,28 +72,41 @@ type ResolvedVar struct {
 
 var varNameFormRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Refs lists the variables the working copy's compose file refers to, sorted by name: every
+// Refs lists the variables the working copy's compose files refer to, sorted by name: every
 // $NAME, ${NAME}, ${NAME:-default}, ${NAME-default}, ${NAME:?message} and the like in a value of
-// the file, wherever the YAML puts it. Only compose.yaml is read: it is the one file compose-go
-// interpolates, so a ${...} in a configuration file the stack carries is that file's own text and
-// not a variable of the stack. A reference in a YAML comment is not one either. A file that is
-// not valid YAML has no references.
+// a compose file, wherever the YAML puts it. Only the compose files are read: they are the files
+// compose-go interpolates, so a ${...} in a configuration file the stack carries is that file's own
+// text and not a variable of the stack. A reference in a YAML comment is not one either. A file that
+// is not valid YAML has no references. Each place carries the compose file it is in and its line;
+// places are in file order, then line, then column.
 func Refs(c WorkingCopy) []VarRef {
-	content := c.Compose()
-	if len(content) == 0 || len(content) > MaxFileBytes {
-		return nil
-	}
-	ix, err := parseIndex(content)
-	if err != nil {
-		return nil
-	}
 	acc := map[string]*VarRef{}
-	for _, root := range ix.docs {
-		collectRefs(root, acc, nil, 0)
+	order := map[string]int{}
+	for i, cf := range c.ComposeContents() {
+		order[cf.Path] = i
+		if len(cf.Content) == 0 || len(cf.Content) > MaxFileBytes {
+			continue
+		}
+		ix, err := parseIndex(cf.Content)
+		if err != nil {
+			continue
+		}
+		for _, root := range ix.docs {
+			collectRefs(root, cf.Path, acc, nil, 0)
+		}
 	}
 	out := make([]VarRef, 0, len(acc))
 	for _, r := range acc {
-		sort.SliceStable(r.Places, func(i, j int) bool { return r.Places[i].Line < r.Places[j].Line })
+		sort.SliceStable(r.Places, func(i, j int) bool {
+			a, b := r.Places[i], r.Places[j]
+			if order[a.File] != order[b.File] {
+				return order[a.File] < order[b.File]
+			}
+			if a.Line != b.Line {
+				return a.Line < b.Line
+			}
+			return a.Col < b.Col
+		})
 		out = append(out, *r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -102,31 +120,31 @@ const maxRefDepth = 64
 // the document to n, so the environment of a service can be told from any other map. Keys are not
 // interpolated by compose-go, so they are not read; an alias is not followed, because the anchor
 // it names is walked where it is written.
-func collectRefs(n *yaml.Node, acc map[string]*VarRef, path []string, depth int) {
+func collectRefs(n *yaml.Node, file string, acc map[string]*VarRef, path []string, depth int) {
 	if n == nil || depth > maxRefDepth {
 		return
 	}
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, c := range n.Content {
-			collectRefs(c, acc, path, depth+1)
+			collectRefs(c, file, acc, path, depth+1)
 		}
 	case yaml.SequenceNode:
 		for _, c := range n.Content {
-			collectRefs(c, acc, append(path, "[]"), depth+1)
+			collectRefs(c, file, acc, append(path, "[]"), depth+1)
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key, val := n.Content[i].Value, n.Content[i+1]
 			if len(path) == 2 && path[0] == "services" && key == "environment" {
-				collectEnvironment(val, acc, depth+1)
+				collectEnvironment(val, file, acc, depth+1)
 				continue
 			}
-			collectRefs(val, acc, append(path, key), depth+1)
+			collectRefs(val, file, acc, append(path, key), depth+1)
 		}
 	case yaml.ScalarNode:
 		if strings.Contains(n.Value, "$") {
-			addScalarRefs(n, acc)
+			addScalarRefs(n, file, acc)
 		}
 	}
 }
@@ -135,30 +153,30 @@ func collectRefs(n *yaml.Node, acc map[string]*VarRef, path []string, depth int)
 // bare entry ("- FOO", or "FOO:" with nothing after it) is a reference to the variable FOO: the
 // Compose spec passes it through from the environment of the host, and Bayplan takes it from the
 // table instead.
-func collectEnvironment(n *yaml.Node, acc map[string]*VarRef, depth int) {
+func collectEnvironment(n *yaml.Node, file string, acc map[string]*VarRef, depth int) {
 	switch n.Kind {
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key, val := n.Content[i], n.Content[i+1]
 			if val.Kind == yaml.ScalarNode && val.Tag == "!!null" {
-				addBare(acc, key.Value, key.Line, key.Column)
+				addBare(acc, file, key.Value, key.Line, key.Column)
 				continue
 			}
-			collectRefs(val, acc, nil, depth+1)
+			collectRefs(val, file, acc, nil, depth+1)
 		}
 	case yaml.SequenceNode:
 		for _, item := range n.Content {
 			if item.Kind == yaml.ScalarNode && !strings.ContainsAny(item.Value, "=$") {
-				addBare(acc, item.Value, item.Line, item.Column)
+				addBare(acc, file, item.Value, item.Line, item.Column)
 				continue
 			}
-			collectRefs(item, acc, nil, depth+1)
+			collectRefs(item, file, acc, nil, depth+1)
 		}
 	}
 }
 
 // addBare records a bare environment entry as a plain reference to name.
-func addBare(acc map[string]*VarRef, name string, line, col int) {
+func addBare(acc map[string]*VarRef, file, name string, line, col int) {
 	if !varNameFormRe.MatchString(name) {
 		return
 	}
@@ -167,11 +185,11 @@ func addBare(acc map[string]*VarRef, name string, line, col int) {
 		r = &VarRef{Name: name}
 		acc[name] = r
 	}
-	r.Places = append(r.Places, Place{File: ComposeFile, Line: line, Col: col, Plain: true})
+	r.Places = append(r.Places, Place{File: file, Line: line, Col: col, Plain: true})
 }
 
 // addScalarRefs reads the references of one scalar value into acc.
-func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
+func addScalarRefs(n *yaml.Node, file string, acc map[string]*VarRef) {
 	found := template.ExtractVariables(map[string]any{"v": n.Value}, nil)
 	// A name that stands inside the default of another is read only when that one is empty, so an
 	// unset value there is not an error where the name stands.
@@ -206,7 +224,7 @@ func addScalarRefs(n *yaml.Node, acc map[string]*VarRef) {
 		}
 		r.Required = r.Required || required
 		r.Places = append(r.Places, Place{
-			File: ComposeFile, Line: lineOf(n, name), Col: n.Column,
+			File: file, Line: lineOf(n, name), Col: n.Column,
 			Plain: !hasDefault && !required && !nested[name],
 		})
 	}
@@ -258,18 +276,37 @@ func lineOf(n *yaml.Node, name string) int {
 // table, sorted by name. The precedence is the stack's table, then the default written in the
 // compose file (D-01); the Bayplan server's own environment never takes part. A table entry with
 // no value counts as no value, so the default is used and, with no default, the variable is
-// required. A secret's value is Hidden.
+// required. A secret's value is Hidden. It is ResolveVarsLayered with no repository .env.
 func ResolveVars(refs []VarRef, vars []Var) []ResolvedVar {
+	return ResolveVarsLayered(refs, vars, nil)
+}
+
+// ResolveVarsLayered is ResolveVars for a stack made from a git repository: a value resolves from the
+// table first, then from the repository's .env (repoEnv, see RepoEnv), then from the default written in
+// the compose file, and a variable with none of them is unset and Required (D-07, GIT-08). A blank
+// value in the table or in the .env is no value. A repoEnv value whose name looks like a secret is
+// Hidden and marked SecretLike, because it is committed to the repository but must not be echoed.
+func ResolveVarsLayered(refs []VarRef, vars []Var, repoEnv map[string]string) []ResolvedVar {
 	table := make(map[string]Var, len(vars))
 	for _, v := range vars {
 		table[v.Name] = v
 	}
-	lookup := func(name string) (string, bool) {
+	fromTable := func(name string) (string, bool) {
 		v, ok := table[name]
 		if !ok || v.Value == "" {
 			return "", false
 		}
 		return v.Value, true
+	}
+	fromRepo := func(name string) (string, bool) {
+		v, ok := repoEnv[name]
+		return v, ok && v != ""
+	}
+	lookup := func(name string) (string, bool) {
+		if v, ok := fromTable(name); ok {
+			return v, true
+		}
+		return fromRepo(name)
 	}
 	out := make([]ResolvedVar, 0, len(refs)+len(vars))
 	seen := make(map[string]bool, len(refs))
@@ -278,9 +315,16 @@ func ResolveVars(refs []VarRef, vars []Var) []ResolvedVar {
 		rv := ResolvedVar{Name: r.Name, Default: r.Default, HasDefault: r.HasDefault, Places: r.Places}
 		tv := table[r.Name]
 		rv.Secret = tv.Secret
-		switch value, ok := lookup(r.Name); {
-		case ok:
-			rv.Value, rv.Source = value, SourceTable
+		tableValue, inTable := fromTable(r.Name)
+		repoValue, inRepo := fromRepo(r.Name)
+		switch {
+		case inTable:
+			rv.Value, rv.Source = tableValue, SourceTable
+		case inRepo:
+			rv.Value, rv.Source = repoValue, SourceRepoEnv
+			if SecretLikeName(r.Name) {
+				rv.SecretLike, rv.Value = true, Hidden
+			}
 		case r.HasDefault:
 			rv.Value, rv.Source = substituteDefault(r.Default, lookup), SourceDefault
 		default:

@@ -804,6 +804,250 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/git-stacks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a stack from a folder of a git repository
+         * @description Fetches the ref into the server's mirror of the repository and creates a stack whose draft holds the files at the commit it resolved to: the compose files, the folder's .env when it has one, and every env_file, secrets and configs file the compose files name. The other files of the folder are not stored; the first 50 names and the total come back as notImported. The stack's source is git, it polls the repository every 5 minutes, auto-deploy is off and it has no webhook. Nothing is deployed and nothing is sent to any engine. Audited as stack.created_from_git with the stack, the repository, the ref and the folder. The name follows the rules of creating a stack in Bayplan (422 stack_name_invalid, 409 stack_name_taken, 409 stack_name_clash). The repository must be one of this environment or an instance repository (404 repository_not_found). 422 ref_invalid for a ref name git would refuse; 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; 422 folder_invalid, compose_path_invalid or compose_file_missing for the paths; 422 file_too_large (a file over 1 MiB) or stack_too_large (more than 50 files or 8 MiB); otherwise 422 with the code of the git failure as its type and the host in its errors, as for browsing. When commit is sent and the ref no longer resolves to it, 409 commit_moved and nothing is created. Needs stacks.create (Admin).
+         */
+        post: operations["createGitStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git-stacks/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check what a repository folder would give as a stack
+         * @description Reads the folder at the ref the way creating a stack from it would, and answers, without saving anything: the commit the ref resolved to, the services found, every problem (blocking ones and warnings, with file and line), the variables with the value a deploy would use and where it comes from (table, repo-env, default or unset) and whether it is required, the paths the compose files need that the repository lacks (missing), and the files of the folder that are not imported. A secret variable, and a value whose name looks like a secret, is <hidden>. A variable that is required has no value from the variables sent, the folder's .env or a default: the page asks for it. Overlay files are sent as paths only, never their contents. When commit is the sha an earlier check answered and the server's mirror holds it, nothing is fetched. At most 60 checks a minute per user: 429 rate_limited. Fails like creating a stack from the folder does: 404 repository_not_found; 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_path_invalid, file_too_large or stack_too_large. Needs stacks.create (Admin).
+         */
+        post: operations["checkGitStackSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the git credentials that apply to an environment
+         * @description This environment's own credentials and the instance credentials, which are readOnly unless the caller holds git.instance. Needs git.read on the environment. No secret is ever included.
+         */
+        get: operations["listEnvGitCredentials"];
+        put?: never;
+        /**
+         * Add a git credential to an environment
+         * @description Stores a git sign-in that repositories of this environment can pick, and no other environment's. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: an ssh credential shows its public key (authorized_keys form, to add to the repository's deploy keys) and SHA256 fingerprint instead. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid, key_passphrase, key_invalid, key_too_large); 409 name_taken when another credential of the scope has the name. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403 and an environment the caller cannot see 404. Audited as git.credential_created with the environment, without the secret.
+         */
+        post: operations["createGitCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/credentials/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git credential of an environment
+         * @description A credential of this environment, or an instance credential (readOnly unless the caller holds git.instance). Needs git.read on the environment. A credential of another environment answers 404 credential_not_found.
+         */
+        get: operations["getGitCredential"];
+        /**
+         * Change an environment's git credential
+         * @description The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding (an ssh key's key_passphrase, key_invalid and key_too_large included); 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here, exactly like one that does not exist, and nothing changes.
+         */
+        put: operations["updateGitCredential"];
+        post?: never;
+        /**
+         * Delete an environment's git credential
+         * @description Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.manage on the environment (its Admin, or an instance admin). A credential of another environment, and an instance credential, answer 404 credential_not_found here.
+         */
+        delete: operations["deleteGitCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the git repositories that apply to an environment
+         * @description This environment's own repositories and the instance repositories, which are readOnly unless the caller holds git.instance. Needs git.read on the environment.
+         */
+        get: operations["listEnvGitRepos"];
+        put?: never;
+        /**
+         * Add a git repository to an environment
+         * @description Stores a repository that stacks of this environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An environment repository may use a credential of its own environment or an instance credential, and no other environment's (credential_scope). Needs git.manage on the environment (its Admin, or an instance admin). Audited as git.repo_created with the environment, the host of its address and the credential's name and scope.
+         */
+        post: operations["createGitRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a git repository address from the server, for an environment
+         * @description As testing an address for the instance, for the repositories of one environment. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. The 10 tests a minute per user are shared with the instance family: 429 rate_limited. credentialId may name an instance credential or one of this environment (credential_scope otherwise). Writes nothing unless it signs in with a credential, which is audited as git.repo_tested.
+         */
+        post: operations["testGitAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git repository of an environment
+         * @description A repository of this environment, or an instance repository that applies to it (readOnly unless the caller holds git.instance). Needs git.read on the environment. A repository of another environment answers 404 repository_not_found, exactly like one that does not exist. No secret is ever included.
+         */
+        get: operations["getGitRepo"];
+        /**
+         * Change an environment's git repository
+         * @description The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        put: operations["updateGitRepo"];
+        post?: never;
+        /**
+         * Delete an environment's git repository
+         * @description Removes the repository. 409 repo_in_use, with the number of stacks in errors (conflict.count), when stacks still use it: nothing is removed. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        delete: operations["deleteGitRepo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/refs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the branches and tags of a git repository
+         * @description Every branch and tag of a repository usable in this environment (its own, or an instance repository), each with its commit (an annotated tag is peeled to its commit) and the default branch, read from the git server with the repository's credential. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. A failure is 422 with the code as its type (unreachable, auth_refused, not_found, cert_untrusted, host_key_changed, host_key_untrusted, egress_blocked, timeout, too_large) and the host in its errors.
+         */
+        get: operations["listGitRefs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a saved git repository of an environment from the server
+         * @description As testing an instance repository, for a repository of this environment. Needs git.manage on the environment (its Admin, or an instance admin). A repository of another environment, or of the instance, answers 404 repository_not_found. The 10 tests a minute per user are shared with the other test routes: 429 rate_limited. Audited as git.repo_tested with the environment.
+         */
+        post: operations["testGitRepo"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a folder of a git repository at a branch, tag or commit
+         * @description Fetches the ref into the server's bare mirror of the repository (only that ref, never every branch) and lists a folder of the commit it resolves to: the commit and its time, and the entries, folders first and then by name, at most 500 (total and capped say when there are more). A folder with a compose file in it has hasCompose. Needs stacks.create on the environment. A repository of another environment answers 404 repository_not_found. 422 ref_invalid for a ref name git would refuse (before any git call); 422 ref_missing, commit_missing, commit_ambiguous or folder_missing when the ref, commit or folder is not there; otherwise 422 with the code of the failure as its type and the host in its errors, as for listing refs.
+         */
+        get: operations["browseGitTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/git/repos/{repoId}/trust-host-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trust an SSH host key for an environment's git repository
+         * @description Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.manage on the environment (its Admin, or an instance admin); an Operator or Viewer gets 403. A repository of another environment, and an instance repository, answer 404 repository_not_found here.
+         */
+        post: operations["trustGitHostKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/images": {
         parameters: {
             query?: never;
@@ -1933,7 +2177,7 @@ export interface paths {
         };
         /**
          * The stacks of an environment: those Bayplan manages and those it found
-         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
+         * @description Every stack of the environment by name, with where it deploys, its state and when it was last deployed. The state comes from Bayplan's own records of the stack's deploys and the engine's cached rows, never from a read of the engine of its own. Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).
          */
         get: operations["listStacks"];
         put?: never;
@@ -2002,6 +2246,26 @@ export interface paths {
          * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Bayplan server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
          */
         post: operations["checkStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/connect-git": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Point an inline or adopted stack at a git repository, through review
+         * @description Reads the repository folder at the head of the ref into the stack's draft (D-24): the repository's files, the files of the draft that files says to keep (each becomes a sealed overlay file) and the stack's variables with vars set over them. The files not kept are dropped. Nothing is applied: the stack stays inline or adopted, with its revisions, until a deploy of the draft ends good, which makes it a git stack and keeps its history; discarding the draft leaves the stack exactly as it was. Review the draft and deploy it as any stack; the review says it replaces the inline files. A stack with a pending conversion can be pointed at another source, which replaces the first. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A stack that is already a git stack is 409 already_git. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 overlay_clash for a file to keep that the repository holds, file_path_invalid or file_name_taken for files, ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. 503 git_unavailable when this server has no git support. Audited as stack.pointed_at_git with the stack, the repository, the ref, the folder and the counts of files kept and dropped. Needs git.manage (Admin of the environment).
+         */
+        post: operations["connectStackGit"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2127,7 +2391,7 @@ export interface paths {
         put?: never;
         /**
          * Accept what runs into the stack's draft
-         * @description Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision, and a stack that is stopped is 409 stack_stopped (its services run no replicas, so there is nothing running to keep; start it first). A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.
+         * @description Rebuilds the stack's draft from what runs (D-23): the new draft is the deployed revision's files and variables with a compose.yaml rebuilt from the engine by the same rebuilder adoption uses, made on top of that revision (D-54). The stack's own secrets and configs stay the files they were, an image keeps the text it was written with while it is still the image that runs, and an environment value, entrypoint word or command word equal to the value of one of the revision's secret variables is written as ${NAME}, so no secret variable's value is copied into the compose file. The draft starts from the deployed revision. Nothing is changed on any engine, and nothing is deployed: the person reviews the draft and deploys it, which records a revision. draftVersion is the version of the draft the person saw (0 when the stack has none); when the draft has moved since, the answer is 409 draft_conflict and nothing is written. While another stack operation runs on the environment the answer is 409 operation_locked. A stack with no deployed revision is 409 no_deployed_revision, and a stack that is stopped is 409 stack_stopped (its services run no replicas, so there is nothing running to keep; start it first). A stack that deploys from a git repository, or whose draft is about to point at one, is 409 git_stack: its files are the repository's and read-only, so the change belongs in the repository. A stack that cannot be written as a compose file that passes the check is 422 rebuild_failed with the reason in errors[].message; the draft is not changed. Audited as stack.drift_accepted. Needs stacks.update (Operator), as saving the draft does; the rebuild reads the values the engine holds, so the secret variables of the revision are used by the server and never sent.
          */
         post: operations["acceptStackDrift"];
         delete?: never;
@@ -2150,6 +2414,210 @@ export interface paths {
          * @description Answers the saved content of a secret file of the stack, in clear: the one way back to a content every other answer shows as <hidden>. A file is secret when the compose file uses it under secrets: or it was saved as secret. The content is read from the saved draft, or from the last deployed definition when there is no draft. A path that is not in the stack, is not secret or is empty is 404 file_not_found. The answer is never cached. Every reveal is audited as stack.value_revealed with the stack, the kind (file) and the path, never the content; if the audit row cannot be written the content is not sent. A refusal is audited as permission.denied. Needs secrets.reveal (Admin, or an Operator granted the extra).
          */
         post: operations["revealStackFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Where a git stack stands against its repository
+         * @description The stack's git settings (repository with its name, host and path, ref, folder, auto-deploy) and the answer of its last check: the commit that is deployed, the head the check saw, how many commits that changed the stack's folder it is behind, its status (unknown, in_sync, behind or error) with the reason of an error, when it was checked, and whether a check runs now. Nothing is read from the repository: this answers from what the last check stored. A webhook, when the stack has one, comes with its git host, placement, address with the routing token masked, the last four characters of its secret, its last delivery, its owner and whether it is paused: the secret and the token are shown once, when the webhook is made, and are never answered again. A stack that is not from a repository is 409 stack_not_git; a stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).
+         */
+        get: operations["getStackGit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/auto-deploy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn a git stack's auto-deploy on or off
+         * @description Off by default: a new commit that changes the stack's folder makes the stack show as behind and waits for someone to review and deploy it. With enabled true such a commit deploys by itself, without a review, on the authority of the person who turned it on: Bayplan rechecks that person's permissions before every deploy and judges the stack's rendered settings as that person, so an Operator's auto-deploy never deploys host access that needs an Admin, and an owner who loses the permission pauses it. It takes the same operation lock, revision, job and console as a deploy a person starts, and is audited as git.autodeployed. A commit that fails a check, a pending draft with unreviewed changes to the variables or overlay files, or a deploy the stack's policy would refuse is not deployed: the stack goes to error auto_deploy_blocked and waits for a person. A deploy that fails sets auto_deploy_failed; the last good version keeps running and nothing is rolled back. Turning it on makes the caller the owner (and resumes a paused one), registers the automation to them and starts a check; turning it off forgets the owner. Turning it on or off is audited as git.autodeploy_enabled or git.autodeploy_disabled, and a request that changes nothing records nothing. Answers the stack's git summary. 403 owner_lacks_permission when the caller could not run it themselves; a stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         */
+        put: operations["setStackGitAutoDeploy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a git stack against its repository now
+         * @description Starts a check and answers 202 at once: it fetches the tracked ref and compares the hash of the stack's folder at the head with the deployed revision's, then stores the head, the count of commits behind, the status and the time. It deploys nothing and makes no draft and no revision itself; a stack with auto-deploy on that it finds behind is then deployed (see the auto-deploy route), and Check now tries a commit that auto-deploy held back once more. A request that arrives while a check of the stack runs joins it, and the fetch has a deadline. At most 12 checks a minute per user: 429 rate_limited. A check by someone who can't deploy (a Viewer) never gives a commit that auto-deploy held back another try; only a check by someone who can (an Operator) does. Read the answer from the stack's git route or its list entry, whose checking is true until the check ends. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Needs stacks.read (Viewer).
+         */
+        post: operations["checkStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/commits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The commits that changed a git stack's folder since it was deployed
+         * @description Lists the commits reachable from head and not from the deployed commit that changed the stack's folder, newest first (commits of the same time are ordered by ID), each with its ID, subject, author and time. At most 50 are named; total is how many there are, counted over at most 2000 commits (capped says the walk stopped there). It reads the server's mirror of the repository and fetches nothing. available is false, with no commits, when the list can't be made: nothing is deployed from the repository, the stack follows another repository, ref or folder than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. head must be 40 lowercase hexadecimal characters. A stack that is not from a repository is 409 stack_not_git. Needs stacks.read (Viewer).
+         */
+        get: operations["listStackGitCommits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Detach a git stack from its repository
+         * @description Turns the stack back into an inline stack you edit in Bayplan (D-25). The files of the deployed revision become the stack's draft as inline files (overlay files stay secret), and its variables and ordered compose files are kept. Bayplan stops checking the repository, removes the webhook (its address answers 404 from now on), turns off auto-deploy and forgets both automations, in one step. Nothing running changes: no deploy starts and no revision is made, so the history keeps every revision. The stack can be pointed at a repository again afterwards. A draft the stack had is replaced by the deployed files. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.stack_detached with the stack, the revision number and the commit. Needs git.manage (Admin of the environment).
+         */
+        post: operations["detachStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pull a git stack's newest commit into its draft
+         * @description Fetches the head of the ref the stack follows (a stack that follows a fixed commit imports that commit again, with no fetch of a moving ref) and replaces the draft's repository files with the commit's: only the files the compose files name, the folder's .env and the secrets and configs files. Bayplan's own files (overlays) and the variables stay. The draft records the commit, the folder's tree hash and the source, and its version goes up by one. A pull deploys nothing and changes nothing that runs: review the draft and deploy it as any stack (D-17). draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. A failed fetch is 422 with the code of the git failure as its type (unreachable, auth_refused, ref_missing, folder_missing ...) and leaves the draft as it was; 422 file_too_large or stack_too_large for a commit whose files break the stack's limits; 422 overlay_clash when the commit holds a file at the path of an overlay file, with the draft and the overlay untouched until the overlay file is removed or renamed. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.pulled with the stack, the repository, the ref, the folder and the commit. Needs stacks.deploy (Operator).
+         */
+        post: operations["pullStackGit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change what a git stack follows, through review
+         * @description Reads the new source (a repository of this environment or of the instance, a branch, tag or commit, a folder and its compose files) at its head into the draft, as a pending source (D-11, D-12): the draft's repository files become those of the new commit, the overlay files and the variables stay, and the draft records the commit, the folder's tree hash and the new source. Its version goes up by one. Nothing is applied: the stack keeps following its own repository, ref, folder and compose files, and Pull & redeploy and the checks keep using them, until a deploy of the draft ends good, which makes the new source the stack's source. Review the draft and deploy it as any stack; discarding the draft, or a pull, drops the pending source. A stack with auto-deploy on does not deploy while a pending source waits. draftVersion must be the version you read, or the answer is 409 draft_changed and nothing is stored. The repository must be one of the environment's or the instance's (404 repository_not_found). 422 ref_invalid, ref_missing, commit_missing, commit_ambiguous, folder_missing, folder_invalid, compose_path_invalid, compose_file_missing, file_too_large or stack_too_large as for creating a stack from a folder, otherwise 422 with the code of the git failure as its type. A stack that is not from a repository is 409 stack_not_git; 503 git_unavailable when this server has no git support. Audited as git.source_changed with the stack, the new repository, ref, folder and commit and the ones replaced. Needs git.manage (Admin of the environment), as creating a stack from a repository or pointing one at it does: the new source's files are read into a draft that every Viewer can open.
+         */
+        post: operations["changeStackGitSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn a git stack's polling on or off and set how often it is checked
+         * @description Sets whether Bayplan checks the stack's repository on a schedule (on by default) and every how many minutes: a whole number from 1 to 1440, anything else is 422 poll_interval. A webhook, when one is set up, does not replace polling. A stack that follows a fixed commit is never polled, whatever is set here. A poll records the new head and how far behind the stack is, and deploys nothing unless the stack has auto-deploy on. Answers the stack's git summary. A change is audited as git.updates_changed with the old and the new values; the same values again change and record nothing. A stack that is not from a repository is 409 stack_not_git. Needs stacks.deploy (Operator).
+         */
+        put: operations["updateStackGitUpdates"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Give a git stack a webhook
+         * @description Creates the stack's one webhook, the address a git host calls when something is pushed, and answers it once: the full address ({publicURL}/hooks/git/{token}) and the secret, with Cache-Control no-store. Neither can be read again. Bayplan keeps the token only as a hash and the secret sealed. A webhook only asks Bayplan to fetch and check this one stack: nothing in the request is read, and it names no ref or commit. The webhook never deploys on its own; a stack with auto-deploy on deploys the commit the check finds, as it does after any check. flavour is github, gitlab, gitea or generic; placement is only for generic (path puts the secret in the address, header expects Authorization: Bearer). The webhook acts on the authority of the person who creates it. A stack that already has a webhook is 409 webhook_exists; a placement the flavour can't use is 422 webhook_placement; a stack that is not from a repository is 409 stack_not_git. Needs git.manage (Admin of the environment).
+         */
+        post: operations["createStackGitWebhook"];
+        /**
+         * Remove a git stack's webhook
+         * @description Deletes the webhook's token and secret, so its address answers 404 from now on, and forgets the automation that acted on its owner's authority. Polling is not touched. A new webhook can be set up afterwards. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. Audited as git.webhook_removed. Needs git.manage (Admin of the environment).
+         */
+        delete: operations["removeStackGitWebhook"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/stacks/{stackId}/git/webhook/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace a git stack's webhook address and secret
+         * @description Makes a new routing token and a new secret for the stack's webhook and stores them in place of the old ones in one step, then answers the new address and secret once, with Cache-Control no-store. The old address answers 404 at once, like an address that was never a webhook, and the new one works: update the git host with it. The webhook keeps its git host, its placement and its owner, and counts as having had no delivery. For a generic webhook with the secret in the address, the address is the secret and secret is empty. A stack with no webhook is 404 webhook_not_found; a stack that is not from a repository is 409 stack_not_git. Audited as git.webhook_rotated, which holds neither the address, the token nor the secret. Needs git.manage (Admin of the environment).
+         */
+        post: operations["rotateStackGitWebhook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2713,7 +3181,7 @@ export interface paths {
         };
         /**
          * List the environment problems that need attention
-         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since). Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
+         * @description Derived from live state, never stored, so an item is there exactly while its cause is and cannot be dismissed: an environment that is offline (env_offline, with since and reason), a certificate that is not renewing or has expired (cert_not_renewing), agents that need an update by hand (manual_update_needed, one item with a count), a clock that is out of step (clock_skew), an environment still waiting for its first agent after 7 days (pending_long), a swarm that was re-initialised (cluster_changed) and a local host that can be folded into a swarm environment it manages (fold_offered, only for callers who hold environments.manage) and a swarm service whose tasks keep failing (restart_loop, one item per service that is not muted, only for callers who hold services.read on that environment; with service, serviceId, count, windowMinutes, latestError and since) and a standalone container that keeps dying (restart_loop_container, one item per container that is not muted, only for callers who hold containers.read on that environment; with container, containerId, nodeId, count, windowMinutes, lastExitCode and since) and a git stack whose sync check is in error (git_sync_error, one item per stack, only for callers who hold git.manage on that environment; with stackId, stackName, reasonCode, reasonDetail and since; it goes when the stack is in sync again) and the automatic deploys of git stacks: a commit that was held back (git_autodeploy_skipped, with commit and reasonDetail; it goes when a deploy ends the wait), a deploy that put changes made outside the stack back (git_autodeploy_reverted, with count, example and revision; it goes with the next deploy of the stack) and an automation that is paused (git_autodeploy_paused, with reasonCode owner or rollback, revision and owner; it goes when it is resumed or turned off). These three go to the user the automation runs for and to callers who hold git.manage on the environment, and to no one else. Only environments the caller holds environments.read for are considered, so the list never reveals what the caller cannot open, and the counts are over that set. A revoked environment says nothing here. Errors come first, then the newest. Names are at most 64 characters.
          */
         get: operations["listEnvironmentWarnings"];
         put?: never;
@@ -2787,6 +3255,170 @@ export interface paths {
          * @description The current join token enrols nobody from now on. Agents that are already enrolled keep working. Rotating the token makes a new one and enables enrolment again. Disabling a disabled token changes nothing. 404 environment_not_found. Needs environments.token. Audited as environment.token_disabled.
          */
         delete: operations["disableEnvironmentToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the git credentials the signed-in user may see
+         * @description An instance admin sees every credential. Anyone who holds git.read on at least one environment sees the instance credentials (readOnly) and the credentials of the environments they can read; readOnly is false for the credentials they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listGitCredentials"];
+        put?: never;
+        /**
+         * Add an instance git credential
+         * @description Stores a git sign-in that repositories of every environment can pick. A repository uses a credential only when it names it: nothing is matched by address. The token or private key is sealed with the vault, included in backups and re-wrapped by key rotation, and never returned by any route afterwards: an ssh credential shows its public key (authorized_keys form, to add to the repository's deploy keys) and SHA256 fingerprint instead. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, type_invalid, username_required, username_invalid, secret_required, secret_invalid, key_passphrase, key_invalid, key_too_large); 409 name_taken when another credential of the scope has the name. Needs git.instance, which only instance admins hold. Audited as git.credential_created without the secret.
+         */
+        post: operations["createGitCredentialInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/credentials/{credentialId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git credential
+         * @description The credential as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 credential_not_found.
+         */
+        get: operations["getGitCredentialInstance"];
+        /**
+         * Change an instance git credential
+         * @description The members replace the credential's: name and type are required, username is required for https. The secret is write-only: leave it out or send it empty to keep the saved one, which is neither read nor returned; send a new one and it is sealed again and replaces it. Switching the type needs a secret typed now (422 secret_required). There is no scope: a credential never moves between layers. 422 validation_failed names every field at fault with the same codes as adding (an ssh key's key_passphrase, key_invalid and key_too_large included); 409 name_taken when another credential of the scope has the name. Audited as git.credential_updated with a changed detail listing the names of the fields that changed, the secret only as the word secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here, exactly like one that does not exist.
+         */
+        put: operations["updateGitCredentialInstance"];
+        post?: never;
+        /**
+         * Delete an instance git credential
+         * @description Removes the credential and its sealed secret. 409 credential_in_use, with the number of repositories in errors (location conflict.count), while repositories use it: pick another credential for them first. One that is already gone answers 404 credential_not_found, so a repeated delete is safe and writes nothing. Audited as git.credential_deleted without the secret. Needs git.instance. A credential of an environment answers 404 credential_not_found here.
+         */
+        delete: operations["deleteGitCredentialInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the git repositories the signed-in user may see
+         * @description An instance admin sees every repository. Anyone who holds git.read on at least one environment sees the instance repositories (readOnly) and the repositories of the environments they can read; readOnly is false for the ones they may change. A caller with no git.read anywhere gets an empty list. No secret is ever included.
+         */
+        get: operations["listGitRepos"];
+        put?: never;
+        /**
+         * Add an instance git repository
+         * @description Stores a repository that stacks of every environment can use. A repository is an address, an optional credential picked by ID and an optional custom certificate authority. Saving never runs or waits for a test. 422 validation_failed names every field at fault with a stable code (name_required, name_invalid, url_unsupported, url_userinfo, ca_invalid, ca_too_large, credential_scope); 409 name_taken when another repository of the scope has the name. An instance repository may use only an instance credential (credential_scope otherwise). Needs git.instance. Audited as git.repo_created with the host of its address and the credential's name and scope.
+         */
+        post: operations["createGitRepoInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a git repository address from the server
+         * @description Lists the branches and tags of a repository over HTTPS from the Bayplan server, which is where the mirrors live, and answers three steps (reachable, signedIn, refs), the first 20 branch names and tag names with their counts, and the default branch. It works on values that are not saved and writes nothing: saving a repository never depends on a test. A test that failed is a 200 with failure.code and failure.host, never text from the server or the network. The server refuses link-local, unspecified, multicast and cloud-metadata addresses at dial time, redirects included, and allows private and loopback ranges. Certificates are always verified: a server with a private CA fails with cert_untrusted unless caPem carries that CA. Needs git.instance. At most 10 tests a minute per user across both families: 429 rate_limited. 422 validation_failed names url (url_unsupported, url_userinfo) or caPem (ca_invalid, ca_too_large).
+         */
+        post: operations["testGitAddressInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one git repository
+         * @description The repository as the list shows it. One the caller may not see answers exactly like one that does not exist: 404 repository_not_found.
+         */
+        get: operations["getGitRepoInstance"];
+        /**
+         * Change an instance git repository
+         * @description The members replace the repository's: name and url. credentialId left out keeps the saved credential, an empty string picks none, an ID picks that credential (422 credential_scope when the layer rule forbids it). When url moves to another host or port, a saved credential is kept only if credentialId names a credential again, else 422 credential_reselect: a token picked for one server is never aimed at another by an edit that did not mention it. The last test is forgotten when the address, the credential or the CA changes. 422 validation_failed names every field at fault with the codes of adding; 409 name_taken when another repository of the scope has the name. Audited as git.repo_updated with a changed detail listing the names of the fields that changed and host_from when the host changed. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        put: operations["updateGitRepoInstance"];
+        post?: never;
+        /**
+         * Delete an instance git repository
+         * @description Removes the repository. 409 repo_in_use, with the number of stacks in errors (conflict.count), when stacks still use it: nothing is removed. One that is already gone answers 404 repository_not_found, so a repeated delete is safe and writes nothing. Audited as git.repo_deleted. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        delete: operations["deleteGitRepoInstance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a saved instance git repository from the server
+         * @description Runs the same test as testing an address, on the saved repository with its saved credential, and records when it ran, whether it passed and the code it failed with. A test that failed is a 200 with failure.code and failure.host. Needs git.instance. A repository of an environment answers 404 repository_not_found here. At most 10 tests a minute per user across all the test routes: 429 rate_limited. Audited as git.repo_tested with the host, the credential's name and scope and the code of a failure.
+         */
+        post: operations["testGitRepoInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/git/repos/{repoId}/trust-host-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trust an SSH host key for an instance git repository
+         * @description Stores the SSH host key a person confirmed as the one the repository's host is trusted by, replacing any earlier one, and records who trusted it and when. This is the only way a changed key is accepted: a test or fetch that sees a different key fails with host_key_changed and sends no credential until an administrator does this. The last test is forgotten. 422 validation_failed names hostKey (host_key_invalid, host_key_not_ssh). Audited as git.host_key_retrusted with the fingerprint of the new key and of the one it replaced, or git.host_key_trusted when the repository had no key. Needs git.instance. A repository of an environment answers 404 repository_not_found here.
+         */
+        post: operations["trustGitHostKeyInstance"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3500,7 +4132,7 @@ export interface paths {
         };
         /**
          * The stacks of every environment the caller may read them on, managed or found
-         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
+         * @description One group for each environment that has stacks, by environment name, each with its stacks, their state and when they were last deployed. An environment the caller does not hold stacks.read on is left out, and so is its name: the list never reveals what the caller cannot open. An environment whose stacks could not be read is named in failedEnvironments while the others are answered. env chooses environments by ID. Stacks Bayplan did not make are listed beside the managed ones (managed false, unmanaged body); kind (managed or unmanaged) lists one kind only, and a group's discoveryFailed says the look for them on that environment failed. The search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort run over every environment together, before the 500-row cap, so at most 500 stacks come back across all the groups, with total the number that matched, unfilteredTotal the number before the search and the status filter and statusCounts the chip numbers, counted before them too.
          */
         get: operations["listAllStacks"];
         put?: never;
@@ -5319,10 +5951,23 @@ export interface components {
         DraftFileBody: {
             /** @description The file's text. A secret file's content is <hidden> on a read; sending <hidden> back for a secret file that is already saved keeps the saved content */
             content: string;
+            /**
+             * @description Left out for a stack that is not from git. For a stack from a git repository: repo for a file of the repository (read-only) and overlay for a file Bayplan holds for a path the repository lacks. On a save the server decides the origin from the path (a path the draft holds keeps its origin, any other path is an overlay), so what is sent here is ignored
+             * @enum {string}
+             */
+            origin?: "repo" | "overlay";
             /** @description The file's path inside the stack: relative, at most 255 characters, no .. or . name, no leading or doubled slash, no backslash or colon, no control character. compose.yaml is the stack's compose file. A path that breaks the rule is 422 file_path_invalid */
             path: string;
             /** @description True when the file is stored sealed and never shown */
             secret: boolean;
+        };
+        DraftGitBody: {
+            /** @description The full ID of the commit the draft's repository files are from */
+            commit: string;
+            /** @description The branch, tag or commit ID the draft follows */
+            ref: string;
+            /** @description The repository's name when the draft was made from it */
+            repoName: string;
         };
         DraftVarBody: {
             /** @description The variable's name: letters, digits and underscore, not starting with a digit */
@@ -5462,6 +6107,8 @@ export interface components {
         EnvWarningBody: {
             /** @description For cert_not_renewing and clock_skew: the agent */
             agentId?: string;
+            /** @description For git_autodeploy_skipped: the short commit that is waiting for a fix or a manual review */
+            commit?: string;
             /** @description For restart_loop_container: the container's name, at most 64 characters */
             container?: string;
             /** @description For restart_loop_container: the container's ID as the last read holds it */
@@ -5480,6 +6127,8 @@ export interface components {
             envId?: string;
             /** @description That environment's name, at most 64 characters. For fold_offered, the swarm environment */
             envName?: string;
+            /** @description For git_autodeploy_reverted: the first change that was put back, as a line such as 'web replicas 5 → 3', at most 300 characters; count is how many were put back */
+            example?: string;
             /**
              * Format: date-time
              * @description For cert_not_renewing: when the certificate expires
@@ -5489,7 +6138,7 @@ export interface components {
              * @description Which problem this is
              * @enum {string}
              */
-            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container";
+            id: "env_offline" | "cert_not_renewing" | "manual_update_needed" | "clock_skew" | "pending_long" | "cluster_changed" | "fold_offered" | "restart_loop" | "restart_loop_container" | "git_sync_error" | "git_autodeploy_skipped" | "git_autodeploy_reverted" | "git_autodeploy_paused";
             /** @description For restart_loop_container: the exit code of the container's newest death */
             lastExitCode?: string;
             /** @description For restart_loop: the error text of the newest failed task, at most 300 characters; absent when Docker gave none */
@@ -5503,8 +6152,19 @@ export interface components {
              * @description For clock_skew: how far the agent's clock is ahead of the server's, in seconds; negative is behind
              */
             offsetSeconds?: number;
+            /** @description For git_autodeploy_paused: the name of the user the automation runs for, at most 64 characters; absent when it has no owner any more */
+            owner?: string;
             /** @description For env_offline and cluster_changed: the environment's reason code, as in its status */
             reason?: string;
+            /** @description For git_sync_error: why the sync check failed, one of the reason codes of the stack's git route (fetch_failed, host_key_changed, host_key_untrusted, ref_gone, folder_gone, checks_failed, auto_deploy_blocked, auto_deploy_failed) */
+            reasonCode?: string;
+            /** @description For git_sync_error: a sentence on the reason, at most 300 characters; it carries nothing from the server. For git_autodeploy_skipped: the problem that held the commit back. For git_autodeploy_paused: the sentence the pause left, when it left one */
+            reasonDetail?: string;
+            /**
+             * Format: int64
+             * @description For git_autodeploy_reverted: the number of the revision that put the changes back. For git_autodeploy_paused with reasonCode rollback: the revision rolled back to
+             */
+            revision?: number;
             /** @description For restart_loop: the service's name, at most 64 characters */
             service?: string;
             /** @description For restart_loop: the service's ID */
@@ -5519,6 +6179,10 @@ export interface components {
              * @description When the problem began, where that is known. Items are shown newest first
              */
             since?: string;
+            /** @description For git_sync_error: the stack's ID */
+            stackId?: string;
+            /** @description For git_sync_error: the stack's name, at most 64 characters */
+            stackName?: string;
             /**
              * Format: int64
              * @description For restart_loop and restart_loop_container: the window the count is over, in minutes
@@ -5842,6 +6506,393 @@ export interface components {
             message: string;
             /** @description The compose service the note is about; empty when it concerns the whole file */
             service: string;
+        };
+        GitCredentialBody: {
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /** @description For an ssh credential, the SHA256 fingerprint of that key; empty for https */
+            fingerprint: string;
+            /** @description The credential's ID */
+            id: string;
+            /** @description The last 4 characters of an https token, or empty when it is shorter than 12 characters and for an ssh key. The page shows •••• before it */
+            last4: string;
+            /** @description The last time the git server refused it and has not accepted it since; null when there was none */
+            lastFailure: components["schemas"]["CredentialFailureBody"] | null;
+            /**
+             * Format: date-time
+             * @description When a test last signed in with it; null when it never did
+             */
+            lastUseAt: string | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description For an ssh credential, the public key in authorized_keys form, to add to the repository's deploy keys; empty for https */
+            publicKey: string;
+            /** @description True when the caller may see the credential but not change or delete it */
+            readOnly: boolean;
+            /** @description Where it can be used: every environment, or one */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * @description https for a token, ssh for a deploy key
+             * @enum {string}
+             */
+            type: "https" | "ssh";
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /**
+             * Format: int64
+             * @description How many repositories use it
+             */
+            usedBy: number;
+            /** @description The user name sent with a token; git for an ssh key unless set */
+            username: string;
+        };
+        GitCredentialListBody: {
+            /** @description Instance credentials first, then each environment's, by name */
+            items: components["schemas"]["GitCredentialBody"][] | null;
+        };
+        GitCredentialRequest: {
+            /** @description What the credential is called, unique among the credentials of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The token (https) or the private key (ssh). It is sealed with the vault and never returned by any route: an https token shows back only as its last 4 characters, and only when it has 12 or more; an ssh key as its public key and SHA256 fingerprint. Required when adding (422 secret_required); left out or empty when changing keeps the saved one. 422 secret_invalid for a token with spaces or control characters or over 4096 characters. For an ssh key: an unencrypted OpenSSH, PKCS#1, PKCS#8 or SEC1 private key (ed25519, RSA or ECDSA) of at most 16 KiB; 422 key_passphrase when it is protected by a passphrase, key_invalid when it is not a private key Bayplan can read, key_too_large over 16 KiB */
+            secret?: string;
+            /** @description https for a token, ssh for a deploy key; 422 type_invalid for anything else */
+            type?: string;
+            /** @description The user name the git server expects with a token (required for https: 422 username_required). Your host decides what it needs here. Defaults to git for an ssh key */
+            username?: string;
+        };
+        GitRefBody: {
+            /** @description The 40-hex commit ID; for an annotated tag the commit the tag points at */
+            commit: string;
+            /** @description The short name: main, v1.2 */
+            name: string;
+        };
+        GitRefsBody: {
+            /** @description Every branch, in name order */
+            branches: components["schemas"]["GitRefBody"][] | null;
+            /** @description The branch HEAD points at; empty when the server does not say */
+            defaultBranch: string;
+            /** @description Every tag, in name order */
+            tags: components["schemas"]["GitRefBody"][] | null;
+        };
+        GitRepoBody: {
+            /** @description The custom certificate authority in PEM, public material, for people who may manage the repository; empty for everyone else and when there is none */
+            caPem: string;
+            /**
+             * Format: date-time
+             * @description When it was added
+             */
+            createdAt: string;
+            /** @description The credential picked for it; null for a public repository */
+            credential: components["schemas"]["GitRepoCredentialBody"] | null;
+            /** @description Whether the repository carries a custom certificate authority, whoever is asking */
+            hasCa: boolean;
+            /** @description The host of its address */
+            host: string;
+            /** @description The SSH host key a person trusted for it; null when none was (and always for a host with built-in keys, which need none) */
+            hostKey: components["schemas"]["GitRepoHostKeyBody"] | null;
+            /** @description The repository's ID */
+            id: string;
+            /** @description The last test of the saved repository; null when it was never tested */
+            lastTest: components["schemas"]["GitRepoTestBody"] | null;
+            /** @description Its name, unique within its scope */
+            name: string;
+            /** @description True when the caller may see the repository but not change or delete it */
+            readOnly: boolean;
+            /** @description Where it can be used: every environment, or one */
+            scope: components["schemas"]["CredentialScopeBody"];
+            /**
+             * Format: date-time
+             * @description When it was last changed
+             */
+            updatedAt: string;
+            /** @description Its address */
+            url: string;
+            /**
+             * Format: int64
+             * @description How many stacks use it
+             */
+            usedBy: number;
+        };
+        GitRepoCredentialBody: {
+            /** @description The credential's ID */
+            id: string;
+            /** @description Its name */
+            name: string;
+            /** @description Where it can be used */
+            scope: components["schemas"]["CredentialScopeBody"];
+        };
+        GitRepoHostKeyBody: {
+            /** @description Its SHA256 fingerprint (SHA256:...) */
+            fingerprint: string;
+            /**
+             * Format: date-time
+             * @description When a person trusted it
+             */
+            trustedAt: string;
+            /** @description The key type (ssh-ed25519) */
+            type: string;
+        };
+        GitRepoListBody: {
+            /** @description Instance repositories first, then each environment's, by name */
+            items: components["schemas"]["GitRepoBody"][] | null;
+        };
+        GitRepoRequest: {
+            /** @description A certificate authority to trust for this repository, in PEM, for a self-hosted server with its own. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
+            caPem?: string;
+            /** @description The saved credential to sign in with, picked explicitly: nothing is matched by address. Left out or empty means a public repository when adding. It must be a credential of the repository's own scope or an instance credential for an environment repository, and only an instance credential for an instance repository: 422 credential_scope */
+            credentialId?: string;
+            /** @description For an ssh address, the host key the person confirmed after a test answered hostKey.state untrusted, in authorized_keys form. Saving it records who trusted it and when (audited git.host_key_trusted, or git.host_key_retrusted when it replaces another). Left out keeps the saved key, unless url moves to another host or port, which forgets it. Ignored for github.com, gitlab.com and bitbucket.org, whose keys ship with Bayplan. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for an address that is not ssh */
+            hostKey?: string;
+            /** @description What the repository is called, unique among the repositories of its scope. 1 to 64 characters: letters, digits, spaces and . _ ( ) -; 422 name_required or name_invalid */
+            name?: string;
+            /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
+            url?: string;
+        };
+        GitRepoTestBody: {
+            /**
+             * Format: date-time
+             * @description When it was tested
+             */
+            at: string;
+            /** @description When it failed, the stable code it failed with; empty when it passed */
+            code: string;
+            /** @description Whether the test passed */
+            ok: boolean;
+        };
+        GitStackCheckBody: {
+            /** @description The commit the check read; send its sha back as commit to check again without a fetch */
+            commit: components["schemas"]["GitStackCommitBody"];
+            /** @description The paths the compose files need that the repository lacks and no overlay path fills. The page asks for the contents of each as an overlay file */
+            missing: string[] | null;
+            /** @description The first 50 names, relative to the folder, of the files the stack does not need: they are not stored */
+            notImported: string[] | null;
+            /**
+             * Format: int64
+             * @description How many files of the folder are not imported
+             */
+            notImportedTotal: number;
+            /** @description Everything the check found, blocking and warnings, ordered by file and line. A blocking one means the stack could not be deployed as it stands */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The services the compose files declare, sorted. Empty when they did not load */
+            services: string[] | null;
+            /** @description Every variable the compose files use and every variable sent, ordered by name */
+            vars: components["schemas"]["GitStackVariableBody"][] | null;
+        };
+        GitStackCheckRequest: {
+            /** @description The commit.sha an earlier check answered for this ref. When the server's mirror holds it the check reads the mirror and fetches nothing; otherwise, and when it is not a full 40-hex commit ID, the ref is fetched */
+            commit?: string;
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The stack's name, when the person has typed one; it only matters to the swarm name rules. A name the target refuses is ignored here: the create refuses it */
+            name?: string;
+            /** @description The paths of the overlay files the person means to add, never their contents: those are sent once, when the stack is created. A path the compose files need that an overlay fills is not missing; one the repository holds is the blocking problem overlay_clash. 422 file_path_invalid for a path that is not a path inside the stack */
+            overlayPaths?: string[] | null;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description The variables typed so far. A value here beats the same name in the folder's .env */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
+        GitStackCommitBody: {
+            /** @description The full 40-hex commit ID */
+            sha: string;
+            /**
+             * Format: date-time
+             * @description When the commit was made
+             */
+            when: string;
+        };
+        GitStackCreateBody: {
+            /** @description The full 40-hex commit ID the ref resolved to; the draft holds the folder's files at this commit */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft the stack was created with
+             */
+            draftVersion: number;
+            /** @description The first 50 names, relative to the folder, of the files the stack does not need: they are not stored */
+            notImported: string[] | null;
+            /**
+             * Format: int64
+             * @description How many files of the folder are not imported
+             */
+            notImportedTotal: number;
+            /** @description What the check of the imported files found. Nothing is deployed, so problems do not stop the creation; they stop the deploy */
+            problems: components["schemas"]["StackProblemBody"][] | null;
+            /** @description The new stack's ID */
+            stackId: string;
+        };
+        GitStackCreateRequest: {
+            /** @description The commit.sha the check answered for this ref. When it is given, the stack is created only if the ref still resolves to this commit, so what the person reviewed is what is created; otherwise 409 commit_moved and nothing is created. When it is empty, the head of the ref at the time of the request is used */
+            commit?: string;
+            /** @description The compose files, relative to the folder, in merge order: a key of a later file wins over the same key of an earlier one. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The stack's name, held to the rule of the environment's target, as for a stack made in Bayplan (422 stack_name_invalid; 409 stack_name_taken, 409 stack_name_clash) */
+            name: string;
+            /** @description Files Bayplan holds for paths the repository does not have, such as the secret a compose file names under secrets:. Each is stored sealed as a secret file. 422 file_path_invalid for a bad path, file_name_taken for one named twice, file_too_large over 1 MiB */
+            overlays?: components["schemas"]["GitStackOverlayBody"][] | null;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description The stack's variables. A value here beats the same name in the folder's .env */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
+        GitStackOverlayBody: {
+            /** @description The file's text, at most 1 MiB (422 file_too_large). It is stored sealed as a secret file and never shown again */
+            content: string;
+            /** @description The file's path inside the stack folder, as a path in a compose file writes it: relative, no .. or . name, no leading or doubled slash, no backslash or colon. 422 file_path_invalid otherwise. A path the repository holds is not stored: it is the blocking problem overlay_clash and the repository's file stands */
+            path: string;
+        };
+        GitStackVariableBody: {
+            /** @description The default written in a compose file, when hasDefault is true; <hidden> for a secret-like name */
+            default: string;
+            /** @description True when a reference in a compose file writes a default, even an empty one */
+            hasDefault: boolean;
+            /** @description The variable's name */
+            name: string;
+            /** @description Where the compose files use the variable, ordered by file and line */
+            places: components["schemas"]["StackPlaceBody"][] | null;
+            /** @description True when the variable has no value from the table, the .env or a default, so the page must ask for one. The deploy is refused until it has */
+            required: boolean;
+            /** @description True when the variable is marked secret in the table */
+            secret: boolean;
+            /** @description True when the name looks like a secret (PASSWORD, TOKEN, KEY and the like): its value is never shown */
+            secretLike: boolean;
+            /**
+             * @description Where the value comes from: table (the variables sent), repo-env (the folder's .env), default (the ${NAME:-default} written in a compose file) or unset (nowhere)
+             * @enum {string}
+             */
+            source: "table" | "repo-env" | "default" | "unset";
+            /** @description True when the variable is in the table and no compose file uses it */
+            unused: boolean;
+            /** @description The value a deploy would use. <hidden> for a secret variable and for one whose name looks like a secret, whatever its source; empty when there is none */
+            value: string;
+        };
+        GitTestFailureBody: {
+            /**
+             * @description Why the test failed
+             * @enum {string}
+             */
+            code: "unreachable" | "auth_refused" | "not_found" | "cert_untrusted" | "host_key_changed" | "host_key_untrusted" | "egress_blocked" | "ref_missing" | "timeout" | "too_large";
+            /** @description The host the test was made to */
+            host: string;
+        };
+        GitTestHostKeyBody: {
+            /** @description The SHA256 fingerprint of the key the host showed (SHA256:...) */
+            fingerprint: string;
+            /** @description The key the host showed in authorized_keys form, set when state is untrusted or changed: send it back as hostKey, or to trust-host-key, after comparing the fingerprint */
+            key: string;
+            /** @description When state is changed, the fingerprint of the trusted key the new one differs from */
+            savedFingerprint: string;
+            /**
+             * @description none for an https address, or an ssh host Bayplan holds no key for; builtin when the host is github.com, gitlab.com or bitbucket.org (or their ssh-over-443 names) and its pinned keys matched; trusted when the key a person confirmed matched; untrusted when the host showed a key nobody has trusted yet, so the test stopped before any credential was sent; changed when the host showed a different key than the trusted one, which is never accepted automatically
+             * @enum {string}
+             */
+            state: "none" | "builtin" | "trusted" | "untrusted" | "changed";
+            /** @description The key type the host showed (ssh-ed25519); empty when it showed none */
+            type: string;
+        };
+        GitTestRequest: {
+            /** @description A certificate authority to trust for this test, in PEM, for a self-hosted server with its own. It is used for this one test. 422 ca_invalid when it is not a PEM certificate; 422 ca_too_large over 64 KiB. There is no option to skip certificate verification */
+            caPem?: string;
+            /** @description The saved git credential to sign in with. It must be one a repository of this scope may use: the instance's, or this environment's on the environment route (422 credential_scope otherwise). Nothing is ever matched by address. A test that signs in is audited as git.repo_tested */
+            credentialId?: string;
+            /** @description For an ssh address, the host key the person confirmed after an earlier test answered hostKey.state untrusted, in authorized_keys form (hostKey.key of that answer). It is treated as trusted for this one test only and saved nowhere; no credential is ever sent to a host whose key is not trusted. 422 host_key_invalid when it is not one public key */
+            hostKey?: string;
+            /** @description The repository address: https://host/path.git, ssh://git@host/path.git or git@host:path.git. 422 url_unsupported for any other scheme, a path, file://, git:// or http://; 422 url_userinfo for an address with a user name and password in it */
+            url: string;
+        };
+        GitTestResultBody: {
+            /**
+             * Format: int64
+             * @description How many branches the repository has
+             */
+            branchCount: number;
+            /** @description The first 20 branch names, in name order */
+            branches: string[] | null;
+            /** @description The branch HEAD points at; empty when the server does not say */
+            defaultBranch: string;
+            /** @description Set when the test failed; null when it passed */
+            failure: components["schemas"]["GitTestFailureBody"];
+            /** @description What the test found out about the SSH host key; state none for an https address */
+            hostKey: components["schemas"]["GitTestHostKeyBody"];
+            steps: components["schemas"]["GitTestStepsBody"];
+            /**
+             * Format: int64
+             * @description How many tags the repository has
+             */
+            tagCount: number;
+            /** @description The first 20 tag names, in name order */
+            tags: string[] | null;
+        };
+        GitTestStepBody: {
+            /**
+             * @description passed, failed, not_checked when an earlier step failed, or not_needed when the step did not apply (no sign-in was asked for)
+             * @enum {string}
+             */
+            state: "passed" | "failed" | "not_checked" | "not_needed";
+        };
+        GitTestStepsBody: {
+            reachable: components["schemas"]["GitTestStepBody"];
+            refs: components["schemas"]["GitTestStepBody"];
+            signedIn: components["schemas"]["GitTestStepBody"];
+        };
+        GitTreeBody: {
+            /** @description True when entries holds fewer than total */
+            capped: boolean;
+            /** @description The full 40-hex commit ID the ref resolved to */
+            commit: string;
+            /**
+             * Format: date-time
+             * @description When that commit was made
+             */
+            committedAt: string;
+            /** @description Folders first, then everything else, each by name; at most 500 */
+            entries: components["schemas"]["GitTreeEntryBody"][] | null;
+            /** @description The folder, without a leading or trailing slash; empty for the root */
+            path: string;
+            /**
+             * Format: int64
+             * @description How many entries the folder has
+             */
+            total: number;
+        };
+        GitTreeEntryBody: {
+            /** @description For a folder, whether it directly holds compose.yaml, compose.yml, docker-compose.yaml or docker-compose.yml; false for everything else */
+            hasCompose: boolean;
+            /**
+             * @description A symlink and a submodule are only reported; they are never followed
+             * @enum {string}
+             */
+            kind: "dir" | "file" | "symlink" | "submodule";
+            /** @description The entry's name within the folder */
+            name: string;
+        };
+        GitTrustHostKeyRequest: {
+            /** @description The SSH host key to trust, in authorized_keys form (hostKey.key of a test that answered untrusted or changed), after comparing its fingerprint with the one the host's administrator publishes. 422 host_key_invalid when it is not one public key; 422 host_key_not_ssh for a repository whose address is not ssh */
+            hostKey: string;
         };
         GrantBody: {
             /**
@@ -8973,6 +10024,8 @@ export interface components {
             drift?: components["schemas"]["StackDriftSummaryBody"];
             /** @description The environment the stack belongs to */
             envId: string;
+            /** @description Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers */
+            git?: components["schemas"]["StackGitSummary"];
             /** @description True when the draft holds changes that have not been deployed */
             hasDraft: boolean;
             /** @description The stack ID */
@@ -8981,6 +10034,11 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /**
+             * @description Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person
+             * @enum {string}
+             */
+            lastDeployedTrigger?: "poll" | "webhook";
             /** @description Left out for a stack that has had no operation: the newest one, which the state is read from */
             lastOperation?: components["schemas"]["StackOperationBody"];
             /** @description Left out unless set: set while a stack operation runs on this environment, on any of its stacks, and names it. Only one runs at a time: a second is refused 409 operation_locked */
@@ -9072,8 +10130,12 @@ export interface components {
              * @description The number of the deployed revision the draft started from, 0 for none
              */
             baseSeq: number;
+            /** @description Left out for a stack with the one compose.yaml. For a stack from a git repository, the paths of its compose files in merge order */
+            composeFiles?: string[] | null;
             /** @description The draft's files by path */
             files: components["schemas"]["DraftFileBody"][] | null;
+            /** @description Left out unless set: set for the draft of a stack made from a git repository, and says where its repository files are from */
+            git?: components["schemas"]["DraftGitBody"];
             /** @description True when this is a saved draft. False when the stack has none (it was discarded): the files and variables are then the last deployed definition, or the starter example for a stack never deployed, and version is 0 */
             isDraft: boolean;
             /** @description When, RFC 3339 UTC */
@@ -9104,6 +10166,8 @@ export interface components {
             version: number;
         };
         StackDraftSaveRequest: {
+            /** @description For a stack from a git repository, its compose files as read. Left out is the same as unchanged; a list that differs from the draft's is refused with 422 repo_file_read_only. Ignored for any other stack */
+            composeFiles?: string[] | null;
             /** @description Every file of the draft. compose.yaml must be one of them. At most 50 files, 1 MiB each and 8 MiB in all */
             files: components["schemas"]["DraftFileBody"][] | null;
             /** @description Every variable of the draft */
@@ -9273,6 +10337,294 @@ export interface components {
             /** @description The file's path inside the stack. A path that is not a saved secret file is 404 file_not_found */
             path: string;
         };
+        StackGitAutoDeployInputBody: {
+            /** @description True to deploy a commit that changes the stack's folder by itself, on the authority of the person who sends this request; false to have such a commit wait for review */
+            enabled: boolean;
+        };
+        StackGitAutoDeployOwner: {
+            /** @description The user's ID */
+            id: string;
+            /** @description The user's display name, else the username; empty when the user is gone */
+            name: string;
+        };
+        StackGitCheckBody: {
+            /** @description True: a check of the stack is running. Read the stack's git route, or its list entry, for the answer */
+            checking: boolean;
+        };
+        StackGitCommitBody: {
+            /** @description The author's name, at most 200 characters. Text, never markup */
+            author: string;
+            /** @description The full ID of the commit */
+            sha: string;
+            /** @description The first line of the commit message, at most 200 characters. Text, never markup */
+            subject: string;
+            /**
+             * Format: date-time
+             * @description When the commit was authored, RFC 3339 UTC
+             */
+            when: string;
+        };
+        StackGitCommitsBody: {
+            /** @description False when Bayplan can't list the commits: nothing is deployed from the repository, the stack follows another source than the one deployed, the mirror doesn't hold the commits, or the deployed commit is not an ancestor of head. commits is then empty */
+            available: boolean;
+            /** @description True when the walk stopped at its limit of 2000 commits: there may be more than total */
+            capped: boolean;
+            /** @description The commits that changed the stack's folder, newest first; commits of the same time are ordered by ID. At most 50 are named: total is how many there are */
+            commits: components["schemas"]["StackGitCommitBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many commits changed the folder between the deployed commit and head
+             */
+            total: number;
+        };
+        StackGitConnectBody: {
+            /** @description The full ID of the commit the draft was made from, at the head of the ref */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the change: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the stack will follow */
+            ref: string;
+        };
+        StackGitConnectFileBody: {
+            /** @description True to keep the file as an overlay file (sealed, secret); false to drop it */
+            keep: boolean;
+            /** @description The path of a file of the stack's draft */
+            path: string;
+        };
+        StackGitConnectInputBody: {
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since, the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+            /** @description What becomes of the files of the stack's draft: each one named is kept as an overlay file or dropped; one not named is dropped. 422 file_path_invalid for a path that is not a file of the draft, file_name_taken for one named twice, overlay_clash for a file to keep that the repository holds */
+            files?: components["schemas"]["StackGitConnectFileBody"][] | null;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description New overlay files for paths the repository does not have, beside the files kept from the draft. Each is stored sealed as a secret file. 422 file_name_taken for a path named twice or also kept, file_path_invalid for a bad path, file_too_large over 1 MiB */
+            overlays?: components["schemas"]["GitStackOverlayBody"][] | null;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+            /** @description Values to set over the stack's variables, by name. A variable the stack holds that is not named stays; a secret variable sent as <hidden> keeps its saved value */
+            vars?: components["schemas"]["DraftVarBody"][] | null;
+        };
+        StackGitPullBody: {
+            /** @description The full ID of the commit the draft was refreshed from */
+            commit: string;
+            /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository */
+            deployedCommit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the pull: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the stack follows */
+            ref: string;
+            /**
+             * Format: int64
+             * @description How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed to compare with
+             */
+            touched: number;
+        };
+        StackGitPullInputBody: {
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since (a save, or another pull), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+        };
+        StackGitSourceBody: {
+            /** @description The full ID of the commit the draft was made from, at the head of the new source */
+            commit: string;
+            /**
+             * Format: int64
+             * @description The version of the draft after the change: review it and deploy it at this version
+             */
+            draftVersion: number;
+            /** @description The branch, tag or commit ID the new source follows */
+            ref: string;
+        };
+        StackGitSourceInputBody: {
+            /** @description The compose files, relative to the folder, in merge order. 422 compose_path_invalid for a path outside the folder or one named twice; 422 compose_file_missing for one the folder does not hold at the commit */
+            composeFiles: string[] | null;
+            /**
+             * Format: int64
+             * @description The version of the draft you read. If the draft moved since (a save, a pull, another change of source), the answer is 409 draft_changed and nothing is stored. 0 for a stack whose draft was discarded
+             */
+            draftVersion: number;
+            /** @description The folder of the repository the stack lives in, without a leading or trailing slash; the root when empty (422 folder_invalid for a path outside the repository) */
+            folder?: string;
+            /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse */
+            ref: string;
+            /**
+             * @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository: one of this environment's, or an instance repository. Another environment's is 404 repository_not_found */
+            repoId: string;
+        };
+        StackGitSummary: {
+            /** @description True when a commit that changes the folder is deployed automatically */
+            autoDeploy: boolean;
+            /** @description The person whose authority automatic deploys run on; only this route and the polling route answer it. Left out when auto-deploy is off or has no owner on record */
+            autoDeployOwner?: components["schemas"]["StackGitAutoDeployOwner"];
+            /** @description True when automatic deploys are paused: after a roll back, or because the owner lacks a permission */
+            autoDeployPaused: boolean;
+            /**
+             * @description Why automatic deploys are paused: owner (the person whose authority they run on no longer holds the permission to deploy here) or rollback (the stack was rolled back, so the repository head is not deployed over it). Left out unless autoDeployPaused
+             * @enum {string}
+             */
+            autoDeployPausedReason?: "owner" | "rollback";
+            /**
+             * Format: int64
+             * @description For autoDeployPausedReason rollback: the number of the revision the stack was rolled back to. Left out otherwise
+             */
+            autoDeployPausedRevision?: number;
+            /**
+             * Format: int64
+             * @description How many commits that changed the stack's folder the head has beyond the deployed commit (newest first, so a commit that changed only other folders is not counted). 0 unless status is behind, where it is at least 1
+             */
+            behind: number;
+            /** @description True when behind is the most that is counted: there may be more commits */
+            behindCapped: boolean;
+            /**
+             * Format: date-time
+             * @description When the stack was last checked, RFC 3339 UTC; left out when it never was
+             */
+            checkedAt?: string;
+            /** @description True while a check of the stack runs now */
+            checking: boolean;
+            /** @description The compose files of the folder the stack merges, in merge order: a key of a later file wins over the same key of an earlier one */
+            composeFiles: string[] | null;
+            /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from the repository */
+            deployedSha: string;
+            /** @description The folder of the repository the stack lives in; empty for the root */
+            folder: string;
+            /** @description The full ID of the commit the ref pointed at when the stack was last checked; empty when it never was */
+            headSha: string;
+            /** @description True when Bayplan checks the repository on a schedule. A stack that follows a fixed commit is never polled, whatever this says */
+            pollEnabled: boolean;
+            /**
+             * Format: int64
+             * @description How often the repository is checked, in minutes
+             */
+            pollMinutes: number;
+            /**
+             * @description Why the status is error, or a note on behind (source_changed); left out when there is no reason. fetch_failed: the repository can't be reached or refused the credential. host_key_changed, host_key_untrusted: the ssh host key. ref_gone: the branch or tag no longer exists. folder_gone: the folder is not in the repository. checks_failed: the new commit fails the checks. source_changed: the stack follows another repository, ref or folder than the one deployed. auto_deploy_blocked, auto_deploy_failed: an automatic deploy was held back or failed
+             * @enum {string}
+             */
+            reasonCode?: "fetch_failed" | "host_key_changed" | "host_key_untrusted" | "ref_gone" | "folder_gone" | "checks_failed" | "source_changed" | "auto_deploy_blocked" | "auto_deploy_failed";
+            /** @description A sentence on the reason, never text from the server; left out when there is no reason */
+            reasonDetail?: string;
+            /** @description The branch, tag or commit ID the stack follows */
+            ref: string;
+            /**
+             * @description What ref names: a branch or a tag, which are followed, or a commit, which is fixed and never behind
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The host of the repository's address, such as github.com; empty when it could not be read */
+            repoHost: string;
+            /** @description The repository the stack follows */
+            repoId: string;
+            /** @description The repository's name; empty when it could not be read */
+            repoName: string;
+            /** @description The repository's path on that host without the leading slash and the .git, such as acme/stacks; empty when it could not be read */
+            repoPath: string;
+            /**
+             * @description unknown: never checked, or nothing deployed to compare with. in_sync: the stack's folder at the head is the deployed one, even if the head has moved. behind: the folder has changed. error: the last check could not be made, and reasonCode says why; what is deployed keeps running
+             * @enum {string}
+             */
+            status: "unknown" | "in_sync" | "behind" | "error";
+            /** @description The stack's webhook; left out when it has none, and on the stack list and detail, which don't carry it. Only this route and the polling route answer it. It never holds the secret or the routing token */
+            webhook?: components["schemas"]["StackGitWebhookSummary"];
+        };
+        StackGitUpdatesInputBody: {
+            /** @description True to check the repository on a schedule */
+            pollEnabled: boolean;
+            /**
+             * Format: double
+             * @description How often to check, in whole minutes from 1 to 1440. Anything else, including a fraction, is 422 poll_interval
+             */
+            pollMinutes: number;
+        };
+        StackGitWebhookBody: {
+            /**
+             * @description The git host the webhook is for
+             * @enum {string}
+             */
+            flavour: "github" | "gitlab" | "gitea" | "generic";
+            /**
+             * @description Where the secret goes: path (in the address) or header
+             * @enum {string}
+             */
+            placement: "path" | "header";
+            /** @description The secret to give the git host (GitHub's Secret, GitLab's Secret token, Gitea's Secret, a generic webhook's bearer token). Shown only in this answer. Empty for a generic webhook with the secret in the address */
+            secret: string;
+            /** @description The full address the git host calls, built on the public URL: {publicURL}/hooks/git/{token}. It holds the routing token and is shown only in this answer. For a generic webhook with the secret in the address, the address is the secret */
+            url: string;
+        };
+        StackGitWebhookInputBody: {
+            /**
+             * @description The git host that will call the address: github, gitlab, gitea (Gitea, Forgejo and Gogs) or generic (any tool that can send a POST request). It decides which header proves a request came from the host
+             * @enum {string}
+             */
+            flavour: "github" | "gitlab" | "gitea" | "generic";
+            /**
+             * @description Only for generic: where the secret goes. path (the default) puts it in the address, so the address is the secret; header expects it as Authorization: Bearer <secret>. The other flavours always send a signature in a header, so they take header or nothing. Anything else is 422 webhook_placement
+             * @enum {string}
+             */
+            placement?: "path" | "header";
+        };
+        StackGitWebhookOwner: {
+            /** @description The user's ID; empty when the webhook has no owner on record */
+            id: string;
+            /** @description The user's display name, else the username; empty when the user is gone */
+            name: string;
+        };
+        StackGitWebhookSummary: {
+            /** @description The address the git host calls with its routing token masked: {publicURL}/hooks/git/••••. The token is kept only as a hash, so the full address was shown once, when the webhook was created or rotated */
+            address: string;
+            /**
+             * @description The git host the webhook is for
+             * @enum {string}
+             */
+            flavour: "github" | "gitlab" | "gitea" | "generic";
+            /** @description The last four characters of the secret (of the token, for a webhook whose address is the secret) */
+            last4: string;
+            /**
+             * Format: date-time
+             * @description When the webhook last saw a request that named it, RFC 3339 UTC; left out when it never did
+             */
+            lastAt?: string;
+            /**
+             * @description What became of that request: accepted, or rejected for a signature that did not match; left out when there was none
+             * @enum {string}
+             */
+            lastResult?: "accepted" | "rejected";
+            /** @description The person whose authority the webhook acts on */
+            owner: components["schemas"]["StackGitWebhookOwner"];
+            /** @description True when the webhook does nothing: its owner no longer holds the permission that made it, is disabled or deleted. Every request to it is a 404 until it is handed to an Admin of the environment */
+            paused: boolean;
+            /**
+             * @description Where the secret goes: path (in the address) or header
+             * @enum {string}
+             */
+            placement: "path" | "header";
+        };
         StackHistoryPreviewBody: {
             /**
              * Format: int64
@@ -9310,6 +10662,8 @@ export interface components {
         StackItem: {
             /** @description Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services */
             drift?: components["schemas"]["StackDriftSummaryBody"];
+            /** @description Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers */
+            git?: components["schemas"]["StackGitSummary"];
             /** @description True when the draft holds changes that have not been deployed */
             hasDraft: boolean;
             /** @description The stack ID */
@@ -9318,6 +10672,11 @@ export interface components {
             lastDeployedAt: string;
             /** @description Who started it; empty when there is none */
             lastDeployedBy: string;
+            /**
+             * @description Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person
+             * @enum {string}
+             */
+            lastDeployedTrigger?: "poll" | "webhook";
             /** @description True for a stack Bayplan manages; false for one found on the engine by its labels that Bayplan did not make. An unmanaged item has an empty id, only the state and the service counts, and no draft or last deploy */
             managed: boolean;
             /** @description The stack name, also its swarm namespace or compose project */
@@ -9351,6 +10710,8 @@ export interface components {
             unmanaged?: components["schemas"]["StackUnmanagedBody"];
         };
         StackJobBody: {
+            /** @description Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys */
+            commit?: string;
             /** @description When the job started, RFC 3339 UTC */
             createdAt: string;
             /** @description When the job ended, RFC 3339 UTC, empty while it runs */
@@ -9364,6 +10725,8 @@ export interface components {
              * @enum {string}
              */
             mode: "deploy" | "update" | "rollback" | "restore" | "stop" | "start" | "remove";
+            /** @description Left out unless set: for an automatic deploy, the name of the user it ran for (the one who turned auto-deploy on), at most 64 characters */
+            onBehalfOf?: string;
             /** @description The output log, oldest first: the newest 2,000 lines */
             output: components["schemas"]["StackJobOutputLine"][] | null;
             /**
@@ -9385,6 +10748,11 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * @description Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook. A deploy a person started has none
+             * @enum {string}
+             */
+            trigger?: "poll" | "webhook";
         };
         StackJobItemBody: {
             /** @description A stable word for how an item failed or was not run, empty otherwise */
@@ -9465,6 +10833,11 @@ export interface components {
              * @enum {string}
              */
             state: "running" | "done" | "failed" | "cancelled";
+            /**
+             * @description Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook
+             * @enum {string}
+             */
+            trigger?: "poll" | "webhook";
         };
         StackKindCountsBody: {
             /**
@@ -9724,6 +11097,8 @@ export interface components {
              * @description The version of the draft the review was made of: send it with the deploy
              */
             draftVersion: number;
+            /** @description Left out unless set: set for a review of the draft of a stack made from a git repository, and says which commit the draft holds and how far it is from the deployed one */
+            git?: components["schemas"]["StackReviewGitBody"];
             /** @description One row for each service with an image, by name */
             images: components["schemas"]["StackReviewImageBody"][] | null;
             /** @description The kinds of host access the stack uses that the caller may not deploy (bind mounts, extra privileges, host networking, device mounts). Empty when the caller may deploy it */
@@ -9768,6 +11143,53 @@ export interface components {
              * @description How many it would remove
              */
             removed: number;
+        };
+        StackReviewGitBody: {
+            /** @description The full ID of the commit the draft's repository files are from */
+            commit: string;
+            /** @description The compose files of the draft's source, in merge order */
+            composeFiles: string[] | null;
+            /** @description Left out unless true: true when the draft points an inline or adopted stack at a repository (D-24), so a good deploy of it replaces the stack's inline files and makes it a git stack. headCommit is then the draft's own commit */
+            converts?: boolean;
+            /** @description The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository */
+            deployedCommit: string;
+            /** @description The folder of the repository the stack lives in; empty for the root */
+            folder: string;
+            /** @description The full ID of the commit the ref pointed at when the stack was last checked or pulled; empty when it never was. When it is not commit, the branch moved on after the draft was made: a deploy still deploys commit */
+            headCommit: string;
+            /** @description The branch, tag or commit ID the draft follows */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit */
+            replaces?: components["schemas"]["StackReviewGitSourceBody"];
+            /** @description The repository's name when the draft was made from it */
+            repoName: string;
+            /** @description True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable */
+            sourceChanged: boolean;
+            /**
+             * Format: int64
+             * @description How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed
+             */
+            touched: number;
+        };
+        StackReviewGitSourceBody: {
+            /** @description The compose files, in merge order */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lives in; empty for the root */
+            folder: string;
+            /** @description The branch, tag or commit ID */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository's name; empty when it could not be read */
+            repoName: string;
         };
         StackReviewImageBody: {
             /** @description The digest the service runs with now; empty for a new service */
@@ -9933,6 +11355,8 @@ export interface components {
             adoptedFrom: string;
             /** @description The code of the failure; empty when the revision did not fail */
             code: string;
+            /** @description The full ID of the commit the revision was made from; empty for a revision of a stack that was not from a git repository then */
+            commit: string;
             /**
              * Format: date-time
              * @description When the revision was taken, RFC 3339 UTC
@@ -9973,6 +11397,15 @@ export interface components {
              * @description The revision number, unique per stack and never reused
              */
             seq: number;
+            /** @description Where the revision was read from; left out for a revision that was not made from a git repository */
+            source?: components["schemas"]["StackRevisionSource"];
+            /**
+             * @description What started the deploy of a revision no person started: poll for a check on a schedule, webhook for a push the repository announced. Empty for any other revision
+             * @enum {string}
+             */
+            syncTrigger: "" | "poll" | "webhook";
+            /** @description The hash of the stack's folder at that commit; empty when commit is */
+            tree: string;
         };
         StackRevisionListBody: {
             /** @description True when the stack has more revisions than the 500 the list holds; the oldest are left out */
@@ -9992,6 +11425,23 @@ export interface components {
             image: string;
             /** @description The service's name in the compose file */
             service: string;
+        };
+        StackRevisionSource: {
+            /** @description The compose files of the folder the revision merged, in merge order */
+            composeFiles: string[] | null;
+            /** @description The folder of the repository the stack lived in; empty for the root */
+            folder: string;
+            /** @description The branch, tag or commit ID the stack followed */
+            ref: string;
+            /**
+             * @description What ref names
+             * @enum {string}
+             */
+            refKind: "branch" | "tag" | "commit";
+            /** @description The repository the revision was made from; compare it with the stack's repository to know whether a commit link applies */
+            repoId: string;
+            /** @description The repository's name when the revision was made */
+            repoName: string;
         };
         StackRevisionVarBody: {
             /** @description The variable's name */
@@ -10078,6 +11528,11 @@ export interface components {
         StackStatusCountsBody: {
             /**
              * Format: int64
+             * @description Git stacks whose repository folder has commits that are not deployed, as the last check that could be made saw it; a stack whose later check failed is counted here too while the commits it last saw are still not deployed
+             */
+            behind: number;
+            /**
+             * Format: int64
              * @description Stacks with some but not all of their services running
              */
             degraded: number;
@@ -10101,6 +11556,11 @@ export interface components {
              * @description Stacks a person stopped
              */
             stopped: number;
+            /**
+             * Format: int64
+             * @description Git stacks whose last sync check could not be made
+             */
+            syncError: number;
         };
         StackTasksCardBody: {
             /** @description Empty when the card was read. Otherwise why it was not: no_manager, no_quorum, node_unavailable or read_failed; Items is then empty */
@@ -10147,11 +11607,13 @@ export interface components {
             required: boolean;
             /** @description True when the variable is marked secret in the table */
             secret: boolean;
+            /** @description Left out unless true. True when the value comes from the repository's .env and the name looks like a secret (PASSWORD, TOKEN, KEY and the like): the value is then <hidden> and a warning offers to set a secret variable */
+            secretLike?: boolean;
             /**
-             * @description Where the value comes from: table (the stack's variables), default (the ${NAME:-default} written in the compose file) or unset (neither)
+             * @description Where the value comes from: table (the stack's variables), repo-env (the .env file of the repository, for a stack from git), default (the ${NAME:-default} written in the compose file) or unset (none of them)
              * @enum {string}
              */
-            source: "table" | "default" | "unset";
+            source: "table" | "repo-env" | "default" | "unset";
             /** @description True when the variable is in the table and no file refers to it */
             unused: boolean;
             /** @description The value a deploy will use: the table's value, else the default written in the compose file, else empty. A secret variable's value is <hidden> */
@@ -12615,6 +14077,620 @@ export interface operations {
             };
         };
     };
+    createGitStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitStackCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStackCreateBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkGitStackSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitStackCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitStackCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvGitCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listEnvGitRepos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listGitRefs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRefsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitRepo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    browseGitTree: {
+        parameters: {
+            query: {
+                /** @description What ref names: a branch, a tag, or a commit by its ID or a prefix of 7 to 40 hex characters */
+                refKind: "branch" | "tag" | "commit";
+                /** @description The branch, tag or commit. 422 ref_invalid for a name git would refuse, one with control characters or '..', one starting with '-', or one over 255 bytes */
+                ref: string;
+                /** @description The folder to list; the root when empty */
+                path?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTreeBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    trustGitHostKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTrustHostKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listImages: {
         parameters: {
             query?: {
@@ -15011,7 +17087,7 @@ export interface operations {
             query?: {
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;
@@ -15184,6 +17260,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    connectStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitConnectInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitConnectBody"];
                 };
             };
             /** @description Error */
@@ -15519,6 +17634,408 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StackFileRevealBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSummary"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setStackGitAutoDeploy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitAutoDeployInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSummary"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitCheckBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listStackGitCommits: {
+        parameters: {
+            query: {
+                /** @description The full ID of the newest commit to list, 40 lowercase hexadecimal characters */
+                head: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitCommitsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    detachStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    pullStackGit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitPullInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitPullBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    changeStackGitSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitSourceInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSourceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateStackGitUpdates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitUpdatesInputBody"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitSummary"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createStackGitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StackGitWebhookInputBody"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitWebhookBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    removeStackGitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    rotateStackGitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The stack ID */
+                stackId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StackGitWebhookBody"];
                 };
             };
             /** @description Error */
@@ -16794,6 +19311,438 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listGitCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitCredentialBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitCredentialInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential's ID */
+                credentialId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listGitRepos: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitAddressInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitRepoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    testGitRepoInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitTestResultBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    trustGitHostKeyInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The repository's ID */
+                repoId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTrustHostKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitRepoBody"];
+                };
             };
             /** @description Error */
             default: {
@@ -18148,7 +21097,7 @@ export interface operations {
                 env?: string;
                 /** @description Search: a case-insensitive substring of the stack name or of one of its service names, at most 128 characters (else 422 query_too_long). Applied before the 500-row cap */
                 q?: string;
-                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed or drifted (the newest drift check found a difference from the deployed revision). Applied before the 500-row cap; any other value is refused 422 status_invalid */
+                /** @description Only stacks in one of these statuses, comma separated: degraded, stopped, draft (a draft with changes not yet deployed), deploy_failed, drifted (the newest drift check found a difference from the deployed revision), behind (a git stack with commits to its folder that are not deployed) or sync-error (a git stack whose last sync check failed). Applied before the 500-row cap; any other value is refused 422 status_invalid */
                 status?: string;
                 /** @description Only stacks Bayplan manages (managed) or only stacks found on the engine that Bayplan did not make (unmanaged); absent lists both. Any other value is refused 422 kind_invalid. The status filter narrows managed stacks only, so a status with kind=unmanaged lists nothing. Applied before the 500-row cap */
                 kind?: string;

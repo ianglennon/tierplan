@@ -27,6 +27,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import { ReasonText } from "@/features/environments/reason-text";
+import { reasonSentence } from "@/features/stack-git/sync-status";
 import { hasPermission, useAnyEnvironmentPermission, useMe, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 import { formatClock, formatRelative } from "@/lib/format";
@@ -144,6 +145,26 @@ type Entry =
     }
   | { kind: "manyOffline"; key: string; severity: "error"; since?: string; count: number }
   | {
+      kind: "manyGitSync";
+      key: string;
+      severity: "error";
+      since?: string;
+      envId: string;
+      envName: string;
+      count: number;
+    }
+  | {
+      kind: "manyAutoDeploy";
+      key: string;
+      severity: "warning";
+      since?: string;
+      // Which of the three auto-deploy notices several stacks of one environment have.
+      autoKind: AutoDeployKind;
+      envId: string;
+      envName: string;
+      count: number;
+    }
+  | {
       kind: "manyLoops" | "manyContainerLoops";
       key: string;
       severity: "error";
@@ -153,11 +174,22 @@ type Entry =
       count: number;
     };
 
+// The three notices an automatic deploy raises (09-26): a commit held back, drift that was put back, and a pause. Several of
+// one kind in one environment collapse into one item with a count, as the other per-stack notices do.
+const AUTO_DEPLOY_KINDS = [
+  "git_autodeploy_skipped",
+  "git_autodeploy_reverted",
+  "git_autodeploy_paused",
+] as const;
+type AutoDeployKind = (typeof AUTO_DEPLOY_KINDS)[number];
+const isAutoDeployKind = (id: string): id is AutoDeployKind =>
+  (AUTO_DEPLOY_KINDS as readonly string[]).includes(id);
+
 // The registry credential items, most severe first (D-07).
 const REGISTRY_KINDS = ["expired", "auth_failed", "expiring"] as const;
 
 const entryKey = (w: EnvWarning) =>
-  `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? w.serviceId ?? w.containerId ?? ""}`;
+  `${w.id}:${w.envId ?? ""}:${w.agentId ?? w.node ?? w.serviceId ?? w.containerId ?? w.stackId ?? ""}`;
 
 // bellEntries is what the bell lists, in order: errors before warnings, then newest
 // first, and what has no time after what has, in the order it came. More than five
@@ -196,7 +228,25 @@ export function bellEntries(
   // Standalone containers that keep restarting are told the same way, apart from the services.
   const loops = new Map<string, EnvWarning[]>();
   const containerLoops = new Map<string, EnvWarning[]>();
+  // Git stacks that cannot sync: one named item for one stack, one item per environment for several (UI-SPEC "Bell").
+  const gitSync = new Map<string, EnvWarning[]>();
+  // An auto-deploy that was skipped is also a stack that cannot sync (its commit is waiting). The skipped notice says
+  // more (the commit, and that it waits for a fix or a review), so the sync error of the same stack is not told twice.
+  const skippedStacks = new Set(
+    env.filter((w) => w.id === "git_autodeploy_skipped").map((w) => `${w.envId}:${w.stackId}`),
+  );
+  const autoDeploy = new Map<string, EnvWarning[]>();
   for (const w of env) {
+    if (w.id === "git_sync_error") {
+      if (skippedStacks.has(`${w.envId}:${w.stackId}`)) continue;
+      gitSync.set(w.envId ?? "", [...(gitSync.get(w.envId ?? "") ?? []), w]);
+      continue;
+    }
+    if (isAutoDeployKind(w.id)) {
+      const group = `${w.id}:${w.envId ?? ""}`;
+      autoDeploy.set(group, [...(autoDeploy.get(group) ?? []), w]);
+      continue;
+    }
     if (w.id === "restart_loop") {
       loops.set(w.envId ?? "", [...(loops.get(w.envId ?? "") ?? []), w]);
       continue;
@@ -240,6 +290,62 @@ export function bellEntries(
         count: ws.length,
       });
     }
+  }
+  for (const [envId, ws] of gitSync) {
+    const [first] = ws;
+    if (!first) continue;
+    if (ws.length === 1) {
+      entries.push({
+        kind: "env",
+        key: entryKey(first),
+        severity: first.severity,
+        since: first.since,
+        w: first,
+      });
+      continue;
+    }
+    const newest =
+      ws
+        .map((w) => w.since ?? "")
+        .sort()
+        .at(-1) || undefined;
+    entries.push({
+      kind: "manyGitSync",
+      key: `git_sync_errors:${envId}`,
+      severity: "error",
+      since: newest,
+      envId,
+      envName: first.envName ?? "",
+      count: ws.length,
+    });
+  }
+  for (const [group, ws] of autoDeploy) {
+    const [first] = ws;
+    if (!first || !isAutoDeployKind(first.id)) continue;
+    if (ws.length === 1) {
+      entries.push({
+        kind: "env",
+        key: entryKey(first),
+        severity: first.severity,
+        since: first.since,
+        w: first,
+      });
+      continue;
+    }
+    entries.push({
+      kind: "manyAutoDeploy",
+      key: `auto_deploy:${group}`,
+      severity: "warning",
+      since:
+        ws
+          .map((w) => w.since ?? "")
+          .sort()
+          .at(-1) || undefined,
+      autoKind: first.id,
+      envId: first.envId ?? "",
+      envName: first.envName ?? "",
+      count: ws.length,
+    });
   }
   if (instance.plainHttp)
     entries.push({ kind: "plainHttp", key: "plain_http", severity: "warning" });
@@ -574,6 +680,100 @@ function EnvEntry({ w, close, finishSetup, canFinishSetup }: { w: EnvWarning } &
         </BellItem>
       );
     }
+    case "git_sync_error": {
+      // The reason in the words of the Sync error reasons; the bell knows the code and the server's sentence and not the
+      // ref or the host, so a sentence that would name them says it plainly. A code this build has no words for gives
+      // the server's own sentence, drawn as text.
+      const reason =
+        reasonSentence(t, w.reasonCode, { detail: w.reasonDetail }) ??
+        w.reasonDetail ??
+        t("stackGit.badge.errorTip");
+      return (
+        <BellItem id={w.id} title={t("bell.env.gitSync.title", { name: w.stackName ?? "" })}>
+          <ItemDescription className="line-clamp-none wrap-anywhere">
+            {t("bell.env.gitSync.body", { reason })}
+          </ItemDescription>
+          <Link
+            to="/env/$envId/stacks/$stackId"
+            params={{ envId, stackId: w.stackId ?? "" }}
+            className={`${linkClass} text-sm ${touchLink}`}
+            onClick={close}
+          >
+            {t("bell.env.gitSync.open")}
+          </Link>
+        </BellItem>
+      );
+    }
+    case "git_autodeploy_skipped":
+      return (
+        <BellItem
+          id={w.id}
+          title={t("bell.env.autoDeploySkipped.title", { name: w.stackName ?? "" })}
+        >
+          <ItemDescription className="line-clamp-none wrap-anywhere">
+            {t("bell.env.autoDeploySkipped.body", {
+              reason: w.reasonDetail ?? t("stackGit.badge.errorTip"),
+              commit: w.commit ?? "",
+            })}
+          </ItemDescription>
+          <Link
+            to="/env/$envId/stacks/$stackId"
+            params={{ envId, stackId: w.stackId ?? "" }}
+            className={`${linkClass} text-sm ${touchLink}`}
+            onClick={close}
+          >
+            {t("bell.env.autoDeploySkipped.open")}
+          </Link>
+        </BellItem>
+      );
+    case "git_autodeploy_reverted":
+      return (
+        <BellItem
+          id={w.id}
+          title={t("bell.env.autoDeployReverted.title", { name: w.stackName ?? "" })}
+        >
+          <ItemDescription className="line-clamp-none wrap-anywhere">
+            {t("bell.env.autoDeployReverted.body", {
+              count: w.count ?? 0,
+              example: w.example ?? "",
+            })}
+          </ItemDescription>
+          <Link
+            to="/env/$envId/stacks/$stackId/history"
+            params={{ envId, stackId: w.stackId ?? "" }}
+            search={{ rev: w.revision }}
+            className={`${linkClass} text-sm ${touchLink}`}
+            onClick={close}
+          >
+            {t("bell.env.autoDeployReverted.open")}
+          </Link>
+        </BellItem>
+      );
+    case "git_autodeploy_paused": {
+      // A roll back paused it, or the person it runs for no longer holds the permission to deploy here.
+      const body =
+        w.reasonCode === "rollback"
+          ? t("bell.env.autoDeployPaused.rollback", { revision: w.revision ?? 0 })
+          : w.owner
+            ? t("bell.env.autoDeployPaused.owner", { user: w.owner })
+            : t("bell.env.autoDeployPaused.ownerGone");
+      return (
+        <BellItem
+          id={w.id}
+          title={t("bell.env.autoDeployPaused.title", { name: w.stackName ?? "" })}
+        >
+          <ItemDescription className="line-clamp-none wrap-anywhere">{body}</ItemDescription>
+          <Link
+            to="/env/$envId/stacks/$stackId"
+            params={{ envId, stackId: w.stackId ?? "" }}
+            className={`${linkClass} text-sm ${touchLink}`}
+            onClick={close}
+          >
+            {t("bell.env.autoDeployPaused.open")}
+          </Link>
+        </BellItem>
+      );
+    }
     case "clock_skew":
       return (
         <BellItem id={w.id} title={t("bell.env.clock.title", { node })}>
@@ -793,6 +993,56 @@ export function HealthBell() {
                             onClick={actions.close}
                           >
                             {t("bell.env.manyOffline.view")}
+                          </Link>
+                        </BellItem>
+                      );
+                    case "manyGitSync":
+                      return (
+                        <BellItem
+                          key={entry.key}
+                          id="git_sync_error"
+                          title={t("bell.env.gitSync.manyTitle", { count: entry.count })}
+                        >
+                          <ItemDescription className="line-clamp-none wrap-anywhere">
+                            {t("bell.env.gitSync.manyBody", { env: entry.envName })}
+                          </ItemDescription>
+                          <Link
+                            to="/env/$envId/stacks"
+                            params={{ envId: entry.envId }}
+                            search={{ status: "sync-error" }}
+                            className={`${linkClass} text-sm ${touchLink}`}
+                            onClick={actions.close}
+                          >
+                            {t("bell.env.gitSync.manyOpen")}
+                          </Link>
+                        </BellItem>
+                      );
+                    case "manyAutoDeploy":
+                      return (
+                        <BellItem
+                          key={entry.key}
+                          id={entry.autoKind}
+                          title={t(`bell.env.autoDeployMany.${entry.autoKind}.title`, {
+                            count: entry.count,
+                          })}
+                        >
+                          <ItemDescription className="line-clamp-none wrap-anywhere">
+                            {t(`bell.env.autoDeployMany.${entry.autoKind}.body`, {
+                              env: entry.envName,
+                            })}
+                          </ItemDescription>
+                          <Link
+                            to="/env/$envId/stacks"
+                            params={{ envId: entry.envId }}
+                            search={
+                              entry.autoKind === "git_autodeploy_skipped"
+                                ? { status: "sync-error" }
+                                : undefined
+                            }
+                            className={`${linkClass} text-sm ${touchLink}`}
+                            onClick={actions.close}
+                          >
+                            {t("bell.env.autoDeployMany.open")}
                           </Link>
                         </BellItem>
                       );

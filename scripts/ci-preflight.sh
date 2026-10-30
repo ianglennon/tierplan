@@ -8,6 +8,9 @@
 # (default 20) free. Two runners share each VM's disk and Docker daemon, so a full
 # disk is reported here as a full disk and not as a confusing test failure later.
 #
+# It also fails when git or git-http-backend is missing, because the git fixture tests
+# need them and a skipped test would pass the git code unchecked (Phase 9).
+#
 # Docker's root directory is usually readable only by root, so the check measures
 # the nearest parent the runner user can stat; it is on the same filesystem.
 set -euo pipefail
@@ -57,4 +60,13 @@ if [ "${failed}" -ne 0 ]; then
   echo "ci-preflight: not enough free disk; see the lines above (a weekly prune runs on the runner VMs; free space by hand on this one)" >&2
   exit 1
 fi
+# The git fixture tests (internal/gitx/gittest) serve real repositories with git-http-backend.
+# A runner without git must fail them loudly: a skipped test would pass the git code unchecked.
+if ! git --version >/dev/null 2>&1 \
+  || [ ! -x "$(git --exec-path 2>/dev/null)/git-http-backend" ]; then
+  echo "ci-preflight: git and git-http-backend are required for the git fixture tests (internal/gitx/gittest)" >&2
+  exit 1
+fi
+echo "ci-preflight: $(git --version), git-http-backend present"
+
 echo "ci-preflight: OK (at least ${MIN} GB free)"

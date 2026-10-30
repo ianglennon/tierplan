@@ -271,6 +271,36 @@ describe("Accept live into draft", () => {
     expect(screen.getByTestId("where").textContent).toBe("/env/e1/stacks/s1/drift");
   });
 
+  it("says the change belongs in the repository when the server refuses with git_stack", async () => {
+    acceptAnswer = () =>
+      Response.json(
+        { type: "git_stack", title: "Conflict", status: 409, detail: "x" },
+        { status: 409 },
+      );
+    mount();
+
+    fireEvent.click(await ready());
+
+    await waitFor(() =>
+      expect(toasts.error).toHaveBeenCalledWith(
+        "This stack deploys from git, so what's running can't be copied into its draft. Make the change in the repository.",
+      ),
+    );
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+
+  it("is not offered for a stack that deploys from git, whose Redeploy to restore stays", async () => {
+    detail = { ...detail, source: "git" };
+    mount();
+
+    await screen.findByRole("link", { name: "Redeploy to restore" });
+    // The button is there while the stack is still loading, and gone once the page knows its source.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Accept live into draft" })).toBeNull(),
+    );
+    expect(posts).toHaveLength(0);
+  });
+
   // heldBack waits for the button to say why it is held back: until the page has learnt what the user may do it says
   // Needs Operator, whoever they are.
   async function heldBack(reason: string): Promise<void> {

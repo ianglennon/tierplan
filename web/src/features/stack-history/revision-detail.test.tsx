@@ -42,6 +42,9 @@ function item(seq: number, over: Partial<StackRevision> = {}): StackRevision {
     images: [],
     pinned: 0,
     adoptedFrom: "",
+    commit: "",
+    tree: "",
+    syncTrigger: "",
     ...over,
   };
 }

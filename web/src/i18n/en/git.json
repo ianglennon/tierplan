@@ -1,0 +1,473 @@
+{
+  "git": {
+    "title": "Git",
+    "caption": "Repositories and credentials Bayplan uses to create stacks from git. Each repository uses the credential you pick, never a guess.",
+    "tabs": {
+      "label": "Git",
+      "repositories": "Repositories",
+      "credentials": "Credentials"
+    },
+    "needs": {
+      "instance": "Needs an instance administrator",
+      "onEnvironment": "{{need}} on {{name}}"
+    },
+    "badge": {
+      "instance": "Instance",
+      "customCa": "Custom CA"
+    },
+    "toolbar": {
+      "scope": {
+        "label": "Scope",
+        "all": "All scopes",
+        "instance": "Instance"
+      },
+      "clear": "Clear filters"
+    },
+    "repos": {
+      "title": "Repositories",
+      "add": "Add repository",
+      "count_one": "{{count, number}} repository",
+      "count_other": "{{count, number}} repositories",
+      "countOf": "{{count, number}} of {{total, number}} repositories",
+      "error": "Couldn't load repositories.",
+      "errorBody": "Check the connection and try again.",
+      "retry": "Retry loading repositories",
+      "search": {
+        "label": "Search repositories",
+        "placeholder": "Search by name or address",
+        "clear": "Clear search"
+      },
+      "columns": {
+        "name": "Name",
+        "scope": "Scope",
+        "address": "Address",
+        "credential": "Credential",
+        "hostKey": "Host key",
+        "lastTest": "Last test",
+        "usedBy": "Used by",
+        "actions": "Actions"
+      },
+      "actionsFor": "Actions for {{name}}",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "test": "Test",
+      "retrustHostKey": "Re-trust host key…",
+      "delete": "Delete…",
+      "noCredential": "None (public)",
+      "notTested": "Not tested",
+      "testPassed": "Passed",
+      "testFailed": "Failed",
+      "hostKey": {
+        "none": "—",
+        "builtin": "Built-in",
+        "trusted": "Trusted",
+        "untrusted": "Not trusted yet",
+        "changed": "Changed"
+      },
+      "empty": {
+        "manage": {
+          "title": "No repositories",
+          "body": "Add a repository so stacks can be created from git. A public repository needs no credential."
+        },
+        "view": {
+          "title": "No repositories apply here",
+          "body": "Ask an administrator to add a repository connection before you create a stack from git."
+        },
+        "filtered": {
+          "title": "No repositories match “{{query}}”.",
+          "titleScope": "No repositories match these filters.",
+          "action": "Clear filters"
+        }
+      },
+      "testToast": {
+        "passed": "Passed: found {{branches}} branches and {{tags}} tags.",
+        "failed": "Failed: {{reason}}"
+      }
+    },
+    "credentials": {
+      "title": "Credentials",
+      "add": "Add credential",
+      "count_one": "{{count, number}} credential",
+      "count_other": "{{count, number}} credentials",
+      "countOf": "{{count, number}} of {{total, number}} credentials",
+      "error": "Couldn't load git credentials.",
+      "errorBody": "Check the connection and try again.",
+      "retry": "Retry loading credentials",
+      "search": {
+        "label": "Search credentials",
+        "placeholder": "Search by name or username",
+        "clear": "Clear search"
+      },
+      "columns": {
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "identity": "Identity",
+        "secret": "Secret",
+        "usedBy": "Used by",
+        "lastUse": "Last use",
+        "actions": "Actions"
+      },
+      "type": {
+        "https": "HTTPS token",
+        "ssh": "SSH deploy key"
+      },
+      "actionsFor": "Actions for {{name}}",
+      "viewDetails": "View details",
+      "edit": "Edit",
+      "delete": "Delete…",
+      "privateKeySaved": "Private key saved",
+      "refused": "Refused",
+      "empty": {
+        "manage": {
+          "title": "No git credentials",
+          "body": "Add a token or a deploy key for a private repository. Public repositories work without one."
+        },
+        "view": {
+          "title": "No git credentials apply here",
+          "body": "Public repositories work without one. Ask an administrator if you need a private repository."
+        },
+        "filtered": {
+          "title": "No credentials match “{{query}}”.",
+          "titleScope": "No credentials match these filters.",
+          "action": "Clear filters"
+        }
+      }
+    },
+    "usedBy": {
+      "stacks_one": "{{count, number}} stack",
+      "stacks_other": "{{count, number}} stacks",
+      "repositories_one": "{{count, number}} repository",
+      "repositories_other": "{{count, number}} repositories",
+      "more": "and {{count, number}} more",
+      "popover": "Used by {{name}}",
+      "disabledRepository_one": "Used by {{count}} stack. Point it at another repository first.",
+      "disabledRepository_other": "Used by {{count}} stacks. Point them at another repository first.",
+      "disabledCredential_one": "Used by {{count}} repository. Pick another credential for it first.",
+      "disabledCredential_other": "Used by {{count}} repositories. Pick another credential for them first."
+    },
+    "errors": {
+      "nameRequired": "Enter a name.",
+      "nameInvalid": "Use 1 to 64 letters, digits, spaces and . _ ( ) -.",
+      "nameTaken": "A repository named {{name}} already exists in this scope.",
+      "credentialNameTaken": "A credential named {{name}} already exists in this scope.",
+      "required": "Enter the repository address.",
+      "unsupported": "Use an https:// or ssh:// address, or git@host:path.",
+      "userinfo": "Remove the username and password from the address and add them as a credential.",
+      "caInvalid": "That isn't a valid PEM certificate.",
+      "caTooLarge": "The CA certificate is too large.",
+      "credentialScope": "That credential can't be used by this repository. Pick one of this scope or an instance credential.",
+      "credentialReselect": "The address moved to another server. Pick the credential again, or choose none.",
+      "usernameRequired": "Enter a username.",
+      "usernameInvalid": "That isn't a valid username.",
+      "secretRequired": "Enter a token.",
+      "secretRequiredKey": "Enter a private key.",
+      "secretInvalid": "That isn't a token Bayplan can use. Remove any spaces.",
+      "keyPassphrase": "That key needs a passphrase. Use a key without one.",
+      "keyInvalid": "That isn't a private key Bayplan can read.",
+      "keyTooLarge": "That key is too large.",
+      "hostKeyInvalid": "That isn't a host key Bayplan can read.",
+      "permission": "You don't have permission to do that.",
+      "generic": "Something went wrong. Try again."
+    },
+    "test": {
+      "title": "Test",
+      "button": "Test repository",
+      "pending": "Testing…",
+      "caption": "Runs from the Bayplan server, where the repositories are kept. It lists the branches and tags and checks the sign-in.",
+      "needAddress": "Enter a valid address to test it.",
+      "steps": {
+        "reachable": "Repository reachable",
+        "signedIn": "Signed in",
+        "refs": "Branches and tags found"
+      },
+      "states": {
+        "passed": "Passed",
+        "failed": "Failed",
+        "not_checked": "Not checked",
+        "not_needed": "Not needed"
+      },
+      "summary": "Found {{branches}} branches and {{tags}} tags. Default branch: {{name}}.",
+      "summaryNoDefault": "Found {{branches}} branches and {{tags}} tags.",
+      "failed": "Failed: {{reason}}",
+      "show": "Show branches and tags",
+      "hide": "Hide branches and tags",
+      "branches": "Branches",
+      "tags": "Tags",
+      "none": "None",
+      "warning": "The last test failed. You can still save this repository.",
+      "stale": "The address or credential has changed since this test.",
+      "lastTest": "Last test",
+      "reasons": {
+        "unreachable": "Couldn't reach {{host}}. Check the address, DNS and firewall.",
+        "auth_refused": "{{host}} refused the credential. Check the token or the deploy key.",
+        "not_found": "{{host}} says the repository doesn't exist or this credential can't read it.",
+        "cert_untrusted": "The certificate from {{host}} isn't trusted. Add the CA certificate under Advanced.",
+        "host_key_changed": "The host key for {{host}} has changed. Bayplan stopped. If you expected this, an administrator can trust the new key.",
+        "host_key_untrusted": "Bayplan hasn't trusted the host key for {{host}}. Test the repository and confirm its key.",
+        "egress_blocked": "Bayplan's network policy doesn't allow connections to {{host}}.",
+        "ref_missing": "That branch or tag no longer exists in the repository on {{host}}.",
+        "timeout": "{{host}} took too long to answer. Try again.",
+        "too_large": "The repository on {{host}} is too large for Bayplan to read.",
+        "unknown": "Bayplan couldn't test the repository. Try again."
+      },
+      "short": {
+        "unreachable": "Couldn't reach the server",
+        "auth_refused": "The credential was refused",
+        "not_found": "Repository not found or no access",
+        "cert_untrusted": "Certificate not trusted",
+        "host_key_changed": "Host key changed",
+        "host_key_untrusted": "Host key not trusted yet",
+        "egress_blocked": "Blocked by the network policy",
+        "ref_missing": "Branch or tag missing",
+        "timeout": "Timed out",
+        "too_large": "Repository too large"
+      },
+      "errors": {
+        "rateLimited": "Too many tests. Wait a minute and try again.",
+        "permission": "You don't have permission to test this repository.",
+        "generic": "Couldn't run the test. Try again."
+      }
+    },
+    "hostKey": {
+      "confirm": {
+        "title": "Confirm this host's key",
+        "body": "{{host}} presented a {{type}} key. Check the fingerprint against the one your git host publishes before you trust it.",
+        "fingerprint": "Fingerprint",
+        "copy": "Copy fingerprint",
+        "copied": "Copied",
+        "trust": "Trust this key",
+        "dismiss": "Don't trust it",
+        "helper": "Bayplan keeps this key with the repository and stops if it ever changes."
+      },
+      "confirmed": "Key trusted. It is saved with the repository.",
+      "builtin": "Matches the built-in key for {{host}}.",
+      "trusted": "Trusted",
+      "trustedKey": "Trusted key",
+      "changed": {
+        "title": "The host key for {{host}} has changed",
+        "body": "Bayplan stopped, because this can mean someone is intercepting the connection.",
+        "saved": "Saved key",
+        "presented": "Presented key",
+        "retrust": "Re-trust host key…"
+      },
+      "retrust": {
+        "title": "Trust the new key for {{host}}?",
+        "body": "The key for {{host}} changed. Only continue if you know why, for example you rebuilt the server. Bayplan will record who trusted it.",
+        "saved": "Saved key",
+        "new": "New key",
+        "keep": "Keep the old key",
+        "confirm": "Trust the new key",
+        "pending": "Trusting…",
+        "done": "Trusted the new key for {{host}}.",
+        "unchanged": "The host key for {{host}} matches the saved key again.",
+        "permission": "You don't have permission to trust this host key.",
+        "gone": "This repository no longer exists.",
+        "invalid": "That isn't a host key Bayplan can read.",
+        "generic": "Couldn't trust the key. Try again."
+      }
+    },
+    "repoSheet": {
+      "add": {
+        "title": "Add a repository",
+        "description": "Stored encrypted where it holds a secret. Stacks refer to a repository by name."
+      },
+      "edit": {
+        "title": "Edit {{name}}"
+      },
+      "view": {
+        "description": "You can see this repository but not change it.",
+        "missing": "—"
+      },
+      "name": {
+        "label": "Name",
+        "placeholder": "homelab-stacks",
+        "helper": "Shown in the table and in each stack that uses it."
+      },
+      "scope": {
+        "label": "Scope",
+        "instance": "All environments (instance)",
+        "helper": "Instance repositories can be used in every environment. Pick an environment to limit it to one.",
+        "fixed": "A repository's scope can't change. Create a new one instead."
+      },
+      "address": {
+        "label": "Repository address",
+        "placeholder": "https://git.example.com/acme/stacks.git or git@github.com:acme/stacks.git",
+        "helper": "https, ssh or the git@host:path form. Don't put a username or password in the address."
+      },
+      "credential": {
+        "label": "Credential",
+        "none": "None (public repository)",
+        "thisScope": "This scope",
+        "instance": "Instance",
+        "add": "Add a credential…",
+        "helper": "Bayplan uses exactly this credential. It never picks one from the address.",
+        "sshWithHttps": "This credential is an SSH key. Use an HTTPS token with an https:// address, or change the address to the ssh form.",
+        "httpsWithSsh": "This credential is an HTTPS token. Use an SSH deploy key with an ssh address.",
+        "gone": "The credential this repository used is no longer listed."
+      },
+      "advanced": {
+        "trigger": "Advanced",
+        "ca": {
+          "label": "Custom CA certificate (PEM)",
+          "placeholder": "-----BEGIN CERTIFICATE-----",
+          "helper": "For a self-hosted https server with its own certificate authority. Used by every fetch of this repository."
+        },
+        "noSkip": "Bayplan has no option to skip certificate checks."
+      },
+      "cancel": "Cancel",
+      "close": "Close",
+      "save": "Save changes",
+      "submit": "Save repository",
+      "pending": "Saving…",
+      "saved": "Saved {{name}}.",
+      "success": "Added repository {{name}}.",
+      "discard": {
+        "title": "Discard changes?",
+        "body": "The repository hasn't been saved.",
+        "keep": "Keep editing",
+        "discard": "Discard changes"
+      },
+      "loadError": {
+        "title": "Couldn't load the repository.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading repository"
+      },
+      "gone": {
+        "title": "That repository is gone",
+        "body": "It was deleted while you were looking at it.",
+        "back": "Back to repositories"
+      },
+      "view_rows": {
+        "label": "Repository details",
+        "empty": "No details.",
+        "name": "Name",
+        "scope": "Scope",
+        "address": "Address",
+        "credential": "Credential",
+        "hostKey": "Host key",
+        "customCa": "Custom CA",
+        "customCaYes": "Yes",
+        "lastTest": "Last test"
+      }
+    },
+    "credSheet": {
+      "add": {
+        "title": "Add a git credential",
+        "description": "Stored encrypted. The secret can't be shown again after you save."
+      },
+      "edit": {
+        "title": "Edit {{name}}"
+      },
+      "view": {
+        "description": "You can see this credential but not change it.",
+        "missing": "—"
+      },
+      "type": {
+        "label": "Credential type",
+        "https": "HTTPS token",
+        "ssh": "SSH deploy key",
+        "httpsHelper": "Use a personal access token, or a deploy or project token with read access to the repository. Use the token, not your password.",
+        "sshHelper": "Use a deploy key with read access. Add the public key shown after saving to the repository's deploy keys."
+      },
+      "name": {
+        "label": "Name",
+        "placeholder": "gitea-homelab",
+        "helper": "Shown in the tables and when you pick a credential."
+      },
+      "scope": {
+        "label": "Scope",
+        "instance": "All environments (instance)",
+        "helper": "Instance credentials can be used by repositories in every environment. Pick an environment to limit it to one.",
+        "fixed": "A credential's scope can't change. Create a new one instead."
+      },
+      "username": {
+        "label": "Username",
+        "helper": "Your host decides what it needs here. GitHub accepts any name with a personal access token; GitLab deploy tokens use their own username."
+      },
+      "token": {
+        "label": "Token",
+        "editLabel": "New token (optional)",
+        "keepLast4": "Leave empty to keep the one ending {{last4}}",
+        "keepStored": "Leave empty to keep the saved token",
+        "show": "Show token",
+        "hide": "Hide token"
+      },
+      "key": {
+        "label": "Private key",
+        "editLabel": "New private key (optional)",
+        "placeholder": "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "keepStored": "Leave empty to keep the saved key",
+        "choose": "Choose file",
+        "helper": "Use a key without a passphrase. Bayplan seals it and never shows it again.",
+        "retype": "Type the new secret now: switching the type needs one."
+      },
+      "publicKey": {
+        "label": "Public key",
+        "copyLabel": "the public key",
+        "fingerprint": "Fingerprint",
+        "helper": "Add this to your repository's deploy keys."
+      },
+      "cancel": "Cancel",
+      "close": "Close",
+      "save": "Save changes",
+      "submit": "Save credential",
+      "pending": "Saving…",
+      "saved": "Saved {{name}}.",
+      "success": "Added credential {{name}}.",
+      "discard": {
+        "title": "Discard changes?",
+        "body": "The credential hasn't been saved.",
+        "keep": "Keep editing",
+        "discard": "Discard changes"
+      },
+      "loadError": {
+        "title": "Couldn't load the credential.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading credential"
+      },
+      "gone": {
+        "title": "That credential is gone",
+        "body": "It was deleted while you were looking at it.",
+        "back": "Back to credentials"
+      },
+      "view_rows": {
+        "label": "Credential details",
+        "empty": "No details.",
+        "name": "Name",
+        "scope": "Scope",
+        "type": "Type",
+        "username": "Username",
+        "secret": "Secret",
+        "fingerprint": "Fingerprint",
+        "lastUse": "Last use"
+      }
+    },
+    "deleteRepo": {
+      "title": "Delete “{{name}}”?",
+      "body": "Stacks can't be created from it any more. No stack uses it, so nothing else changes.",
+      "cancel": "Cancel",
+      "confirm": "Delete repository",
+      "pending": "Deleting…",
+      "done": "Deleted repository {{name}}.",
+      "gone": "{{name}} was already deleted.",
+      "permission": "You don't have permission to delete this repository.",
+      "inUse_one": "Used by {{count}} stack. Point it at another repository first.",
+      "inUse_other": "Used by {{count}} stacks. Point them at another repository first.",
+      "generic": "Couldn't delete the repository. Try again."
+    },
+    "deleteCred": {
+      "title": "Delete “{{name}}”?",
+      "body": "Nothing uses it, so no repository changes.",
+      "cancel": "Cancel",
+      "confirm": "Delete credential",
+      "pending": "Deleting…",
+      "done": "Deleted credential {{name}}.",
+      "gone": "{{name}} was already deleted.",
+      "permission": "You don't have permission to delete this credential.",
+      "inUse_one": "Used by {{count}} repository. Pick another credential for it first.",
+      "inUse_other": "Used by {{count}} repositories. Pick another credential for them first.",
+      "generic": "Couldn't delete the credential. Try again."
+    }
+  }
+}

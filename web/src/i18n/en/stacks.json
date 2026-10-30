@@ -41,7 +41,10 @@
       "start": {
         "label": "Start from",
         "example": "Starter example",
-        "empty": "Empty file"
+        "empty": "Empty file",
+        "git": "A git repository",
+        "gitHelper": "Keep {{name}} in sync with a folder in a repository. You choose the repository on the next page.",
+        "gitHelperNoName": "Keep the stack in sync with a folder in a repository. You choose the repository on the next page."
       },
       "cancel": "Cancel",
       "submit": "Create stack",
@@ -56,7 +59,8 @@
         "permission": "You can't create stacks on this environment.",
         "generic": "Couldn't create the stack. Check the connection and try again.",
         "lost": "The server didn't answer. The stack may have been created: check the list before you try again."
-      }
+      },
+      "chooseRepository": "Choose repository"
     },
     "detail": {
       "breadcrumb": {

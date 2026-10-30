@@ -38,6 +38,9 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `environments.read` | environment | yes | yes | yes | yes | no | View an environment |
 | `environments.revoke` | environment | no | no | yes | yes | no | Revoke, block and unblock this environment's agents |
 | `environments.token` | global | no | no | no | yes | yes | Show or rotate an environment's join token |
+| `git.instance` | global | no | no | no | yes | yes | Manage git repositories and credentials that apply to every environment |
+| `git.manage` | environment | no | no | yes | yes | no | Manage this environment's git repositories and credentials, the webhooks of its git stacks, and convert or detach git stacks |
+| `git.read` | environment | yes | yes | yes | yes | no | View the git repositories and credentials that apply to this environment |
 | `images.delete` | environment | no | yes | yes | yes | no | Remove and untag images |
 | `images.pull` | environment | no | yes | yes | yes | no | Pull images |
 | `images.read` | environment | yes | yes | yes | yes | no | View images |

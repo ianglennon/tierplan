@@ -503,3 +503,20 @@ func maskSegments(value string) string {
 	}
 	return strings.Join(out, ",")
 }
+
+// webhookPathMarker is the part of a webhook's address that comes before its routing token.
+const webhookPathMarker = "/hooks/git/"
+
+// WebhookPlaceholder stands for the routing token of a webhook address in anything that is logged.
+const WebhookPlaceholder = "[redacted]"
+
+// WebhookPath is a request path as it may be logged: the routing token in a webhook address (/hooks/git/{token}) is a
+// credential, so everything after "/hooks/git/" is replaced by "[redacted]". Any other path is returned as it is. The
+// marker is found anywhere in the path, so an address still carrying a base path is covered too.
+func WebhookPath(path string) string {
+	i := strings.Index(path, webhookPathMarker)
+	if i < 0 {
+		return path
+	}
+	return path[:i+len(webhookPathMarker)] + WebhookPlaceholder
+}

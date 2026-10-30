@@ -131,6 +131,43 @@ type Environment struct {
 	RestartLoopWindowMinutes int64
 }
 
+type GitCredential struct {
+	ID              string
+	EnvID           sql.NullString
+	Name            string
+	Type            string
+	Username        string
+	SecretSealed    string
+	SecretLast4     string
+	PublicKey       string
+	Fingerprint     string
+	LastUseAt       sql.NullInt64
+	LastFailureAt   sql.NullInt64
+	LastFailureCode string
+	CreatedAt       int64
+	UpdatedAt       int64
+	CreatedBy       string
+}
+
+type GitRepo struct {
+	ID               string
+	EnvID            sql.NullString
+	Name             string
+	Url              string
+	CredentialID     sql.NullString
+	CaPem            string
+	HostKey          string
+	HostKeyFp        string
+	HostKeyTrustedBy string
+	HostKeyTrustedAt sql.NullInt64
+	LastTestAt       sql.NullInt64
+	LastTestOk       sql.NullInt64
+	LastTestCode     string
+	CreatedAt        int64
+	UpdatedAt        int64
+	CreatedBy        string
+}
+
 type OwnedResource struct {
 	Kind          string
 	ResourceID    string
@@ -237,21 +274,72 @@ type StackDeploy struct {
 	Code          string
 }
 
+type StackGit struct {
+	StackID                string
+	RepoID                 string
+	RefKind                string
+	Ref                    string
+	Folder                 string
+	ComposeFiles           string
+	PollEnabled            int64
+	PollIntervalS          int64
+	AutoDeploy             int64
+	AutoDeployPausedReason string
+	AutoDeployPausedSeq    int64
+	WebhookFlavour         string
+	WebhookPlacement       string
+	WebhookTokenHash       string
+	WebhookSecretSealed    string
+	WebhookSecretLast4     string
+	WebhookCreatedBy       string
+	WebhookLastAt          sql.NullInt64
+	WebhookLastResult      string
+	PendingConvert         int64
+	CreatedAt              int64
+	UpdatedAt              int64
+}
+
+type StackGitState struct {
+	StackID             string
+	DeployedCommit      string
+	DeployedTree        string
+	HeadCommit          string
+	HeadTree            string
+	Behind              int64
+	Status              string
+	ReasonCode          string
+	ReasonDetail        string
+	CheckedAt           sql.NullInt64
+	ErrorSince          sql.NullInt64
+	ConsecutiveFailures int64
+	PendingCommit       string
+	NextCheckAt         sql.NullInt64
+	EventKind           string
+	EventDetail         string
+	EventAt             sql.NullInt64
+}
+
 type StackSnapshot struct {
-	ID           string
-	StackID      string
-	Kind         string
-	Seq          int64
-	BaseSeq      int64
-	Version      int64
-	Outcome      string
-	Rendered     string
-	Pins         string
-	CreatedBy    string
-	CreatedAt    int64
-	Origin       string
-	RestoredFrom int64
-	Platforms    string
+	ID            string
+	StackID       string
+	Kind          string
+	Seq           int64
+	BaseSeq       int64
+	Version       int64
+	Outcome       string
+	Rendered      string
+	Pins          string
+	CreatedBy     string
+	CreatedAt     int64
+	Origin        string
+	RestoredFrom  int64
+	Platforms     string
+	GitCommit     string
+	GitTree       string
+	GitSource     string
+	ComposeFiles  string
+	SyncTrigger   string
+	RevertedDrift string
 }
 
 type StackSnapshotFile struct {
@@ -260,6 +348,7 @@ type StackSnapshotFile struct {
 	Content       string
 	ContentSealed string
 	Secret        int64
+	Origin        string
 }
 
 type StackSnapshotVar struct {

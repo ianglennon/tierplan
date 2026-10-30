@@ -132,6 +132,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "secret.rotated",
   "config.rotated",
   "stack.created",
+  "stack.created_from_git",
+  "stack.pointed_at_git",
   "stack.draft_saved",
   "stack.draft_discarded",
   "stack.deployed",
@@ -141,6 +143,29 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "stack.value_revealed",
   "stack.adopted",
   "stack.drift_accepted",
+  "git.credential_created",
+  "git.credential_updated",
+  "git.credential_deleted",
+  "git.repo_created",
+  "git.repo_updated",
+  "git.repo_deleted",
+  "git.repo_tested",
+  "git.host_key_trusted",
+  "git.host_key_retrusted",
+  "git.sync_failed",
+  "git.updates_changed",
+  "git.webhook_delivered",
+  "git.webhook_rejected",
+  "git.webhook_created",
+  "git.webhook_rotated",
+  "git.webhook_removed",
+  "git.autodeploy_enabled",
+  "git.autodeploy_disabled",
+  "git.autodeployed",
+  "git.autodeploy_paused",
+  "git.stack_detached",
+  "git.pulled",
+  "git.source_changed",
 ];
 
 // The actions that can carry an environment, which is all an env Admin's scoped
@@ -169,6 +194,7 @@ const ENV_SCOPED_PREFIXES = [
   "secret.",
   "config.",
   "stack.",
+  "git.",
 ];
 export const ENV_SCOPED_ACTIONS: readonly string[] = KNOWN_ACTIONS.filter(
   (key) => key === "permission.denied" || ENV_SCOPED_PREFIXES.some((p) => key.startsWith(p)),
@@ -303,6 +329,54 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   }
   if (key === "stack.drift_accepted" && details?.stack) {
     return t("audit.actions.stack.drift_accepted_named", { name: details.stack });
+  }
+  // A failed sync names the stack and says why.
+  if (key === "git.sync_failed" && details?.stack) {
+    return t("audit.actions.git.sync_failed_named", {
+      name: details.stack,
+      reason: details.reason ?? details.reason_code ?? "",
+    });
+  }
+  // A change of a stack's polling names the stack.
+  if (key === "git.updates_changed" && details?.stack) {
+    return t("audit.actions.git.updates_changed_named", { name: details.stack });
+  }
+  // A webhook names the stack it is for.
+  if (key === "git.webhook_delivered" && details?.stack) {
+    return t("audit.actions.git.webhook_delivered_named", { name: details.stack });
+  }
+  if (key === "git.webhook_rejected" && details?.stack) {
+    return t("audit.actions.git.webhook_rejected_named", { name: details.stack });
+  }
+  if (
+    (key === "git.webhook_created" ||
+      key === "git.webhook_rotated" ||
+      key === "git.webhook_removed") &&
+    details?.stack
+  ) {
+    return t(`audit.actions.${key}_named`, { name: details.stack });
+  }
+  // Auto-deploy names the stack it is for, and an automatic deploy the commit it ran.
+  if (key === "git.autodeployed" && details?.stack && details.commit) {
+    return t("audit.actions.git.autodeployed_named", {
+      name: details.stack,
+      sha: details.commit.slice(0, 7),
+    });
+  }
+  if (
+    (key === "git.autodeploy_enabled" ||
+      key === "git.autodeploy_disabled" ||
+      key === "git.autodeploy_paused" ||
+      key === "git.stack_detached" ||
+      key === "git.pulled" ||
+      key === "git.source_changed") &&
+    details?.stack
+  ) {
+    return t(`audit.actions.${key}_named`, { name: details.stack });
+  }
+  // A git connection change names the credential or repository it was about.
+  if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {
+    return t(`audit.actions.${key}_named`, { name: details.name });
   }
   return KNOWN_ACTIONS.includes(key) ? t(`audit.actions.${key}`) : key;
 }

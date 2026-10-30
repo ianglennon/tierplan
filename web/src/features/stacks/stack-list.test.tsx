@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: 2026 The Bayplan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setCsrfToken } from "@/api/client";
+import { LIST_REFETCH_MS } from "@/api/resources";
+import { STACK_GIT_POLL_MS } from "@/api/stack-git";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { StackListSearch, StackListSearchPatch } from "@/features/stacks/list-search";
 import { StackList } from "@/features/stacks/stack-list";
@@ -14,6 +16,7 @@ import "@/i18n";
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 import { TestRouter } from "@/test-router";
+import { waitUnderFakeClock } from "@/test-settle";
 
 const ENV = "e1";
 
@@ -87,7 +90,15 @@ beforeEach(() => {
           total: items.length,
           unfilteredTotal: items.length,
           capped: false,
-          statusCounts: { degraded: 0, stopped: 0, draft: 0, deployFailed: 0, drifted: 0 },
+          statusCounts: {
+            degraded: 0,
+            stopped: 0,
+            draft: 0,
+            deployFailed: 0,
+            drifted: 0,
+            behind: 0,
+            syncError: 0,
+          },
           ...(stacks as object),
           ...listExtra,
         });
@@ -555,16 +566,32 @@ describe("StackList: search and status chips", () => {
     expect(last.searchParams.get("dir")).toBe("desc");
   });
 
-  it("shows the five status chips with the counts the server gave, in a labelled group that wraps, Drifted after the others", async () => {
+  it("shows the seven status chips with the counts the server gave, in a labelled group that wraps, Behind and Sync error after Drifted", async () => {
     listExtra = {
-      statusCounts: { degraded: 2, stopped: 1, draft: 3, deployFailed: 0, drifted: 4 },
+      statusCounts: {
+        degraded: 2,
+        stopped: 1,
+        draft: 3,
+        deployFailed: 0,
+        drifted: 4,
+        behind: 5,
+        syncError: 1,
+      },
       unfilteredTotal: 9,
     };
     mount({ search: { q: "zzz" } });
     await screen.findByRole("link", { name: "web" });
     const group = screen.getByRole("group", { name: "Filter by status" });
     expect(group.className).toContain("flex-wrap");
-    const labels = ["Degraded 2", "Stopped 1", "Draft 3", "Deploy failed 0", "Drifted 4"];
+    const labels = [
+      "Degraded 2",
+      "Stopped 1",
+      "Draft 3",
+      "Deploy failed 0",
+      "Drifted 4",
+      "Behind 5",
+      "Sync error 1",
+    ];
     for (const label of labels) {
       expect(within(group).getByRole("button", { name: label })).toBeTruthy();
     }
@@ -1084,5 +1111,266 @@ describe("StackList: flags on unmanaged stacks", () => {
       const badge = within(row).getByText(word);
       expect(badge.getAttribute("data-variant")).toBe("outline");
     }
+  });
+});
+
+describe("StackList git stacks", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const git = (over: Record<string, unknown> = {}) => ({
+    repoId: "r1",
+    repoName: "stacks repo",
+    repoHost: "github.com",
+    repoPath: "acme/stacks",
+    refKind: "branch",
+    ref: "main",
+    folder: "",
+    deployedSha: SHA,
+    headSha: SHA,
+    behind: 0,
+    behindCapped: false,
+    status: "in_sync",
+    checking: false,
+    autoDeploy: false,
+    autoDeployPaused: false,
+    ...over,
+  });
+  const gitStack = (name: string, g: Record<string, unknown> = {}, over = {}) =>
+    stack({
+      id: name,
+      name,
+      source: "git",
+      state: "running",
+      lastDeployedAt: "2026-10-19T11:00:00Z",
+      lastDeployedBy: "ada",
+      git: git(g),
+      ...over,
+    });
+  const row = (n: string) => screen.getByRole("link", { name: n }).closest("tr") as HTMLElement;
+  const badgeTexts = (n: string) =>
+    within(row(n))
+      .getAllByText(/^(Draft|Drifted|Behind.*|Sync error)$/)
+      .map((b) => b.textContent);
+
+  it("shows the outline Git source badge, with the repository and the ref in its description", async () => {
+    stacks = { items: [gitStack("web")] };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    const badge = within(row("web")).getByText("Git");
+    expect(badge.getAttribute("data-variant")).toBe("outline");
+    const description = document.getElementById(badge.getAttribute("aria-describedby") ?? "");
+    expect(description?.textContent).toBe("stacks repo · main");
+  });
+
+  it("reads Last deployed as the time and then the short commit and who", async () => {
+    stacks = {
+      items: [
+        gitStack("web"),
+        stack({
+          id: "plain",
+          name: "plain",
+          state: "running",
+          lastDeployedAt: "2026-10-19T11:00:00Z",
+          lastDeployedBy: "bob",
+        }),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "web" });
+    expect(within(row("web")).getByText("0123456 · by ada")).toBeTruthy();
+    // A stack that is not from git keeps the P7 wording.
+    expect(within(row("plain")).getByText("by bob")).toBeTruthy();
+  });
+
+  it("badges a stack that is behind with the count, and one whose sync failed", async () => {
+    stacks = {
+      items: [
+        gitStack("behind", { status: "behind", behind: 3, headSha: "f".repeat(40) }),
+        gitStack("failing", {
+          status: "error",
+          reasonCode: "ref_gone",
+          reasonDetail: "The branch or tag no longer exists.",
+        }),
+        gitStack("fine"),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "behind" });
+    expect(badgeTexts("behind")).toEqual(["Behind 3"]);
+    expect(badgeTexts("failing")).toEqual(["Sync error"]);
+    expect(within(row("fine")).queryByText(/^(Behind|Sync error)/)).toBeNull();
+    const badge = within(row("failing")).getByText("Sync error");
+    expect(document.getElementById(badge.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "main no longer exists.",
+    );
+  });
+
+  it("shows Draft, Drifted, Behind and Sync error together after the name, in that order", async () => {
+    stacks = {
+      items: [
+        gitStack(
+          "everything",
+          { status: "error", behind: 2, reasonCode: "fetch_failed" },
+          { hasDraft: true, drift: { state: "drifted", revision: 3, count: 2 } },
+        ),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: "everything" });
+    expect(badgeTexts("everything")).toEqual(["Draft", "Drifted", "Behind 2", "Sync error"]);
+    // They sit after the name in the same cell, which wraps them under it on a narrow screen.
+    const cell = screen.getByRole("link", { name: "everything" }).closest("td") as HTMLElement;
+    expect(cell.querySelector("span")?.className).toContain("flex-wrap");
+  });
+
+  it("keeps the badges after a truncated name and gives each of 30 stacks its own", async () => {
+    const long = `${"a".repeat(100)}-monorepo`;
+    stacks = {
+      items: [
+        gitStack(long, { status: "behind", behind: 1 }),
+        ...Array.from({ length: 30 }, (_, i) =>
+          gitStack(`svc-${i}`, { status: "behind", behind: i + 1 }),
+        ),
+      ],
+    };
+    mount();
+    await screen.findByRole("link", { name: long });
+    const link = screen.getByRole("link", { name: long });
+    const cell = link.closest("td") as HTMLElement;
+    const children = Array.from(cell.querySelectorAll("span, a"));
+    const nameAt = children.indexOf(link);
+    const badgeAt = children.findIndex((c) => c.textContent === "Behind 1");
+    expect(nameAt).toBeGreaterThanOrEqual(0);
+    expect(badgeAt).toBeGreaterThan(nameAt);
+    for (let i = 0; i < 30; i++) {
+      expect(badgeTexts(`svc-${i}`)).toEqual([`Behind ${i + 1}`]);
+    }
+  });
+
+  it("offers Check now in the menu of a git stack, which asks the server to check it", async () => {
+    stacks = { items: [gitStack("web")] };
+    const checks: string[] = [];
+    const base = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (req) => {
+      const r = req as Request;
+      const path = new URL(r.url).pathname;
+      if (r.method === "POST" && path === `/api/env/${ENV}/stacks/web/git/check`) {
+        checks.push(path);
+        return Response.json({ checking: true }, { status: 202 });
+      }
+      return (base as (r: Request) => Promise<Response>)(r);
+    });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Check now" }));
+    await waitFor(() => expect(checks).toEqual([`/api/env/${ENV}/stacks/web/git/check`]));
+  });
+
+  it("goes on waiting for a check after the menu closed, and reads the list again so the badge follows the answer", async () => {
+    stacks = { items: [gitStack("web")] };
+    // What the server answers for the stack while the check runs, and once it has ended.
+    let checking = true;
+    const base = vi.mocked(fetch).getMockImplementation();
+    vi.mocked(fetch).mockImplementation(async (req) => {
+      const r = req as Request;
+      const path = new URL(r.url).pathname;
+      if (r.method === "POST" && path === `/api/env/${ENV}/stacks/web/git/check`) {
+        return Response.json({ checking: true }, { status: 202 });
+      }
+      if (r.method === "GET" && path === `/api/env/${ENV}/stacks/web`) {
+        return Response.json({
+          ...gitStack("web"),
+          envId: ENV,
+          git: git({ checking }),
+        });
+      }
+      return (base as (r: Request) => Promise<Response>)(r);
+    });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "Actions for web" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    const item = await screen.findByRole("menuitem", { name: "Check now" });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(item);
+      // The menu is gone with the click, and the check is still waited for.
+      await waitUnderFakeClock(() => expect(screen.queryByRole("menuitem")).toBeNull());
+      // The answer to the click has come and the lists were read once for it, before the check ended.
+      await waitUnderFakeClock(() => {
+        expect(client.isMutating()).toBe(0);
+        expect(client.isFetching()).toBe(0);
+      });
+      const listReads = requests.length;
+      // The server has ended the check and found the stack behind: the next poll of the stack says so.
+      checking = false;
+      stacks = {
+        items: [gitStack("web", { status: "behind", behind: 2, headSha: "f".repeat(40) })],
+      };
+      const before = Date.now();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STACK_GIT_POLL_MS);
+      });
+      await waitUnderFakeClock(() => expect(screen.getByText("Behind 2")).toBeTruthy());
+      // It came from the end of the check and not from the list's own 30 s refresh.
+      expect(Date.now() - before).toBeLessThan(LIST_REFETCH_MS);
+      expect(requests.length).toBeGreaterThan(listReads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads Pull & redeploy… for a git stack in the place of Deploy…, and Review update only while it is behind", async () => {
+    stacks = {
+      items: [
+        stack({ id: "inline", name: "inline", state: "running" }),
+        gitStack("current", { status: "in_sync", behind: 0 }),
+        gitStack("late", { status: "behind", behind: 2 }),
+      ],
+    };
+    mount();
+    const expected: Record<string, { pull: boolean; deploy: boolean; review: boolean }> = {
+      inline: { pull: false, deploy: true, review: false },
+      current: { pull: true, deploy: false, review: false },
+      late: { pull: true, deploy: false, review: true },
+    };
+    for (const [name, want] of Object.entries(expected)) {
+      const trigger = await screen.findByRole("button", { name: `Actions for ${name}` });
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+      await screen.findByRole("menuitem", { name: "Open stack" });
+      expect(!!screen.queryByRole("menuitem", { name: "Pull & redeploy…" })).toBe(want.pull);
+      expect(!!screen.queryByRole("menuitem", { name: "Deploy…" })).toBe(want.deploy);
+      expect(!!screen.queryByRole("menuitem", { name: "Review update" })).toBe(want.review);
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    }
+  });
+
+  it("offers no Check now for an inline or an adopted stack, or for a fixed commit", async () => {
+    stacks = {
+      items: [
+        stack({ id: "inline", name: "inline", state: "running" }),
+        stack({ id: "adopted", name: "adopted", source: "adopted", state: "running" }),
+        gitStack("pinned", { refKind: "commit", ref: SHA }),
+      ],
+    };
+    mount();
+    for (const name of ["inline", "adopted", "pinned"]) {
+      const trigger = await screen.findByRole("button", { name: `Actions for ${name}` });
+      fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+      await screen.findByRole("menuitem", { name: "Open stack" });
+      expect(screen.queryByRole("menuitem", { name: "Check now" })).toBeNull();
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    }
+  });
+
+  it("puts Behind and Sync error in the URL after the other chips, and restores them for the server", async () => {
+    const { onChange } = mount();
+    await screen.findByRole("link", { name: "web" });
+    fireEvent.click(screen.getByRole("button", { name: /^Sync error/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "sync-error" });
+    fireEvent.click(screen.getByRole("button", { name: /^Behind/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ status: "behind,sync-error" });
+    await waitFor(() =>
+      expect((requests.at(-1) as URL).searchParams.get("status")).toBe("behind,sync-error"),
+    );
   });
 });

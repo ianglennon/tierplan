@@ -31,6 +31,7 @@ type StackJobSummary struct {
 	StartedAt  string `json:"startedAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
 	StartedBy  string `json:"startedBy" doc:"Who started it, as a name"`
+	Trigger    string `json:"trigger,omitempty" enum:"poll,webhook" doc:"Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook"`
 }
 
 // StackJobListBody is the answer to the list route.
@@ -99,6 +100,7 @@ func stackJobSummary(j jobs.Job) StackJobSummary {
 	s := StackJobSummary{
 		ID: j.ID, EnvID: j.EnvID, EnvName: j.Meta[metaEnvName], StackID: j.Meta[metaStackID], StackName: j.Meta[metaStackName],
 		Kind: kind, State: state, StartedAt: rfc3339(j.CreatedAt), StartedBy: j.Meta[metaStartedBy],
+		Trigger: j.Meta[metaTrigger],
 	}
 	if j.Finished() {
 		s.FinishedAt = rfc3339(j.FinishedAt)

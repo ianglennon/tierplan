@@ -17,5 +17,5 @@ func convertLogText(err error, c stacks.WorkingCopy) string {
 	if err == nil {
 		return ""
 	}
-	return stacks.NewMasker(c.Vars, c.Files).Mask(convert.GuardSecrets(err, stacks.NewSecretUse(c)).Error())
+	return stacks.NewMasker(c.Vars, c.MaskFiles()).Mask(convert.GuardSecrets(err, stacks.NewSecretUse(c)).Error())
 }

@@ -62,7 +62,8 @@ INSERT INTO stack_snapshots (id, stack_id, kind, seq, base_seq, version, outcome
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -78,11 +79,11 @@ DELETE FROM stack_snapshots WHERE id = ? AND kind = 'draft';
 DELETE FROM stack_snapshot_files WHERE snapshot_id = ?;
 
 -- name: InsertSnapshotFile :exec
-INSERT INTO stack_snapshot_files (snapshot_id, path, content, content_sealed, secret)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO stack_snapshot_files (snapshot_id, path, content, content_sealed, secret, origin)
+VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: ListSnapshotFiles :many
-SELECT snapshot_id, path, content, content_sealed, secret FROM stack_snapshot_files
+SELECT snapshot_id, path, content, content_sealed, secret, origin FROM stack_snapshot_files
 WHERE snapshot_id = ? ORDER BY path;
 
 -- name: DeleteSnapshotVars :exec
@@ -101,7 +102,8 @@ SELECT CAST(COALESCE(MAX(seq), 0) AS INTEGER) + 1 AS seq FROM stack_snapshots
 WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -114,7 +116,8 @@ WHERE stack_id = ? AND kind = 'revision';
 -- name: GoodRevisionBefore :one
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -135,7 +138,8 @@ WHERE id = sqlc.arg(id) AND kind = 'revision';
 UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
-SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms
+SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -144,6 +148,27 @@ UPDATE stack_snapshots SET base_seq = ? WHERE stack_id = ? AND kind = 'draft';
 
 -- name: SetSnapshotPins :execrows
 UPDATE stack_snapshots SET pins = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotComposeFiles :execrows
+-- The ordered compose files of a snapshot, a JSON array of paths ('[]' for an inline stack).
+UPDATE stack_snapshots SET compose_files = ? WHERE id = ?;
+
+-- name: SetSnapshotGit :execrows
+-- What a snapshot of a git stack was made from (D-08): the commit, the tree hash of the folder, the source as JSON
+-- and what triggered the deploy of a revision ('' for a person).
+UPDATE stack_snapshots SET git_commit = ?, git_tree = ?, git_source = ?, sync_trigger = ? WHERE id = ?;
+
+-- name: SetSnapshotSyncTrigger :execrows
+-- What started the deploy of a revision no person pressed ('poll' or 'webhook'), set once the revision is taken.
+UPDATE stack_snapshots SET sync_trigger = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotRevertedDrift :execrows
+-- The lines an automatic deploy put back to what the repository says, a JSON array of strings.
+UPDATE stack_snapshots SET reverted_drift = ? WHERE id = ? AND kind = 'revision';
+
+-- name: GetRevisionRevertedDrift :one
+-- The lines an automatic deploy put back on one revision of a stack, a JSON array of strings.
+SELECT reverted_drift FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetSnapshotPlatforms :execrows
 -- The platforms each service of a revision was sent with, JSON by swarm service name.
@@ -191,6 +216,18 @@ WHERE d.env_id = ? AND d.state = 'done' AND d.kind IN ('deploy', 'update', 'roll
               WHERE d2.stack_id = d.stack_id AND d2.state = 'done' AND d2.kind IN ('deploy', 'update', 'rollback')
               ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
 
+-- name: LatestDoneStackDeployTriggersByEnv :many
+-- What started the revision behind each stack's "last deployed" (the same operation as LatestDoneStackDeploysByEnv),
+-- for the stacks whose newest successful operation was an automatic deploy: poll or webhook. A deploy a person pressed
+-- has no row.
+SELECT d.stack_id, r.sync_trigger
+FROM stack_deploys d
+JOIN stack_snapshots r ON r.stack_id = d.stack_id AND r.kind = 'revision' AND r.seq = d.revision_seq
+WHERE d.env_id = ? AND d.state = 'done' AND d.kind IN ('deploy', 'update', 'rollback') AND r.sync_trigger != ''
+  AND d.id = (SELECT d2.id FROM stack_deploys d2
+              WHERE d2.stack_id = d.stack_id AND d2.state = 'done' AND d2.kind IN ('deploy', 'update', 'rollback')
+              ORDER BY d2.started_at DESC, d2.id DESC LIMIT 1);
+
 -- name: ListDraftsByEnv :many
 -- The draft of each stack of an environment, for the list (its version and when it was saved).
 SELECT dr.stack_id, dr.version, dr.created_by, dr.created_at FROM stack_snapshots dr
@@ -209,6 +246,7 @@ GROUP BY r.stack_id;
 -- The revisions of one stack, newest first, with the failure each one's deploy ended in. Two operations can name one
 -- seq (a retry of the same revision), so the newest deploy row is the one read.
 SELECT r.seq, r.origin, r.restored_from, r.outcome, r.pins, r.created_by, r.created_at,
+       r.git_commit, r.git_tree, r.git_source, r.sync_trigger,
        COALESCE(d.failed_service, '') AS failed_service, COALESCE(d.code, '') AS code
 FROM stack_snapshots r
 LEFT JOIN stack_deploys d ON d.id = (

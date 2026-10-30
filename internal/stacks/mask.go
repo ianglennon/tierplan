@@ -48,6 +48,9 @@ const (
 // in every form above, which is how the messages probed quote it; only a line quoted on its own
 // would show. A variable is interpolated whole, so it is not split at "=".
 //
+// A repository's .env whose key names look like a secret (SecretLikeName) is masked too: the value of
+// each such key is hidden as a secret variable's is.
+//
 // A secret file is one flagged secret, or one the compose file uses under secrets: even before a
 // save has flagged it, so what a person has just typed is hidden too. Its content is hidden as a
 // whole, without the line break an editor adds at the end, and, for a file of lines, each line
@@ -82,6 +85,11 @@ func NewMasker(vars []Var, files []File) Masker {
 				add(m)
 			}
 		}
+	}
+	// A secret-like key of the repository's .env is hidden like a secret variable although it is
+	// committed (D-07): the repository holds it, but Bayplan must not echo it.
+	for _, v := range envSecretLikeValues(files) {
+		add(v)
 	}
 	for _, f := range MarkSecretFiles(files, nil) {
 		if f.Secret {

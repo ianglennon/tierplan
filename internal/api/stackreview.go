@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/rbac"
 	"github.com/ianglennon/bayplan/internal/redact"
@@ -142,6 +143,34 @@ type StackConcurrentBody struct {
 	BaseToDraft    []StackFileDiffBody `json:"baseToDraft" doc:"What the draft changed since the version it started from, file by file, masked"`
 }
 
+// StackReviewGitBody is where the draft of a git stack came from, and how far that is from what is deployed.
+type StackReviewGitBody struct {
+	Commit         string `json:"commit" doc:"The full ID of the commit the draft's repository files are from"`
+	Ref            string `json:"ref" doc:"The branch, tag or commit ID the draft follows"`
+	RefKind        string `json:"refKind" enum:"branch,tag,commit" doc:"What ref names"`
+	Folder         string `json:"folder" doc:"The folder of the repository the stack lives in; empty for the root"`
+	RepoName       string `json:"repoName" doc:"The repository's name when the draft was made from it"`
+	DeployedCommit string `json:"deployedCommit" doc:"The full ID of the commit the stack's newest good revision was made from; empty when nothing was deployed from a repository"`
+	Touched        int    `json:"touched" minimum:"0" doc:"How many commits changed the stack's folder between deployedCommit and commit; 0 when nothing is deployed or the source changed"`
+	SourceChanged  bool   `json:"sourceChanged" doc:"True when the draft follows another repository, ref or folder than the one deployed, so the two commits are not comparable"`
+	HeadCommit     string `json:"headCommit" doc:"The full ID of the commit the ref pointed at when the stack was last checked or pulled; empty when it never was. When it is not commit, the branch moved on after the draft was made: a deploy still deploys commit"`
+
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files of the draft's source, in merge order"`
+
+	Converts bool `json:"converts,omitempty" doc:"Left out unless true: true when the draft points an inline or adopted stack at a repository (D-24), so a good deploy of it replaces the stack's inline files and makes it a git stack. headCommit is then the draft's own commit"`
+
+	Replaces *StackReviewGitSourceBody `json:"replaces,omitempty" doc:"Left out unless set: set when the draft holds another source than the one the stack follows (the repository, ref, folder or compose files were changed through review, D-11), and names the source a good deploy of the draft replaces. headCommit is then the draft's own commit"`
+}
+
+// StackReviewGitSourceBody is a source a git stack follows: where its files come from.
+type StackReviewGitSourceBody struct {
+	RepoName     string   `json:"repoName" doc:"The repository's name; empty when it could not be read"`
+	RefKind      string   `json:"refKind" enum:"branch,tag,commit" doc:"What ref names"`
+	Ref          string   `json:"ref" doc:"The branch, tag or commit ID"`
+	Folder       string   `json:"folder" doc:"The folder of the repository the stack lives in; empty for the root"`
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files, in merge order"`
+}
+
 // StackReviewBody is what a deploy of the saved draft would do.
 type StackReviewBody struct {
 	Problems                []StackProblemBody       `json:"problems" doc:"What the check found and the review added: host access that needs Admin, a name clash, an image that cannot be looked up, an external object that does not exist. An error stops a deploy"`
@@ -159,6 +188,7 @@ type StackReviewBody struct {
 	DeployedSeq             int64                    `json:"deployedSeq" doc:"The number of the stack's newest good revision when the review was made, 0 when it has none. A roll back sends it as expectedDeployed, so a deploy made after the review is noticed"`
 	RevertsDrift            []StackRevertsDriftBody  `json:"revertsDrift" doc:"The changes made outside the stack that this deploy, update or roll back would put back, apart from the draft's own changes: a setting counts when the deployed revision's value differs from what runs and the draft (or the revision rolled back to) has the deployed revision's value. A service of the revision that no longer runs and that is kept, and a service that runs under the stack that neither declares, are listed too. It never blocks a deploy. Empty for a restore, which is the drift itself, and for a stack with no deployed revision"`
 	RevertsDriftUnavailable bool                     `json:"revertsDriftUnavailable" doc:"True when the drift could not be computed, so revertsDrift is empty for want of knowing; the rest of the review is accurate"`
+	Git                     *StackReviewGitBody      `json:"git,omitempty" doc:"Left out unless set: set for a review of the draft of a stack made from a git repository, and says which commit the draft holds and how far it is from the deployed one"`
 }
 
 // StackReviewOutput wraps StackReviewBody for huma.
@@ -292,6 +322,11 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		rv.RevertsDrift = stackops.RedactReverts(rv.RevertsDrift, st.Target)
 	}
 	body := stackReviewBody(rv)
+	if !rollback && in.Body.Mode != stackops.ReviewModeUpdate {
+		if body.Git, err = reviewGitBody(ctx, d, repo, draft); err != nil {
+			return nil, stackInternal(d, "read the deployed commit", env.ID, err)
+		}
+	}
 	if ri.Deployed != nil {
 		body.DeployedSeq = ri.Deployed.Seq
 	}
@@ -299,6 +334,73 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 		body.Revision = ri.Target.Seq
 	}
 	return &StackReviewOutput{CacheControl: "no-store", Body: body}, nil
+}
+
+// reviewGitBody says which commit the draft of a git stack holds and how far it is from the deployed one; nil for a draft
+// that is not from a repository. The commits between the two are counted from the server's mirror, which a pull has just
+// filled; a mirror that can't be read counts none.
+func reviewGitBody(ctx context.Context, d StacksDeps, repo stackops.Repo, draft stackops.Snapshot) (*StackReviewGitBody, error) {
+	if draft.Git.Commit == "" {
+		return nil, nil
+	}
+	src := draft.Git.Source
+	out := &StackReviewGitBody{
+		Commit: draft.Git.Commit, Ref: src.Ref, RefKind: src.RefKind, Folder: src.Folder, RepoName: src.RepoName,
+		ComposeFiles: composeFilesOf(src.ComposeFiles),
+	}
+	// A stack that follows nothing any more has no head to compare with.
+	if state, err := repo.GitState(ctx, draft.StackID); err == nil {
+		out.HeadCommit = state.HeadCommit
+	} else if !errors.Is(err, stackops.ErrNoGit) {
+		return nil, err
+	}
+	// A draft that holds another source than the stack follows says which source it replaces (D-11). The head the sync
+	// state holds belongs to that source, so the draft's own commit stands in for it: it was read just now.
+	if sg, err := repo.StackGit(ctx, draft.StackID); err == nil {
+		if gitsync.PendingSource(sg, draft) {
+			out.Replaces = replacedSource(ctx, d, sg, src)
+			out.HeadCommit = draft.Git.Commit
+		}
+	} else if !errors.Is(err, stackops.ErrNoGit) {
+		return nil, err
+	}
+	// A draft that points a stack that is not from git at a repository is the first sync with it (D-24).
+	if _, pending, err := repo.PendingGit(ctx, draft.StackID); err != nil {
+		return nil, err
+	} else if pending {
+		out.Converts = true
+		out.HeadCommit = draft.Git.Commit
+	}
+	dep, deployed, err := repo.DeployedGit(ctx, draft.StackID)
+	if err != nil {
+		return nil, err
+	}
+	if !deployed {
+		return out, nil
+	}
+	out.DeployedCommit = dep.Commit
+	out.SourceChanged = dep.Source.RepoID != src.RepoID || dep.Source.RefKind != src.RefKind || dep.Source.Ref != src.Ref || dep.Source.Folder != src.Folder
+	if !out.SourceChanged && d.GitSync != nil {
+		out.Touched = d.GitSync.CommitsSince(ctx, src.RepoID, src.Folder, dep.Commit, draft.Git.Commit)
+	}
+	return out, nil
+}
+
+// replacedSource is the source the stack follows now, as a pending source replaces it. The repository's name is read from
+// the repository, which may be gone; the draft's own record of its name stands when it is the same repository.
+func replacedSource(ctx context.Context, d StacksDeps, sg stackops.StackGit, pending stackops.GitSource) *StackReviewGitSourceBody {
+	name := ""
+	switch {
+	case sg.RepoID == pending.RepoID:
+		name = pending.RepoName
+	case d.GitConns != nil:
+		if r, err := d.GitConns.GetRepo(ctx, sg.RepoID); err == nil {
+			name = r.Name
+		}
+	}
+	return &StackReviewGitSourceBody{
+		RepoName: name, RefKind: sg.RefKind, Ref: sg.Ref, Folder: sg.Folder, ComposeFiles: composeFilesOf(sg.ComposeFiles),
+	}
 }
 
 // stackReviewBody turns a review into its answer. Every list is present, empty when there is nothing.

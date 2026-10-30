@@ -3,6 +3,15 @@
     "title": "Deploying {{name}}",
     "started": "Started {{time}} by {{user}}.",
     "startedAnon": "Started {{time}}.",
+    "auto": {
+      "title": "Auto-deploying {{name}}",
+      "started": "Commit {{commit}}, started by {{trigger}} for {{user}}.",
+      "startedNoUser": "Commit {{commit}}, started by {{trigger}}.",
+      "startedNoCommit": "Started by {{trigger}} for {{user}}.",
+      "startedBare": "Started by {{trigger}}.",
+      "poll": "a poll check",
+      "webhook": "a webhook"
+    },
     "elapsedRunning": "Running for {{elapsed}}.",
     "elapsedDone": "Took {{elapsed}}.",
     "elapsed": {
@@ -162,6 +171,7 @@
         "registry_unresolved": "The registry credential for an image could not be read.",
         "no_manager_connected": "No manager of the swarm is connected to Bayplan.",
         "agent_policy_denied": "The agent refused the request.",
+        "agent_host_policy": "The host's agent doesn't let Bayplan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
         "host_read_only": "The host is read-only, so Bayplan can't change it.",
         "network_conflict": "The swarm already has a network of that name that this stack does not own.",
         "network_failed": "The swarm could not create a network.",

@@ -653,6 +653,39 @@ func TestRunningDeploysAreMarkedInterruptedAtStartup(t *testing.T) {
 
 const hostAccessCompose = "services:\n  web:\n    image: nginx:1.27-alpine\n    privileged: true\n"
 
+// A deploy the node's agent refuses by host policy (G-09-8b) is recorded, audited and shown as the
+// host-policy refusal the services and volumes screens already give, not the plain agent refusal.
+func TestStackDeployRefusedByTheAgentsHostPolicySaysSo(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
+		c.ServiceCreateError = "agent_policy_denied: host_policy: POST /v1.56/services/create"
+	})
+	// Bayplan's own policy lets an env Admin ask for host access; the agent is what refuses.
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "hostpol")
+	job := f.awaitDeploy(t, f.deployDraft(t, admin, st.ID, hostAccessCompose))
+	if job.State == "done" {
+		t.Fatalf("job = %+v, want the deploy to fail", job)
+	}
+	got := answerOf[struct {
+		stackAnswer
+		LastOperation *struct {
+			Kind, State, Code, FailedService string
+		} `json:"lastOperation"`
+	}](t, admin.do(http.MethodGet, "stacks/"+st.ID, ""))
+	op := got.LastOperation
+	if got.State != "deploy_failed" || op == nil || op.Code != "agent_host_policy" || op.FailedService == "" {
+		t.Errorf("stack = %+v %+v, want deploy_failed with agent_host_policy and the service named", got.stackAnswer, op)
+	}
+	var row *auditRowFull
+	for _, r := range f.auditRowsOf(t, "stack.deployed") {
+		row = &r
+	}
+	if row == nil || row.Result != "failure" || row.Reason != "agent_host_policy" {
+		t.Errorf("stack.deployed = %+v, want a failure with reason agent_host_policy", row)
+	}
+}
+
 func TestPolicyIsCheckedAgainUnderTheLock(t *testing.T) {
 	t.Parallel()
 	var between atomic.Pointer[func()]

@@ -18,6 +18,8 @@ import (
 	"github.com/ianglennon/bayplan/internal/audit"
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -49,6 +51,7 @@ const (
 	problemStackTooLarge       = "stack_too_large"
 	problemComposeMissing      = "compose_missing"
 	problemDraftConflict       = "draft_conflict"
+	problemRepoFileReadOnly    = "repo_file_read_only"
 	problemTargetEngineAbsent  = "target_engine_missing"
 	problemComposeInvalid      = "compose_invalid"
 	problemComposeUnsupported  = "compose_unsupported"
@@ -142,6 +145,24 @@ type StacksDeps struct {
 	DriftRecheck func(envID, stackID string)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// GitConns and GitSync fill the git part of a git stack's list entry and detail: the repository's name and
+	// address, and whether a sync check runs now. Nil leaves them empty.
+	GitConns *gitconn.Store
+	GitSync  *gitsync.Service
+	// GitDeployed, when set, is told that a revision of a stack ended good, so that a git stack's settings and sync state
+	// follow what was deployed (gitsync.Service.Deployed). It does nothing for a revision not made from a repository.
+	GitDeployed func(ctx context.Context, stackID string, rev stackops.Snapshot)
+	// GitRolledBack, when set, is told that a person rolled a stack back and the revision of the roll back exists, so that
+	// a git stack whose automatic deploys are on pauses them and the repository head is not deployed over the restored
+	// revision (gitsync.Service.RolledBack). It does nothing for a stack that is not from a repository.
+	GitRolledBack func(ctx context.Context, st stackops.Stack, rev stackops.Snapshot, actor audit.Actor)
+	// GitDeployFailed, when set, is told that the deploy of a revision ended failed, with the service that failed, so
+	// that a git stack whose revision an automatic deploy made goes to error (gitsync.Service.DeployFailed). It does
+	// nothing for a revision a person deployed.
+	GitDeployFailed func(ctx context.Context, st stackops.Stack, rev stackops.Snapshot, failedService string)
+	// Envs resolves the environment of a deploy that has no request (StackDeployer); the routes get theirs from the
+	// router. Nil makes such a deploy refuse with environment_not_found.
+	Envs httpx.EnvResolver
 	// SelfContainerID is the ID of the container Bayplan runs in and SelfNamespace the swarm namespace of
 	// that container; either is empty when Bayplan cannot tell. The lists flag the stack that holds them (D-49).
 	SelfContainerID, SelfNamespace string
@@ -211,13 +232,17 @@ type StackItem struct {
 	State          string `json:"state" enum:"removing,deploying,rolling_back,starting,stopping,stopped,deploy_failed,not_running,degraded,running,not_deployed,unknown" doc:"The one state the stack shows everywhere, in this priority: removing, deploying, rolling_back, starting or stopping while that operation runs; stopped when a person stopped it; deploy_failed when the newest deploy, update or roll back failed, was cancelled or was interrupted (it stays until a later one succeeds, so a failure is never hidden by degraded or running); not_deployed when nothing was ever deployed; unknown when it was deployed and the engine could not be read; then not_running, degraded or running by how many of its services run"`
 	LastDeployedAt string `json:"lastDeployedAt" doc:"When the newest successful deploy ended, RFC 3339 UTC; empty when there is none"`
 	LastDeployedBy string `json:"lastDeployedBy" doc:"Who started it; empty when there is none"`
-	HasDraft       bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
+	// LastDeployedTrigger says the newest successful deploy was an automatic one.
+	LastDeployedTrigger string `json:"lastDeployedTrigger,omitempty" enum:"poll,webhook" doc:"Left out unless set: what started the newest successful deploy when no person did, a poll check or a webhook. Then lastDeployedBy is the system actor and not a person"`
+	HasDraft            bool   `json:"hasDraft" doc:"True when the draft holds changes that have not been deployed"`
 	// ServicesRunning and ServicesTotal are the engine's own count of the stack's services, read from the
 	// cache the lists use. They are left out for a stack that was never deployed and for one the engine could not be read for.
 	ServicesRunning *int `json:"servicesRunning,omitempty" doc:"Services of the stack that run now; left out for a stack not deployed and when the engine could not be read"`
 	ServicesTotal   *int `json:"servicesTotal,omitempty" doc:"Services the stack has on the engine; left out for a stack not deployed and when the engine could not be read"`
 	// Drift is the newest drift check of a stack Bayplan manages.
 	Drift *StackDriftSummaryBody `json:"drift,omitempty" doc:"Left out until the stack has been checked for drift since its newest deploy, start or stop (by the background check or by someone opening its drift page), and for an unmanaged stack: the newest check, as the drift route answers it without the services"`
+	// Git is where a git stack stands against its repository.
+	Git *StackGitSummary `json:"git,omitempty" doc:"Left out unless the stack is from a git repository: what it follows, the commit that is deployed, how far behind the repository's folder is, the status of the last check and why it failed, as the stack's git route answers"`
 	// Unmanaged is set on a stack found on the engine that Bayplan did not make (D-07).
 	Unmanaged *StackUnmanagedBody `json:"unmanaged,omitempty" doc:"Set on an unmanaged stack only: what was found about it"`
 }
@@ -380,7 +405,7 @@ func RegisterStacks(r *httpx.Router, d StacksDeps) {
 			"Stacks Bayplan did not make (a swarm namespace or a Compose project made by docker stack deploy, docker compose up or Portainer) are listed beside them with managed false and an unmanaged body; " +
 			"they are found by their labels in the same cached rows and nothing about them is stored. kind (managed or unmanaged) lists one kind only; kindCounts counts both. " +
 			"discoveryFailed is true when the look for them failed, and the managed stacks are listed all the same. " +
-			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted) and the sort, " +
+			"At most 500 stacks come back after the search (q: a stack name or one of its service names), the status filter (status: degraded, stopped, draft, deploy_failed, drifted, behind, sync-error) and the sort, " +
 			"with total the number that matched, unfilteredTotal the number before them and statusCounts the chip numbers, counted before them too. Needs stacks.read (Viewer).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksRead, Scope: rbac.ScopeEnvironment},
@@ -521,7 +546,7 @@ func stackItemWithServices(reads *stackReads, st stackops.Stack, latest stackops
 		item.ServicesRunning, item.ServicesTotal = &running, &total
 	}
 	if hasLast {
-		item.LastDeployedAt, item.LastDeployedBy = rfc3339(last.EndedAt), last.StartedBy
+		item.LastDeployedAt, item.LastDeployedBy, item.LastDeployedTrigger = rfc3339(last.EndedAt), last.StartedBy, last.Trigger
 	}
 	return item, in.Services
 }
@@ -595,6 +620,11 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 	if draft.Pending {
 		detail.DraftSavedAt, detail.DraftSavedBy = rfc3339(draft.At), draft.By
 	}
+	if st.Source.Kind == stacks.SourceGit {
+		if detail.Git, err = d.gitSummaryOfStack(ctx, st.ID); err != nil {
+			return StackDetail{}, err
+		}
+	}
 	back, hasBack, err := repo.RollbackInfo(ctx, st.ID)
 	if err != nil {
 		return StackDetail{}, err
@@ -642,6 +672,33 @@ func stackNameTakenProblem(name, envName string) error {
 	}
 }
 
+// stackNameFree refuses a name the environment already uses. A name the environment uses for something Bayplan does
+// not manage is refused (D-12): Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's
+// own stacks holds is 409 stack_name_taken, and its objects are never a clash.
+func (d StacksDeps) stackNameFree(ctx context.Context, envID, envName string, target stacks.Target, name string) error {
+	own, err := d.repo().Stacks(ctx, envID)
+	if err != nil {
+		return stackInternal(d, "list", envID, err)
+	}
+	if stackNameTaken(own, target, name) {
+		return stackNameTakenProblem(name, envName)
+	}
+	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
+		foreign, err := d.ops().ForeignStack(ctx, envID, target, name, "")
+		if err != nil {
+			return snapshotProblem(d.Log, envID, err)
+		}
+		if foreign {
+			return &huma.ErrorModel{
+				Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
+				Detail: stackops.NameClashMessage(name),
+				Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
+			}
+		}
+	}
+	return nil
+}
+
 func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*StackDetailOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
@@ -671,28 +728,8 @@ func createStack(ctx context.Context, d StacksDeps, in *StackCreateInput) (*Stac
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemFileTooLarge, "A file is at most 1 MiB.")
 	}
 
-	// A name the environment already uses for something Bayplan does not manage is refused (D-12):
-	// Bayplan never deploys into, takes over or changes such a stack. A name one of Bayplan's own
-	// stacks holds is the create's own refusal below, and its objects are never a clash.
-	own, err := d.repo().Stacks(ctx, env.ID)
-	if err != nil {
-		return nil, stackInternal(d, "list", env.ID, err)
-	}
-	if stackNameTaken(own, target, name) {
-		return nil, stackNameTakenProblem(name, env.Name)
-	}
-	if !slices.ContainsFunc(own, func(s stackops.Stack) bool { return s.Name == name }) {
-		foreign, err := d.ops().ForeignStack(ctx, env.ID, target, name, "")
-		if err != nil {
-			return nil, snapshotProblem(d.Log, env.ID, err)
-		}
-		if foreign {
-			return nil, &huma.ErrorModel{
-				Type: problemNameClash, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-				Detail: stackops.NameClashMessage(name),
-				Errors: []*huma.ErrorDetail{{Location: "name", Message: name}},
-			}
-		}
+	if err := d.stackNameFree(ctx, env.ID, env.Name, target, name); err != nil {
+		return nil, err
 	}
 
 	st, _, err := d.repo().CreateStack(ctx, env.ID, name, target, p.Name, stacks.WorkingCopy{

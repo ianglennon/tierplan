@@ -23,6 +23,42 @@
     "titleUpdate": "Review image updates for {{name}}",
     "body": "Check what will change on {{env}}, then deploy.",
     "bodyUpdate": "These services get a newly looked-up digest. Everything else keeps its running image.",
+    "titleGit": "Pull and redeploy {{name}}",
+    "titleSource": "Review the new source for {{name}}",
+    "bodyGit": "Bayplan fetched {{ref}} just now and rendered {{folder}} at commit {{sha}}. This shows what would change on {{env}}.",
+    "bodySource": "This deploys {{now}}, replacing {{old}}.",
+    "bodyConvert": "This deploys {{now}}, replacing the inline files.",
+    "git": {
+      "commit": "Commit",
+      "onRef": "on {{ref}}",
+      "touched_one": "{{count}} commit changed this folder since {{sha}}.",
+      "touched_other": "{{count}} commits changed this folder since {{sha}}.",
+      "commits": {
+        "title": "What changed in the repository",
+        "caption": "Commits that changed {{folder}}",
+        "columns": {
+          "sha": "Commit",
+          "subject": "Subject",
+          "author": "Author"
+        },
+        "by": "{{author}}, ",
+        "showAll": "Show all {{count}}",
+        "showFewer": "Show fewer",
+        "partial": "Showing the newest {{shown}} of {{total}}.",
+        "capped": "Bayplan counted {{total}} commits and stopped there; there may be more.",
+        "unavailable": "Bayplan can't list the commits, so only the changes are shown.",
+        "loading": "Reading the commits…"
+      },
+      "moved": {
+        "title": "{{ref}} has moved on",
+        "body": "This deploy uses {{sha}}, the commit you reviewed. {{ref}} is now at {{newSha}}.",
+        "review": "Review {{newSha}}",
+        "pulling": "Pulling…"
+      },
+      "rollbackNote": "Auto-deploy will pause after this roll back, so the repository head isn't deployed over it. Turn it back on when the repository is fixed.",
+      "source": "{{folder}} of {{repo}} at {{ref}}",
+      "sourceFiles": "{{source}} using {{files}}"
+    },
     "loading": "Checking the stack…",
     "lookingUp": "Looking up the digest…",
     "summary": {
@@ -57,7 +93,8 @@
       "asWritten": "Pinned in the compose file",
       "local": "Not from a registry. Pinned to the local image ID.",
       "unreachable": "Can't reach the registry",
-      "unresolved": "Can't look up this image"
+      "unresolved": "Can't look up this image",
+      "gitNote": "Only images whose reference changed in the repository are looked up again. The others keep the digest they run."
     },
     "footer": {
       "back": "Back to editing",

@@ -22,8 +22,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedText } from "@/features/resources/resource-table";
 import { ImageChangeSummary } from "@/features/stack-history/image-change-summary";
+import { type HistoryRepo, RevisionCommit } from "@/features/stack-history/revision-commit";
 import { RevisionKindCell, RevisionLink } from "@/features/stack-history/revision-kind-cell";
 import { RevisionResultCell } from "@/features/stack-history/revision-result-cell";
 import { useNeeds } from "@/hooks/use-needs";
@@ -39,6 +41,8 @@ interface RevisionTableProps {
   selected: number | undefined;
   // Revisions that appeared while the tab was open: their rows are highlighted for a moment (P4 D-05).
   fresh: ReadonlySet<number>;
+  // The repository a git stack follows. Its presence adds the Commit column; so does any revision that has a commit.
+  repo?: HistoryRepo;
 }
 
 // The body shows 8 rows of 36px and scrolls inside, with the header row above them (UI-SPEC "Spacing
@@ -101,6 +105,44 @@ function RowActions({
   );
 }
 
+// WhoCell is who started a revision's deploy: a person, or "Auto-deploy" for the person whose authority an automatic deploy
+// ran on (UI-SPEC "History additions", T-09-82). The server records that person as the revision's creator and says what
+// started it in syncTrigger; the Tooltip names the trigger. Names are text.
+function WhoCell({ item }: { item: StackRevision }) {
+  const t = useT();
+  if (!item.syncTrigger) {
+    return item.createdBy ? (
+      <TruncatedText>{item.createdBy}</TruncatedText>
+    ) : (
+      <span>{t("stackHistory.missing")}</span>
+    );
+  }
+  const user = item.createdBy;
+  const tip = !user
+    ? t("stackHistory.table.auto.tipUnknown")
+    : t(
+        item.syncTrigger === "webhook"
+          ? "stackHistory.table.auto.tipWebhook"
+          : "stackHistory.table.auto.tipPoll",
+        { user },
+      );
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="flex flex-col leading-tight">
+          <span>{t("stackHistory.table.auto.label")}</span>
+          {user ? (
+            <span className="max-w-64 truncate text-xs text-muted-foreground">
+              {t("stackHistory.table.auto.for", { user })}
+            </span>
+          ) : null}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm break-words">{tip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 // RevisionTable lists the revisions of a stack, newest first. It is a native table with a caption, and the
 // revision number is the link that selects a revision: it sets rev with replace, so selecting does not add
 // a history entry per click. The selected row is marked with aria-current.
@@ -111,8 +153,10 @@ export function RevisionTable({
   items,
   selected,
   fresh,
+  repo,
 }: RevisionTableProps) {
   const t = useT();
+  const commits = repo !== undefined || items.some((i) => !!i.commit);
   return (
     <div className={cn("overflow-auto rounded-md border", BODY_MAX)}>
       <table className="w-full caption-bottom text-sm">
@@ -121,6 +165,9 @@ export function RevisionTable({
           <TableRow className="hover:bg-muted">
             <TableHead scope="col">{t("stackHistory.table.columns.revision")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.kind")}</TableHead>
+            {commits ? (
+              <TableHead scope="col">{t("stackHistory.table.columns.commit")}</TableHead>
+            ) : null}
             <TableHead scope="col">{t("stackHistory.table.columns.result")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.who")}</TableHead>
             <TableHead scope="col">{t("stackHistory.table.columns.when")}</TableHead>
@@ -152,15 +199,16 @@ export function RevisionTable({
               <TableCell>
                 <RevisionKindCell item={item} envId={envId} stackId={stackId} />
               </TableCell>
+              {commits ? (
+                <TableCell>
+                  <RevisionCommit item={item} repo={repo} />
+                </TableCell>
+              ) : null}
               <TableCell>
                 <RevisionResultCell item={item} />
               </TableCell>
               <TableCell>
-                {item.createdBy ? (
-                  <TruncatedText>{item.createdBy}</TruncatedText>
-                ) : (
-                  t("stackHistory.missing")
-                )}
+                <WhoCell item={item} />
               </TableCell>
               <TableCell>
                 <RelativeTime value={item.createdAt} />

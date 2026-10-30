@@ -6,6 +6,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 
+import { StackGitPullError, usePullStackGit } from "@/api/stack-git";
 import {
   type DeployRequestError,
   type StackDetail,
@@ -58,7 +59,7 @@ export const canStart = (state: StackState) => state === "stopped";
 // Images can be updated where something runs to update: the states a stop acts on.
 export const canUpdateImages = canStop;
 
-type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state">;
+type LifecycleStack = Pick<StackDetail, "id" | "envId" | "name" | "target" | "state" | "source">;
 
 interface StackActionsProps {
   stack: LifecycleStack;
@@ -107,6 +108,93 @@ export function useStackStart(stack: Pick<StackDetail, "id" | "envId" | "name">)
   return { start, pending: mutation.isPending };
 }
 
+// The words for why a pull did not happen, by the problem type the server named. The server decides; this only says
+// what it means (a git failure's code is the type).
+export function pullReason(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  e: unknown,
+  ref: string,
+) {
+  const type = e instanceof StackGitPullError ? e.type : undefined;
+  switch (type) {
+    case "draft_changed":
+      return t("stackGit.pull.reason.draftChanged");
+    case "unreachable":
+    case "timeout":
+    case "egress_blocked":
+    case "cert_untrusted":
+      return t("stackGit.pull.reason.unreachable");
+    case "auth_refused":
+      return t("stackGit.pull.reason.authRefused");
+    case "ref_missing":
+    case "commit_missing":
+      return t("stackGit.pull.reason.refMissing", { ref });
+    case "folder_missing":
+      return t("stackGit.pull.reason.folderMissing");
+    case "file_too_large":
+    case "stack_too_large":
+    case "too_large":
+      return t("stackGit.pull.reason.tooLarge");
+    default:
+      return t("stackGit.pull.reason.other");
+  }
+}
+
+interface PullStack {
+  id: string;
+  envId: string;
+  git?: { ref: string } | null;
+}
+
+// usePullAndReview is what "Pull & redeploy…" and "Review update" do (D-17): fetch the newest commit of the stack's ref
+// into its draft, then open the Review in deploy mode. There is one review path; a pull deploys nothing, and the Review
+// shows what a deploy of that commit would change. A refusal is a toast, since the actions have no dialog to keep it in.
+export function usePullAndReview(stack: PullStack) {
+  const t = useT();
+  const navigate = useNavigate();
+  const mutation = usePullStackGit(stack.envId, stack.id);
+
+  async function pull() {
+    if (mutation.isPending) return;
+    try {
+      await mutation.mutateAsync();
+    } catch (e) {
+      const ref = stack.git?.ref ?? "";
+      toastError(t("stackGit.pull.failed", { ref, reason: pullReason(t, e, ref) }));
+      return;
+    }
+    void navigate({
+      to: "/env/$envId/stacks/$stackId/review",
+      params: { envId: stack.envId, stackId: stack.id },
+    });
+  }
+
+  return { pull, pending: mutation.isPending };
+}
+
+// PullAndRedeployAction is a git stack's header action in the place of Deploy…: it pulls, then opens the Review. A user
+// who may not deploy sees it off with the role it takes, and a user whose permissions are not known yet sees nothing
+// rather than a button that may turn off.
+export function PullAndRedeployAction({ stack }: { stack: PullStack }) {
+  const t = useT();
+  const needs = useNeeds("stacks.deploy", stack.envId);
+  const { pull, pending } = usePullAndReview(stack);
+  if (!needs.allowed && !needs.reason) return null;
+  return (
+    <NeedsTooltip reason={needs.allowed ? undefined : needs.reason}>
+      <Button
+        type="button"
+        variant="outline"
+        className="max-md:h-11"
+        aria-disabled={pending}
+        onClick={needs.allowed ? () => void pull() : undefined}
+      >
+        {pending ? t("stackGit.pull.pulling") : t("stackGit.pull.action")}
+      </Button>
+    </NeedsTooltip>
+  );
+}
+
 // StoppedAlertWithStart is the stopped alert of a stack's page with its Start stack wired for a user who may
 // deploy. Anyone else gets the alert without the button.
 export function StoppedAlertWithStart({ stack }: { stack: StackDetail }) {
@@ -136,6 +224,10 @@ export function StackActions({ stack }: StackActionsProps) {
 export function StackMoreMenu({ stack }: StackActionsProps) {
   const t = useT();
   const needs = useNeeds("stacks.delete", stack.envId);
+  const gitNeeds = useNeeds("git.manage", stack.envId);
+  const navigate = useNavigate();
+  // An inline or adopted stack can be pointed at a repository (D-24). Only an Admin of the environment is offered it.
+  const canConnect = gitNeeds.allowed && (stack.source === "inline" || stack.source === "adopted");
   const [removing, setRemoving] = useState(false);
   const operating = isOperating(stack.state);
   async function copy() {
@@ -160,6 +252,20 @@ export function StackMoreMenu({ stack }: StackActionsProps) {
           <DropdownMenuItem className="max-md:min-h-11" onSelect={() => void copy()}>
             {t("stackRemove.actions.copyName")}
           </DropdownMenuItem>
+          {canConnect ? (
+            <DropdownMenuItem
+              className="max-md:min-h-11"
+              disabled={operating}
+              onSelect={() =>
+                void navigate({
+                  to: "/env/$envId/stacks/$stackId/connect-git",
+                  params: { envId: stack.envId, stackId: stack.id },
+                })
+              }
+            >
+              {t("gitSource.convert.action")}
+            </DropdownMenuItem>
+          ) : null}
           {needs.allowed || needs.reason ? <DropdownMenuSeparator /> : null}
           {needs.allowed ? (
             <DropdownMenuItem

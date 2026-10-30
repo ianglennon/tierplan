@@ -26,6 +26,16 @@ type StackRevisionImageChange struct {
 	To      string `json:"to" doc:"The reference this revision pinned, tag@sha256"`
 }
 
+// StackRevisionSource is where a git stack's revision was read from.
+type StackRevisionSource struct {
+	RepoID       string   `json:"repoId" doc:"The repository the revision was made from; compare it with the stack's repository to know whether a commit link applies"`
+	RepoName     string   `json:"repoName" doc:"The repository's name when the revision was made"`
+	RefKind      string   `json:"refKind" enum:"branch,tag,commit" doc:"What ref names"`
+	Ref          string   `json:"ref" doc:"The branch, tag or commit ID the stack followed"`
+	Folder       string   `json:"folder" doc:"The folder of the repository the stack lived in; empty for the root"`
+	ComposeFiles []string `json:"composeFiles" doc:"The compose files of the folder the revision merged, in merge order"`
+}
+
 // StackRevisionItem is one revision of a stack.
 type StackRevisionItem struct {
 	Seq           int64                      `json:"seq" doc:"The revision number, unique per stack and never reused"`
@@ -41,6 +51,10 @@ type StackRevisionItem struct {
 	Images        []StackRevisionImageChange `json:"images" doc:"The services whose image differs from the next older good revision's, by service name. Empty for a revision that changed none, and for one with no older good revision to compare with"`
 	Pinned        int                        `json:"pinned" doc:"How many images the revision pinned, when it has no older good revision to compare with (the first or an adopted one); 0 otherwise"`
 	AdoptedFrom   string                     `json:"adoptedFrom" doc:"The swarm namespace or Compose project an adopted stack was taken over from; empty for any other revision"`
+	Commit        string                     `json:"commit" doc:"The full ID of the commit the revision was made from; empty for a revision of a stack that was not from a git repository then"`
+	Tree          string                     `json:"tree" doc:"The hash of the stack's folder at that commit; empty when commit is"`
+	Source        *StackRevisionSource       `json:"source,omitempty" doc:"Where the revision was read from; left out for a revision that was not made from a git repository"`
+	SyncTrigger   string                     `json:"syncTrigger" enum:",poll,webhook" doc:"What started the deploy of a revision no person started: poll for a check on a schedule, webhook for a push the repository announced. Empty for any other revision"`
 }
 
 // StackRevisionListBody is the History tab of a stack.
@@ -105,6 +119,12 @@ func revisionItem(st stackops.Stack, row stackops.RevisionRow) StackRevisionItem
 	}
 	if row.Origin == stackops.OriginAdopted {
 		item.AdoptedFrom = st.Source.Ref
+	}
+	item.Commit, item.Tree, item.SyncTrigger = row.Git.Commit, row.Git.Tree, row.SyncTrigger
+	if src := row.Git.Source; src.RepoID != "" {
+		item.Source = &StackRevisionSource{
+			RepoID: src.RepoID, RepoName: src.RepoName, RefKind: src.RefKind, Ref: src.Ref, Folder: src.Folder, ComposeFiles: composeFilesOf(src.ComposeFiles),
+		}
 	}
 	return item
 }

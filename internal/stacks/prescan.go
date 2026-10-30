@@ -32,34 +32,59 @@ import (
 // can tell which files are unused. It reads only the bytes it is given and never opens a file. A
 // file that is not YAML returns nothing: the load reports that.
 func Prescan(compose []byte, files FileSet) (problems Problems, refs []string) {
-	if len(compose) > MaxFileBytes {
-		return Problems{tooLargeProblem()}, nil
+	return prescan([]ComposeContent{{Path: ComposeFile, Content: compose}}, false, files)
+}
+
+// PrescanFiles is Prescan over the compose files of a working copy, each judged on its own with its
+// own work budget, and every problem carrying the path of the file it was found in. git selects the
+// wording of the include and extends refusals for a stack with named compose files (D-26). refs is
+// the union of the stack files any of the compose files refers to.
+func PrescanFiles(contents []ComposeContent, git bool, files FileSet) (problems Problems, refs []string) {
+	return prescan(contents, git, files)
+}
+
+func prescan(contents []ComposeContent, git bool, files FileSet) (Problems, []string) {
+	var all Problems
+	union := map[string]struct{}{}
+	decoded := false
+	for _, c := range contents {
+		if len(c.Content) > MaxFileBytes {
+			return Problems{tooLargeProblem(c.Path)}, nil
+		}
+		w := &walker{budget: maxBudget, files: files, refs: map[string]struct{}{}, file: c.Path, git: git}
+		roots, ok := decodeRoots(c.Content)
+		if !ok {
+			continue
+		}
+		decoded = true
+		// The whole tree is measured first, following every alias, so a file built to expand into
+		// millions of nodes is stopped here and not by the first check that happens to look at it.
+		for _, root := range roots {
+			w.measure(root, 0)
+			if w.err != nil {
+				return Problems{tooComplexProblem(c.Path)}, nil
+			}
+		}
+		for _, root := range roots {
+			w.document(root)
+			if w.err != nil {
+				return Problems{tooComplexProblem(c.Path)}, nil
+			}
+		}
+		all = append(all, w.found...)
+		for p := range w.refs {
+			union[p] = struct{}{}
+		}
 	}
-	w := &walker{budget: maxBudget, files: files, refs: map[string]struct{}{}}
-	roots, ok := decodeRoots(compose)
-	if !ok {
+	if !decoded {
 		return nil, nil
 	}
-	// The whole tree is measured first, following every alias, so a file built to expand into
-	// millions of nodes is stopped here and not by the first check that happens to look at it.
-	for _, root := range roots {
-		w.measure(root, 0)
-		if w.err != nil {
-			return Problems{tooComplexProblem()}, nil
-		}
-	}
-	for _, root := range roots {
-		w.document(root)
-		if w.err != nil {
-			return Problems{tooComplexProblem()}, nil
-		}
-	}
-	refs = make([]string, 0, len(w.refs))
-	for p := range w.refs {
+	refs := make([]string, 0, len(union))
+	for p := range union {
 		refs = append(refs, p)
 	}
 	sort.Strings(refs)
-	return w.found.Sorted(), refs
+	return all.Sorted(), refs
 }
 
 // decodeRoots reads every YAML document of a compose file and returns the root node of each. It
@@ -82,16 +107,16 @@ func decodeRoots(compose []byte) ([]*yaml.Node, bool) {
 	}
 }
 
-func tooLargeProblem() Problem {
+func tooLargeProblem(file string) Problem {
 	return Problem{
-		Severity: SeverityError, Code: CodeComposeTooLarge, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
-		Message: "compose.yaml is over 1 MiB. Split it up or remove what it doesn't need.",
+		Severity: SeverityError, Code: CodeComposeTooLarge, File: file, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Message: file + " is over 1 MiB. Split it up or remove what it doesn't need.",
 	}
 }
 
-func tooComplexProblem() Problem {
+func tooComplexProblem(file string) Problem {
 	return Problem{
-		Severity: SeverityError, Code: CodeComposeTooComplex, File: ComposeFile, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		Severity: SeverityError, Code: CodeComposeTooComplex, File: file, Line: 1, Col: 1, EndLine: 1, EndCol: 2,
 		Message: "The compose file is too complex to check.",
 	}
 }
@@ -154,6 +179,22 @@ type walker struct {
 	// file. Nil when the walk does not collect them.
 	secrets map[string]struct{}
 	found   Problems
+	// file is the compose file being walked, the File of every problem. Empty is ComposeFile.
+	file string
+	// git is true for a working copy with named compose files: include and extends then say to add
+	// the file to the stack's compose files (D-26).
+	git bool
+	// uses, when set, collects every file a compose file refers to (see referencedUses), whether or not
+	// the stack has it.
+	uses *[]refUse
+}
+
+// fileName is the path of the compose file being walked.
+func (w *walker) fileName() string {
+	if w.file == "" {
+		return ComposeFile
+	}
+	return w.file
 }
 
 // spend charges one unit of work and reports whether the walk may continue.
@@ -279,7 +320,11 @@ func (w *walker) document(root *yaml.Node) {
 	for _, top := range w.entries(val{n: root}, 0) {
 		switch top.name {
 		case "include":
-			w.blocking(top, CodeIncludeUnsupported, "include isn't supported. Put everything in compose.yaml.")
+			message := "include isn't supported. Put everything in compose.yaml."
+			if w.git {
+				message = "include isn't supported. Add the file to the stack's compose files instead."
+			}
+			w.blocking(top, CodeIncludeUnsupported, message)
 		case "services":
 			for _, svc := range w.entries(top.val, 0) {
 				w.service(svc)
@@ -321,7 +366,11 @@ func (w *walker) service(svc entry) {
 	for _, f := range w.entries(svc.val, 0) {
 		switch f.name {
 		case "extends":
-			w.blocking(f, CodeExtendsUnsupported, "extends isn't supported. Copy the settings you need into the service.")
+			message := "extends isn't supported. Copy the settings you need into the service."
+			if w.git {
+				message = "extends isn't supported. Add the file to the stack's compose files instead."
+			}
+			w.blocking(f, CodeExtendsUnsupported, message)
 		case "label_file":
 			w.blocking(f, CodeLabelFileUnsupported, "label_file isn't supported. Put the labels under labels in compose.yaml.")
 		case "env_file":
@@ -334,7 +383,7 @@ func (w *walker) service(svc entry) {
 func (w *walker) blocking(e entry, code, message string) {
 	line, col := e.where()
 	w.found = append(w.found, Problem{
-		Severity: SeverityError, Code: code, File: ComposeFile, Key: e.name, Message: message,
+		Severity: SeverityError, Code: code, File: w.fileName(), Key: e.name, Message: message,
 		Line: line, Col: col, EndLine: line, EndCol: col + utf8.RuneCountInString(e.name),
 	})
 }
@@ -398,7 +447,10 @@ func (w *walker) fileRef(key string, v val, optional bool) {
 		width = 1
 	}
 	path := strings.TrimPrefix(ref, "./")
-	problem := Problem{Severity: SeverityError, File: ComposeFile, Key: key, Line: line, Col: col, EndLine: line, EndCol: col + max(width, 1)}
+	if w.uses != nil {
+		*w.uses = append(*w.uses, refUse{Ref: ref, Path: path, Optional: optional, Compose: w.fileName(), Key: key, Line: line, Col: col})
+	}
+	problem := Problem{Severity: SeverityError, File: w.fileName(), Key: key, Line: line, Col: col, EndLine: line, EndCol: col + max(width, 1)}
 	switch {
 	case ValidPath(path) != nil:
 		problem.Code = CodePathIllegal
@@ -434,7 +486,9 @@ var (
 // PortsError is a refusal of PortBudget, located at the item that caused it. It never holds a
 // port's text: a value may come from a secret variable.
 type PortsError struct {
-	Err       error
+	Err error
+	// File is the compose file the item is in.
+	File      string
 	Key       string
 	Line, Col int
 }
@@ -453,41 +507,58 @@ func (e *PortsError) Unwrap() error { return e.Err }
 // after interpolation with the stack's variable table, and the file is refused at the first item
 // that takes the total over MaxPorts.
 func PortBudget(compose []byte, vars []Var) error {
-	roots, ok := decodeRoots(compose)
-	if !ok {
-		return rawPortBudget(compose)
-	}
-	w := &walker{budget: maxBudget}
-	for _, root := range roots {
-		w.measure(root, 0)
-		if w.err != nil {
-			return ErrComposeTooComplex
-		}
-	}
+	return portBudgetFiles([]ComposeContent{{Path: ComposeFile, Content: compose}}, vars)
+}
+
+// portBudgetFiles is PortBudget over the compose files of a working copy. The ports of every file
+// add up to one total: compose-go appends the ports of the files it merges, so a limit per file
+// would let many files expand past it.
+func portBudgetFiles(contents []ComposeContent, vars []Var) error {
 	table := make(map[string]string, len(vars))
 	for _, v := range vars {
 		if v.Value != "" {
 			table[v.Name] = v.Value
 		}
 	}
-	pc := &portCounter{w: w, table: table}
-	for _, root := range roots {
-		for _, top := range w.entries(val{n: root}, 0) {
-			if top.name != "services" {
-				continue
+	pc := &portCounter{table: table}
+	for _, c := range contents {
+		roots, ok := decodeRoots(c.Content)
+		if !ok {
+			if err := rawPortBudget(c.Content); err != nil {
+				var pe *PortsError
+				if errors.As(err, &pe) {
+					pe.File = c.Path
+				}
+				return err
 			}
-			for _, svc := range w.entries(top.val, 0) {
-				for _, f := range w.entries(svc.val, 0) {
-					if f.name == "ports" || f.name == "expose" {
-						if err := pc.field(svc.name, f); err != nil {
-							return err
+			continue
+		}
+		w := &walker{budget: maxBudget}
+		for _, root := range roots {
+			w.measure(root, 0)
+			if w.err != nil {
+				return ErrComposeTooComplex
+			}
+		}
+		pc.w, pc.file = w, c.Path
+		for _, root := range roots {
+			for _, top := range w.entries(val{n: root}, 0) {
+				if top.name != "services" {
+					continue
+				}
+				for _, svc := range w.entries(top.val, 0) {
+					for _, f := range w.entries(svc.val, 0) {
+						if f.name == "ports" || f.name == "expose" {
+							if err := pc.field(svc.name, f); err != nil {
+								return err
+							}
 						}
 					}
 				}
 			}
-		}
-		if w.err != nil {
-			return ErrComposeTooComplex
+			if w.err != nil {
+				return ErrComposeTooComplex
+			}
 		}
 	}
 	return nil
@@ -498,6 +569,8 @@ type portCounter struct {
 	w     *walker
 	table map[string]string
 	total int
+	// file is the compose file being counted.
+	file string
 }
 
 // field counts the items of one ports or expose key of a service.
@@ -524,11 +597,11 @@ func (pc *portCounter) field(service string, f entry) error {
 			n, valid = shortFormPorts(text, f.name == "expose")
 		}
 		if !valid {
-			return &PortsError{Err: ErrPortRangeInvalid, Key: key, Line: it.line(), Col: it.col()}
+			return &PortsError{Err: ErrPortRangeInvalid, File: pc.file, Key: key, Line: it.line(), Col: it.col()}
 		}
 		pc.total += n
 		if pc.total > MaxPorts {
-			return &PortsError{Err: ErrPortsTooMany, Key: key, Line: it.line(), Col: it.col()}
+			return &PortsError{Err: ErrPortsTooMany, File: pc.file, Key: key, Line: it.line(), Col: it.col()}
 		}
 	}
 	return nil

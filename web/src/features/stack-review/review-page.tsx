@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { CircleX, Info } from "lucide-react";
 import { useId, useState } from "react";
-
 import { useRestoreStack } from "@/api/stack-drift";
+import { usePullStackGit } from "@/api/stack-git";
 import { useRollbackToRevision } from "@/api/stack-history";
 import {
   type DeployRequestError,
@@ -26,17 +26,21 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { EditorFooter } from "@/features/service-editor/editor-footer";
+import { shortSha } from "@/features/stack-git/sha-link";
 import { BlockingList } from "@/features/stack-review/blocking-list";
+import { CommitsCard } from "@/features/stack-review/commits-card";
 import { ConcurrentDeployPanel } from "@/features/stack-review/concurrent-deploy-panel";
 import { ImagePinTable } from "@/features/stack-review/image-pin-table";
+import { MovedHeadNote } from "@/features/stack-review/moved-head-note";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
 import { RevertsDriftSection } from "@/features/stack-review/reverts-drift-section";
 import { ReviewSummary } from "@/features/stack-review/review-summary";
 import { ServiceDiffList } from "@/features/stack-review/service-diff-list";
 import { WarningsList } from "@/features/stack-review/warnings-list";
 import { YamlDiff } from "@/features/stack-review/yaml-diff";
+import { pullReason } from "@/features/stacks/stack-actions";
 import { useT } from "@/i18n/use-t";
-import { toastInfo } from "@/lib/toast";
+import { toastError, toastInfo } from "@/lib/toast";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
 
@@ -141,6 +145,37 @@ function listOf(items: string[]): string {
   return new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(items);
 }
 
+type GitReview = NonNullable<StackReview["git"]>;
+
+// The words of a source in the review of a change of source: its folder, repository and ref, and the compose files when
+// they are all that differs from the source it replaces ("{old source}" of UI-SPEC "Source-change title").
+function describeSource(
+  t: Translate,
+  s: GitReview | NonNullable<GitReview["replaces"]>,
+  files: boolean,
+): string {
+  const source = t("stackReview.git.source", {
+    folder: s.folder || t("stackGit.status.rootFolder"),
+    repo: s.repoName || t("stackGit.strip.repoUnknown"),
+    ref: s.refKind === "commit" ? shortSha(s.ref) : s.ref,
+  });
+  return files
+    ? t("stackReview.git.sourceFiles", { source, files: listOf(s.composeFiles ?? []) })
+    : source;
+}
+
+function sourceWords(t: Translate, now: GitReview, old: NonNullable<GitReview["replaces"]>) {
+  const describe = (s: GitReview | NonNullable<GitReview["replaces"]>, files: boolean) =>
+    describeSource(t, s, files);
+  // Only the compose files differ: the two sources would read the same without them.
+  const sameWhere =
+    old.folder === now.folder &&
+    old.refKind === now.refKind &&
+    old.ref === now.ref &&
+    old.repoName === now.repoName;
+  return { now: describe(now, sameWhere), old: describe(old, sameWhere) };
+}
+
 // noChange says whether a deploy of the review would do nothing: no service to add, change or
 // remove, and no network, secret or config but the external ones the stack only names.
 function noChange(data: StackReview): boolean {
@@ -230,6 +265,39 @@ export function ReviewPage({
   // restore redeploys is the deployed one, which the review names.
   const exact = rollback || restore;
   const seq = restore ? data?.revision : revision;
+  // The review of the draft of a git stack says which commit it deploys (D-17). The title waits for nothing: the stack
+  // knows it is from git; the body and the commit line wait for the review, which names the commit.
+  const gitStack = mode === "deploy" && !!stack.data?.git;
+  const gitReview = mode === "deploy" ? data?.git : undefined;
+  const pull$ = usePullStackGit(envId, stackId);
+  // The commit the ref points at now, when it is not the one reviewed (D-17). A review is never read again by itself, so
+  // it knows the head as it was when it was made; the stack's page is read again every 30 seconds and may know a newer
+  // one. Either moving away from the reviewed commit is worth saying, and a person who presses Review gets the truth
+  // from a new pull. A fixed commit does not move.
+  const stackHead = stack.data?.git?.headSha ?? "";
+  const reviewedHead = gitReview?.headCommit ?? "";
+  // A draft that holds a new source (D-11) is about that source: the stack's head belongs to the source it replaces.
+  const replaces = gitReview?.replaces;
+  // A draft that points an inline or adopted stack at a repository (D-24) is the first sync with it: the same.
+  const converts = gitReview?.converts === true;
+  const movedOn =
+    gitReview && !replaces && !converts && gitReview.refKind !== "commit"
+      ? [stackHead, reviewedHead].find((h) => h !== "" && h !== gitReview.commit) || ""
+      : "";
+
+  // Review the new commit: pull it into the draft again, then read the review again. The draft version, the pins and
+  // the commit line all come from the new review; a failed pull changes nothing and the old review stands.
+  async function reviewMovedHead() {
+    if (pull$.isPending) return;
+    try {
+      await pull$.mutateAsync();
+    } catch (e) {
+      const ref = gitReview?.ref ?? "";
+      toastError(t("stackGit.pull.failed", { ref, reason: pullReason(t, e, ref) }));
+      return;
+    }
+    void review.refetch();
+  }
 
   // Roll back stack sends the revision that was reviewed and the deployed revision the review was made against,
   // so the server refuses a stack that was deployed again since. Like a deploy, it is pending after the first
@@ -321,7 +389,7 @@ export function ReviewPage({
   const deployButton = (
     <Button
       type="button"
-      className="max-md:h-11"
+      className="max-md:h-11 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
       aria-disabled={blocked || starting ? true : undefined}
       aria-describedby={reason ? reasonId : undefined}
       onClick={
@@ -364,7 +432,11 @@ export function ReviewPage({
                 ? t("stackRollback.review.title", { name, seq: revision })
                 : update
                   ? t("stackReview.titleUpdate", { name })
-                  : t("stackReview.title", { name })}
+                  : replaces || converts
+                    ? t("stackReview.titleSource", { name })
+                    : gitStack
+                      ? t("stackReview.titleGit", { name })
+                      : t("stackReview.title", { name })}
           </h3>
         )}
         <p className="text-sm text-muted-foreground">
@@ -376,7 +448,21 @@ export function ReviewPage({
               ? t("stackRollback.review.body", { seq: revision })
               : update
                 ? t("stackReview.bodyUpdate")
-                : t("stackReview.body", { env: envName })}
+                : gitReview && replaces
+                  ? t("stackReview.bodySource", sourceWords(t, gitReview, replaces))
+                  : gitReview && converts
+                    ? t("stackReview.bodyConvert", { now: describeSource(t, gitReview, false) })
+                    : gitReview
+                      ? t("stackReview.bodyGit", {
+                          ref:
+                            gitReview.refKind === "commit"
+                              ? shortSha(gitReview.ref)
+                              : gitReview.ref,
+                          folder: gitReview.folder || t("stackGit.status.rootFolder"),
+                          sha: shortSha(gitReview.commit),
+                          env: envName,
+                        })
+                      : t("stackReview.body", { env: envName })}
         </p>
         {data || failed ? null : (
           <p role="status" className="text-sm text-muted-foreground">
@@ -404,6 +490,15 @@ export function ReviewPage({
         </Alert>
       ) : (
         <>
+          {gitReview && movedOn ? (
+            <MovedHeadNote
+              refName={gitReview.ref}
+              reviewed={gitReview.commit}
+              latest={movedOn}
+              onReview={() => void reviewMovedHead()}
+              pending={pull$.isPending || review.isFetching}
+            />
+          ) : null}
           {data?.concurrent ? (
             <ConcurrentDeployPanel
               concurrent={data.concurrent}
@@ -415,6 +510,12 @@ export function ReviewPage({
             <Alert role="status">
               <Info aria-hidden="true" />
               <AlertDescription>{t("stackRollback.review.draftNotice")}</AlertDescription>
+            </Alert>
+          ) : null}
+          {rollback && stack.data?.git?.autoDeploy ? (
+            <Alert role="status" data-slot="rollback-pauses-auto-deploy">
+              <Info aria-hidden="true" />
+              <AlertDescription>{t("stackReview.git.rollbackNote")}</AlertDescription>
             </Alert>
           ) : null}
           <BlockingList problems={problems} envId={envId} stackId={stackId} />
@@ -447,11 +548,22 @@ export function ReviewPage({
               mode={rollback ? "rollback" : update ? "update" : "deploy"}
             />
           ) : null}
-          <ReviewSummary summary={data?.summary} />
+          <ReviewSummary summary={data?.summary} git={gitReview} />
+          {gitReview && gitReview.deployedCommit !== "" && !gitReview.sourceChanged ? (
+            <CommitsCard
+              envId={envId}
+              stackId={stackId}
+              head={gitReview.commit}
+              folder={gitReview.folder}
+              repoHost={stack.data?.git?.repoHost ?? ""}
+              repoPath={stack.data?.git?.repoPath ?? ""}
+            />
+          ) : null}
           <ImagePinTable
             images={data ? (data.images ?? []) : undefined}
             mode={mode}
             revision={seq}
+            git={!!gitReview}
           />
           {unchanged ? (
             <Empty className="border">

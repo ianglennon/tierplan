@@ -48,6 +48,22 @@ const (
 	// CodeObjectTooLarge is a secret or config with more content than the target takes.
 	CodeObjectTooLarge = "object_too_large"
 
+	// The rules of a stack made from a git repository (D-07, D-09, D-10); see gitlint.go.
+
+	// CodeEnvSecretLike is a key of the repository's .env whose name looks like a secret (a warning).
+	CodeEnvSecretLike = "env_secret_like"
+	// A path that is both a repository file and an overlay file is an overlay clash.
+	CodeOverlayClash = "overlay_clash"
+	// CodeRepoFileMissing is a file the compose files refer to that is neither in the repository nor an
+	// overlay file.
+	CodeRepoFileMissing = "repo_file_missing"
+	// CodeLFSPointer is a repository file whose content is a Git LFS pointer.
+	CodeLFSPointer = "git_lfs_pointer"
+	// CodeSubmodule is a path that is a git submodule.
+	CodeSubmodule = "git_submodule"
+	// CodeSymlinkOutside is a repository link that points outside the stack folder.
+	CodeSymlinkOutside = "git_symlink_outside"
+
 	// The target-aware lint (STK-03); see package lint.
 	CodeIgnoredOnTarget          = lint.CodeIgnoredOnTarget
 	CodeBlockingKey              = lint.CodeBlockingKey
@@ -77,7 +93,18 @@ type Problem struct {
 	// Key is the dotted path of the compose key at fault, such as services.web.image, when the
 	// problem is about a key.
 	Key string
+	// Action is the one thing the editor offers to fix the problem, by a stable name (ActionAddOverlay),
+	// or empty when it offers none.
+	Action string
 }
+
+// The actions a problem can offer.
+const (
+	// ActionAddOverlay offers to add an overlay file for a path the repository lacks.
+	ActionAddOverlay = "add_overlay"
+	// ActionSetSecret offers to set a secret variable that overrides a value committed in the repository.
+	ActionSetSecret = "set_secret"
+)
 
 // Problems is the list of what a check found.
 type Problems []Problem

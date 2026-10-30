@@ -10,7 +10,7 @@
 #
 # Usage: scripts/insecure-tls-check.sh [directory]
 # The directory defaults to the repository root. Dependency and VCS directories
-# are not scanned. Paths in the output are relative to the directory.
+# are not scanned, nor .claude (local agent worktrees). Paths in the output are relative to the directory.
 set -euo pipefail
 
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
@@ -25,7 +25,7 @@ while IFS= read -r file; do
   file="${file#./}"
   [ "${file}" = "${ALLOWED}" ] && continue
   bad+=("${file}")
-done < <(grep -rl --include='*.go' --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor -e "${SETTING}" . 2>/dev/null | sort || true)
+done < <(grep -rl --include='*.go' --exclude-dir=.git --exclude-dir=.claude --exclude-dir=node_modules --exclude-dir=vendor -e "${SETTING}" . 2>/dev/null | sort || true)
 
 if [ "${#bad[@]}" -gt 0 ]; then
   for f in "${bad[@]}"; do

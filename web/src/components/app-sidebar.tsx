@@ -7,6 +7,7 @@ import {
   Boxes,
   Container,
   FileCog,
+  GitBranch,
   HardDrive,
   KeyRound,
   Layers,
@@ -170,6 +171,9 @@ export function AppSidebar() {
   // All stacks is global too (D-21): the stacks of every environment the user may read them on. The
   // server limits the rows it lists.
   const canAllStacks = useAnyEnvironmentPermission("stacks.read");
+  // Git is global too: the repositories and credentials that apply to the environments the user
+  // may read them on. The server limits the rows it lists.
+  const canGit = useAnyEnvironmentPermission("git.read");
 
   return (
     <Sidebar
@@ -195,7 +199,7 @@ export function AppSidebar() {
         ) : null}
       </SidebarHeader>
       <SidebarContent>
-        {canOverview || canRegistries || canAllStacks ? (
+        {canOverview || canRegistries || canAllStacks || canGit ? (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -250,6 +254,20 @@ export function AppSidebar() {
                       >
                         <KeyRound aria-hidden="true" />
                         <span>{t("shell.nav.registries")}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {canGit ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip={t("shell.nav.git")} className="max-md:h-11">
+                      <Link
+                        to="/git"
+                        onClick={closeMenu}
+                        activeProps={{ "aria-current": "page", "data-active": true }}
+                      >
+                        <GitBranch aria-hidden="true" />
+                        <span>{t("shell.nav.git")}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

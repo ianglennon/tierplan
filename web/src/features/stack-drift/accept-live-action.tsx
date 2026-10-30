@@ -93,6 +93,10 @@ export function AcceptLiveAction({ envId, stackId, drifted }: AcceptLiveActionPr
     }
   }
 
+  // A stack that deploys from git has the repository's files, which are read-only: what runs can't be written into
+  // its draft, and the change belongs in the repository. The server refuses it too (git_stack).
+  if (stack.data?.source === "git") return null;
+
   const reason = !needs.allowed
     ? (needs.reason ?? t("needs.role.operator"))
     : stack.data?.lock
@@ -159,6 +163,8 @@ function refusal(
       return t("stackAcceptLive.errors.none");
     case "stack_stopped":
       return t("stackAcceptLive.errors.stopped");
+    case "git_stack":
+      return t("stackAcceptLive.errors.gitStack");
     default:
       return err.status === 0
         ? t("stackAcceptLive.errors.lost")

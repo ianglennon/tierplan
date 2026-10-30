@@ -4,6 +4,7 @@
 package stacks
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,13 @@ import (
 // NewPositionIndex reads the positions of every key of the YAML in src. It is what Check builds
 // for the compose file, exported so the lint tests can index a file the schema would refuse.
 func NewPositionIndex(src []byte) (*PositionIndex, error) { return parseIndex(src) }
+
+// NewPositionIndexOf is NewPositionIndex over the compose files of a working copy, in merge order. A
+// position it reports names the compose file it is in (lint.Pos.File) when the copy names its compose
+// files; the last file that has a key is the one reported, because a later file wins in the merge.
+func NewPositionIndexOf(contents []ComposeContent) (*PositionIndex, error) {
+	return parseIndexOf(contents)
+}
 
 // PositionIndex implements lint.Index over the stored YAML.
 var _ lint.Index = (*PositionIndex)(nil)
@@ -144,10 +152,14 @@ func (ix *PositionIndex) Lookup(path string) (lint.Pos, bool) {
 	if ix == nil || path == "" {
 		return lint.Pos{}, false
 	}
-	for _, root := range ix.docs {
-		if at, v := exact(root, path, 0); v != nil {
+	for _, i := range ix.order() {
+		if at, v := exact(ix.docs[i], path, 0); v != nil {
 			line, col, endLine, endCol := posOf(at)
-			return lint.Pos{Line: line, Col: col, EndLine: endLine, EndCol: endCol}, true
+			pos := lint.Pos{Line: line, Col: col, EndLine: endLine, EndCol: endCol}
+			if ix.files != nil {
+				pos.File = ix.files[i]
+			}
+			return pos, true
 		}
 	}
 	return lint.Pos{}, false
@@ -181,7 +193,12 @@ func (ix *PositionIndex) Keys(path string) []string {
 
 // Scalar is the text of the scalar the path names.
 func (ix *PositionIndex) Scalar(path string) (string, bool) {
-	for _, v := range ix.valuesAt(path) {
+	values := ix.valuesAt(path)
+	if ix != nil && ix.files != nil {
+		// A later compose file wins in the merge.
+		slices.Reverse(values)
+	}
+	for _, v := range values {
 		if v.Kind == yaml.ScalarNode {
 			return v.Value, true
 		}

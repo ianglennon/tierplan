@@ -41,8 +41,12 @@ func DeployItems() []string {
 // The codes a swarm deploy ends a failed item with. Each has a sentence in codeMessages; the
 // manager's own words are never put in a job.
 const (
-	CodeHostReadOnly       = "host_read_only"
-	CodeAgentPolicyDenied  = "agent_policy_denied"
+	CodeHostReadOnly      = "host_read_only"
+	CodeAgentPolicyDenied = "agent_policy_denied"
+	// CodeAgentHostPolicy is a refusal the agent words as host policy (host access the agent does not
+	// allow). It is the API's wire code for the same refusal (services.go codeAgentHostPolicy), so the
+	// stack screens and the services and volumes screens read it alike.
+	CodeAgentHostPolicy    = "agent_host_policy"
 	CodeNoManagerConnected = "no_manager_connected"
 	CodeServiceRejected    = "service_rejected"
 	CodeServiceChanged     = "service_changed"
@@ -70,6 +74,7 @@ const (
 var codeMessages = map[string]string{
 	CodeHostReadOnly:        "This host is read-only, so Bayplan cannot change it.",
 	CodeAgentPolicyDenied:   "The agent refused the request.",
+	CodeAgentHostPolicy:     "The host's agent doesn't let Bayplan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
 	CodeNoManagerConnected:  "No manager of this swarm is connected to Bayplan.",
 	CodeServiceRejected:     "The swarm rejected the service.",
 	CodeServiceChanged:      "The service was changed by someone else while the deploy ran.",
@@ -704,7 +709,8 @@ func hasExternal(p convert.Plan) bool {
 	return false
 }
 
-// codeOf classifies the error of one engine call into a deploy code.
+// codeOf classifies the error of one engine call into a deploy code. An agent refusal is
+// agent_host_policy when the agent words it as host policy, else agent_policy_denied.
 func codeOf(ctx context.Context, err error) string {
 	err = envs.ClassifyDockerError(err)
 	var denied *envs.AgentPolicyDeniedError
@@ -717,6 +723,9 @@ func codeOf(ctx context.Context, err error) string {
 	case errors.Is(err, envs.ErrNodeUnavailable):
 		return CodeNoManagerConnected
 	case errors.As(err, &denied):
+		if denied.HostPolicy {
+			return CodeAgentHostPolicy
+		}
 		return CodeAgentPolicyDenied
 	case errors.Is(err, dockerx.ErrServiceChanged):
 		return CodeServiceChanged

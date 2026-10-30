@@ -35,6 +35,7 @@ type checkProblem struct {
 }
 
 type checkVariable struct {
+	SecretLike bool   `json:"secretLike"`
 	Name       string `json:"name"`
 	Value      string `json:"value"`
 	Secret     bool   `json:"secret"`

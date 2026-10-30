@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { ownedName } from "@/features/access/owned-name";
 import { ownerLabel } from "@/features/access/owner-label";
 import { Truncated } from "@/features/access/truncated";
 import { useMe } from "@/hooks/use-me";
@@ -67,7 +68,7 @@ function OwnedRow({ item, owner, onChange, disabled }: OwnedRowProps) {
   return (
     <li className="flex min-w-0 flex-col gap-2 py-2">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <Truncated text={item.name} className="max-w-full font-medium" />
+        <Truncated text={ownedName(t, item)} className="max-w-full font-medium" />
         <p className="text-xs break-words text-muted-foreground">
           {item.label} · {item.envName}
         </p>
@@ -83,7 +84,7 @@ function OwnedRow({ item, owner, onChange, disabled }: OwnedRowProps) {
         >
           <SelectTrigger
             id={`delete-owner-${keyOf(item)}`}
-            aria-label={t("owned.delete.ownerLabel", { automation: item.name })}
+            aria-label={t("owned.delete.ownerLabel", { automation: ownedName(t, item) })}
             className={`${TOUCH_HEIGHT} w-full`}
           >
             <SelectValue />
@@ -99,7 +100,7 @@ function OwnedRow({ item, owner, onChange, disabled }: OwnedRowProps) {
         </Select>
         {query.isError ? (
           <p role="alert" className="text-xs text-destructive">
-            {t("owned.delete.eligibleFailed", { automation: item.name })}
+            {t("owned.delete.eligibleFailed", { automation: ownedName(t, item) })}
           </p>
         ) : null}
       </div>

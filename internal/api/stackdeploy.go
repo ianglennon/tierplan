@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
@@ -37,6 +38,12 @@ const (
 	// as. A deploy has no metaRevision.
 	metaRevision = "revision"
 	metaRecorded = "recorded"
+	// metaTrigger, metaOnBehalfOf and metaCommit are what an automatic deploy adds: what started it (poll or webhook),
+	// the name of the user it ran for and the short commit it deploys. A deploy a person started has no metaTrigger or
+	// metaOnBehalfOf.
+	metaTrigger    = "trigger"
+	metaOnBehalfOf = "onBehalfOf"
+	metaCommit     = "commit"
 
 	deployModeDeploy   = "deploy"
 	deployModeUpdate   = "update"
@@ -139,6 +146,9 @@ type StackJobBody struct {
 	Revision   int64                `json:"revision,omitempty" doc:"Left out unless set: for a roll back or a restore, the number of the revision it restores"`
 	Recorded   int64                `json:"recordedRevision,omitempty" doc:"Left out unless set: the number of the revision the operation was recorded as, the one a deploy took from the draft or a roll back's copy of the revision it restores. A stop, a start and a removal take none"`
 	StartedBy  string               `json:"startedBy" doc:"Who started the deploy, as a name"`
+	Trigger    string               `json:"trigger,omitempty" enum:"poll,webhook" doc:"Left out unless set: what started an automatic deploy of a git stack, a poll check or a webhook. A deploy a person started has none"`
+	OnBehalfOf string               `json:"onBehalfOf,omitempty" doc:"Left out unless set: for an automatic deploy, the name of the user it ran for (the one who turned auto-deploy on), at most 64 characters"`
+	Commit     string               `json:"commit,omitempty" doc:"Left out unless set: for a deploy of a git stack, the first 7 characters of the commit it deploys"`
 	State      string               `json:"state" enum:"running,done,partial,failed,cancelled" doc:"running until every step has ended, then done when every step is"`
 	CreatedAt  string               `json:"createdAt" doc:"When the job started, RFC 3339 UTC"`
 	FinishedAt string               `json:"finishedAt" doc:"When the job ended, RFC 3339 UTC, empty while it runs"`
@@ -357,19 +367,81 @@ func stackJobOf(j jobs.Job, envID, stackID string) bool {
 	return strings.HasPrefix(j.Kind, stackJobKindPrefix) && j.EnvID == envID && j.Meta[metaStackID] == stackID
 }
 
-// stackJobOwner is who a stack job is attributed to in the hub, as an audit actor.
-func stackJobOwner(p *rbac.Principal) string { return string(p.Type) + ":" + p.ID }
+// stackJobOwner is who a stack job is attributed to in the hub, as an audit actor. A system principal acting
+// for a user is attributed to that user's own share of it (system:gitsync:{ownerID}), so the automated deploys
+// of one owner never take another owner's job slots.
+func stackJobOwner(p *rbac.Principal) string {
+	if p.OnBehalfOf != "" {
+		return p.ID + ":" + p.OnBehalfOf
+	}
+	return string(p.Type) + ":" + p.ID
+}
+
+// deployOpts is what a deploy that no person pressed adds to the ones a person does.
+type deployOpts struct {
+	// Trigger is what started the deploy ("poll" or "webhook"); empty for one a person started.
+	Trigger string
+	// Escalating, when set, is set to whether the stack asks for host access that only an env Admin may deploy, once the
+	// policy has passed for the caller. An automatic deploy uses it to record that its owner must stay an Admin.
+	Escalating *bool
+}
+
+// noteHostAccess tells o.Escalating whether the stack asks for host access, judged without a role (stackops.HostAccess),
+// so an Admin's deploy of it is known for what it is. A stack that can't be read for it counts as escalating: the owner
+// is then held to the stricter rule.
+func (o deployOpts) noteHostAccess(d StacksDeps, copy stacks.WorkingCopy, plan convert.Plan) {
+	if o.Escalating == nil {
+		return
+	}
+	res, err := d.ops().HostAccess(copy, plan)
+	*o.Escalating = err != nil || len(res.Entries) > 0 || len(res.Kinds) > 0
+}
+
+// recordTrigger stores on a new revision what started its deploy when no person did, and on the in-memory copy, which
+// the end of the deploy reads. A failure marks the revision failed: nothing has started that could finish it.
+func (o deployOpts) recordTrigger(ctx context.Context, d StacksDeps, envID string, repo stackops.Repo, rev *stackops.Snapshot) error {
+	if o.Trigger == "" {
+		return nil
+	}
+	if err := repo.SetSyncTrigger(ctx, rev.ID, o.Trigger); err != nil {
+		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
+		return stackInternal(d, "record the trigger", envID, err)
+	}
+	rev.SyncTrigger = o.Trigger
+	return nil
+}
+
+// auditExtras are the audit details that say who an automated deploy acted for and what started it.
+func (o deployOpts) auditExtras(p *rbac.Principal) map[string]string {
+	extra := map[string]string{}
+	if o.Trigger != "" {
+		extra["trigger"] = o.Trigger
+	}
+	if p.OnBehalfOf != "" {
+		extra["onBehalfOf"] = p.OnBehalfOf
+	}
+	return extra
+}
 
 func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*StackDeployOutput, error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return nil, huma.Error500InternalServerError("internal error")
 	}
+	out, err := deployDraft(ctx, d, p, env, in.StackID, in.Body, in.UserAgent, deployOpts{})
+	return out, plainProblem(err)
+}
+
+// deployDraft judges, locks, records and starts the deploy of a stack's draft for the principal p on the
+// environment env. It is the whole of a deploy once the caller is known: the route reads p and env from the
+// request, StackDeployer from the arguments of a background service, and both get the same checks, the same
+// operation lock, the same revision, job and audit (RESEARCH Pitfall 9, D-20).
+func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, stackID string, body StackDeployRequest, userAgent string, o deployOpts) (*StackDeployOutput, error) {
 	if d.Jobs == nil {
 		return nil, httpx.Problem(http.StatusServiceUnavailable, problemJobsUnavail, "Deploys are not available right now.")
 	}
 	repo := d.repo()
-	st, err := repo.Stack(ctx, env.ID, in.StackID)
+	st, err := repo.Stack(ctx, env.ID, stackID)
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
@@ -380,17 +452,17 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	if err != nil {
 		return nil, stackLookupProblem(d, env.ID, err)
 	}
-	if draft.Version != in.Body.DraftVersion {
+	if draft.Version != body.DraftVersion {
 		return nil, draftChanged(&stackops.DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version})
 	}
-	if err := concurrentGate(ctx, d, repo, st.ID, env.ID, draft.BaseSeq, in.Body.AcknowledgeConcurrent); err != nil {
+	if err := concurrentGate(ctx, d, repo, st.ID, env.ID, draft.BaseSeq, body.AcknowledgeConcurrent); err != nil {
 		return nil, err
 	}
-	mode, update := deployModeOf(in.Body)
+	mode, update := deployModeOf(body)
 	// The stack's masker is built once for the request: the refusals below and the stored rendering use it.
 	masker := stacks.NewMasker(draft.Copy.Vars, draft.Copy.Files)
 	if st.Target == stacks.TargetStandalone {
-		return deployStandaloneStack(ctx, d, p, env, st, draft, in, mode, update, masker)
+		return deployStandaloneStack(ctx, d, p, env, st, draft, body, userAgent, o, mode, update, masker)
 	}
 
 	// The draft is judged once, by the check pipeline the review ran, before anything is stored or
@@ -402,28 +474,25 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, deployableProblem(d, env.ID, err)
 	}
 	if mode == deployModeUpdate {
-		if err := stackops.ValidateUpdateServices(loaded.Project, st.Target, st.Name, in.Body.Services); err != nil {
+		if err := stackops.ValidateUpdateServices(loaded.Project, st.Target, st.Name, body.Services); err != nil {
 			return nil, targetProblem(d, env.ID, err)
 		}
 	}
-	files, vars := stacks.NewFileSet(draft.Copy.Files), make(map[string]string, len(draft.Copy.Vars))
-	for _, v := range draft.Copy.Vars {
-		vars[v.Name] = v.Value
-	}
+	files, vars := stacks.NewFileSet(draft.Copy.Files), stacks.ObjectVars(draft.Copy)
 	objs, err := stacks.ResolveObjects(loaded.Project, files, vars)
 	if err != nil {
-		return nil, objectProblem(err, masker)
+		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	plan, err := convert.Convert(loaded.Project, convert.Options{StackName: st.Name, StackID: st.ID, Objects: stackops.PlannedObjects(st.Name, objs)})
 	if err != nil {
 		// A refusal about a field that uses a secret variable arrives as the fixed sentence; the SecretUse is
 		// built only on this path.
-		return nil, convertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(draft.Copy)), masker)
+		return nil, refuse(refusalConvert, convertProblem(convert.GuardSecrets(err, stacks.NewSecretUse(draft.Copy)), masker))
 	}
 	// The images the review chose are checked now, before anything is stored, against what the
 	// server decides itself: a pin it would not have chosen is refused and nothing starts.
-	if in.Body.Pins != nil {
-		if err := d.ops().ValidatePins(ctx, env.ID, st, plan.Services, repo, update, in.Body.Pins); err != nil {
+	if body.Pins != nil {
+		if err := d.ops().ValidatePins(ctx, env.ID, st, plan.Services, repo, update, body.Pins); err != nil {
 			return nil, pinsProblem(d, env.ID, err)
 		}
 	}
@@ -436,8 +505,9 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
 	if pol.Refused {
-		return nil, policyProblem(pol)
+		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
+	o.noteHostAccess(d, draft.Copy, plan)
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
@@ -462,9 +532,12 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
+	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	if err := o.recordTrigger(ctx, d, env.ID, repo, &rev); err != nil {
+		return nil, err
 	}
 	// The draft is now the content of this revision, so it starts from it: the next review does not
 	// take this deploy for one made by someone else.
@@ -477,8 +550,8 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	// with the images it ran with.
 	rendering := revisionRendering{repo: repo, loaded: loaded, masker: masker}
 	var startPins map[string]stacks.LivePin
-	if in.Body.Pins != nil {
-		startPins = stackops.LivePins(in.Body.Pins)
+	if body.Pins != nil {
+		startPins = stackops.LivePins(body.Pins)
 	} else if startPins, err = repo.GoodPins(ctx, st.ID); err != nil {
 		d.Log.Warn("could not read the pins of a stack for its rendering", "stack", st.ID, "error", err)
 	}
@@ -489,10 +562,10 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 	swarmIn := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
 		Caller: caller, Masker: rendering.masker,
-		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: in.Body.Pins,
+		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: body.Pins,
 	}
 	out, err := launchStackDeploy(ctx, d, launch{
-		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: in.UserAgent,
+		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
 		items: stackops.DeployItemSpecs(),
 		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
 			swarmIn.OnDone = onDone
@@ -510,19 +583,19 @@ func deployStack(ctx context.Context, d StacksDeps, in *StackDeployInput) (*Stac
 // same way, and the job runs the Compose SDK instead of the swarm engine. Every step before the lock is a
 // read or a check; nothing is stored or started until the draft, the objects, the pins, the host-access
 // policy and the name have all passed.
-func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, in *StackDeployInput, mode string, update map[string]bool, masker stacks.Masker) (*StackDeployOutput, error) {
+func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal, env *httpx.Env, st stackops.Stack, draft stackops.Snapshot, body StackDeployRequest, userAgent string, o deployOpts, mode string, update map[string]bool, masker stacks.Masker) (*StackDeployOutput, error) {
 	repo := d.repo()
 	checked := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: draft.Copy, Deadline: d.CheckDeadline})
 	if checked.Loaded == nil {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
 	}
 	if mode == deployModeUpdate {
-		if err := stackops.ValidateUpdateServices(checked.Loaded.Project, st.Target, st.Name, in.Body.Services); err != nil {
+		if err := stackops.ValidateUpdateServices(checked.Loaded.Project, st.Target, st.Name, body.Services); err != nil {
 			return nil, targetProblem(d, env.ID, err)
 		}
 	}
-	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), varMap(draft.Copy.Vars)); err != nil {
-		return nil, objectProblem(err, masker)
+	if _, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, checked.Loaded.Project, stacks.NewFileSet(draft.Copy.Files), stacks.ObjectVars(draft.Copy)); err != nil {
+		return nil, refuse(refusalObjects, objectProblem(err, masker))
 	}
 	if checked.Problems.Errors() > 0 {
 		return nil, stackInvalid(checked.Problems, "The stack has errors, so it can't be deployed. Review it and fix the problems it lists.")
@@ -533,8 +606,8 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	}
 	// The images the review chose are checked now, before anything is stored, against what the server decides
 	// itself: a pin it would not have chosen is refused and nothing starts.
-	if in.Body.Pins != nil {
-		if err := d.ops().ValidateStandalonePins(ctx, env.ID, node, st, checked.Loaded.Project, repo, update, in.Body.Pins); err != nil {
+	if body.Pins != nil {
+		if err := d.ops().ValidateStandalonePins(ctx, env.ID, node, st, checked.Loaded.Project, repo, update, body.Pins); err != nil {
 			return nil, pinsProblem(d, env.ID, err)
 		}
 	}
@@ -544,8 +617,9 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		return nil, stackInternal(d, "policy", env.ID, err)
 	}
 	if pol.Refused {
-		return nil, policyProblem(pol)
+		return nil, refuse(refusalPolicy, policyProblem(pol))
 	}
+	o.noteHostAccess(d, draft.Copy, convert.Plan{})
 	foreign, err := d.ops().ForeignStackOf(ctx, env.ID, st)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, env.ID, err)
@@ -567,9 +641,12 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		}
 	}()
 
-	rev, err := repo.NewRevision(ctx, st.ID, p.Name, originOf(mode))
+	rev, err := repo.NewRevision(ctx, st.ID, revisionCreator(ctx, repo, p), originOf(mode))
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
+	}
+	if err := o.recordTrigger(ctx, d, env.ID, repo, &rev); err != nil {
+		return nil, err
 	}
 	if err := repo.RebaseDraft(ctx, st.ID, rev.Seq); err != nil {
 		_ = repo.SetOutcome(context.WithoutCancel(ctx), rev.ID, stackops.OutcomeFailed, "", "")
@@ -577,8 +654,8 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	}
 	rendering := revisionRendering{repo: repo, loaded: checked.Loaded, masker: masker}
 	var startPins map[string]stacks.LivePin
-	if in.Body.Pins != nil {
-		startPins = stackops.LivePins(in.Body.Pins)
+	if body.Pins != nil {
+		startPins = stackops.LivePins(body.Pins)
 	} else if startPins, err = repo.GoodPins(ctx, st.ID); err != nil {
 		d.Log.Warn("could not read the pins of a stack for its rendering", "stack", st.ID, "error", err)
 	}
@@ -587,11 +664,11 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	}
 
 	standaloneIn := stackops.StandaloneDeployInput{
-		EnvID: env.ID, NodeID: node, Stack: st, Copy: draft.Copy, Reviewed: in.Body.Pins, Update: update,
+		EnvID: env.ID, NodeID: node, Stack: st, Copy: draft.Copy, Reviewed: body.Pins, Update: update,
 		Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
 	}
 	return launchStackDeploy(ctx, d, launch{
-		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: in.UserAgent,
+		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
 		items: stackops.StandaloneItemSpecs(),
 		run: func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
 			standaloneIn.OnDone = onDone
@@ -599,15 +676,6 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 		},
 		rendering: rendering, release: release, owned: &jobOwnsLock,
 	})
-}
-
-// varMap is the stack's variable table by name.
-func varMap(vars []stacks.Var) map[string]string {
-	out := make(map[string]string, len(vars))
-	for _, v := range vars {
-		out[v.Name] = v.Value
-	}
-	return out
 }
 
 // rollbackStack redeploys the last version of a stack that ran well. It is judged like a deploy and runs
@@ -748,6 +816,11 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 	if err != nil {
 		return nil, stackInternal(d, "revision", env.ID, err)
 	}
+	// A roll back stops the repository head from being deployed over what it restores: the stack's automatic deploys
+	// pause now, in the same action (D-22). A restore puts back the revision that already runs, so it pauses nothing.
+	if d.GitRolledBack != nil && mode == deployModeRollback {
+		d.GitRolledBack(context.WithoutCancel(ctx), st, rev, p.AuditActor())
+	}
 	rendering := revisionRendering{repo: repo, loaded: prep.Loaded, masker: masker}
 	if err := rendering.store(ctx, rev.ID, stackops.LivePins(pins)); err != nil {
 		d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", err)
@@ -822,6 +895,8 @@ type launch struct {
 	mode      string
 	kind      string // the kind of the row in stack_deploys
 	userAgent string
+	// trigger is what started an automated deploy ("poll" or "webhook"); empty for one a person started.
+	trigger string
 	// jobKind is the Kind of the job in the hub; empty is a deploy's.
 	jobKind string
 	// restores is the revision a roll back restores, 0 for any other operation.
@@ -848,11 +923,12 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	var deploy stackops.DeployRow
 	reqCtx := context.WithoutCancel(ctx)
 	actor, userAgent := l.p.AuditActor(), l.userAgent
+	extra := deployOpts{Trigger: l.trigger}.auditExtras(l.p)
 	onDone := func(res stackops.DeployResult) {
 		if l.record != nil {
 			l.record(reqCtx, deploy, res)
 		} else {
-			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering)
+			recordDeployEnd(reqCtx, d, actor, userAgent, l.st, l.rev, deploy, l.mode, res, l.rendering, extra)
 		}
 		// The lock is free before the job reads as finished, so whoever sees it end can start the next
 		// operation at once. Freeing it again when the run returns changes nothing.
@@ -876,6 +952,15 @@ func launchStackDeploy(ctx context.Context, d StacksDeps, l launch) (*StackDeplo
 	}
 	if l.rev.Seq > 0 {
 		meta[metaRecorded] = itoa(l.rev.Seq)
+	}
+	if l.trigger != "" {
+		meta[metaTrigger] = l.trigger
+	}
+	if l.p.OnBehalfOf != "" {
+		meta[metaOnBehalfOf] = clipName(ownerName(ctx, &repo, l.p.OnBehalfOf))
+	}
+	if l.rev.Git.Commit != "" {
+		meta[metaCommit] = shortCommit(l.rev.Git.Commit)
 	}
 	spec := jobs.Spec{Kind: kind, EnvID: l.env.ID, Owner: stackJobOwner(l.p), Meta: meta, Items: l.items}
 	if d.BeforeJob != nil {
@@ -964,7 +1049,7 @@ func concurrentGate(ctx context.Context, d StacksDeps, repo stackops.Repo, stack
 // recordDeployEnd stores how a deploy ended: the revision's outcome, the deploy row and the
 // audit row. It runs before the job's last step is finished, so a job that reads as finished has
 // already been recorded.
-func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, mode string, res stackops.DeployResult, rendering revisionRendering) {
+func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userAgent string, st stackops.Stack, rev stackops.Snapshot, deploy stackops.DeployRow, mode string, res stackops.DeployResult, rendering revisionRendering, extra map[string]string) {
 	state, outcome, result := stackops.DeployDone, stackops.OutcomeGood, audit.ResultSuccess
 	resultWord := "done"
 	switch {
@@ -999,9 +1084,17 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 		if perr != nil {
 			d.Log.Warn("could not store the rendering of a revision", "stack", st.ID, "revision", rev.Seq, "error", perr)
 		}
+		// A stack made from a repository now runs this revision's commit: its settings and sync state follow it (D-08).
+		if d.GitDeployed != nil && rev.Git.Commit != "" {
+			d.GitDeployed(wctx, st.ID, rev)
+		}
 	}
 	if err := repo.FinishDeploy(wctx, deploy.ID, state, res.FailedService, res.Code); err != nil {
 		d.Log.Error("could not finish a deploy row", "stack", st.ID, "deploy", deploy.ID, "error", err)
+	}
+	// A revision an automatic deploy made that failed puts the stack in error; a cancelled one does not, a person did it.
+	if state == stackops.DeployFailed && d.GitDeployFailed != nil && rev.Git.Commit != "" && rev.SyncTrigger != "" {
+		d.GitDeployFailed(wctx, st, rev, res.FailedService)
 	}
 	// The outcome is stored, so this revision is no longer pending and the deployed one is the newest good: prune
 	// the stack to the instance's limit (D-01). A failure is logged and never fails the record.
@@ -1025,6 +1118,14 @@ func recordDeployEnd(ctx context.Context, d StacksDeps, actor audit.Actor, userA
 	}
 	if rev.RestoredFrom > 0 {
 		details["restoredFrom"] = itoa(rev.RestoredFrom)
+	}
+	// A revision made from a repository says which commit it ran.
+	if rev.Git.Commit != "" {
+		details["commit"] = rev.Git.Commit
+	}
+	// An automated deploy says what started it and whom it acted for, next to the system actor.
+	for k, v := range extra {
+		details[k] = v
 	}
 	if err := d.Audit.Record(wctx, audit.Entry{
 		Actor: actor, Action: audit.ActionStackDeployed, TargetType: stackTargetType, TargetID: st.ID, EnvID: st.EnvID,
@@ -1257,6 +1358,7 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 	b := StackJobBody{
 		ID: j.ID, StackID: j.Meta[metaStackID], Mode: j.Meta[metaMode], StartedBy: j.Meta[metaStartedBy], State: stackJobState(j),
 		Revision: metaInt(j.Meta, metaRevision), Recorded: metaInt(j.Meta, metaRecorded),
+		Trigger: j.Meta[metaTrigger], OnBehalfOf: j.Meta[metaOnBehalfOf], Commit: j.Meta[metaCommit],
 		CreatedAt: rfc3339(j.CreatedAt), FinishedAt: rfc3339(j.FinishedAt), Items: make([]StackJobItemBody, 0, len(j.Items)),
 		Output: make([]StackJobOutputLine, 0, len(output)),
 	}
@@ -1267,6 +1369,32 @@ func stackJobBody(j jobs.Job, output []jobs.Output) StackJobBody {
 		b.Output = append(b.Output, stackJobOutputLine(o))
 	}
 	return b
+}
+
+// revisionCreator is who a revision is recorded as made for. A person is themselves; an automatic deploy acts as a system
+// principal on behalf of the person whose authority it runs on, and History shows the revision as an Auto-deploy "for"
+// that person, so the system principal's own name would say nothing.
+func revisionCreator(ctx context.Context, repo stackops.Repo, p *rbac.Principal) string {
+	if p.OnBehalfOf != "" {
+		if name := clipName(ownerName(ctx, &repo, p.OnBehalfOf)); name != "" {
+			return name
+		}
+	}
+	return p.Name
+}
+
+// clipName cleans a user's name for a job's meta: no control characters, at most 64 characters.
+func clipName(s string) string {
+	s = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s))
+	if r := []rune(s); len(r) > 64 {
+		s = string(r[:64])
+	}
+	return s
 }
 
 // metaInt reads a number out of a job's meta, 0 for one that is not there.

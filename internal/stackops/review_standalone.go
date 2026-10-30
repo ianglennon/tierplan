@@ -37,7 +37,7 @@ const CodeExternalFileObject = stacks.CodeExternalFileObject
 //
 // res is the check of the draft, which loaded.
 func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.CheckResult, rv *Review) error {
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	project := res.Loaded.Project
 	objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, project, files, vars)
 	if err != nil {
@@ -84,7 +84,7 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		}
 	}
 	pinned := d.resolvePins(ctx, in.EnvID, items, standaloneLivePins(live.Containers), stored, update, d.nodeReader(in.EnvID, node))
-	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (the host is not reachable, the agent refused).
 		rv.Problems = append(rv.Problems, stacks.Problem{
@@ -384,7 +384,7 @@ func (d Deps) preparedRevisions(ctx context.Context, in ReviewInput) ([]map[stri
 		}
 		copies = append(copies, rev.Copy)
 		p := checked.Loaded.Project
-		objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, p, stacks.NewFileSet(rev.Copy.Files), varTable(rev.Copy.Vars))
+		objs, err := stacks.ResolveObjectsFor(stacks.TargetStandalone, p, stacks.NewFileSet(rev.Copy.Files), stacks.ObjectVars(rev.Copy))
 		if err != nil {
 			continue
 		}

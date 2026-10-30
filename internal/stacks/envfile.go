@@ -36,6 +36,9 @@ type EnvFileError struct {
 }
 
 func (e *EnvFileError) Error() string {
+	if e.Service == "" {
+		return "stacks: " + strconv.Quote(e.Path) + ": " + e.Err.Error()
+	}
 	return "stacks: service " + e.Service + ": env_file " + strconv.Quote(e.Path) + ": " + e.Err.Error()
 }
 
@@ -154,4 +157,87 @@ func resolveService(name string, svc types.ServiceConfig, files FileSet, lookup 
 		}
 	}
 	return env, nil
+}
+
+// repoDotEnv is the .env at the stack root when it is a file of the repository. An inline or overlay
+// .env is not one (D-07): only a committed .env supplies defaults.
+func repoDotEnv(files []File) (File, bool) {
+	for _, f := range files {
+		if f.Path == DotEnvFile && f.Origin == OriginRepo {
+			return f, true
+		}
+	}
+	return File{}, false
+}
+
+// RepoEnv parses the .env at the stack root of a stack made from a git repository (D-07). It is read
+// only when the file's origin is OriginRepo: an inline stack's .env, and an overlay .env, supply
+// nothing. A ${NAME} inside a value is looked up in the stack's table. The server's own environment is
+// never read. A working copy with no repository .env returns a nil map.
+//
+// A file over MaxFileBytes is a *FileError and one the .env parser refuses is an *EnvFileError for
+// ".env" with the line (0 when unknown); neither holds a value from the file.
+func RepoEnv(c WorkingCopy) (map[string]string, error) {
+	f, ok := repoDotEnv(c.Files)
+	if !ok {
+		return nil, nil
+	}
+	if len(f.Content) > MaxFileBytes {
+		return nil, &FileError{Path: DotEnvFile, Err: ErrFileTooLarge}
+	}
+	vars, err := dotenv.ParseWithLookup(bytes.NewReader(f.Content), tableValues(c.Vars))
+	if err != nil {
+		return nil, &EnvFileError{Path: DotEnvFile, Line: errorLine(err, f.Content), Err: ErrEnvFileInvalid}
+	}
+	return vars, nil
+}
+
+// InterpolationEnv is the environment a compose file of the working copy is interpolated with (D-07): the
+// repository's .env (RepoEnv) under the table, where a value in the table beats the .env and a blank value in
+// either is no value. Load interpolates with it, and so must anything that judges the values a deploy would
+// use (the host-access policy), so that they never disagree. A .env that cannot be read is an error, never a
+// table-only environment.
+func InterpolationEnv(c WorkingCopy) (map[string]string, error) {
+	repoEnv, err := RepoEnv(c)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string, len(c.Vars)+len(repoEnv))
+	for name, value := range repoEnv {
+		if value != "" {
+			env[name] = value
+		}
+	}
+	for _, v := range c.Vars {
+		if v.Value != "" {
+			env[v.Name] = v.Value
+		}
+	}
+	return env, nil
+}
+
+// ObjectVars is the variables a secret or config that reads `environment: NAME` is resolved from at a check, a
+// review and a deploy: the table over the repository's .env (RepoEnv), the same layering the compose files are
+// interpolated with, so the three never disagree about which values exist. A blank table value hides nothing
+// the .env holds, but one the .env does not hold stays in the map as blank (an empty secret is refused as
+// empty, not reported as missing). A .env that cannot be read adds nothing: the load has already refused a
+// stack with one, and a table-only map can only fail closed (a missing variable).
+func ObjectVars(c WorkingCopy) map[string]string {
+	repoEnv, _ := RepoEnv(c)
+	return objectVarsLayered(c.Vars, repoEnv)
+}
+
+func objectVarsLayered(vars []Var, repoEnv map[string]string) map[string]string {
+	out := make(map[string]string, len(vars)+len(repoEnv))
+	for name, value := range repoEnv {
+		if value != "" {
+			out[name] = value
+		}
+	}
+	for _, v := range vars {
+		if _, held := out[v.Name]; v.Value != "" || !held {
+			out[v.Name] = v.Value
+		}
+	}
+	return out
 }

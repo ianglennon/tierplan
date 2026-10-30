@@ -12,6 +12,8 @@ export const STACK_STATUS_VALUES = [
   "draft",
   "deploy_failed",
   "drifted",
+  "behind",
+  "sync-error",
 ] as const;
 export type StackStatusValue = (typeof STACK_STATUS_VALUES)[number];
 

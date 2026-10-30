@@ -30,6 +30,9 @@ import (
 	"github.com/ianglennon/bayplan/internal/dockerx"
 	"github.com/ianglennon/bayplan/internal/engine"
 	"github.com/ianglennon/bayplan/internal/envs"
+	"github.com/ianglennon/bayplan/internal/gitconn"
+	"github.com/ianglennon/bayplan/internal/gitsync"
+	"github.com/ianglennon/bayplan/internal/gitx"
 	"github.com/ianglennon/bayplan/internal/httpx"
 	"github.com/ianglennon/bayplan/internal/instance"
 	"github.com/ianglennon/bayplan/internal/jobs"
@@ -100,6 +103,9 @@ type Server struct {
 	monitor  *envs.Monitor
 	// drift checks the stacks of the monitored environments for drift in the background.
 	drift *stackops.DriftMonitor
+	// gitSync checks the git stacks; its checks and automatic deploys run apart from the poller and are ended and
+	// waited for by Close before the jobs and the database close.
+	gitSync *gitsync.Service
 	// snapshots caches the resource lists per environment for a few seconds.
 	// The events hub invalidates it on every Docker event.
 	snapshots *envs.Snapshots
@@ -180,6 +186,7 @@ type RouterDeps struct {
 	Pulls         api.PullsDeps
 	Stacks        api.StacksDeps
 	Registries    api.RegistriesDeps
+	Git           api.GitDeps
 	Tags          api.TagsDeps
 	Events        api.EventsDeps
 	Logs          api.LogsDeps
@@ -192,6 +199,8 @@ type RouterDeps struct {
 	Settings      api.SettingsDeps
 	Backup        api.BackupDeps
 	Restore       api.RestoreDeps
+	// GitHooks serves POST /hooks/git/{token}, the address a git host calls on a push. Zero answers 404 to everything.
+	GitHooks api.GitHookDeps
 	// AgentConnect serves the agent WebSocket at /agent/connect. It is the one
 	// route outside the policy besides the probes and the setup page, because the
 	// handshake inside it is its own authentication. Nil mounts a handler that
@@ -218,7 +227,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterEnvironments(r, d.Environments)
 	api.RegisterAgents(r, d.Agents)
 	api.RegisterUnknownAgents(r, d.UnknownAgents)
-	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Agents: d.Agents, Log: d.Environments.Log})
+	api.RegisterEnvWarnings(r, api.EnvWarningsDeps{Envs: d.Environments.Envs, Checker: d.Environments.Checker, Clusters: d.Services.Clusters, Repo: &stackops.Repo{Store: d.Stacks.Store, Vault: d.Stacks.Vault}, Agents: d.Agents, Log: d.Environments.Log})
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
@@ -232,6 +241,9 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterPulls(r, d.Pulls)
 	api.RegisterStacks(r, d.Stacks)
 	api.RegisterRegistries(r, d.Registries)
+	api.RegisterGit(r, d.Git)
+	api.RegisterGitStacks(r, d.Stacks, d.Git)
+	api.RegisterGitHooks(r, d.GitHooks)
 	api.RegisterTags(r, d.Tags)
 	api.RegisterEvents(r, d.Events)
 	api.RegisterLogs(r, d.Logs)
@@ -749,6 +761,23 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// Every call the server makes to a registry dials through one egress policy (T-05-38).
 	registryEgress := registry.NewEgressPolicy(cfg.RegistryBlockCIDRs)
 	registryClients := registry.NewClientCache(registryEgress, buildinfo.Get().Version, log)
+	// Git over HTTPS dials through the same policy. go-git keeps its protocols in a package variable, so the
+	// transport is installed once, here, before any route can run a git call (Phase 9, T-09-01).
+	gitx.InstallTransport(registryEgress)
+	gitClient := gitx.NewGoGit(gitx.Options{Policy: registryEgress, Log: log, Root: filepath.Join(info.Path, "git")})
+	gitConns := gitconn.NewStore(st, vlt, nil)
+	gitDeps := api.GitDeps{
+		Git: gitClient, Conns: gitConns, Envs: envSvc, Audit: aud, Checker: checker, Log: log, Access: accessSvc, Instance: inst,
+		Sync: gitsync.New(gitsync.Deps{Git: gitClient, Conns: gitConns, Repo: stackops.Repo{Store: st, Vault: vlt}, Audit: aud, Log: log, Access: accessSvc}),
+	}
+	// A git stack's webhook and auto-deploy act on their owner's authority while the owner is away (P3 D-14): the
+	// kinds are registered before any route can create or run one.
+	gitsync.RegisterOwnedKinds()
+	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
+	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
+	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
+	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
 			Fallback:       spa,
@@ -820,8 +849,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Volumes:       api.VolumesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, Log: log},
 		Images:        api.ImagesDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, Checker: checker, SelfContainerID: selfID, Log: log},
 		Pulls:         api.PullsDeps{Aggregator: aggregator, Jobs: jobHub, Audit: aud, Checker: checker, Resolver: resolver, Log: log},
-		Stacks:        api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, Log: log},
+		Stacks:        stacksDeps,
 		Registries:    api.RegistriesDeps{Store: registryStore, Envs: envSvc, Aggregator: aggregator, Audit: aud, Checker: checker, Egress: registryEgress, Clients: registryClients, Version: buildinfo.Get().Version, Log: log},
+		Git:           gitDeps,
+		GitHooks:      api.GitHookDeps{Repo: stackops.Repo{Store: st, Vault: vlt}, Sync: gitDeps.Sync, Access: accessSvc, Audit: aud, Log: log},
 		Tags:          api.TagsDeps{Resolver: resolver, Tags: registry.NewTagService(registryClients, registryEgress, buildinfo.Get().Version, log), Checker: checker, Aggregator: aggregator, Envs: envSvc, Audit: aud, Log: log},
 		Containers:    api.ContainersDeps{Aggregator: aggregator, Audit: aud, Checker: checker, SelfContainerID: selfID, Clusters: clusters, Store: st, Log: log},
 		Events:        api.EventsDeps{Aggregator: aggregator, Log: log},
@@ -871,6 +902,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		envs:       envSvc,
 		monitor:    monitor,
 		drift:      driftMonitor,
+		gitSync:    gitDeps.Sync,
 		snapshots:  snapshots,
 		hub:        hub,
 		clusters:   clusters,
@@ -902,6 +934,11 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
+	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
+	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
+	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for
+	// 14 days or that grew past 2 GiB are removed once a day, and made again on their next use (D-08).
+	srv.background.Go(func() { gitDeps.Sync.RunMirrorGC(bg, gitsync.GCDeps{Clock: stackops.RealClock()}) })
 	// The drift check starts before the environments do, so it hears of each of them.
 	driftMonitor.Start(bg)
 	// Monitoring resumes for the environments an admin already added. The
@@ -909,6 +946,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	if err := envSvc.StartAll(bg); err != nil {
 		stop()
 		srv.background.Wait()
+		srv.shutdownGitSync()
 		driftMonitor.Stop()
 		jobHub.Close()
 		statsHub.Close()
@@ -1000,12 +1038,33 @@ func (s *Server) Tunnel() *tunnel.Hub { return s.tunnel }
 // Agents creates agent environments and enrols agents.
 func (s *Server) Agents() *agents.Service { return s.agents }
 
+// gitSyncGrace is how long Close waits for the checks of git stacks to end once they are told to. A fetch that is
+// cancelled ends within a moment; the wait only runs out for a call that does not look at its context.
+const gitSyncGrace = 15 * time.Second
+
+// shutdownGitSync ends the detached git checks and waits for them for gitSyncGrace; a wait that runs out is logged
+// and Close goes on.
+func (s *Server) shutdownGitSync() {
+	if s.gitSync == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitSyncGrace)
+	defer cancel()
+	if err := s.gitSync.Shutdown(ctx); err != nil {
+		s.log.Warn("a git check was still running when the server closed", "error", err)
+	}
+}
+
 // Close stops background work, including the events streams and the
 // environment monitors, and releases the database. Run calls it on exit; it is
 // safe to call again.
 func (s *Server) Close() error {
 	s.stopBackground()
 	s.background.Wait()
+	// The checks of git stacks, and the automatic deploys that follow them, run apart from the poller (and a webhook
+	// starts them too). They are ended and waited for before the jobs and the database close, so none writes to either
+	// afterwards.
+	s.shutdownGitSync()
 	// Before the database closes: a check in flight reads it.
 	s.drift.Stop()
 	// Before the database closes, so the end of each shell is still audited.

@@ -208,7 +208,7 @@ func (r *Router) methodNotAllowed(w http.ResponseWriter, req *http.Request) {
 func isAPIPath(p string) bool { return p == "/api" || strings.HasPrefix(p, "/api/") }
 
 // isReservedPath names the paths huma would serve by default (spec, docs,
-// schemas) and the agent endpoint's prefix. They are never SPA routes: they
+// schemas) the agent endpoint's prefix and the webhook prefix. They are never SPA routes: they
 // answer 404 instead of falling through to index.html, so a client probing for
 // an API description gets an honest answer (T-01-02), and an agent that dials a
 // wrong path under /agent is not handed the SPA.
@@ -216,7 +216,8 @@ func isReservedPath(p string) bool {
 	return p == "/openapi" || strings.HasPrefix(p, "/openapi.") ||
 		p == "/docs" || strings.HasPrefix(p, "/docs/") ||
 		p == "/schemas" || strings.HasPrefix(p, "/schemas/") ||
-		p == "/agent" || strings.HasPrefix(p, "/agent/")
+		p == "/agent" || strings.HasPrefix(p, "/agent/") ||
+		p == "/hooks" || strings.HasPrefix(p, "/hooks/")
 }
 
 // writeProblem writes an RFC 9457 problem body, the same shape huma emits.

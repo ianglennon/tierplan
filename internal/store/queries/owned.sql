@@ -59,3 +59,13 @@ ORDER BY username;
 -- Hands an automation to another owner. Only the access service calls it, after
 -- checking the new owner could run it (D-14).
 UPDATE owned_resources SET owner_id = ?, updated_at = ? WHERE kind = ? AND resource_id = ?;
+
+-- name: DeleteOwnedResource :execrows
+-- Forgets an automation whose resource is gone or was switched off by a person: removing a stack's webhook deregisters
+-- it in the same transaction. Only the access service calls it.
+DELETE FROM owned_resources WHERE kind = ? AND resource_id = ?;
+
+-- name: DeleteOwnedResourcesOfStack :execrows
+-- Forgets the automations of a stack that was removed (its webhook and its auto-deploy), in the same transaction as the
+-- removal, so no row is left for a resource that is gone. The two kinds are passed in because the names live in gitsync.
+DELETE FROM owned_resources WHERE resource_id = sqlc.arg(resource_id) AND kind IN (sqlc.arg(kind_a), sqlc.arg(kind_b));

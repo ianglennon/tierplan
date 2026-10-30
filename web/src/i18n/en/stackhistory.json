@@ -11,6 +11,7 @@
       "columns": {
         "revision": "Revision",
         "kind": "Kind",
+        "commit": "Commit",
         "result": "Result",
         "who": "Who",
         "when": "When",
@@ -19,7 +20,14 @@
       },
       "deployed": "Deployed",
       "open": "Open revision #{{seq}}",
-      "rowMenu": "Actions for revision #{{seq}}"
+      "rowMenu": "Actions for revision #{{seq}}",
+      "auto": {
+        "label": "Auto-deploy",
+        "for": "for {{user}}",
+        "tipPoll": "Started by a poll check on behalf of {{user}}.",
+        "tipWebhook": "Started by a webhook on behalf of {{user}}.",
+        "tipUnknown": "Started by a poll check or a webhook."
+      }
     },
     "kind": {
       "deploy": "Deploy",
@@ -49,6 +57,7 @@
     "detail": {
       "heading": "Revision",
       "rollbackOf": "Roll back of",
+      "rollbackPauses": "Rolling back pauses auto-deploy.",
       "deployed": "This is the deployed revision.",
       "failed": {
         "title": "Revision #{{seq}} failed",
@@ -60,7 +69,8 @@
         "title": "Revision #{{seq}} is still deploying",
         "console": "Open console"
       },
-      "by": "by {{user}},"
+      "by": "by {{user}},",
+      "commit": "commit"
     },
     "empty": {
       "title": "No revisions yet",

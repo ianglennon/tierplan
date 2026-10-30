@@ -197,11 +197,18 @@ func Validate(in CreateInput, now time.Time) (CreateInput, []FieldError) {
 	return in, errs
 }
 
-// validCAPEM reports whether s is at most 64 KiB and adds at least one certificate to a pool
-// (T-05-73). Text around the certificates is ignored, as a pool does.
-func validCAPEM(s string) bool {
-	return len(s) <= maxCAPEMLen && x509.NewCertPool().AppendCertsFromPEM([]byte(s))
+// MaxCAPEMBytes is the longest custom certificate authority bundle accepted: 64 KiB. Git
+// repository connections use the same limit as registry credentials (Phase 9 D-05).
+const MaxCAPEMBytes = maxCAPEMLen
+
+// ValidCAPEM reports whether s is at most MaxCAPEMBytes and adds at least one certificate to a
+// pool (T-05-73). Text around the certificates is ignored, as a pool does.
+func ValidCAPEM(s string) bool {
+	return len(s) <= MaxCAPEMBytes && x509.NewCertPool().AppendCertsFromPEM([]byte(s))
 }
+
+// validCAPEM is ValidCAPEM for this package's own validators.
+func validCAPEM(s string) bool { return ValidCAPEM(s) }
 
 // validHost reports whether s is a host[:port] with a usable port.
 func validHost(s string) bool {

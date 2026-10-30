@@ -305,6 +305,11 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		if err != nil {
 			return
 		}
+		if len(in.Copy.ComposeFiles) > 0 {
+			// The steps after the check write their problems against compose.yaml; in a stack with
+			// named compose files they are moved to the file that holds the key, before the keys are masked.
+			rv.Problems = placeProblemsOf(in.Copy, rv.Problems)
+		}
 		stacks.MaskProblems(rv.Problems, masker)
 		rv.Concurrent = concurrentOf(in)
 		if res.Loaded != nil {
@@ -323,7 +328,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 		err = d.reviewStandalone(ctx, in, res, &rv)
 		return rv, err
 	}
-	files, vars := stacks.NewFileSet(in.Copy.Files), varTable(in.Copy.Vars)
+	files, vars := stacks.NewFileSet(in.Copy.Files), stacks.ObjectVars(in.Copy)
 	project := res.Loaded.Project
 	objs, err := stacks.ResolveObjects(project, files, vars)
 	if err != nil {
@@ -381,7 +386,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	// A service is sent the platforms the last good revision recorded for its digest, else the ones of the image it runs,
 	// in the order a deploy applies them, so the review shows what the deploy sends (G-08-4, WR-02).
 	pinPlatforms(pinned.Pins, stored, byName)
-	rv.Problems = append(rv.Problems, placeProblems(files, pinned.Problems)...)
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, pinned.Problems)...)
 	if pinned.Code != "" && len(pinned.Problems) == 0 {
 		// A failure that is not about one image (no manager is connected, the agent refused).
 		rv.Problems = append(rv.Problems, stacks.Problem{
@@ -433,7 +438,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 
 	var problems stacks.Problems
 	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live)
-	rv.Problems = append(rv.Problems, placeProblems(files, problems)...)
+	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, problems)...)
 	for _, o := range rv.Objects {
 		switch o.Kind {
 		case "network":
@@ -461,19 +466,10 @@ func bump(c *Counts, change string) {
 	}
 }
 
-// varTable is the table of the stack's variables by name, as a deploy reads it.
-func varTable(vars []stacks.Var) map[string]string {
-	out := make(map[string]string, len(vars))
-	for _, v := range vars {
-		out[v.Name] = v.Value
-	}
-	return out
-}
-
 // reviewMasker hides the secrets of the working copy and, when there is one, of the revision that
 // is running.
 func reviewMasker(in ReviewInput) stacks.Masker {
-	vars, files := slices.Clone(in.Copy.Vars), slices.Clone(in.Copy.Files)
+	vars, files := slices.Clone(in.Copy.Vars), slices.Clone(in.Copy.MaskFiles())
 	if in.Previous != nil {
 		vars, files = append(vars, in.Previous.Vars...), append(files, in.Previous.Files...)
 	}
@@ -920,14 +916,23 @@ func changedFiles(old, next stacks.WorkingCopy, m stacks.Masker) []FileHunks {
 			paths = append(paths, p)
 		}
 	}
+	// The compose files come first, in merge order.
+	composeAt := map[string]int{}
+	for _, c := range []stacks.WorkingCopy{old, next} {
+		for i, p := range c.ComposePaths() {
+			if _, seen := composeAt[p]; !seen {
+				composeAt[p] = i
+			}
+		}
+	}
 	slices.SortFunc(paths, func(a, b string) int {
 		rank := func(p string) int {
-			if p == stacks.ComposeFile {
+			if _, ok := composeAt[p]; ok {
 				return 0
 			}
 			return 1
 		}
-		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(a, b))
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), cmp.Compare(composeAt[a], composeAt[b]), cmp.Compare(a, b))
 	})
 	var out []FileHunks
 	for _, p := range paths {

@@ -147,6 +147,79 @@ describe("actionLabel", () => {
     expect(audit.audit.actions.stack.drift_accepted).toBe("Accepted live state into the draft");
   });
 
+  it("labels a failed git sync with the stack and the reason when the entry has them", () => {
+    expect(KNOWN_ACTIONS).toContain("git.sync_failed");
+    expect(
+      actionLabel("git.sync_failed", echo, { stack: "web", reason: "The branch is gone." }),
+    ).toBe("t:audit.actions.git.sync_failed_named");
+    expect(actionLabel("git.sync_failed", echo)).toBe("t:audit.actions.git.sync_failed");
+    expect(audit.audit.actions.git.sync_failed_named).toBe("Sync of {{name}} failed: {{reason}}");
+  });
+
+  it("labels a change of a git stack's update checks with the stack when the entry has it", () => {
+    expect(KNOWN_ACTIONS).toContain("git.updates_changed");
+    expect(actionLabel("git.updates_changed", echo, { stack: "web" })).toBe(
+      "t:audit.actions.git.updates_changed_named",
+    );
+    expect(actionLabel("git.updates_changed", echo)).toBe("t:audit.actions.git.updates_changed");
+    expect(audit.audit.actions.git.updates_changed_named).toBe(
+      "Changed how {{name}} checks for updates",
+    );
+  });
+
+  it("labels a git webhook's deliveries and rejections with the stack when the entry has it", () => {
+    for (const key of ["git.webhook_delivered", "git.webhook_rejected"] as const) {
+      expect(KNOWN_ACTIONS).toContain(key);
+      expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+    expect(audit.audit.actions.git.webhook_delivered_named).toBe(
+      "Webhook for {{name}} delivered a push",
+    );
+    expect(audit.audit.actions.git.webhook_rejected_named).toBe(
+      "Webhook for {{name}} rejected a request",
+    );
+  });
+
+  it("labels the creation, rotation and removal of a git webhook with the stack when the entry has it", () => {
+    for (const key of [
+      "git.webhook_created",
+      "git.webhook_rotated",
+      "git.webhook_removed",
+    ] as const) {
+      expect(KNOWN_ACTIONS).toContain(key);
+      expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+    expect(audit.audit.actions.git.webhook_created_named).toBe("Created a webhook for {{name}}");
+    expect(audit.audit.actions.git.webhook_rotated_named).toBe("Rotated the webhook of {{name}}");
+    expect(audit.audit.actions.git.webhook_removed_named).toBe("Removed the webhook of {{name}}");
+  });
+
+  it("labels a git stack's auto-deploy with the stack, and an automatic deploy with its commit", () => {
+    for (const key of [
+      "git.autodeploy_enabled",
+      "git.autodeploy_disabled",
+      "git.autodeploy_paused",
+      "git.stack_detached",
+    ] as const) {
+      expect(KNOWN_ACTIONS).toContain(key);
+      expect(actionLabel(key, echo, { stack: "web" })).toBe(`t:audit.actions.${key}_named`);
+      expect(actionLabel(key, echo)).toBe(`t:audit.actions.${key}`);
+    }
+    expect(KNOWN_ACTIONS).toContain("git.autodeployed");
+    expect(
+      actionLabel("git.autodeployed", echo, { stack: "web", commit: "0123456789abcdef" }),
+    ).toBe("t:audit.actions.git.autodeployed_named");
+    expect(actionLabel("git.autodeployed", echo, { stack: "web" })).toBe(
+      "t:audit.actions.git.autodeployed",
+    );
+    expect(audit.audit.actions.git.autodeployed_named).toBe("Auto-deployed {{name}} at {{sha}}");
+    expect(audit.audit.actions.git.autodeploy_enabled_named).toBe(
+      "Turned on auto-deploy for {{name}}",
+    );
+  });
+
   it("has a label in audit.json for every known action", () => {
     for (const key of KNOWN_ACTIONS) {
       const [area, name] = key.split(".") as [string, string];

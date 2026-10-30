@@ -1,0 +1,311 @@
+{
+  "stackGit": {
+    "sourceTip": "{{repo}} · {{ref}}",
+    "kind": {
+      "branch": "branch",
+      "tag": "tag",
+      "commit": "commit"
+    },
+    "sha": {
+      "open": "Open commit {{sha}} on {{host}} (opens in a new tab)"
+    },
+    "strip": {
+      "label": "Git sync",
+      "source": "Source",
+      "deployed": "Deployed",
+      "status": "Status",
+      "checked": "Checked",
+      "notDeployed": "Not deployed yet",
+      "never": "Never",
+      "repoUnknown": "Repository",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "settings": "Git settings"
+    },
+    "check": {
+      "failed": "Couldn't start the check. Try again."
+    },
+    "pull": {
+      "action": "Pull & redeploy…",
+      "pulling": "Pulling…",
+      "reviewUpdate": "Review update",
+      "failed": "Couldn't pull {{ref}}. {{reason}}",
+      "reason": {
+        "draftChanged": "The draft changed while you were pulling. Reload it and try again.",
+        "unreachable": "The repository can't be reached.",
+        "authRefused": "The repository refused the credential.",
+        "refMissing": "{{ref}} no longer exists.",
+        "folderMissing": "The stack's folder is no longer in the repository.",
+        "tooLarge": "The files are over the limits of a stack.",
+        "other": "Try again."
+      }
+    },
+    "status": {
+      "inSync": "In sync",
+      "inSyncTip": "{{ref}} is at {{sha}}, but nothing in {{folder}} changed.",
+      "rootFolder": "the repository root",
+      "behind_one": "Behind by {{count}} commit",
+      "behind_other": "Behind by {{count}} commits",
+      "behindCapped_other": "Behind by {{count}}+ commits",
+      "behindTip_one": "{{count}} commit changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "behindTip_other": "{{count}} commits changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "behindTipCapped_other": "At least {{count}} commits changed this stack's folder since {{sha}}. {{ref}} is at {{head}}.",
+      "error": "Error",
+      "checking": "Checking…",
+      "fixed": "Fixed commit",
+      "unknown": "Not compared yet",
+      "sourceChanged": "Source changed",
+      "sourceChangedNote": "The repository, ref or folder is not the one that is deployed."
+    },
+    "reason": {
+      "fetchFailed": "Bayplan couldn't fetch the repository.",
+      "fetchFailedWhy": "Bayplan couldn't fetch the repository: {{reason}}.",
+      "hostKeyChanged": "The host key for {{host}} has changed.",
+      "hostKeyChangedNoHost": "The host key of the repository's server has changed.",
+      "hostKeyUntrusted": "Host key not trusted yet. Confirm the key for {{host}}.",
+      "hostKeyUntrustedNoHost": "Host key not trusted yet. Confirm the key of the repository's server.",
+      "refGone": "{{ref}} no longer exists.",
+      "refGoneNoRef": "The branch or tag no longer exists.",
+      "folderGone": "{{folder}} no longer exists at {{ref}}.",
+      "folderGoneNoFolder": "The stack's folder no longer exists in the repository.",
+      "checksFailed": "Commit {{sha}} didn't pass the checks: {{problem}}.",
+      "checksFailedNoProblem": "Commit {{sha}} didn't pass the checks.",
+      "checksFailedNoSha": "The new commit didn't pass the checks: {{problem}}.",
+      "checksFailedNoShaNoProblem": "The new commit didn't pass the checks.",
+      "autoDeployFailed": "The automatic deploy of {{sha}} failed: {{reason}}.",
+      "autoDeployFailedNoReason": "The automatic deploy of {{sha}} failed.",
+      "autoDeployFailedNoSha": "The automatic deploy failed: {{reason}}.",
+      "autoDeployFailedNoShaNoReason": "The automatic deploy failed.",
+      "autoDeployBlocked": "Commit {{sha}} is waiting: {{problem}}. Nothing was deployed.",
+      "autoDeployBlockedNoProblem": "Commit {{sha}} is waiting. Nothing was deployed.",
+      "autoDeployBlockedNoSha": "The new commit is waiting: {{problem}}. Nothing was deployed.",
+      "autoDeployBlockedNoShaNoProblem": "The new commit is waiting. Nothing was deployed."
+    },
+    "badge": {
+      "behind": "Behind {{n}}",
+      "behindCapped": "Behind {{n}}+",
+      "behindNoCount": "Behind",
+      "behindTip_one": "{{count}} commit changed this stack's folder since it was deployed. Review update.",
+      "behindTip_other": "{{count}} commits changed this stack's folder since it was deployed. Review update.",
+      "behindTipCapped_other": "At least {{count}} commits changed this stack's folder since it was deployed. Review update.",
+      "behindSourceTip": "The repository, ref or folder is not the one that is deployed. Review update.",
+      "syncError": "Sync error",
+      "errorTip": "The last check of the repository failed."
+    },
+    "details": {
+      "source": "Source",
+      "repository": "Repository",
+      "ref": "Ref",
+      "folder": "Folder",
+      "rootFolder": "Repository root",
+      "composeFiles": "Compose files",
+      "deployedCommit": "Deployed commit",
+      "copyCommit": "Copy commit ID",
+      "latestCommit": "Latest commit",
+      "autoDeploy": "Auto-deploy",
+      "autoDeployOn": "On",
+      "autoDeployOff": "Off. Waits for review.",
+      "autoDeployPaused": "Paused",
+      "checked": "Checked",
+      "copiedCommit": "Copied the commit ID"
+    },
+    "alert": {
+      "title": "{{name}} can't sync with {{repo}}",
+      "titleNoRepo": "{{name}} can't sync with its repository",
+      "body": "{{reason}} The last good version, {{sha}}, is still running.",
+      "bodyNoVersion": "{{reason}}",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "openSettings": "Open git settings"
+    },
+    "tab": {
+      "label": "Git",
+      "error": {
+        "title": "Couldn't load the git settings.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading git settings"
+      }
+    },
+    "updates": {
+      "title": "Updates",
+      "body": "How Bayplan learns that the repository changed.",
+      "poll": "Check on a schedule",
+      "minutes": "Check every (minutes)",
+      "helper": "Stacks on the same repository share one check, and checks are spread out a little so a git host isn't hit all at once. Keep this on even with a webhook; it catches pushes the webhook missed.",
+      "invalid": "Use a whole number from 1 to 1440.",
+      "save": "Save update settings",
+      "saving": "Saving…",
+      "saved": "Saved the update settings.",
+      "saveFailed": "Couldn't save the update settings. Try again.",
+      "fixed": "A fixed commit has nothing to check.",
+      "checkNow": "Check now",
+      "checking": "Checking…",
+      "lastChecked": "Last checked",
+      "neverChecked": "Not checked yet"
+    },
+    "webhook": {
+      "title": "Webhook",
+      "body": "Lets your git host tell Bayplan the moment something is pushed.",
+      "none": "No webhook yet.",
+      "setUp": "Set up webhook",
+      "needsOnEnvironment": "{{need}} on {{name}}",
+      "host": {
+        "github": "GitHub",
+        "gitlab": "GitLab",
+        "gitea": "Gitea or Forgejo",
+        "generic": "Other (generic)"
+      },
+      "hostFallback": "your git host",
+      "setup": {
+        "title": "Set up a webhook",
+        "body": "Pick your git host. Bayplan creates a secret address for this stack.",
+        "host": "Git host",
+        "placement": "Where the secret goes",
+        "placementPath": "In the address",
+        "placementHeader": "In an Authorization header",
+        "cancel": "Cancel",
+        "create": "Create webhook",
+        "creating": "Creating…",
+        "exists": "This stack already has a webhook.",
+        "permission": "You need Admin on this environment to set up a webhook.",
+        "failed": "Couldn't create the webhook. Try again."
+      },
+      "created": "Created the webhook.",
+      "once": {
+        "title": "Copy the secret now",
+        "body": "Bayplan can't show it again. If you lose it, rotate the secret.",
+        "address": "Webhook address",
+        "secret": "Secret",
+        "secretLabel": "Webhook secret, shown once",
+        "copyAddress": "Copy address",
+        "copySecret": "Copy secret",
+        "copiedAddress": "Copied address",
+        "copiedSecret": "Copied secret",
+        "done": "Done"
+      },
+      "rows": {
+        "host": "Git host",
+        "address": "Address",
+        "copyAddress": "Copy address",
+        "copiedAddress": "Copied address",
+        "secret": "Secret",
+        "lastDelivery": "Last delivery",
+        "accepted": "Accepted {{when}}",
+        "rejected": "Rejected, bad signature {{when}}",
+        "never": "Never",
+        "pausedNote": "{{owner}} set this webhook up and no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it.",
+        "pausedNoteNoOwner": "The person who set this webhook up no longer has the access it needs, so requests to it do nothing. Hand it to an Admin of this environment from the user's page, or remove it."
+      },
+      "rotateAction": "Rotate secret…",
+      "removeAction": "Remove webhook…",
+      "note": "A webhook only tells Bayplan to check the repository. Bayplan ignores what the request says and fetches {{ref}} itself.",
+      "help": {
+        "trigger": "How to add it",
+        "github": "In the repository open Settings, then Webhooks, then Add webhook. Payload URL: the address above. Content type: application/json. Secret: the secret above. Events: just the push event.",
+        "gitlab": "In the project open Settings, then Webhooks. URL: the address above. Secret token: the secret above. Trigger: push events.",
+        "gitea": "In the repository open Settings, then Webhooks, then Add webhook, then Gitea or Forgejo. Target URL: the address above. Secret: the secret above. Trigger: push events.",
+        "generic": "Send a POST request to the address whenever the repository changes.",
+        "genericHeader": "Send the secret as an Authorization: Bearer header."
+      },
+      "rotate": {
+        "title": "Rotate the webhook secret?",
+        "body": "The old secret stops working at once. Update the webhook in {{host}} with the new one.",
+        "cancel": "Keep current secret",
+        "confirm": "Rotate secret",
+        "pending": "Rotating…",
+        "done": "Rotated the webhook secret.",
+        "gone": "The webhook is already gone.",
+        "permission": "You need Admin on this environment to rotate the secret.",
+        "failed": "Couldn't rotate the secret. Try again."
+      },
+      "remove": {
+        "title": "Remove the webhook?",
+        "body": "Pushes no longer reach {{name}} straight away. Polling still checks every {{minutes}} minutes. Remove the webhook in your git host too.",
+        "bodyNoPolling": "Pushes no longer reach {{name}} straight away, and polling is off, so Bayplan only sees changes when you check. Remove the webhook in your git host too.",
+        "cancel": "Keep webhook",
+        "confirm": "Remove webhook",
+        "pending": "Removing…",
+        "done": "Removed the webhook.",
+        "gone": "The webhook is already gone.",
+        "permission": "You need Admin on this environment to remove the webhook.",
+        "failed": "Couldn't remove the webhook. Try again."
+      }
+    },
+    "autoDeploy": {
+      "title": "Deploying",
+      "body": "Choose whether new commits deploy by themselves or wait for you.",
+      "switch": "Deploy changes automatically",
+      "folderRoot": "the repository root",
+      "ownerFallback": "its owner",
+      "helperOff": "A new commit that changes {{folder}} makes {{name}} show as behind. You review and deploy it.",
+      "helperOn": "A new commit that changes {{folder}} deploys without review, as {{user}}. A blocked change is skipped and shown as an error.",
+      "fixed": "A fixed commit has nothing to deploy.",
+      "runsAs": "Runs as",
+      "transfer": "Transfer…",
+      "transferLabel": "Transfer auto-deploy of {{name}}…",
+      "paused": "Paused",
+      "resume": "Resume…",
+      "needsOnEnvironment": "{{need}} on {{name}}",
+      "turnedOff": "{{name}} now waits for review.",
+      "turnedOn": "Auto-deploy is on for {{name}}.",
+      "failed": "Couldn't change auto-deploy. Try again.",
+      "permission": "You don't hold the permission to deploy here, so you can't turn on auto-deploy.",
+      "confirm": {
+        "title": "Turn on auto-deploy?",
+        "body": "New commits to {{ref}} that change {{folder}} will deploy by themselves, without a review, as you. If you lose permission to deploy on {{environment}}, auto-deploy pauses. Changes that fail a check are skipped and shown as an error.",
+        "cancel": "Keep waiting for review",
+        "confirm": "Turn on auto-deploy",
+        "pending": "Turning on…"
+      },
+      "pausedAlert": {
+        "title": "Auto-deploy is paused",
+        "body": "{{user}} set it up and no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
+        "bodyNoUser": "The person who set it up no longer has permission to deploy on {{environment}}. Transfer it to someone who can, or turn it off.",
+        "openSettings": "Open git settings"
+      },
+      "rollbackAlert": {
+        "title": "Auto-deploy paused after rollback to #{{n}}",
+        "titleNoRevision": "Auto-deploy paused after a roll back",
+        "body": "{{name}} now waits for review. The repository head, {{sha}}, shows as pending.",
+        "bodyNoHead": "{{name}} now waits for review.",
+        "turnOn": "Turn on auto-deploy…"
+      }
+    },
+    "source": {
+      "title": "Source",
+      "body": "Where {{name}} comes from. Changing it goes through review.",
+      "change": "Change source…",
+      "cancel": "Cancel",
+      "review": "Review change",
+      "preparing": "Preparing…",
+      "needsAll": "Choose a repository, a ref, a folder and at least one compose file.",
+      "reading": "Reading the draft…",
+      "conflict": "{{user}} changed the source of {{name}} while you were editing. Reload to see it.",
+      "conflictUnknown": "Someone changed the source of {{name}} while you were editing. Reload to see it.",
+      "reload": "Reload",
+      "failed": "Couldn't change the source. {{reason}}",
+      "repoGone": "That repository isn't available on this environment.",
+      "permission": "You don't have permission to change the source.",
+      "other": "Try again.",
+      "draftFailed": "Couldn't read the draft. Check the connection and try again."
+    },
+    "detach": {
+      "advanced": "Advanced",
+      "title": "Detach from git",
+      "body": "Turn {{name}} back into an inline stack you edit in Bayplan. The files now deployed become an editable draft. Bayplan stops checking the repository, removes the webhook and turns off auto-deploy. Nothing running changes.",
+      "action": "Detach from git…",
+      "done": "Detached {{name}} from git.",
+      "permission": "You don't have permission to detach this stack.",
+      "failed": "Couldn't detach the stack. Check the connection and try again.",
+      "dialog": {
+        "title": "Detach {{name}} from git?",
+        "body": "Revision #{{revision}} (commit {{sha}}) is copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "bodyNoRevision": "The files of the stack are copied into an editable draft. Bayplan stops checking {{repo}}, removes the webhook and turns off auto-deploy. Nothing running changes. You can point the stack at a repository again later.",
+        "draftLost": "This stack has a draft that hasn't been deployed. Detaching replaces it with the deployed files, and its overlay file contents and variable edits are lost. This can't be undone.",
+        "cancel": "Keep tracking git",
+        "confirm": "Detach from git",
+        "pending": "Detaching…"
+      }
+    }
+  }
+}

@@ -1,0 +1,253 @@
+{
+  "gitSource": {
+    "page": {
+      "breadcrumbRoot": "Stacks",
+      "breadcrumbCurrent": "New from git",
+      "title": "Create {{name}} from git",
+      "body": "Bayplan keeps {{name}} in sync with a folder in a git repository. Nothing is deployed until you review and deploy it.",
+      "documentTitle": "New stack from git"
+    },
+    "card1": {
+      "title": "Repository and ref",
+      "body": "Choose where the stack lives and which branch, tag or commit it follows."
+    },
+    "repo": {
+      "label": "Repository",
+      "placeholder": "Choose a repository",
+      "add": "Add a repository…",
+      "none": "No repository is available on {{env}}. An administrator can add one under Git.",
+      "loadFailed": "Couldn't load the repositories.",
+      "retry": "Retry loading repositories",
+      "clears": "Changing the repository clears the folder and files you chose."
+    },
+    "refKind": {
+      "label": "Follow a",
+      "branch": "Branch",
+      "tag": "Tag",
+      "commit": "Commit"
+    },
+    "ref": {
+      "label": {
+        "branch": "Branch",
+        "tag": "Tag",
+        "commit": "Commit"
+      },
+      "placeholder": {
+        "branch": "Choose a branch",
+        "tag": "Choose a tag",
+        "commit": "a1b2c3d"
+      },
+      "search": {
+        "branch": "Search branches",
+        "tag": "Search tags"
+      },
+      "list": {
+        "branch": "Branches",
+        "tag": "Tags"
+      },
+      "helper": {
+        "branch": "Bayplan follows this branch.",
+        "tag": "Bayplan follows this tag. If the tag is moved to another commit, that counts as a change.",
+        "commit": "A fixed commit is never behind. Change the ref to move it."
+      },
+      "commitHelper": "7 to 40 hex characters.",
+      "default": "Default",
+      "capped": "Showing the first 200 of {{n}}. Type to narrow.",
+      "noMatch": "Nothing matches “{{query}}”.",
+      "empty": {
+        "branch": "No branches. The repository may be empty.",
+        "tag": "No tags in this repository."
+      },
+      "loading": "Looking up branches and tags…",
+      "failed": "Couldn't read {{repo}}.",
+      "retry": "Retry loading refs",
+      "resolvedBefore": "{{ref}} is at",
+      "resolvedAfter": ".",
+      "resolving": "Looking up {{ref}}…"
+    },
+    "card2": {
+      "title": "Folder and compose files",
+      "body": "The folder is the stack's root. Bayplan only reads files inside it.",
+      "firstRepository": "Choose a repository first.",
+      "firstRef": "Choose a ref first."
+    },
+    "folder": {
+      "pathBar": "Folder path",
+      "root": "Repository root",
+      "list": "Folder contents",
+      "filter": "Filter this folder",
+      "noMatch": "Nothing matches “{{query}}”.",
+      "use": "Use this folder",
+      "chosen": "Stack folder: {{path}}",
+      "chosenRoot": "Stack folder: / (repository root)",
+      "change": "Change",
+      "loading": "Reading {{repo}} at {{ref}}…",
+      "empty": "This folder is empty.",
+      "noComposeTitle": "No compose file here",
+      "noComposeBody": "Open a folder, or pick this folder if its compose file has another name.",
+      "hasCompose": "Has compose file",
+      "submodule": "Submodule",
+      "submoduleTip": "Bayplan doesn't support submodules.",
+      "link": "Link",
+      "linkTip": "Links aren't followed.",
+      "capped": "Showing the first {{shown}} of {{n}}. Filter to find the rest.",
+      "failed": "Couldn't read {{repo}} at {{ref}}.",
+      "retry": "Retry loading folders",
+      "opened_one": "Opened {{folder}}, {{count}} entry",
+      "opened_other": "Opened {{folder}}, {{count}} entries"
+    },
+    "compose": {
+      "title": "Compose files",
+      "helper": "Files are merged in this order, like docker compose -f a -f b. Later files override earlier ones.",
+      "list": "Compose files, in merge order",
+      "none": "No compose file chosen yet.",
+      "add": "Add file",
+      "search": "Search files",
+      "noneToAdd": "No other .yml or .yaml files in this folder.",
+      "noMatch": "Nothing matches that search.",
+      "moveUp": "Move {{file}} up",
+      "moveDown": "Move {{file}} down",
+      "remove": "Remove {{file}}",
+      "picked": "Picked {{file}}. Change it if the stack uses another.",
+      "position": "{{file}} is now number {{n}}",
+      "failed": "Couldn't read the files of this folder."
+    },
+    "reasons": {
+      "ref_missing": "That branch or tag isn't in {{repo}} any more.",
+      "commit_missing": "That commit isn't in {{repo}}.",
+      "commit_ambiguous": "More than one commit in {{repo}} starts with that. Use more characters.",
+      "folder_missing": "That folder isn't in {{repo}} at this ref.",
+      "ref_invalid": "That isn't a ref name git accepts.",
+      "offline": "The server didn't answer. Check the connection and try again.",
+      "permission": "You don't have permission to read this repository.",
+      "unknown": "Bayplan couldn't read the repository. Try again.",
+      "compose_file_missing": "A compose file you chose isn't in that folder at this ref.",
+      "compose_path_invalid": "A compose file path is outside the stack folder or is named twice.",
+      "file_path_invalid": "An overlay file path isn't a path inside the stack folder.",
+      "folder_invalid": "That folder isn't a path inside the repository."
+    },
+    "check": {
+      "checking": "Checking the files…",
+      "found_one": "Found {{count}} service:",
+      "found_other": "Found {{count}} services:",
+      "more": "and {{count}} more",
+      "none": "No services found.",
+      "blockingTitle": "Fix these in the repository",
+      "severity": {
+        "error": "Blocking",
+        "warning": "Warning"
+      },
+      "failed": "Couldn't check the files: {{reason}}",
+      "retry": "Retry",
+      "addOverlay": "Add overlay file"
+    },
+    "vars": {
+      "title": "Variables",
+      "body": "Values come from this table first, then from the repository's .env, then from the compose file's defaults.",
+      "first": "Choose a compose file first.",
+      "waiting": "The variables appear once the files are checked.",
+      "empty": {
+        "title": "No variables",
+        "body": "The compose file doesn't use any ${VARIABLES}."
+      },
+      "source": {
+        "table": "From the table",
+        "repo-env": "From the repo's .env",
+        "default": "From the compose file's default",
+        "unset": "Not set"
+      },
+      "committedTip": "Committed in the repository. Hidden here because the name looks like a secret.",
+      "secretLike": "{{name}} looks like a secret and is committed in the repository's .env. Set a secret variable here to override it.",
+      "setSecret": "Set secret value",
+      "required_one": "{{count}} required variable has no value. Review won't deploy until you set it.",
+      "required_other": "{{count}} required variables have no value. Review won't deploy until you set them."
+    },
+    "overlay": {
+      "title": "Overlay files",
+      "body": "Files the repository doesn't have, such as a secret or a config. Bayplan keeps them encrypted.",
+      "list": "Overlay files",
+      "missing": "Missing",
+      "added": "Added",
+      "addContents": "Add contents",
+      "addContentsFor": "Add contents for {{path}}",
+      "remove": "Remove {{path}}",
+      "add": "Add overlay file",
+      "blocking": "Blocking",
+      "dialog": {
+        "title": "Add an overlay file",
+        "body": "Fills a path the repository doesn't have. The contents are encrypted and never shown again.",
+        "path": {
+          "label": "Path",
+          "placeholder": "secrets/db_pw.txt",
+          "helper": "Relative to the stack folder. No leading slash and no ..",
+          "invalid": "Use a path inside the stack folder.",
+          "inRepo": "{{path}} exists in the repository. Overlay files can only fill paths it doesn't have.",
+          "taken": "That path is already an overlay file."
+        },
+        "contents": "Contents",
+        "chooseFile": "Choose file",
+        "tooBig": "That file is over 1 MiB. Overlay files hold at most 1 MiB.",
+        "readFailed": "Couldn't read that file.",
+        "cancel": "Cancel",
+        "submit": "Add overlay file"
+      }
+    },
+    "footer": {
+      "note": "Checks the repository every 5 minutes and waits for your review. Change this under Git settings.",
+      "cancel": "Cancel",
+      "create": "Create stack",
+      "pending": "Creating…",
+      "needsAll": "Choose a repository, a ref, a folder and a compose file first."
+    },
+    "errors": {
+      "createFailed": "Couldn't create the stack from that folder. Check the repository, ref, folder and files, then try again.",
+      "nameInvalid": "Use only letters, numbers, dash and underscore, starting with a letter or number.",
+      "commitMoved": "The branch or tag moved after it was checked, so nothing was created. Bayplan is reading it again: look over the result, then create the stack."
+    },
+    "guard": {
+      "title": "Discard this stack?",
+      "body": "{{name}} hasn't been created yet.",
+      "keep": "Keep editing",
+      "discard": "Discard"
+    },
+    "convert": {
+      "action": "Use a git repository…",
+      "breadcrumbCurrent": "Use a git repository",
+      "documentTitle": "Use a git repository",
+      "title": "Use a git repository for {{name}}",
+      "body": "The first sync goes through review and is recorded as a revision, so the history of {{name}} is kept. Your variables stay.",
+      "files": {
+        "title": "Files in {{name}} today",
+        "body": "The compose file is replaced by the repository's. Choose what happens to the other files.",
+        "secret": "Secret",
+        "choose": "What to do with {{path}}",
+        "drop": "Drop it",
+        "keep": "Keep as overlay file",
+        "clash": "{{path}} exists in the repository. Drop it or rename it first."
+      },
+      "footer": {
+        "note": "Nothing changes on {{env}} until you review and deploy.",
+        "submit": "Review and sync",
+        "pending": "Preparing…"
+      },
+      "guard": {
+        "title": "Discard these choices?",
+        "body": "Your choices for {{name}} haven't been applied.",
+        "keep": "Keep editing",
+        "discard": "Discard"
+      },
+      "errors": {
+        "conflict": "{{user}} changed {{name}} while you were choosing. Reload to see it.",
+        "conflictUnknown": "Someone changed {{name}} while you were choosing. Reload to see it.",
+        "reload": "Reload",
+        "alreadyGit": "{{name}} already uses a git repository.",
+        "back": "Back to the stack",
+        "loadFailed": "Couldn't read the stack. Check the connection and try again.",
+        "retry": "Try again",
+        "permission": "Only an Admin of {{env}} can use a git repository for a stack.",
+        "failed": "Couldn't read that folder. Check the repository, ref, folder and files, then try again.",
+        "generic": "Couldn't prepare the review. Try again."
+      }
+    }
+  }
+}

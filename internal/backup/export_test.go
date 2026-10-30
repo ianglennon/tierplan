@@ -248,6 +248,10 @@ func (f *exportFixture) seedExcluded(t *testing.T) {
 	f.exec(t, `INSERT INTO env_join_tokens (id, env_id, token_hash, generation, created_at, created_by)
 		VALUES ('j1', 'env-1', ?, 1, 1, 'u1')`, joinMarker)
 	f.exec(t, `INSERT INTO backup_runs (id, source, started_at) VALUES ('r1', 'ui', 1)`)
+	// The state of the last check of a git stack is derived: a restored instance checks again (Phase 9).
+	f.exec(t, `INSERT INTO stacks (id, env_id, name, target, source_kind, created_by, created_at)
+		VALUES ('stack-1', 'env-1', 'web', 'standalone', 'inline', 'u1', 1)`)
+	f.exec(t, `INSERT INTO stack_git_state (stack_id) VALUES ('stack-1')`)
 }
 
 func (f *exportFixture) liveCount(t *testing.T, table string) int {

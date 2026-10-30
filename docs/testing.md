@@ -93,6 +93,27 @@ Each swarm test needs a real swarm of dind nodes, and starting one costs about h
 - The cases run in a shuffled order that follows `-shuffle`; the log names the seed, and `BAYPLAN_SWARM_SHARED_SEED=<seed>` replays it. Run one case with `-run 'TestSwarmShared/Networks$'`.
 - A case that leaves something `Reset` does not know about makes the next case start a fresh swarm: that is safe but slow, so teach `Reset` about it.
 
+## The git fixtures
+
+The git tests use a real git server, never a stand-in, and a real mirror on disk. `internal/gitx/gittest` builds them:
+
+- `gittest.NewRepo` makes a bare repository and a working tree. `Commit`, `CommitMany`, `Orphan`, `Branch`, `Tag`,
+  `Ref`, `DeleteRef`, `Symlink` and `Submodule` make the history and the hostile content a test needs, with fixed dates so
+  commit IDs are stable.
+- `gittest.NewHTTPServer` serves one repository over smart HTTP with `git-http-backend`, optionally over TLS with a
+  certificate the test trusts through its `CAPEM`, with basic auth, and with the server-side switch for asking a commit by
+  its ID. `Requests` counts the ref advertisements, which the tests of polling and deduplication assert on.
+- `gittest.NewSSHServer` serves a repository over SSH in the test process, with a host key `RotateHostKey` can change, to
+  test trust on first use and a changed key.
+
+**`git` and `git-http-backend` must be installed**, on a developer machine and on the runners. A fixture **fails the test**
+when either is missing, never skips it, because a skipped test would pass the git code unchecked.
+`scripts/ci-preflight.sh`, the first step of every Docker-heavy CI job, fails the job with the missing tool named before
+any test runs. `git-http-backend` lives in the directory `git --exec-path` prints; the `git` package of Debian and Ubuntu includes it.
+
+The git tests follow the rest of this page: time is a clock the test moves (the poller, the mirror sweep and the webhook
+limiters all take one), a wait is a channel the code under test signals, and nothing sleeps.
+
 ## Quarantine
 
 Quarantine is a last resort, not a parking lot. Use it only when a failing test cannot be fixed in the change that found it.

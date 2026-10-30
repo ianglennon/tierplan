@@ -180,6 +180,8 @@ const (
 	ActionSecretRotated              = "secret.rotated"
 	ActionConfigRotated              = "config.rotated"
 	ActionStackCreated               = "stack.created"
+	ActionStackCreatedFromGit        = "stack.created_from_git"
+	ActionStackPointedAtGit          = "stack.pointed_at_git"
 	ActionStackDraftSaved            = "stack.draft_saved"
 	ActionStackDraftDiscarded        = "stack.draft_discarded"
 	ActionStackDeployed              = "stack.deployed"
@@ -189,6 +191,51 @@ const (
 	ActionStackValueRevealed         = "stack.value_revealed"
 	ActionStackAdopted               = "stack.adopted"
 	ActionStackDriftAccepted         = "stack.drift_accepted"
+	ActionGitCredentialCreated       = "git.credential_created" //nolint:gosec // G101: an action name, not a credential
+	ActionGitCredentialUpdated       = "git.credential_updated" //nolint:gosec // G101: an action name, not a credential
+	ActionGitCredentialDeleted       = "git.credential_deleted" //nolint:gosec // G101: an action name, not a credential
+	ActionGitRepoCreated             = "git.repo_created"
+	ActionGitRepoUpdated             = "git.repo_updated"
+	ActionGitRepoDeleted             = "git.repo_deleted"
+	ActionGitRepoTested              = "git.repo_tested"
+	ActionGitHostKeyTrusted          = "git.host_key_trusted"
+	ActionGitHostKeyRetrusted        = "git.host_key_retrusted"
+	// The sync check of a git stack went into error, or into a different error (D-16). A repeat of the error already
+	// recorded writes nothing.
+	ActionGitSyncFailed = "git.sync_failed"
+	// A person turned a git stack's polling on or off, or changed how often it is checked (D-14).
+	ActionGitUpdatesChanged = "git.updates_changed"
+	// A webhook accepted a delivery and asked for a check, and a request to a webhook that exists failed its signature.
+	// A request to an address that is no webhook writes nothing (D-15). Neither carries the address, the token, the
+	// secret or the signature.
+	ActionGitWebhookDelivered = "git.webhook_delivered"
+	ActionGitWebhookRejected  = "git.webhook_rejected"
+	// A person gave a git stack a webhook, replaced its token and secret, or removed it (D-15). The entry names the stack
+	// and the git host, never the address, the token or the secret.
+	ActionGitWebhookCreated = "git.webhook_created"
+	ActionGitWebhookRotated = "git.webhook_rotated"
+	ActionGitWebhookRemoved = "git.webhook_removed"
+	// A person turned a git stack's automatic deploys on or off (D-18). The entry names the stack.
+	ActionGitAutoDeployEnabled  = "git.autodeploy_enabled"
+	ActionGitAutoDeployDisabled = "git.autodeploy_disabled"
+	// Bayplan deployed a new commit of a git stack by itself, on the authority of the person who turned auto-deploy on
+	// (D-20). The actor is the system principal that ran it; the entry names the stack, the commit, what started it (poll
+	// or webhook) and the owner.
+	ActionGitAutoDeployed = "git.autodeployed"
+	// A roll back paused a git stack's automatic deploys, so the repository head is not deployed over the restored
+	// revision (D-22). The actor is the person who rolled back; the entry names the stack, the reason (rollback) and the
+	// number of the revision restored.
+	ActionGitAutoDeployPaused = "git.autodeploy_paused"
+	// An Admin of the environment detached a git stack from its repository, so it is an inline stack again (D-25). The entry
+	// names the stack, the number of the revision whose files became the draft and its commit, never a path or content.
+	ActionGitStackDetached = "git.stack_detached"
+	// A person pulled the head of a git stack's ref into its draft. The entry names the stack, the repository, the ref,
+	// the folder, the commit that was read and the draft's version; it deploys nothing.
+	ActionGitPulled = "git.pulled"
+	// An Admin of the environment pointed a git stack at another repository, ref, folder or compose files, as a pending
+	// source for review. The entry names the stack, the new repository, ref kind, ref, folder and commit and the ones it
+	// replaces; the next good deploy of the draft makes it the stack's source.
+	ActionGitSourceChanged = "git.source_changed"
 )
 
 // ActionAuthLinkRefused is an anonymous visitor's refused use of an invite or

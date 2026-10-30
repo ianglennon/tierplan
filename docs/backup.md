@@ -21,6 +21,10 @@ and they are not an upgrade tool: see [upgrade.md](upgrade.md) for that.
 - environments, with their certificate authorities and the records of the agent certificates
   they issued;
 - the whole audit log;
+- registry credentials, compose stacks, their revisions and the owned automations (see [stacks.md](stacks.md));
+- **everything git**, in four tables: `git_credentials` (HTTPS tokens and SSH deploy keys, sealed), `git_repos` (address,
+  credential choice, custom CA and the SSH host key a person trusted), `stack_git` (a git stack's repository, ref, folder,
+  compose files, polling settings, auto-deploy setting and webhook, with the webhook's signing secret sealed), and the commit each revision of a git stack was made from;
 - the same for anything added in later releases. A test fails the build if a table is neither
   included nor deliberately left out, so a new feature cannot silently miss the backup.
 
@@ -28,7 +32,15 @@ and they are not an upgrade tool: see [upgrade.md](upgrade.md) for that.
 
 - sessions, so a restore signs everyone out;
 - invite links, password reset links and **pending agent join tokens**;
-- cached git checkouts.
+- **cached git mirrors** (the `git` directory of `/data`): they are a cache, and a restored instance fetches each one again
+  on its first check;
+- **`stack_git_state`**, the result of the last check of each git stack. It is derived, so every git stack of a restored
+  instance reads *unknown* until it is checked again, which happens on its next poll or when you press **Check now**.
+
+**Git secrets restore under the new key.** A git token, an SSH deploy key and a webhook's signing secret are opened with
+the old key and sealed again under the passphrase-derived key when the backup is written, and again under the new
+instance's key when it is restored; a webhook's routing token is kept only as a hash and comes back as it was, so the
+address a git host already calls still routes to the stack as long as the instance's public URL is the same.
 
 **The master key is never in a backup.** Before a backup is written, every stored secret is
 re-encrypted under a key made from your passphrase, so the file restores onto an install that
@@ -180,6 +192,14 @@ tokens are not part of a backup.
 The list of unknown agents is kept in memory. It is empty after a restart until the agents try
 again, and an entry drops off after 24 hours without a new attempt.
 
+## After a restore: git stacks
+
+Repositories, credentials, webhooks and the settings of every git stack come back, and the sealed secrets open under the
+new key. Each git stack reads *unknown* until its first check, then *in sync* or *behind*; the mirrors are fetched again
+on that check. Auto-deploy keeps its setting and its owner, so the first check of a stack that is behind may deploy it.
+Check the **public URL** (Settings, General): the address a git host calls for a webhook is built on it, so on an
+instance with a different public URL you add the new address at the git host, which **Rotate secret** shows.
+
 ## Rotating the master key
 
 The master key encrypts stored secrets and keys the audit log's chain. Rotate it if you think it
@@ -224,5 +244,9 @@ records a `key.rotated` entry that the old key vouches for. It prints the key ID
   it like a password store.
 - A backup is a copy at one moment. Anything done after it is lost by a restore, including
   users, access and audit entries.
+- The key and the database go together when you copy the data directory instead of making a backup. A copy of
+  `bayplan.db` without `bayplan.key` (or the key you supplied through `BAYPLAN_ENCRYPTION_KEY_FILE`) holds the git tokens,
+  deploy keys and webhook secrets only as ciphertext that nothing opens. A backup file does not have this problem: it
+  restores under any key.
 - Docker state is not in the backup. Bayplan reads containers, images and the rest live from the
   hosts.

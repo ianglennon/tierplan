@@ -25,6 +25,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useEnvName } from "@/features/resources/use-env-name";
+import { AutoDeployPausedAlert } from "@/features/stack-git/auto-deploy-paused-alert";
+import { GitStrip } from "@/features/stack-git/git-strip";
+import { GitSourceBadge } from "@/features/stack-git/sync-badges";
+import { SyncErrorAlert } from "@/features/stack-git/sync-error-alert";
 import {
   NotAdoptableNote,
   OrphanIdNote,
@@ -35,7 +39,11 @@ import { DeployBanner } from "@/features/stacks/deploy-banner";
 import { DeployFailedAlert } from "@/features/stacks/deploy-failed-alert";
 import { DraftBanner } from "@/features/stacks/draft-banner";
 import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
-import { StackActions, StoppedAlertWithStart } from "@/features/stacks/stack-actions";
+import {
+  PullAndRedeployAction,
+  StackActions,
+  StoppedAlertWithStart,
+} from "@/features/stacks/stack-actions";
 import { StackStateCell } from "@/features/stacks/stack-state-cell";
 import { UnmanagedBadge } from "@/features/stacks/unmanaged-badge";
 import { useDocumentTitle } from "@/hooks/use-me";
@@ -104,6 +112,33 @@ const TABS = [
     exact: false,
   },
 ] as const;
+
+// The Git tab of a stack from a repository, last in the order. Other stacks have no such tab.
+const GIT_TAB_ENTRY = {
+  id: "git",
+  to: "/env/$envId/stacks/$stackId/git",
+  labelKey: "stackGit.tab.label",
+  exact: false,
+} as const;
+
+interface TabEntry {
+  id: string;
+  to: (typeof TABS)[number]["to"] | typeof GIT_TAB_ENTRY.to;
+  labelKey: string;
+  exact: boolean;
+}
+
+// tabsOf is the tabs of a stack's page. A stack from a git repository reads Files where the others read Editor (the
+// route is the same: its files are the repository's, read-only, and Bayplan's overlay files), and has the Git tab last.
+function tabsOf(git: boolean): readonly TabEntry[] {
+  if (!git) return TABS;
+  return [
+    ...TABS.map((tab) =>
+      tab.id === "editor" ? { ...tab, labelKey: "stackEditor.tab.files" } : tab,
+    ),
+    GIT_TAB_ENTRY,
+  ];
+}
 
 function Breadcrumb({ envId, name }: { envId: string; name: string | undefined }) {
   const t = useT();
@@ -346,7 +381,11 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
                   failedService={data.lastOperation?.failedService}
                 />
                 <Badge variant="outline">{t(`stacks.target.${data.target}`)}</Badge>
-                <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+                {data.git ? (
+                  <GitSourceBadge git={data.git} />
+                ) : (
+                  <Badge variant="outline">{t(`stacks.source.${data.source}`)}</Badge>
+                )}
                 {data.hasDraft ? <Badge variant="outline">{t("stacks.draft")}</Badge> : null}
               </div>
               <p className="text-sm text-muted-foreground">
@@ -363,7 +402,11 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
             </div>
             {flow ? null : (
               <div className="flex flex-wrap items-start gap-2 max-md:w-full">
-                <DeployAction envId={envId} stackId={stackId} />
+                {data.git ? (
+                  <PullAndRedeployAction stack={data} />
+                ) : (
+                  <DeployAction envId={envId} stackId={stackId} />
+                )}
                 <StackActions stack={data} />
               </div>
             )}
@@ -372,8 +415,11 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
           <Skeleton className="h-8 w-64" />
         )}
       </header>
+      {/* The Git strip of a stack from a repository: under the header and above the alerts, on every tab. The Review
+          and the console routes show the flow caption instead and do not repeat it. */}
+      {data && !flow ? <GitStrip stack={data} /> : null}
       {/* The alerts, in the order of UI-SPEC "Stack page": an operation under way, the last deploy that
-          stopped, another operation holding the environment, a stack that is stopped, a draft that waits.
+          stopped, another operation holding the environment, a stack that is stopped, a git stack that cannot sync, auto-deploy that is paused, a draft that waits.
           The console is the operation's own page, so it does not warn about itself, and a stack that
           is being deployed or removed is not also called stopped. */}
       {data && flow !== "deploy" ? <DeployBanner stack={data} /> : null}
@@ -384,6 +430,8 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
       {data && flow !== "deploy" && data.lastOperation?.state !== "running" ? (
         <StoppedAlertWithStart stack={data} />
       ) : null}
+      {data && !flow ? <SyncErrorAlert stack={data} /> : null}
+      {data && !flow ? <AutoDeployPausedAlert stack={data} /> : null}
       {data && !flow && !editing ? <DraftBanner stack={data} envName={envName} /> : null}
       {flow ? (
         <FlowCaption step={flow} />
@@ -394,7 +442,7 @@ function ManagedStackDetailLayout({ envId, stackId, children, flow, editing }: M
             aria-label={t("stacks.detail.tabs.label")}
             className="h-9 max-md:h-11"
           >
-            {TABS.map((tab) => (
+            {tabsOf(data?.source === "git").map((tab) => (
               <TabsTrigger
                 key={tab.id}
                 value={tab.id}

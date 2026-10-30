@@ -87,6 +87,26 @@ services:
     depends_on:
       dind:
         condition: service_healthy
+      gitserver:
+        condition: service_healthy
+
+  # A git server for the From git golden path (plan 09-33): one repository over smart
+  # HTTP and TLS with a certificate of its own, which the spec gives Bayplan as the
+  # repository's CA. Bayplan reaches it by name on the compose network; the browser
+  # never does. The fixed address is in the certificate beside the name.
+  gitserver:
+    build: ./gitserver
+    # Build on every `up`: the layers are cached, and a changed file is never stale.
+    pull_policy: build
+    networks:
+      default:
+        ipv4_address: 172.30.0.11
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "443"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 2s
 
   caddy:
     image: caddy:2

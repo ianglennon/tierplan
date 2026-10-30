@@ -17,6 +17,10 @@
       "loadFailedBody": "Check the connection and try again.",
       "retry": "Retry"
     },
+    "automation": {
+      "git_autodeploy": "Auto-deploy of {{stack}} on {{environment}}",
+      "git_webhook": "Webhook of {{stack}} on {{environment}}"
+    },
     "state": {
       "active": "Active",
       "paused_lacks_permission": "Paused: owner lacks permission",

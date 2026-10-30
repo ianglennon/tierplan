@@ -23,6 +23,15 @@ const (
 	// WarnRestartLoopContainer is a standalone container that keeps dying and whose alerts
 	// nobody muted (plan 06-36, RES-13, D-15).
 	WarnRestartLoopContainer = "restart_loop_container"
+	// The next is a git stack whose sync check is in error: the repository can't be reached, the ref is gone and
+	// so on (Phase 9, D-16). It is told to whoever manages the environment's git, and goes when the stack is in sync.
+	WarnGitSyncError = "git_sync_error"
+	// The next three are told of a git stack's automatic deploys (Phase 9, D-19, D-23): a commit that was held back
+	// (skipped), a deploy that put changes made outside the stack back (reverted) and automation that is paused. They
+	// go to the automation's owner and to the environment's Admins, and go when their cause does.
+	WarnGitAutoDeploySkipped  = "git_autodeploy_skipped"
+	WarnGitAutoDeployReverted = "git_autodeploy_reverted"
+	WarnGitAutoDeployPaused   = "git_autodeploy_paused"
 )
 
 // maxWarnError is the longest latest-error text a restart-loop warning carries, in characters.
@@ -52,6 +61,13 @@ type EnvWarning struct {
 	// For a container loop: the container's name and ID, the node it is on and its last
 	// exit code. Count and WindowMinutes are as for a service.
 	Container, ContainerID, NodeID, LastExitCode string
+	// For a git sync error: the stack, the reason code of its check and the sentence that goes with it. Since is when
+	// the error began.
+	StackID, StackName, ReasonCode, ReasonDetail string
+	// For an automatic deploy's notice: the short commit that was held back, the first line a deploy put back (Example,
+	// of Count), the revision it made or that a roll back went to, and who owns the paused automation.
+	Commit, Example, Owner string
+	Revision               int64
 }
 
 // AgentState is what the warnings need to know of one agent.
@@ -221,6 +237,9 @@ func SortWarnings(out []EnvWarning) {
 		}
 		if a.ContainerID != b.ContainerID {
 			return a.ContainerID < b.ContainerID
+		}
+		if a.StackID != b.StackID {
+			return a.StackID < b.StackID
 		}
 		return a.ID < b.ID
 	})

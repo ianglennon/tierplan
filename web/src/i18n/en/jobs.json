@@ -36,6 +36,12 @@
           "failed": "Failed",
           "cancelled": "Cancelled"
         },
+        "auto": {
+          "running": "Auto-deploying",
+          "done": "Auto-deployed",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
         "update": {
           "running": "Updating images",
           "done": "Images updated",

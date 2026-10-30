@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Download, ListRestart, Rocket, Undo2 } from "lucide-react";
+import { Download, GitBranch, ListRestart, Rocket, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { type PullSummary, pullsListQuery } from "@/api/pulls";
@@ -75,6 +75,10 @@ function pullStateKey(p: PullSummary): { key: string; values: Record<string, num
 // stackStateKey is the words for where a stack operation stands: by what it is (a deploy, an update of
 // images, a roll back, a stop, a start, a removal), and for an operation this version has no words for yet, the general ones.
 function stackStateKey(job: StackJobSummary): string {
+  // A deploy or an update that no person started says so (D-20): Auto-deploying, Auto-deployed.
+  if (job.trigger && (job.kind === "deploy" || job.kind === "update")) {
+    return `jobs.indicator.stack.auto.${job.state}`;
+  }
   const specific = `jobs.indicator.stack.${job.kind}.${job.state}`;
   return keyExists(specific) ? specific : `jobs.indicator.stack.other.${job.state}`;
 }
@@ -378,7 +382,9 @@ function StackJobRow({
   const live = job.state === "running";
   return (
     <li className="flex min-w-0 items-center gap-2 rounded-md hover:bg-muted/50">
-      {job.kind === "restore" ? (
+      {job.trigger && (job.kind === "deploy" || job.kind === "update") ? (
+        <GitBranch aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
+      ) : job.kind === "restore" ? (
         <ListRestart aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />
       ) : job.kind === "rollback" ? (
         <Undo2 aria-hidden="true" className="ms-2 size-4 shrink-0 text-muted-foreground" />

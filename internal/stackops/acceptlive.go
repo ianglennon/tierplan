@@ -23,6 +23,11 @@ var ErrNoDeployedRevision = errors.New("stackops: the stack has no deployed revi
 // stack is not drift (D-21), and there is nothing running to keep.
 var ErrStackStopped = errors.New("stackops: the stack is stopped")
 
+// ErrGitStack is a stack that deploys from a git repository, or one whose draft is about to point at one. Its files are
+// the repository's, which are read-only (D-11), so a definition rebuilt from what runs has no file to go in: the
+// change belongs in the repository.
+var ErrGitStack = errors.New("stackops: the stack deploys from git")
+
 // AcceptLiveInput says which stack's draft is rebuilt from what runs. DraftVersion is the version of the draft the
 // person saw (0 for a stack that has none), so a draft that moved since is not overwritten unseen.
 type AcceptLiveInput struct {
@@ -49,10 +54,21 @@ type AcceptLiveResult struct {
 // Nothing is written to any engine: the rebuild only reads. A rebuild that fails, or whose file does not pass the
 // check every stack passes against the revision's own variables and files, leaves the draft as it was. A draft that
 // has moved since DraftVersion is a *DraftConflictError. A stack that is stopped is refused with ErrStackStopped
-// before anything is read.
+// before anything is read. A stack that deploys from git, or whose draft carries a repository commit (a pending
+// conversion to one), is refused with ErrGitStack: the draft's repository files are read-only.
 func (d Deps) AcceptLive(ctx context.Context, repo Repo, in AcceptLiveInput) (AcceptLiveResult, error) {
+	if in.Stack.Source.Kind == stacks.SourceGit {
+		return AcceptLiveResult{}, ErrGitStack
+	}
 	if in.Stack.Stopped {
 		return AcceptLiveResult{}, ErrStackStopped
+	}
+	current, err := repo.Draft(ctx, in.Stack.ID)
+	if err != nil {
+		return AcceptLiveResult{}, err
+	}
+	if current.IsDraft && current.Git.Commit != "" {
+		return AcceptLiveResult{}, ErrGitStack
 	}
 	deployed, ok, err := repo.LatestGoodRevision(ctx, in.Stack.ID)
 	if err != nil {
@@ -72,6 +88,7 @@ func (d Deps) AcceptLive(ctx context.Context, repo Repo, in AcceptLiveInput) (Ac
 
 	// The revision's files keep their order, with compose.yaml replaced where it was. RebuildLive has already
 	// checked the file beside them and the revision's variables, as a deploy would load it.
+	// The rebuilt file is the whole definition, merged, so the result is a stack of the one compose.yaml.
 	next := stacks.WorkingCopy{Files: slices.Clone(deployed.Copy.Files), Vars: slices.Clone(deployed.Copy.Vars)}
 	if i := slices.IndexFunc(next.Files, func(f stacks.File) bool { return f.Path == stacks.ComposeFile }); i >= 0 {
 		next.Files[i].Content = res.YAML
@@ -103,7 +120,7 @@ func baseOf(ctx context.Context, st Stack, copy stacks.WorkingCopy) (*rebuild.Ba
 	}
 	base := &rebuild.Base{
 		Project: loaded.Project, SecretValues: map[string]string{},
-		ImageText: rebuild.ImageTextOf(copy.Compose()),
+		ImageText: imageTextOf(copy),
 	}
 	// Two secret variables with one value are written as the one whose name sorts first, so the same input gives
 	// the same file.
@@ -118,4 +135,15 @@ func baseOf(ctx context.Context, st Stack, copy stacks.WorkingCopy) (*rebuild.Ba
 		}
 	}
 	return base, nil
+}
+
+// imageTextOf is the image of each service as the working copy's compose files wrote it: the image a later
+// compose file gives a service replaces an earlier one's, as in the merge.
+func imageTextOf(copy stacks.WorkingCopy) map[string]string {
+	contents := copy.ComposeContents()
+	composes := make([][]byte, len(contents))
+	for i, c := range contents {
+		composes[i] = c.Content
+	}
+	return rebuild.ImageTextOfFiles(composes...)
 }
