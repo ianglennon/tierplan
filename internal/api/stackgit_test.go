@@ -48,8 +48,8 @@ type stackGitAnswer struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"autoDeployOwner"`
-	PollEnabled  bool     `json:"pollEnabled"`
-	PollMinutes  int      `json:"pollMinutes"`
+	PollEnabled bool `json:"pollEnabled"`
+	PollMinutes int  `json:"pollMinutes"`
 }
 
 // checkEnded is told by the server when a check a request started has ended.
