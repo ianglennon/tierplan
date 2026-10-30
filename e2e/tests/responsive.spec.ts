@@ -19,6 +19,7 @@ import {
   environmentsOf,
   expect,
   expectChipsInsideScreen,
+  openReview,
   removeStackIfPresent,
   retryName,
   test,
@@ -357,14 +358,33 @@ async function expectFooterClear(
   width: number,
   what: string,
 ): Promise<void> {
-  const { scroll, inner } = await page.evaluate(() => ({
+  const { scroll, inner, wide } = await page.evaluate(() => ({
     scroll: document.scrollingElement?.scrollWidth ?? 0,
     inner: window.innerWidth,
+    // The elements whose right edge passes the window: what makes a page too wide.
+    wide: [...document.querySelectorAll("body *")]
+      .filter((el) => el.getBoundingClientRect().right > window.innerWidth + 0.5)
+      .slice(0, 8)
+      .map((el) => `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 80)}`),
   }));
   expect(inner, `${what} at ${width}px: the layout viewport is ${inner}px`).toBe(width);
-  expect(scroll, `${what} at ${width}px: the document is ${scroll}px wide`).toBeLessThanOrEqual(
-    width,
-  );
+  // The page-wide check holds from 375px. At 320px the stack page's own tab strip (Overview,
+  // Editor, History, Resources, in stack-detail-layout.tsx, outside the footer) is 369px wide and
+  // makes the document scroll sideways: a separate gap, recorded as G-09-10b in the 09-38 SUMMARY.
+  // There the check narrows to the bar, which is what this test is about.
+  if (width >= 375) {
+    expect(
+      scroll,
+      `${what} at ${width}px: the document is ${scroll}px wide (past the window: ${wide.join(" | ")})`,
+    ).toBeLessThanOrEqual(width);
+  }
+  const barScroll = await page
+    .locator('[data-slot="editor-footer"]')
+    .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+  expect(
+    barScroll.scroll,
+    `${what} at ${width}px: the bar's content is ${barScroll.scroll}px in a ${barScroll.client}px bar`,
+  ).toBeLessThanOrEqual(barScroll.client);
 
   const bar = page.locator('[data-slot="editor-footer"]');
   const barBox = await bar.boundingBox();
@@ -450,7 +470,11 @@ async function expectFooterClear(
   }
 }
 
-test("the stack editor footer keeps Unsaved changes off Discard draft on a 375px screen (G-09-10)", async ({
+// What the planning probe measured on the code before the wrap: the status 0px wide, Discard draft
+// at x=-9, the saved text a 19-line column, the review reason bleeding outside the 56px bar at
+// 320px, and text drawn over a button beside the expanded 256px sidebar at 768px. The test exists
+// to catch that class of defect.
+test("the stack editor and review footers keep their text off their buttons at 375px and 320px and beside the expanded sidebar at 768px (G-09-10)", async ({
   page,
 }) => {
   test.setTimeout(180_000);
@@ -468,6 +492,26 @@ test("the stack editor footer keeps Unsaved changes off Discard draft on a 375px
   expect(created.status(), `create ${FOOTER_STACK}: ${await created.text()}`).toBe(201);
   const { id } = (await created.json()) as { id: string };
 
+  // At 768px the 256px sidebar is expanded, so the bar is squeezed as it is on a tablet.
+  const phoneHeight = 812;
+  const sizes = [
+    { width: 375, height: phoneHeight },
+    { width: 320, height: phoneHeight },
+    { width: 768, height: 1024 },
+  ];
+  const checkAll = async (text: Locator, what: string): Promise<void> => {
+    for (const { width, height } of sizes) {
+      await page.setViewportSize({ width, height });
+      if (width === 768) {
+        await expect(page.locator('[data-slot="sidebar"]')).toHaveAttribute(
+          "data-state",
+          "expanded",
+        );
+      }
+      await expectFooterClear(page, text, width, what);
+    }
+  };
+
   try {
     await page.goto(at(`/env/${env.id}/stacks/${id}/editor`));
     const footer = page.locator('[data-slot="editor-footer"]');
@@ -481,11 +525,29 @@ test("the stack editor footer keeps Unsaved changes off Discard draft on a 375px
     await typeInEditor(page, "compose.yaml, YAML", `${FOOTER_COMPOSE}# saved\n`);
     await footer.getByRole("button", { name: "Save draft" }).click();
     await expect(status).toHaveText(/^Saved .+ by /);
+    await checkAll(status, "editor, saved");
 
+    // On a desktop beside the expanded sidebar the saved footer is still one 48px row.
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expect(page.locator('[data-slot="sidebar"]')).toHaveAttribute("data-state", "expanded");
+    const desktop = await footer.boundingBox();
+    expect(desktop?.height ?? 0, "the saved footer at 1024px is one 48px row").toBeCloseTo(48, 0);
+
+    await page.setViewportSize({ width: 375, height: phoneHeight });
     await typeInEditor(page, "compose.yaml, YAML", `${FOOTER_COMPOSE}# edited\n`);
     await expect(status).toHaveText("Unsaved changes");
     await expect(footer.getByRole("button", { name: "Discard draft" })).toBeVisible();
-    await expectFooterClear(page, status, 375, "editor, unsaved");
+    await checkAll(status, "editor, unsaved");
+
+    // The review of a compose file that does not parse answers at once with its problems.
+    await page.setViewportSize({ width: 375, height: phoneHeight });
+    await openReview(page, FOOTER_STACK);
+    const reason = footer.locator("p");
+    await expect(reason).toHaveText(/^Fix \d+ errors? first\.$/);
+    for (const { width, height } of sizes.slice(0, 2)) {
+      await page.setViewportSize({ width, height });
+      await expectFooterClear(page, reason, width, "review, reason");
+    }
   } finally {
     await removeStackIfPresent(page.context(), env.id, FOOTER_STACK);
   }
