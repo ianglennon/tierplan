@@ -347,6 +347,31 @@ func TestStandaloneDeployNamesTheServiceAnAgentRefusedAndKeepsTheRefusalAsItsCod
 	}
 }
 
+// The agent's host-policy refusal (G-09-8b) is told apart from the plain one on a standalone host too.
+func TestStandaloneDeployNamesAHostPolicyRefusal(t *testing.T) {
+	t.Parallel()
+	rig := newStandaloneRig(t)
+	const refusal = "Error response from daemon: agent_policy_denied: host_policy: POST /v1.52/containers/create"
+	refused := container("demo-web-1", "web", "Error", false)
+	refused.Failed = true
+	refused.Text = refusal
+	rig.deps.Up = newScriptedUp(errString(refusal),
+		[]dockerx.ComposeEvent{container("demo-web-1", "web", "Creating", false), refused}).up
+
+	res, job := rig.deployStandalone(t, standaloneInput("demo", webStandalone))
+
+	if res.OK() || res.Code != stackops.CodeAgentHostPolicy || res.FailedService != "web" {
+		t.Fatalf("result = %+v, want agent_host_policy at web", res)
+	}
+	svc := itemByID(t, job, "service:web")
+	if svc.State != jobs.ItemFailed || svc.Code != stackops.CodeAgentHostPolicy {
+		t.Errorf("service row = %s %s, want failed with agent_host_policy", svc.State, svc.Code)
+	}
+	if !strings.Contains(svc.Detail, "host_policy") || !strings.Contains(svc.Detail, "POST /v1.52/containers/create") {
+		t.Errorf("service detail = %q, want the agent's own words", svc.Detail)
+	}
+}
+
 func TestStandaloneDeployOnAReadOnlyHostFailsTheCheckStepAndRunsNothing(t *testing.T) {
 	t.Parallel()
 	rig := newStandaloneRig(t)
