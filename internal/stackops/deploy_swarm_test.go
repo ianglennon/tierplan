@@ -321,6 +321,31 @@ func TestDeploySwarmReportsAnAgentRefusalWithoutTheEnginesWords(t *testing.T) {
 	}
 }
 
+// A refusal the agent words as host policy (G-09-8b) ends as agent_host_policy, the API's wire code for
+// it, with the sentence that names host access and the agent setting; the plain refusal above stays
+// agent_policy_denied.
+func TestDeploySwarmNamesAHostPolicyRefusal(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.ServiceCreateError = "agent_policy_denied: host_policy: POST /v1.56/services/create"
+	})
+	_, in := starterPlan(t, "tracer")
+	res, job := rig.deploy(t, in)
+	if res.Code != stackops.CodeAgentHostPolicy || res.FailedService != "tracer_web" {
+		t.Fatalf("result = %+v, want agent_host_policy at tracer_web", res)
+	}
+	if got := itemStates(job); got[stackops.ItemServices] != "failed:agent_host_policy" {
+		t.Errorf("items = %v", got)
+	}
+	row := itemByID(t, job, "service:tracer_web")
+	if row.Code != stackops.CodeAgentHostPolicy || row.Message != stackops.CodeMessage(stackops.CodeAgentHostPolicy) {
+		t.Errorf("service row = %+v, want the host-policy code and its sentence", row)
+	}
+	if !strings.Contains(row.Message, "BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+		t.Errorf("message = %q, want it to name the agent setting", row.Message)
+	}
+}
+
 func TestDeploySwarmCallsOnDoneBeforeTheJobReadsAsFinished(t *testing.T) {
 	t.Parallel()
 	rig := newSwarmRig(t, nil)

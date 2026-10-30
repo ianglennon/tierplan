@@ -125,6 +125,17 @@ describe("DeployFailedAlert", () => {
     ).toBeTruthy();
   });
 
+  it("says a deploy the agent refused by host policy was, naming host access and the agent setting", async () => {
+    mount(withOperation({ code: "agent_host_policy" }));
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(
+        "Bayplan stopped at web_api: The host's agent doesn't let Bayplan deploy with host access, such as a bind mount outside /srv, /mnt and /media. Its owner can allow it by setting BAYPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES=true on the agent.",
+      ),
+    ).toBeTruthy();
+    expect(within(alert).queryByText(/agent_host_policy/)).toBeNull();
+  });
+
   it("is a warning, not an error", async () => {
     mount(stackOf());
     const alert = await screen.findByRole("alert");
