@@ -59,8 +59,12 @@ export default defineConfig({
     // (http://localhost:5173) reaches the Go Origin check unchanged (Pitfall 20).
     // ws forwards the browser shell's WebSocket upgrade; without it the shell's
     // pending session is never claimed and expires after 30 seconds.
+    // /hooks: under make dev the webhook address Bayplan shows is built on the Vite public
+    // URL, so a git host's delivery to /hooks/git/{token} must reach the Go server. It is a
+    // plain POST, so no ws.
     proxy: {
       "/api": { target: "http://127.0.0.1:7480", changeOrigin: false, ws: true },
+      "/hooks": { target: "http://127.0.0.1:7480", changeOrigin: false },
     },
   },
 });
