@@ -362,6 +362,7 @@ describe("the Variables pane of a git stack", () => {
     expect(within(row).getByText("••••")).toBeTruthy();
     expect(within(row).queryByText("<hidden>")).toBeNull();
     const warning = screen.getByTestId("variable-warning-DB_PASSWORD");
+    expectWarningCellWraps(warning);
     expect(
       within(warning).getByText(
         "DB_PASSWORD looks like a secret and is committed in the repository's .env. Set a secret variable here to override it.",
@@ -385,8 +386,18 @@ describe("the Variables pane of a git stack", () => {
     mount({ pane: "variables" });
     const warning = await screen.findByTestId("variable-warning-DB_PASSWORD");
     expect(within(warning).queryByRole("button", { name: "Set secret value" })).toBeNull();
+    expectWarningCellWraps(warning);
   });
 });
+
+// G-09-3: the shadcn TableCell base is whitespace-nowrap; the warning cell must override it so the
+// sentence wraps at 375px instead of spilling across the shrink-0 button. jsdom has no layout, so
+// this pins the cause (the class); the 375px look is the human check in plan 09-36.
+function expectWarningCellWraps(warning: HTMLElement) {
+  const cell = warning.querySelector("td");
+  expect(cell?.className).toContain("whitespace-normal");
+  expect(cell?.className).not.toContain("whitespace-nowrap");
+}
 
 describe("Review and deploy on a git stack", () => {
   const pulls = () => server.sent.filter((s) => s.path.endsWith("/git/pull"));
