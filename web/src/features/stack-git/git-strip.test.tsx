@@ -579,15 +579,32 @@ describe("the Details rows of a git stack", () => {
     expect(row("Folder").textContent).toBe("Repository root");
   });
 
-  it("shows the deployed commit in full with Copy and a link on a known host", async () => {
+  it("shows the short deployed commit once with Copy and a link on a known host", async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
     await mountPart("details", makeGit());
     await screen.findByText("Deployed commit", { selector: "dt" });
     const cell = row("Deployed commit");
-    expect(cell.textContent).toContain(DEPLOYED);
-    expect(within(cell).getByRole("button", { name: /Copy/ })).toBeTruthy();
+    expect(cell.textContent?.split("0123456").length).toBe(2);
+    expect(cell.textContent).not.toContain(DEPLOYED);
     expect(
       within(cell).getByRole("link", { name: /Open commit 0123456 on github.com/ }),
     ).toBeTruthy();
+
+    fireEvent.click(within(cell).getByRole("button", { name: "Copy commit ID" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(DEPLOYED));
+    expect(await within(cell).findByText("Copied the commit ID")).toBeTruthy();
+  });
+
+  it("shows the short deployed commit once as plain text on a host without commit links", async () => {
+    await mountPart("details", makeGit({ repoHost: "git.homelab.org.uk" }));
+    await screen.findByText("Deployed commit", { selector: "dt" });
+    const cell = row("Deployed commit");
+    expect(cell.textContent?.split("0123456").length).toBe(2);
+    expect(cell.textContent).not.toContain(DEPLOYED);
+    expect(within(cell).queryByRole("link")).toBeNull();
+    expect(within(cell).getByRole("button", { name: "Copy commit ID" })).toBeTruthy();
   });
 
   it("shows the latest commit only while the stack is behind", async () => {

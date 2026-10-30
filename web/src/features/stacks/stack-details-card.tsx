@@ -36,12 +36,14 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 // CopyId is the stack ID in mono with a button that copies it. The result is told in words for a
-// screen reader and by the icon for everyone else.
+// screen reader and by the icon for everyone else. With showId off the value is not drawn (the
+// caller draws it, shortened, in extra) and the button still copies all of it.
 function CopyId({
   id,
   label,
   copiedLabel,
   extra,
+  showId = true,
 }: {
   id: string;
   // The accessible name of the button and what is announced after it copied; the stack ID's by default.
@@ -49,6 +51,8 @@ function CopyId({
   copiedLabel?: string;
   // Something after the value and before the button, such as the link to a commit.
   extra?: ReactNode;
+  // Draw id in full before extra; false when extra stands for it.
+  showId?: boolean;
 }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
@@ -68,7 +72,7 @@ function CopyId({
 
   return (
     <span ref={host} className="flex min-w-0 items-start gap-1">
-      <span className="min-w-0 font-mono text-xs break-all">{id}</span>
+      {showId ? <span className="min-w-0 font-mono text-xs break-all">{id}</span> : null}
       {extra}
       <Button
         type="button"
@@ -131,6 +135,7 @@ function GitRows({ git }: { git: StackGit }) {
             id={git.deployedSha}
             label={t("stackGit.details.copyCommit")}
             copiedLabel={t("stackGit.details.copiedCommit")}
+            showId={false}
             extra={
               <ShaLink sha={git.deployedSha} repoHost={git.repoHost} repoPath={git.repoPath} />
             }
