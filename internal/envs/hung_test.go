@@ -17,7 +17,7 @@ type hungTransport struct{ path string }
 
 func newHungTransport(t *testing.T) *hungTransport {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "bphung")
+	dir, err := os.MkdirTemp("", "cmhung")
 	if err != nil {
 		t.Fatal(err)
 	}

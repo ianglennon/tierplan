@@ -172,9 +172,9 @@ func TestCreateEnvironmentStoresTheEnvironmentItsCAAndAHashedToken(t *testing.T)
 
 	envID, secret, ok := agents.ParseToken(c.JoinToken)
 	if !ok || envID != c.EnvID {
-		t.Fatalf("the returned token %q does not parse as bpjt_<envId>_<secret> for %s", c.JoinToken, c.EnvID)
+		t.Fatalf("the returned token %q does not parse as cmjt_<envId>_<secret> for %s", c.JoinToken, c.EnvID)
 	}
-	if !strings.HasPrefix(c.JoinToken, "bpjt_"+c.EnvID+"_") {
+	if !strings.HasPrefix(c.JoinToken, "cmjt_"+c.EnvID+"_") {
 		t.Fatalf("token %q has the wrong shape", c.JoinToken)
 	}
 	if raw, err := base64.RawURLEncoding.DecodeString(secret); err != nil || len(raw) != 32 {
@@ -323,9 +323,9 @@ func TestEnrolRefusesAWrongTokenAndWritesNoAgent(t *testing.T) {
 	_, otherSecret, _ := agents.ParseToken(other.JoinToken)
 
 	for name, token := range map[string]string{
-		"a wrong secret":                     "bpjt_" + c.EnvID + "_" + otherSecret,
-		"a secret of zeros":                  "bpjt_" + c.EnvID + "_" + strings.Repeat("A", 43),
-		"an environment that does not exist": "bpjt_0197b8a0-0000-7000-8000-000000000000_" + secret,
+		"a wrong secret":                     "cmjt_" + c.EnvID + "_" + otherSecret,
+		"a secret of zeros":                  "cmjt_" + c.EnvID + "_" + strings.Repeat("A", 43),
+		"an environment that does not exist": "cmjt_0197b8a0-0000-7000-8000-000000000000_" + secret,
 		"no prefix":                          c.EnvID + "_" + secret,
 		"empty":                              "",
 		"truncated":                          c.JoinToken[:len(c.JoinToken)-5],
@@ -556,16 +556,16 @@ func TestParseToken(t *testing.T) {
 	for token, want := range map[string]bool{
 		c.JoinToken:      true,
 		"":               false,
-		"bpjt_":          false,
-		"bpjt_nope_AAAA": false,
-		"xpjt_" + strings.TrimPrefix(c.JoinToken, "bpjt_"): false,
-		"bpjt_" + c.EnvID:                                 false,
-		"bpjt_" + c.EnvID + "_":                           false,
-		"bpjt_" + c.EnvID + "_" + strings.Repeat("A", 42): false,
-		"bpjt_" + c.EnvID + "_" + strings.Repeat("A", 44): false,
-		"bpjt_" + c.EnvID + "_" + strings.Repeat("!", 43): false,
-		"bpjt_" + c.EnvID + "_" + strings.Repeat("A", 43): true,
-		"bpjt_" + c.EnvID + "_" + strings.Repeat("_", 43): true, // the secret alphabet includes _ and -
+		"cmjt_":          false,
+		"cmjt_nope_AAAA": false,
+		"xpjt_" + strings.TrimPrefix(c.JoinToken, "cmjt_"): false,
+		"cmjt_" + c.EnvID:                                 false,
+		"cmjt_" + c.EnvID + "_":                           false,
+		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 42): false,
+		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 44): false,
+		"cmjt_" + c.EnvID + "_" + strings.Repeat("!", 43): false,
+		"cmjt_" + c.EnvID + "_" + strings.Repeat("A", 43): true,
+		"cmjt_" + c.EnvID + "_" + strings.Repeat("_", 43): true, // the secret alphabet includes _ and -
 	} {
 		if _, _, ok := agents.ParseToken(token); ok != want {
 			t.Errorf("ParseToken(%q) ok = %v, want %v", token, ok, want)
@@ -1015,7 +1015,7 @@ func TestEnrolWithAWrongSecretIsStillATokenMismatchAfterARotation(t *testing.T) 
 		t.Fatal(err)
 	}
 	other, _, _ := agents.ParseToken(c.JoinToken)
-	forged := "bpjt_" + other + "_" + strings.Repeat("A", 43)
+	forged := "cmjt_" + other + "_" + strings.Repeat("A", 43)
 	_, err := r.svc.Enrol(r.ctx, newProof(t, "h").request(forged))
 	var re *tunnel.RefuseError
 	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected || re.AuditReason != "token_mismatch" {

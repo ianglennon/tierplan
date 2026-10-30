@@ -292,7 +292,7 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 	if !strings.Contains(standalone, "docker rm -f coaming-agent") || !strings.Contains(standalone, "docker volume rm coaming-agent") {
 		t.Errorf("the standalone cleanup = %q", standalone)
 	}
-	if strings.Contains(swarm+standalone, "bpjt_") {
+	if strings.Contains(swarm+standalone, "cmjt_") {
 		t.Fatal("a cleanup command carries a join token")
 	}
 

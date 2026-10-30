@@ -428,7 +428,7 @@ func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.
 	if got.Kind != "agent" || got.Name != "Production" || got.IsSelfHost || !got.Enabled || got.Status.State != "pending" {
 		t.Errorf("environment = %+v", got.envBody)
 	}
-	if got.Install == nil || !strings.HasPrefix(got.Install.JoinToken, "bpjt_"+got.ID+"_") {
+	if got.Install == nil || !strings.HasPrefix(got.Install.JoinToken, "cmjt_"+got.ID+"_") {
 		t.Fatalf("install = %+v", got.Install)
 	}
 	if got.Install.AgentURL != "wss://example.com/coaming/agent/connect" {
@@ -681,7 +681,7 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	in := got.Install
-	if !strings.HasPrefix(in.JoinToken, "bpjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "coaming-agent-token-g1" {
+	if !strings.HasPrefix(in.JoinToken, "cmjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "coaming-agent-token-g1" {
 		t.Errorf("token %q generation %d secret %q", in.JoinToken, in.Generation, in.SecretName)
 	}
 	if in.AgentURL != "wss://example.com/coaming/agent/connect" || in.Pin != "sha256/PINPINPIN" {

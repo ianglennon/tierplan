@@ -21,7 +21,7 @@ import (
 // binds it was given. The container is removed when the test ends.
 func runToExit(t *testing.T, ctx context.Context, raw *client.Client, binds []string, script string) int64 {
 	t.Helper()
-	name := "bp-vol-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-vol-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:       name,
 		Config:     &container.Config{Image: "busybox:1", Cmd: []string{"sh", "-c", script}},
@@ -66,7 +66,7 @@ func TestVolumeCreateHostFolder(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	folder := "/tmp/bp-hostfolder-" + suffix
+	folder := "/tmp/cm-hostfolder-" + suffix
 	// The folder is on the engine's host, which can be another machine than this one, so
 	// it is made there: a bind of a folder that does not exist makes it, and a file in it
 	// is what the volume must show.
@@ -74,7 +74,7 @@ func TestVolumeCreateHostFolder(t *testing.T) {
 		t.Fatalf("seeding the folder exited %d", code)
 	}
 
-	name := "bp-vol-" + suffix
+	name := "cm-vol-" + suffix
 	if ok, err := cli.VolumeExists(ctx, name); err != nil || ok {
 		t.Fatalf("VolumeExists before the create = %v, %v, want false", ok, err)
 	}
@@ -127,8 +127,8 @@ func TestVolumeRemoveInUse(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	vol := "bp-inuse-" + suffix
-	ctr := "bp-user-" + suffix
+	vol := "cm-inuse-" + suffix
+	ctr := "cm-user-" + suffix
 	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: vol}); err != nil {
 		t.Fatalf("VolumeCreate: %v", err)
 	}
@@ -195,8 +195,8 @@ func TestVolumeAnonymous(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	ctr := "bp-anon-" + suffix
-	named := "bp-named-" + suffix
+	ctr := "cm-anon-" + suffix
+	named := "cm-named-" + suffix
 	if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: named}); err != nil {
 		t.Fatalf("VolumeCreate: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestVolumeSizes(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	full, empty := "bp-sized-"+suffix, "bp-unsized-"+suffix
+	full, empty := "cm-sized-"+suffix, "cm-unsized-"+suffix
 	for _, name := range []string{full, empty} {
 		if err := cli.VolumeCreate(ctx, dockerx.VolumeCreateSpec{Name: name}); err != nil {
 			t.Fatalf("VolumeCreate %s: %v", name, err)

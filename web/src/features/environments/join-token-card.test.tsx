@@ -30,7 +30,7 @@ function install() {
     agentUrl: "wss://coaming.example.com/agent/connect",
     generation: 4,
     image: "ghcr.io/ianglennon/coaming-agent:0.1.0",
-    joinToken: "bpjt_E1_s3cr3tvalue",
+    joinToken: "cmjt_E1_s3cr3tvalue",
     manualCleanup: { standalone: " docker rm -f coaming-agent", swarm: " docker service rm x" },
     secretName: "coaming-agent-token-g4",
     standalone: { command: " docker run x", composeFile: "services: {}\n" },

@@ -529,13 +529,13 @@ func snapshotStack(ctx context.Context, node *dockertest.Node, stack string, ask
 
 // compareGroup fails the test with the field-level differences between the docker CLI's objects of
 // one kind and Coaming's. An empty group on both sides is fine (a file with no secrets has none).
-func compareGroup(t *testing.T, kind string, cli, bp map[string]map[string]any) {
+func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) {
 	t.Helper()
 	seen := map[string]bool{}
 	for n := range cli {
 		seen[n] = true
 	}
-	for n := range bp {
+	for n := range cm {
 		seen[n] = true
 	}
 	var names []string
@@ -545,7 +545,7 @@ func compareGroup(t *testing.T, kind string, cli, bp map[string]map[string]any) 
 	sort.Strings(names)
 	for _, n := range names {
 		a, okA := cli[n]
-		b, okB := bp[n]
+		b, okB := cm[n]
 		switch {
 		case !okA:
 			t.Errorf("%s %s: only Coaming made it", kind, n)
@@ -564,15 +564,15 @@ func compareGroup(t *testing.T, kind string, cli, bp map[string]map[string]any) 
 
 // compareSnapshots fails the test with every difference between the docker CLI's deploy and
 // Coaming's, and when neither made a service, because then it would prove nothing.
-func compareSnapshots(t *testing.T, cli, bp stackSnapshot) {
+func compareSnapshots(t *testing.T, cli, cm stackSnapshot) {
 	t.Helper()
-	if len(cli.Services) == 0 && len(bp.Services) == 0 {
+	if len(cli.Services) == 0 && len(cm.Services) == 0 {
 		t.Fatal("neither deploy created a service: the comparison would prove nothing")
 	}
-	compareGroup(t, "service", cli.Services, bp.Services)
-	compareGroup(t, "network", cli.Networks, bp.Networks)
-	compareGroup(t, "secret", cli.Secrets, bp.Secrets)
-	compareGroup(t, "config", cli.Configs, bp.Configs)
+	compareGroup(t, "service", cli.Services, cm.Services)
+	compareGroup(t, "network", cli.Networks, cm.Networks)
+	compareGroup(t, "secret", cli.Secrets, cm.Secrets)
+	compareGroup(t, "config", cli.Configs, cm.Configs)
 }
 
 // removeStackCLI removes the stack with the docker CLI and waits until no service, no container and

@@ -107,7 +107,7 @@ func pullImage(t *testing.T, ctx context.Context, raw *client.Client, ref string
 
 func runningContainer(t *testing.T, ctx context.Context, raw *client.Client, image string) string {
 	t.Helper()
-	name := "bp-exec-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-exec-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:   name,
 		Config: &container.Config{Image: image, Cmd: []string{"sleep", "300"}},

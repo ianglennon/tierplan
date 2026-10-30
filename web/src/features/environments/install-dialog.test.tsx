@@ -20,7 +20,7 @@ import { EnvHealthStreamProvider } from "@/features/environments/health-stream";
 import { InstallDialog } from "@/features/environments/install-dialog";
 import "@/i18n";
 
-const TOKEN = "bpjt_E1_s3cr3tvalue";
+const TOKEN = "cmjt_E1_s3cr3tvalue";
 const MASK = "••••••••";
 
 function install(extra: Partial<InstallInfo> = {}, generation = 1): InstallInfo {

@@ -190,7 +190,7 @@ func TestServiceFacadeOnARealEngine(t *testing.T) {
 	}
 	bad := spec
 	bad.Name = "facade-bad-network"
-	bad.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "bp-no-such-network"}}
+	bad.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "cm-no-such-network"}}
 	var rejected *dockerx.SpecRejectedError
 	if _, _, err := f.cli.ServiceCreate(ctx, specOf(t, bad), ""); !errors.As(err, &rejected) {
 		t.Errorf("ServiceCreate naming a network that does not exist = %v, want a *SpecRejectedError", err)
@@ -275,7 +275,7 @@ func TestServiceFacadeOnARealEngine(t *testing.T) {
 	}
 	var unknown *dockerx.SpecRejectedError
 	broken := decodeSpec(t, edit.Spec)
-	broken.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "bp-no-such-network"}}
+	broken.TaskTemplate.Networks = []swarm.NetworkAttachmentConfig{{Target: "cm-no-such-network"}}
 	if _, err := f.cli.ServiceUpdate(ctx, id, edit.Version, specOf(t, broken), ""); !errors.As(err, &unknown) {
 		t.Errorf("ServiceUpdate naming a network that does not exist = %v, want a *SpecRejectedError", err)
 	}

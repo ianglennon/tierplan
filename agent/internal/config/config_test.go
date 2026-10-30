@@ -37,13 +37,13 @@ func TestLoadTrimsTheTokenFileNewline(t *testing.T) {
 			"COAMING_AGENT_URL":             goodURL,
 			"COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/coaming-agent-token",
 		}),
-		files(map[string]string{"/run/secrets/coaming-agent-token": "bpjt_x_y\n"}), //nolint:gosec // a test fixture, not a credential
+		files(map[string]string{"/run/secrets/coaming-agent-token": "cmjt_x_y\n"}), //nolint:gosec // a test fixture, not a credential
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JoinToken != "bpjt_x_y" {
-		t.Fatalf("JoinToken = %q, want bpjt_x_y", cfg.JoinToken)
+	if cfg.JoinToken != "cmjt_x_y" {
+		t.Fatalf("JoinToken = %q, want cmjt_x_y", cfg.JoinToken)
 	}
 }
 
@@ -66,14 +66,14 @@ func TestLoadPrefersTheTokenFileOverTheEnvironmentVariable(t *testing.T) {
 
 func TestLoadUsesTheEnvironmentTokenWhenThereIsNoFile(t *testing.T) {
 	cfg, err := Load(
-		env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "bpjt_a_b"}), //nolint:gosec // a test fixture, not a credential
+		env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_a_b"}), //nolint:gosec // a test fixture, not a credential
 		files(nil),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.JoinToken != "bpjt_a_b" {
-		t.Fatalf("JoinToken = %q, want bpjt_a_b", cfg.JoinToken)
+	if cfg.JoinToken != "cmjt_a_b" {
+		t.Fatalf("JoinToken = %q, want cmjt_a_b", cfg.JoinToken)
 	}
 }
 
@@ -164,10 +164,10 @@ func TestCheckEnrolledWithATokenReadsNothing(t *testing.T) {
 		env   map[string]string
 		files map[string]string
 	}{
-		"variable": {map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "bpjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
+		"variable": {map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_a_b"}, nil}, //nolint:gosec // a test fixture, not a credential
 		"file": {
 			map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN_FILE": "/run/secrets/t"}, //nolint:gosec // a test fixture, not a credential
-			map[string]string{"/run/secrets/t": "bpjt_a_b\n"},                                                  //nolint:gosec // a test fixture, not a credential
+			map[string]string{"/run/secrets/t": "cmjt_a_b\n"},                                                  //nolint:gosec // a test fixture, not a credential
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -203,7 +203,7 @@ func TestCheckEnrolledReportsAStateDirectoryItCannotRead(t *testing.T) {
 	if !strings.Contains(err.Error(), "read the enrolled state in /state") {
 		t.Errorf("the error %q does not name the state directory", err)
 	}
-	if strings.Contains(err.Error(), "bpjt_") {
+	if strings.Contains(err.Error(), "cmjt_") {
 		t.Errorf("the error carries a token: %q", err)
 	}
 	if cfg.Enrolled {
@@ -321,7 +321,7 @@ func TestLoadDefaultsAndOverrides(t *testing.T) {
 
 // The secret must not leak through an error or a log line (T-02-18).
 func TestLoadNeverPutsTheTokenInAnErrorOrALogLine(t *testing.T) {
-	const secret = "bpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
+	const secret = "cmjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 	var logs bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -437,7 +437,7 @@ func TestLoadRefusesAPolicyFlagItCannotRead(t *testing.T) {
 func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 	a := "sha256/" + strings.Repeat("A", 43) + "="
 	b := "sha256/" + strings.Repeat("B", 43) + "="
-	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "bpjt_x_y"} //nolint:gosec // a test fixture, not a credential
+	base := map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_x_y"} //nolint:gosec // a test fixture, not a credential
 	load := func(pin string) (Config, error) {
 		m := map[string]string{"COAMING_AGENT_PIN": pin}
 		for k, v := range base {
@@ -463,7 +463,7 @@ func TestLoadReadsTheServerPinsFromTheInstallCommand(t *testing.T) {
 func TestLoadRefusesAPinThatIsNotASHA256Pin(t *testing.T) {
 	for _, bad := range []string{"sha1/abc", "AAAA", "sha256/short", "sha256/" + strings.Repeat("A", 44), "sha256/" + strings.Repeat("!", 43) + "="} {
 		_, err := Load(env(map[string]string{ //nolint:gosec // a test fixture, not a credential
-			"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "bpjt_x_y", "COAMING_AGENT_PIN": bad,
+			"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "cmjt_x_y", "COAMING_AGENT_PIN": bad,
 		}), files(nil))
 		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_PIN") {
 			t.Errorf("pin %q: error = %v, want one naming COAMING_AGENT_PIN", bad, err)

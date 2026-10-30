@@ -34,7 +34,7 @@ func (f *saFix) modeOf(t *testing.T, name string) string {
 // pulls and redeploys it, and then lets auto-deploy deploy the commit after that by itself (GIT-04, GIT-06, GIT-07).
 func TestGitStackStandaloneThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/bp/app:1"
+	image := f.registry + "/cm/app:1"
 	f.pushBusybox(t, image, nil)
 	h := newGitHarness(t, f.srv.Do, f.env.ID)
 

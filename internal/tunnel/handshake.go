@@ -27,10 +27,10 @@ import (
 // handshake read limit is the outer bound, this keeps parsing cheap.
 const maxCertBytes = 8 << 10
 
-// joinTokenPrefix starts every join token: bpjt_<environment ID>_<secret>. The
+// joinTokenPrefix starts every join token: cmjt_<environment ID>_<secret>. The
 // agents package makes them; the hub only reads the environment ID out of a
 // refused one, to say where the refusal happened.
-const joinTokenPrefix = "bpjt_"
+const joinTokenPrefix = "cmjt_"
 
 // peerInfo is what the handler knows about the connection that the signed
 // handshake must agree with.

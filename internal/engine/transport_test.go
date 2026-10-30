@@ -53,7 +53,7 @@ func TestParseDockerHostAcceptsOnlyUnixSockets(t *testing.T) {
 }
 
 func TestLocalSocketTransportDialsItsPathAndIgnoresTheAddress(t *testing.T) {
-	dir, err := os.MkdirTemp("", "bpt")
+	dir, err := os.MkdirTemp("", "cmt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestLocalSocketTransportDialErrorNamesThePath(t *testing.T) {
 }
 
 func TestSocketExistsIsTrueOnlyForASocket(t *testing.T) {
-	dir, err := os.MkdirTemp("", "bpt")
+	dir, err := os.MkdirTemp("", "cmt")
 	if err != nil {
 		t.Fatal(err)
 	}

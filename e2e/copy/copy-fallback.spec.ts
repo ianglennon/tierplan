@@ -10,7 +10,7 @@
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 // Copied from web/harness/copy/main.tsx.
-const TOKEN = "bpjt_harness_S3CRET";
+const TOKEN = "cmjt_harness_S3CRET";
 const COMMAND = ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://coaming.test/agent/connect' ghcr.io/ianglennon/coaming-agent:edge`;
 const SENTINEL = "SENTINEL-not-the-command";
 const COPY = "Copy the install command";

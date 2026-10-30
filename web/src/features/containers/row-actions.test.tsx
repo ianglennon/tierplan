@@ -607,7 +607,7 @@ describe("Kill and Remove", () => {
 
 describe("Coaming's own containers", () => {
   const own = (extra: Partial<ContainerRow> = {}) =>
-    row({ name: "coaming", id: "bp-id", selfKind: "server", isSelf: true, ...extra });
+    row({ name: "coaming", id: "cm-id", selfKind: "server", isSelf: true, ...extra });
 
   it.each([
     ["Stop", "Stop coaming?"],
@@ -630,7 +630,7 @@ describe("Coaming's own containers", () => {
 
   it("starts an own container that is stopped at once, as for any other", async () => {
     answer = () =>
-      Response.json({ results: [{ nodeId: "n1", id: "bp-id", name: "coaming", result: "done" }] });
+      Response.json({ results: [{ nodeId: "n1", id: "cm-id", name: "coaming", result: "done" }] });
     mount(own({ state: "exited" }));
     await openMenu("coaming");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));

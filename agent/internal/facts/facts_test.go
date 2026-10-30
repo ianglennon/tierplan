@@ -17,7 +17,7 @@ import (
 // fakeEngine serves h on a Unix socket and returns its path.
 func fakeEngine(t *testing.T, h http.HandlerFunc) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "bpfa")
+	dir, err := os.MkdirTemp("", "cmfa")
 	if err != nil {
 		t.Fatal(err)
 	}

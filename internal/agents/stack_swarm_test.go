@@ -100,13 +100,13 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 			removeStackCLI(t, f, parityCLIStack)
 
 			deployWithCoaming(t, f, coamingStack, src)
-			bp, err := snapshotStack(execCtx(t, time.Minute), mgr, coamingStack, askedPools)
+			cm, err := snapshotStack(execCtx(t, time.Minute), mgr, coamingStack, askedPools)
 			if err != nil {
 				t.Fatal(err)
 			}
 			removeStackCLI(t, f, coamingStack)
 
-			compareSnapshots(t, cli, bp)
+			compareSnapshots(t, cli, cm)
 		})
 	}
 }

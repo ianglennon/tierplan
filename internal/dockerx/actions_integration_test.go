@@ -33,7 +33,7 @@ func state(t *testing.T, ctx context.Context, raw *client.Client, name string) c
 // it when the test ends.
 func idleContainer(t *testing.T, ctx context.Context, raw *client.Client, cfg *container.Config, hc *container.HostConfig) string {
 	t.Helper()
-	name := "bp-act-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "cm-act-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	cfg.Image = "busybox:1"
 	cfg.Cmd = []string{"sleep", "300"}
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: cfg, HostConfig: hc}); err != nil {
@@ -130,7 +130,7 @@ func TestActions(t *testing.T) {
 	})
 
 	t.Run("remove with volumes deletes the anonymous volume and keeps the named one", func(t *testing.T) {
-		named := "bp-act-named-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+		named := "cm-act-named-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 		if _, err := raw.VolumeCreate(ctx, client.VolumeCreateOptions{Name: named}); err != nil {
 			t.Fatalf("create the named volume: %v", err)
 		}

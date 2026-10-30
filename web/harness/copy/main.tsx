@@ -23,7 +23,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/sonner";
 
-const TOKEN = "bpjt_harness_S3CRET";
+const TOKEN = "cmjt_harness_S3CRET";
 const COMMAND = ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://coaming.test/agent/connect' ghcr.io/ianglennon/coaming-agent:edge`;
 
 const code = <CopyableCode code={COMMAND} secret={TOKEN} label="the install command" />;

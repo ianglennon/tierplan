@@ -34,7 +34,7 @@ func TestEveryMessageRoundTripsThroughJSON(t *testing.T) {
 	cases := map[string]any{
 		"challenge": Challenge{T: TypeChallenge, Proto: ProtoVersion, Nonce: nonce, TS: 1700000000000, ServerVersion: "0.2.0", Features: []string{"x"}},
 		"auth": Auth{T: TypeAuth, Mode: ModeEnrol, Proto: ProtoVersion, AgentVersion: "0.2.0", Aud: "coaming.example:443", //nolint:gosec // the token is a placeholder in a round-trip test
-			Nonce: nonce, TS: 1700000000001, Pub: []byte{1, 2, 3}, Token: "bpjt_x_y", EKM: nonce, Sig: []byte{9, 9}, Facts: facts},
+			Nonce: nonce, TS: 1700000000001, Pub: []byte{1, 2, 3}, Token: "cmjt_x_y", EKM: nonce, Sig: []byte{9, 9}, Facts: facts},
 		"auth hello": Auth{T: TypeAuth, Mode: ModeHello, Proto: ProtoVersion, AgentID: "a1", Aud: "h", Nonce: nonce, Cert: []byte{4, 5}, Sig: []byte{1}},
 		"welcome": Welcome{T: TypeWelcome, AgentID: "a1", EnvID: "e1", Cert: []byte{1}, HeartbeatMs: DefaultHeartbeatMs,
 			URLs: []string{"wss://h/agent/connect"}, Pins: []string{"sha256/abc"}, ServerTime: 1700000000002},

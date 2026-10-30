@@ -242,7 +242,7 @@ run_scenario() {
   PUBLIC="http://${HOST}${BASE}"
   LABEL="${kind} ${site}"
   [ "${variant}" = ok ] || LABEL="${LABEL} (${variant})"
-  COAMING_NAME="coaming-psmoke-${RUN_ID}-bp"
+  COAMING_NAME="coaming-psmoke-${RUN_ID}-cm"
   PROXY_NAME="coaming-psmoke-${RUN_ID}-px"
   SESSION=""
 

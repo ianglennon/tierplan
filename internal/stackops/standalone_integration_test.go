@@ -51,7 +51,7 @@ func TestStandaloneDeployOnARealEngine(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/web:1"
+	image := registry + "/cm/web:1"
 	pushed := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 	// Coaming's own client to the node, for what the test reads back: the project's containers.
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
@@ -342,7 +342,7 @@ func TestRecordComposeRequests(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/web:1"
+	image := registry + "/cm/web:1"
 	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 	rec, sdk := startRecorder(t, node.Host())
 	ctx := testsupport.Context(t)
@@ -537,7 +537,7 @@ func TestStandaloneReviewEmptyAfterDeployLocal(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/web:1"
+	image := registry + "/cm/web:1"
 	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 
 	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
@@ -768,7 +768,7 @@ func TestStandaloneStopStartKeepsSecrets(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/keep:1"
+	image := registry + "/cm/keep:1"
 	pushed := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
 	if err != nil {
@@ -878,7 +878,7 @@ func TestVolumeConfigEditKeepsTheVolume(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/vol:1"
+	image := registry + "/cm/vol:1"
 	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
 	if err != nil {
@@ -968,7 +968,7 @@ func startRequestLog(t *testing.T, host string) (string, func() []string) {
 	var mu sync.Mutex
 	var seen []string
 	// A short path: a unix socket path may not be longer than about 100 bytes.
-	dir, err := os.MkdirTemp("", "bpx")
+	dir, err := os.MkdirTemp("", "cmx")
 	if err != nil {
 		t.Fatalf("make the log's directory: %v", err)
 	}
@@ -1010,7 +1010,7 @@ func TestStandaloneRollbackOnARealEngine(t *testing.T) {
 	}
 	node := dockertest.StartHost(t, "")
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
-	image := registry + "/bp/web:1"
+	image := registry + "/cm/web:1"
 	first := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
 	// Coaming's own client to the node, for what the test reads back: the project's containers.
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))

@@ -30,7 +30,7 @@ import (
 	"github.com/ianglennon/coaming/proto/wire"
 )
 
-const secret = "bpjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
+const secret = "cmjt_SECRETVALUE_zzz" //nolint:gosec // a test fixture, not a credential
 
 // harness records the order of the effects run causes.
 type harness struct {

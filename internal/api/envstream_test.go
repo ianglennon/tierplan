@@ -307,7 +307,7 @@ func TestEnvStreamDeliversARefusedEnrolmentToAnAdminWatching(t *testing.T) {
 	nextFrame(t, c) // the snapshot
 
 	// The same environment's token with a wrong secret: its first character changed.
-	i := len("bpjt_") + 36 + 1
+	i := len("cmjt_") + 36 + 1
 	swap := "A"
 	if env.Token[i:i+1] == "A" {
 		swap = "B"

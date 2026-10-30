@@ -93,7 +93,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	t.Helper()
 	// A short path: the limit of a Unix socket address is about 100 bytes, and a
 	// test name makes t.TempDir() longer than that.
-	dir, err := os.MkdirTemp("", "bp")
+	dir, err := os.MkdirTemp("", "cm")
 	if err != nil {
 		t.Fatal(err)
 	}

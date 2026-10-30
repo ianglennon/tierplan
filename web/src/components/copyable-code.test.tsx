@@ -264,7 +264,7 @@ describe("CopyableCode inside a modal dialog (G-02-1a)", () => {
 });
 
 describe("CopyableCode with a secret", () => {
-  const TOKEN = "bpjt_E_S";
+  const TOKEN = "cmjt_E_S";
   const COMMAND = ` docker run -d -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://b.test/agent/connect' agent`;
   const MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
 

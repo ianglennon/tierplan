@@ -1,4 +1,4 @@
-# Create the secret first:  printf %s 'bpjt_E_S' | docker secret create coaming-agent-token-g1 -
+# Create the secret first:  printf %s 'cmjt_E_S' | docker secret create coaming-agent-token-g1 -
 # Then deploy this file:  docker stack deploy -c coaming-agent.yml coaming
 services:
   coaming-agent:
