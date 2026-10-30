@@ -1012,6 +1012,61 @@ func TestRebaseDraftMovesWhereTheDraftStartedAndTouchesNothingElse(t *testing.T)
 	}
 }
 
+func TestRebaseDraftAtMovesTheBaseForwardOnlyAtTheVersion(t *testing.T) {
+	t.Parallel()
+	f := newRepo(t)
+	ctx := context.Background()
+	st, _, _ := f.repo.CreateStack(ctx, f.envID, "web", stacks.TargetSwarm, "ada", stacks.WorkingCopy{Files: []stacks.File{compose("one")}})
+	goodRevision(t, f, st.ID, "ada")
+	goodRevision(t, f, st.ID, "bob")
+	before, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || before.BaseSeq != 0 {
+		t.Fatalf("draft = base %d, %v; want a draft that starts below the newest good revision", before.BaseSeq, err)
+	}
+
+	// At the version the caller read, the base moves to the revision and nothing else changes.
+	if err := f.repo.RebaseDraftAt(ctx, st.ID, before.Version, 2); err != nil {
+		t.Fatalf("RebaseDraftAt: %v", err)
+	}
+	after, err := f.repo.Draft(ctx, st.ID)
+	if err != nil || after.BaseSeq != 2 {
+		t.Fatalf("draft = base %d, %v; want 2", after.BaseSeq, err)
+	}
+	if after.Version != before.Version || after.CreatedBy != before.CreatedBy || string(after.Copy.Compose()) != string(before.Copy.Compose()) {
+		t.Errorf("a rebase changed the draft's version, author or content: %+v -> %+v", before, after)
+	}
+
+	// A base that is already at or above the revision is left as it is, which is not an error.
+	if err := f.repo.RebaseDraftAt(ctx, st.ID, before.Version, 1); err != nil {
+		t.Errorf("RebaseDraftAt below the base: %v", err)
+	}
+	if again, _ := f.repo.Draft(ctx, st.ID); again.BaseSeq != 2 {
+		t.Errorf("base = %d after a rebase to an older revision, want it still 2", again.BaseSeq)
+	}
+
+	// A draft at another version is somebody else's now: nothing moves.
+	saved, _, err := f.repo.SaveDraft(ctx, st.ID, before.Version, "cy", stacks.WorkingCopy{Files: []stacks.File{compose("two")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodRevision(t, f, st.ID, "bob")
+	var conflict *stackops.DraftConflictError
+	if err := f.repo.RebaseDraftAt(ctx, st.ID, before.Version, 3); !errors.As(err, &conflict) || conflict.Version != saved.Version || conflict.SavedBy != "cy" {
+		t.Fatalf("RebaseDraftAt at a stale version = %v, want a conflict naming cy at version %d", err, saved.Version)
+	}
+	if kept, _ := f.repo.Draft(ctx, st.ID); kept.BaseSeq != 2 {
+		t.Errorf("base = %d after a refused rebase, want it still 2", kept.BaseSeq)
+	}
+
+	// A stack with no draft has nothing to rebase: the version the caller read is gone.
+	if _, _, err := f.repo.DiscardDraft(ctx, st.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.RebaseDraftAt(ctx, st.ID, saved.Version, 3); !errors.As(err, &conflict) {
+		t.Errorf("RebaseDraftAt with no draft = %v, want a conflict", err)
+	}
+}
+
 func TestGoodRevisionInfoNamesWhoDeployedTheNewestGoodRevision(t *testing.T) {
 	t.Parallel()
 	f := newRepo(t)

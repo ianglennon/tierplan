@@ -975,6 +975,42 @@ func (r Repo) RebaseDraft(ctx context.Context, stackID string, seq int64) error 
 	return nil
 }
 
+// RebaseDraftAt moves the base of the stack's draft forward to revision seq, when the draft is still at version, and
+// changes nothing else: not the version, the content or who saved it. A base that is already at or above seq stays
+// (it never moves backward) and that is not an error. A draft at another version, or no draft, is a *DraftConflictError
+// and nothing changes.
+//
+// Only the automatic deploy calls it, for a draft it has just proven to hold the repository's head plus the variables
+// and overlay files of revision seq (no unreviewed local edit, no pending source). A person's draft is never rebased this
+// way, so a review of it still shows a roll back or a deploy made since as one.
+func (r Repo) RebaseDraftAt(ctx context.Context, stackID string, version, seq int64) error {
+	tx, err := r.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := r.Store.Q.WithTx(tx)
+
+	draft, err := r.readDraft(ctx, q, stackID)
+	switch {
+	case errors.Is(err, ErrNoDraft):
+		return &DraftConflictError{}
+	case err != nil:
+		return err
+	case draft.Version != version:
+		return &DraftConflictError{SavedBy: draft.CreatedBy, SavedAt: draft.CreatedAt, Version: draft.Version}
+	case draft.BaseSeq >= seq:
+		return nil
+	}
+	if _, err := q.SetDraftBaseSeq(ctx, sqlc.SetDraftBaseSeqParams{BaseSeq: seq, StackID: stackID}); err != nil {
+		return fmt.Errorf("rebase draft: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
 // GoodRevisionInfo is who started the deploy of the stack's newest good revision, when, and its
 // number, without opening its content. It reports false when the stack has none.
 func (r Repo) GoodRevisionInfo(ctx context.Context, stackID string) (DeployedRevision, bool, error) {

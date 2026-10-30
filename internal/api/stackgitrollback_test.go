@@ -5,7 +5,9 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/bayplan/internal/audit"
@@ -160,4 +162,73 @@ func TestRollbackWithoutMirror(t *testing.T) {
 	if err != nil || got.Origin != "rollback" || got.RestoredFrom != 1 {
 		t.Errorf("revision #3 = origin %q restored from #%d (%v), want a roll back to #1", got.Origin, got.RestoredFrom, err)
 	}
+}
+
+// rollBack rolls the stack back to revision seq as a second Operator and waits for the roll back to end.
+func (a *autoFix) rollBack(t *testing.T, seq int) {
+	t.Helper()
+	rolledBy := a.f.caller(t, a.e, "operator-2", "operator")
+	rec := rolledBy.do(http.MethodPost, rollbackPath(a.stackID), fmt.Sprintf(`{"revision":%d}`, seq))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("roll back: %d %s", rec.Code, rec.Body)
+	}
+	if job := a.f.awaitDeploy(t, answerOf[rollbackStarted](t, rec).JobID); job.State != "done" {
+		t.Fatalf("roll back job = %+v, want it done", job)
+	}
+}
+
+// Auto-deploy after a roll back (plan 09-34, G-09-8, G-09-9, D-19, D-22, D-23): a roll back makes a new good revision and
+// leaves the draft where it started, so the draft is behind the newest good revision. The automation proves the draft holds
+// nothing a person left, so the head it deploys is not taken for an overwrite of a newer deploy nobody saw. The router,
+// policy, store, access service and deployer are the real ones, the repository a real git server and the engine a fake.
+func TestGitAutoDeployAfterRollback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("turning auto-deploy on again deploys the head", func(t *testing.T) {
+		t.Parallel()
+		a := newDeployedAutoFix(t)
+		operator := a.f.asRoleOn(t, "u-operator", a.env, "operator")
+		a.turnOn(t, operator)
+
+		// A commit deploys by itself (#2); a second Operator rolls back to #1, which makes #3 and pauses auto-deploy.
+		a.commitCompose(t, "services:\n  web:\n    image: nginx:1.28\n    env_file: web.env\n", "bump nginx")
+		if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {
+			t.Fatalf("first check = %s, want behind", out)
+		}
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("deploy of #2 = %+v, want done", job)
+		}
+		a.rollBack(t, 1)
+
+		// A commit that arrives while auto-deploy is paused is not deployed.
+		head := a.commitCompose(t, "services:\n  web:\n    image: nginx:1.29\n    env_file: web.env\n", "bump nginx again")
+		if out := a.poll(t); out != gitsync.OutcomeBehind {
+			t.Fatalf("poll = %s, want behind", out)
+		}
+		if n := len(a.f.auditRowsOf(t, audit.ActionGitAutoDeployed)); n != 1 {
+			t.Fatalf("git.autodeployed rows = %d while paused, want only the one before the roll back", n)
+		}
+
+		// Turning it on again is the person's go-ahead (D-22): the check that follows deploys the head.
+		a.turnOn(t, operator)
+		if job := a.f.awaitDeploy(t, a.lastJob(t)); job.State != "done" {
+			t.Fatalf("deploy of the head = %+v, want done", job)
+		}
+		got := a.readGit(t, a.admin, a.stackID)
+		if got.Status != "in_sync" || got.DeployedSha != head || got.HeadSha != head || got.ReasonCode != "" {
+			t.Errorf("git = %+v, want in sync at %s with no reason", got, head)
+		}
+		if strings.Contains(got.ReasonDetail, "after you started editing") {
+			t.Errorf("reason = %q, a person's sentence on an automatic deploy", got.ReasonDetail)
+		}
+		var deployed []auditRowFull
+		for _, r := range a.f.auditRowsOf(t, audit.ActionGitAutoDeployed) {
+			if r.TargetID == a.stackID && r.Details["commit"] == head {
+				deployed = append(deployed, r)
+			}
+		}
+		if len(deployed) != 1 {
+			t.Errorf("git.autodeployed rows for %s = %+v, want one", head, deployed)
+		}
+	})
 }

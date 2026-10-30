@@ -106,9 +106,12 @@ func (s *Service) afterCheck(ctx context.Context, envID, stackID string, o Check
 //
 // The owner's rights are rechecked first (access.Service.RunAs): an owner who no longer holds stacks.deploy, or env
 // Admin for a stack that used host-escalating features, pauses the automation and nothing is deployed. A draft that
-// holds changes nobody reviewed blocks it too (D-29). Then the head is pulled into the draft and the draft is deployed
+// holds changes nobody reviewed blocks it too (D-29). Then the head is pulled into the draft and the draft is rebased
+// onto the good revision it was just proven equal to in variables and overlays: a roll back or a drift restore leaves the
+// draft behind that revision on purpose, and only D-11 and D-29 passing makes the rebase safe. The draft is then deployed
 // through the Deployer: the same policy on the rendered spec, operation lock, revision, job, console and audit as a
-// person's deploy, judged as the owner. Anything that would stop a manual deploy leaves the stack in error
+// person's deploy, judged as the owner, with the concurrent gate still running as the backstop for a roll back or deploy
+// that lands after the comparison. Anything that would stop a manual deploy leaves the stack in error
 // auto_deploy_blocked with the commit pending, so it is not tried again until the head changes or a person acts; a held
 // lock or a full job slot is not an error and the next round tries again.
 //
@@ -181,7 +184,7 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 		return
 	}
 	// Bayplan never deploys unreviewed local edits (D-29).
-	edited, err := s.hasLocalEdits(ctx, stackID, draft)
+	edited, goodSeq, err := s.hasLocalEdits(ctx, stackID, draft)
 	if err != nil {
 		s.log.Warn("could not compare the draft with the deployed revision", "stack", stackID, "error", err)
 		return
@@ -205,6 +208,24 @@ func (s *Service) autoDeploy(ctx context.Context, envID, stackID string, head gi
 	reverted, revertsErr := deployer.RevertedDrift(ctx, p, envID, stackID, pulled.DraftVersion)
 	if revertsErr != nil {
 		s.log.Warn("could not work out what an automatic deploy puts back", "stack", stackID, "error", revertsErr)
+	}
+
+	// The draft now holds the repository's head plus the variables and overlay files of the good revision it was compared
+	// with, and nobody's unreviewed edit (D-11, D-29). A roll back or a drift restore leaves the draft's base below that
+	// revision on purpose, for a person's review; here it would make the concurrent gate take this deploy for an overwrite
+	// of a newer deploy nobody saw, so the draft is rebased onto the revision it was proven equal to. The gate still runs
+	// in the deploy, and still refuses a roll back or deploy that lands after the comparison.
+	if goodSeq > 0 {
+		if err := s.repo.RebaseDraftAt(ctx, stackID, pulled.DraftVersion, goodSeq); err != nil {
+			var conflict *stackops.DraftConflictError
+			if errors.As(err, &conflict) {
+				// A person saved the draft meanwhile; their edit is theirs to review and the next round looks again.
+				s.log.Debug("an automatic deploy stopped: the draft was saved meanwhile", "stack", stackID)
+				return
+			}
+			s.log.Warn("could not rebase the draft for an automatic deploy", "stack", stackID, "error", err)
+			return
+		}
 	}
 
 	// The pull and the drift check took their time; a person may have turned auto-deploy off, or a roll back paused it,
@@ -392,13 +413,14 @@ func (s *Service) setEvent(ctx context.Context, stackID, kind, detail string) {
 
 // hasLocalEdits says whether the draft's variables or overlay files differ from those of the newest good revision: edits
 // somebody saved and nobody reviewed and deployed (D-29). The files of the repository are not compared, since a pull
-// replaces them. A stack with no good revision has nothing deployed to differ from.
-func (s *Service) hasLocalEdits(ctx context.Context, stackID string, draft stackops.Snapshot) (bool, error) {
+// replaces them. A stack with no good revision has nothing deployed to differ from. It also answers the seq of the good
+// revision it compared with, 0 when the stack has none.
+func (s *Service) hasLocalEdits(ctx context.Context, stackID string, draft stackops.Snapshot) (edited bool, goodSeq int64, err error) {
 	good, ok, err := s.repo.LatestGoodRevision(ctx, stackID)
 	if err != nil || !ok {
-		return false, err
+		return false, 0, err
 	}
-	return !sameVars(draft.Copy.Vars, good.Copy.Vars) || !sameOverlays(draft.Copy.Files, good.Copy.Files), nil
+	return !sameVars(draft.Copy.Vars, good.Copy.Vars) || !sameOverlays(draft.Copy.Files, good.Copy.Files), good.Seq, nil
 }
 
 func sameVars(a, b []stacks.Var) bool {
