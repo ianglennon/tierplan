@@ -33,6 +33,7 @@ const (
 
 	problemSubnetInvalid         = "subnet_invalid"
 	problemSubnetOverlap         = "subnet_overlap"
+	problemSubnetOverlapSwarm    = "subnet_overlap_swarm"
 	problemGatewayOutsideSubnet  = "gateway_outside_subnet"
 	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
 	problemAttachableOverlayOnly = "attachable_overlay_only"
@@ -87,7 +88,7 @@ type NetworkCreateRequest struct {
 	Gateway    string            `json:"gateway,omitempty" maxLength:"64" doc:"The gateway address, inside the subnet"`
 	IPRange    string            `json:"ipRange,omitempty" maxLength:"64" doc:"The range containers are given addresses from, in CIDR form, inside the subnet"`
 	// CreateAnyway lets a subnet that overlaps another network of this environment through.
-	CreateAnyway bool `json:"createAnyway,omitempty" doc:"Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Recorded in the audit log"`
+	CreateAnyway bool `json:"createAnyway,omitempty" doc:"Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Not for an overlap between swarm networks on a swarm: that is 422 subnet_overlap_swarm. Recorded in the audit log"`
 }
 
 // NetworkCreateInput is the path and body of the create route.
@@ -243,7 +244,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
 			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
 			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
-			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true; the check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
+			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
 			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
@@ -420,6 +421,12 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	var extra map[string]string
 	if body.Subnet != "" && d.AddressSpaces != nil {
 		overlaps := sameEnvOverlaps(body.Subnet, agg, swarm && !clusterWide, nodeID)
+		// An overlap the swarm cannot allocate is refused whatever createAnyway says (G-10-8).
+		for _, f := range overlaps {
+			if !overrideAllowed(clusterWide, f) {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlapSwarm, overlapSwarmMessage(body.Subnet, f))
+			}
+		}
 		if len(overlaps) > 0 && !body.CreateAnyway {
 			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(body.Subnet, overlaps[0]))
 		}
@@ -469,6 +476,12 @@ func overlapMessage(subnet string, f netspace.Finding) string {
 		on = " on " + f.Node
 	}
 	return subnet + " overlaps " + f.Network + " (" + f.Subnet + ")" + on + ". Choose another subnet, or create it anyway."
+}
+
+// overlapSwarmMessage is the sentence of an overlap with a swarm network that cannot be created
+// anyway, naming that network.
+func overlapSwarmMessage(subnet string, f netspace.Finding) string {
+	return subnet + " overlaps swarm network " + f.Network + " (" + f.Subnet + "). A swarm can't give two of its networks overlapping subnets, so it can't be created anyway. Choose another subnet."
 }
 
 // overlapNames lists the networks of the findings once each, cut to what an audit row holds.

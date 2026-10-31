@@ -90,6 +90,25 @@ func TestFindOverlapsKinds(t *testing.T) {
 	}
 }
 
+// A same_env finding says whether the network it overlaps is swarm-wide, which is what decides
+// whether creating the subnet anyway can work (G-10-8).
+func TestFindOverlapsMarksSwarmNetworks(t *testing.T) {
+	t.Parallel()
+	same := []MapItemNamed{
+		named("ovl", swarmNet(t, "10.0.1.0/24")),
+		named("br-a", localNet(t, "n1", "10.0.1.0/24")),
+	}
+	got := FindOverlaps(netip.MustParsePrefix("10.0.1.0/25"), OverlapInput{Swarm: true, Same: same})
+	if len(got) != 2 || got[0].Network != "br-a" || got[0].Swarm || got[1].Network != "ovl" || !got[1].Swarm {
+		t.Errorf("findings = %+v, want br-a not swarm, then ovl swarm", got)
+	}
+	other := OtherEnv{Name: "site-b", Networks: []MapItemNamed{named("lan", swarmNet(t, "10.0.1.0/25")), named("dmz", localNet(t, "n2", "10.0.1.128/25"))}}
+	got = FindOverlaps(netip.MustParsePrefix("10.0.1.0/24"), OverlapInput{Swarm: true, Other: []OtherEnv{other}})
+	if len(got) != 2 || got[0].Network != "dmz" || got[0].Swarm || got[1].Network != "lan" || !got[1].Swarm {
+		t.Errorf("other environment = %+v, want dmz not swarm, then lan swarm", got)
+	}
+}
+
 func TestFindOverlapsAdjacent(t *testing.T) {
 	t.Parallel()
 	in := OverlapInput{

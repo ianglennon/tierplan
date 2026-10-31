@@ -1443,7 +1443,7 @@ export interface paths {
         put?: never;
         /**
          * Create a network
-         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true; the check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
          */
         post: operations["createNetwork"];
         delete?: never;
@@ -7902,7 +7902,7 @@ export interface components {
         NetworkCreateRequest: {
             /** @description Let standalone containers join it. Only for an overlay network on a swarm */
             attachable?: boolean;
-            /** @description Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Recorded in the audit log */
+            /** @description Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Not for an overlap between swarm networks on a swarm: that is 422 subnet_overlap_swarm. Recorded in the audit log */
             createAnyway?: boolean;
             /**
              * @description The network driver. Ingress, config-only and config-from networks cannot be created
@@ -12265,7 +12265,7 @@ export interface components {
             unhealthy: number;
         };
         SubnetCheckBody: {
-            /** @description What the typed subnet collides with, never null: this environment's networks on every node (blocking), other environments' networks the caller may read, host routes, common home and VPN ranges, and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6 */
+            /** @description What the typed subnet collides with, never null: this environment's networks on every node (blocking, or blocking for good with noOverride), other environments' networks the caller may read, host routes and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6 */
             findings: components["schemas"]["SubnetFindingBody"][] | null;
             /** @description True when the typed subnet is IPv6, which is not checked */
             ipv6NotChecked: boolean;
@@ -12349,6 +12349,8 @@ export interface components {
             kind: "same_env" | "other_env" | "host_route" | "outside_pool";
             /** @description same_env, other_env: the network the subnet overlaps */
             network?: string;
+            /** @description same_env only: true when the network to be made and the network it overlaps are both swarm networks on a swarm. A swarm never allocates two of its networks with overlapping subnets, so createAnyway cannot help and the create answers 422 subnet_overlap_swarm */
+            noOverride?: boolean;
             /** @description The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network */
             node?: string;
             /** @description outside_pool: the pool the subnet should be in; several pools are joined with a comma */
@@ -12356,7 +12358,7 @@ export interface components {
             /** @description host_route: the route's destination in CIDR form */
             route?: string;
             /**
-             * @description blocking: creating the network is refused until createAnyway is true (same_env only). warning: shown, never stops anything
+             * @description blocking: creating the network is refused until createAnyway is true (same_env only), or for good when noOverride is true. warning: shown, never stops anything
              * @enum {string}
              */
             severity: "blocking" | "warning";

@@ -1846,12 +1846,12 @@ func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsC
 
 func TestCreateNetworkOverlapRefused(t *testing.T) {
 	t.Parallel()
-	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	s := subnetSwarmWithBridge(t, "mgr-2", "lan", "10.0.1.0/24")
 	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
 		t.Fatalf("status = %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
 	}
-	if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps ovl-a (10.0.1.0/24)") {
+	if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps lan (10.0.1.0/24) on") {
 		t.Errorf("the problem does not name the network: %s", rec.body)
 	}
 	if got := s.createsOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
@@ -1863,16 +1863,65 @@ func TestCreateNetworkOverlapRefused(t *testing.T) {
 	}
 }
 
+// An overlay that overlaps only a node-local network can be created anyway: the swarm allocator
+// does not see the node's bridge.
 func TestCreateNetworkOverlapCreateAnyway(t *testing.T) {
 	t.Parallel()
-	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	s := subnetSwarmWithBridge(t, "mgr-2", "lan", "10.0.1.0/24")
+	if rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("without the override: %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
 	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25","createAnyway":true}`)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	s.onlyCreate(t)
 	audits := s.networkAudits(t)
-	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "ovl-a" || audits[0].Result != "success" {
+	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "lan" || audits[0].Result != "success" {
+		t.Fatalf("audit = %+v, want a success with overlap_override and overlaps lan", audits)
+	}
+}
+
+// An overlay that overlaps another swarm network is refused with or without createAnyway: the
+// managers' allocator would refuse it after the create answered and leave a stub (G-10-8, T-10-69).
+func TestCreateNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	for _, body := range []string{
+		`{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`,
+		`{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25","createAnyway":true}`,
+	} {
+		rec := s.post(t, body)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap_swarm" {
+			t.Fatalf("%s: status = %d %q, want 422 subnet_overlap_swarm: %s", body, rec.code, rec.ptyp, rec.body)
+		}
+		if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps swarm network ovl-a (10.0.1.0/24)") || !strings.Contains(string(rec.body), "can't be created anyway") {
+			t.Errorf("the problem does not name the network or say why: %s", rec.body)
+		}
+	}
+	if got := s.createsOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
+		t.Errorf("a refused create reached an engine: %v", got)
+	}
+	if rows := s.networkAudits(t); len(rows) != 0 {
+		t.Errorf("a refused create wrote audit rows: %+v", rows)
+	}
+}
+
+// A local network on a node is made against a swarm network when createAnyway says so: the
+// node keeps the overlay's pool in another address space.
+func TestCreateNetworkLocalOverSwarmIsOverridable(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	body := `{"name":"mine","driver":"bridge","nodeId":"` + s.m2.id + `","subnet":"10.0.1.0/25"`
+	if rec := s.post(t, body+`}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("without the override: %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := s.post(t, body+`,"createAnyway":true}`); rec.code != http.StatusCreated {
+		t.Fatalf("with the override: %d: %s", rec.code, rec.body)
+	}
+	s.onlyCreate(t)
+	audits := s.networkAudits(t)
+	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "ovl-a" {
 		t.Fatalf("audit = %+v, want a success with overlap_override and overlaps ovl-a", audits)
 	}
 }

@@ -48,6 +48,9 @@ type Finding struct {
 	// Network, Subnet and Node name the overlapping network (same_env, other_env): its name,
 	// the subnet of it that overlaps, and the node a local network is on.
 	Network, Subnet, Node string
+	// Swarm is true when the overlapping network (same_env, other_env) is swarm-wide, false for
+	// a network local to one node.
+	Swarm bool
 	// Environment names the other environment (other_env).
 	Environment string
 	// Route and Iface name the host route (host_route); Node is the node it is on.
@@ -113,13 +116,13 @@ func FindOverlaps(candidate netip.Prefix, in OverlapInput) []Finding {
 			continue
 		}
 		if sub, ok := FirstOverlap(cand, n.Prefixes); ok {
-			same = append(same, Finding{Kind: KindSameEnv, Severity: SeverityBlocking, Network: n.Name, Subnet: sub.String(), Node: localNode(n)})
+			same = append(same, Finding{Kind: KindSameEnv, Severity: SeverityBlocking, Network: n.Name, Subnet: sub.String(), Node: localNode(n), Swarm: n.Swarm})
 		}
 	}
 	for _, e := range in.Other {
 		for _, n := range e.Networks {
 			if sub, ok := FirstOverlap(cand, n.Prefixes); ok {
-				other = append(other, Finding{Kind: KindOtherEnv, Severity: SeverityWarning, Environment: e.Name, Network: n.Name, Subnet: sub.String(), Node: localNode(n)})
+				other = append(other, Finding{Kind: KindOtherEnv, Severity: SeverityWarning, Environment: e.Name, Network: n.Name, Subnet: sub.String(), Node: localNode(n), Swarm: n.Swarm})
 			}
 		}
 	}

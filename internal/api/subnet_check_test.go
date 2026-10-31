@@ -60,6 +60,7 @@ type subnetFinding struct {
 	Route       string `json:"route"`
 	Iface       string `json:"iface"`
 	Pool        string `json:"pool"`
+	NoOverride  bool   `json:"noOverride"`
 }
 
 // ofKind are the findings of one kind, in the order given.
@@ -88,6 +89,22 @@ func subnetSwarm(t *testing.T, overlays ...dockertest.FakeNetwork) *swarmFix {
 		}
 		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
 		cfg.Networks = append([]dockertest.FakeNetwork{}, overlays...)
+	})
+}
+
+// subnetSwarmWithBridge is subnetSwarm with a bridge network on one manager (host, "mgr-1" or
+// "mgr-2") only: a node-local network the swarm allocator does not see.
+func subnetSwarmWithBridge(t *testing.T, host, name, subnet string, overlays ...dockertest.FakeNetwork) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(h string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(h, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = append([]dockertest.FakeNetwork{}, overlays...)
+		if h == host {
+			cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: name, Name: name, Driver: "bridge", Scope: "local", Subnets: []string{subnet}})
+		}
 	})
 }
 
@@ -361,6 +378,39 @@ func TestSubnetCheckSameEnvBlocking(t *testing.T) {
 	}
 	if rec := s.subnetCheck(t, s.env.ID, `{"tasks":3}`); !strings.Contains(string(rec.body), `"findings":[]`) {
 		t.Errorf("findings is not always present: %s", rec.body)
+	}
+}
+
+// Only an overlap between swarm networks on a swarm cannot be created anyway (G-10-8): the
+// managers' allocator refuses it after the create answers.
+func TestSubnetCheckNoOverride(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarmWithBridge(t, "mgr-2", "lan", "10.0.5.0/24", overlayNet("ovl-a", "10.0.1.0/24"))
+
+	// An overlay against another swarm network.
+	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.1.0/25","driver":"overlay"}`))
+	same := got.ofKind("same_env")
+	if len(same) != 1 || same[0].Severity != "blocking" || !same[0].NoOverride {
+		t.Errorf("overlay over a swarm network = %+v, want blocking with noOverride", got.Findings)
+	}
+	// No driver is an overlay too.
+	got = checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.1.0/25"}`))
+	if same := got.ofKind("same_env"); len(same) != 1 || !same[0].NoOverride {
+		t.Errorf("no driver over a swarm network = %+v, want noOverride", got.Findings)
+	}
+	// A bridge on a node against a swarm network can be created anyway.
+	got = checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.1.0/25","driver":"bridge","nodeId":"`+s.m2.id+`"}`))
+	if same := got.ofKind("same_env"); len(same) != 1 || same[0].Severity != "blocking" || same[0].NoOverride {
+		t.Errorf("bridge over a swarm network = %+v, want blocking without noOverride", got.Findings)
+	}
+	// An overlay against only a node's bridge can be created anyway.
+	got = checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.5.0/25","driver":"overlay"}`))
+	if same := got.ofKind("same_env"); len(same) != 1 || same[0].Network != "lan" || same[0].NoOverride {
+		t.Errorf("overlay over a node's bridge = %+v, want blocking without noOverride", got.Findings)
+	}
+	// The field is left out of the answer unless it is true.
+	if rec := s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.5.0/25","driver":"overlay"}`); strings.Contains(string(rec.body), "noOverride") {
+		t.Errorf("noOverride is in the answer for an overridable finding: %s", rec.body)
 	}
 }
 

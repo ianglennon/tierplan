@@ -86,7 +86,8 @@ type SubnetErrorBody struct {
 // are set.
 type SubnetFindingBody struct {
 	Kind        string `json:"kind" enum:"same_env,other_env,host_route,outside_pool" doc:"same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. outside_pool: the subnet is in none of the pools"`
-	Severity    string `json:"severity" enum:"blocking,warning" doc:"blocking: creating the network is refused until createAnyway is true (same_env only). warning: shown, never stops anything"`
+	Severity    string `json:"severity" enum:"blocking,warning" doc:"blocking: creating the network is refused until createAnyway is true (same_env only), or for good when noOverride is true. warning: shown, never stops anything"`
+	NoOverride  bool   `json:"noOverride,omitempty" doc:"same_env only: true when the network to be made and the network it overlaps are both swarm networks on a swarm. A swarm never allocates two of its networks with overlapping subnets, so createAnyway cannot help and the create answers 422 subnet_overlap_swarm"`
 	Network     string `json:"network,omitempty" doc:"same_env, other_env: the network the subnet overlaps"`
 	Subnet      string `json:"subnet,omitempty" doc:"same_env, other_env: the subnet of that network that overlaps"`
 	Node        string `json:"node,omitempty" doc:"The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network"`
@@ -116,7 +117,7 @@ type SubnetCheckBody struct {
 	SubnetError       *SubnetErrorBody      `json:"subnetError,omitempty" doc:"Why the typed subnet is refused; absent when it is fine or none was sent"`
 	IPv6NotChecked    bool                  `json:"ipv6NotChecked" doc:"True when the typed subnet is IPv6, which is not checked"`
 	RouteChecks       []RouteCheckBody      `json:"routeChecks" doc:"With a valid IPv4 subnet or suggest, one entry per node of the environment saying whether its host's routes were read for the check. Never null; empty when neither was asked for"`
-	Findings          []SubnetFindingBody   `json:"findings" doc:"What the typed subnet collides with, never null: this environment's networks on every node (blocking), other environments' networks the caller may read, host routes, common home and VPN ranges, and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6"`
+	Findings          []SubnetFindingBody   `json:"findings" doc:"What the typed subnet collides with, never null: this environment's networks on every node (blocking, or blocking for good with noOverride), other environments' networks the caller may read, host routes and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6"`
 }
 
 // SubnetCheckOutput wraps SubnetCheckBody for huma.
@@ -254,13 +255,14 @@ func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req Subn
 		out.RouteChecks, routes = readHostRoutes(ctx, d, envID, space, agg)
 	}
 	all, node := subnetScope(space, req, agg)
+	candidateSwarm := space.Swarm && (req.Driver == "" || req.Driver == dockerx.DriverOverlay)
 	if req.Suggest {
 		if err := suggestSubnet(pools, scopedRoutes(routes, all, node), req, agg, &out); err != nil {
 			return out, err
 		}
 	}
 	if candidate.IsValid() {
-		out.Findings = subnetFindings(ctx, d, envID, candidate, agg, pools, routes, all, node)
+		out.Findings = subnetFindings(ctx, d, envID, candidate, agg, pools, routes, all, node, candidateSwarm)
 	}
 	return out, nil
 }
@@ -319,8 +321,19 @@ func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeI
 	return netspace.FindOverlaps(candidate, in)
 }
 
+// overrideAllowed says whether createAnyway can let the overlap f through. It cannot when the
+// network to be made is swarm-scoped on a swarm (candidateSwarm) and the network it overlaps is
+// a swarm network too: the managers' allocator refuses such a subnet after the create has
+// already answered, and leaves a stub network that tasks hang on (UAT G-10-8). Every other
+// overlap is the engine's to accept or refuse when the create is sent: a node-local network
+// lives in the node's own address space, and the swarm allocator does not see it. A finding
+// of another kind is not an overlap that blocks, so there is nothing to override.
+func overrideAllowed(candidateSwarm bool, f netspace.Finding) bool {
+	return !(candidateSwarm && f.Kind == netspace.KindSameEnv && f.Swarm)
+}
+
 // subnetFindings is what the typed subnet collides with.
-func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string) []SubnetFindingBody {
+func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string, candidateSwarm bool) []SubnetFindingBody {
 	in := netspace.OverlapInput{
 		Swarm: all, Node: node,
 		Same:   envs.NetworkItems(agg.Networks),
@@ -334,6 +347,7 @@ func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candi
 		out = append(out, SubnetFindingBody{
 			Kind: string(f.Kind), Severity: string(f.Severity), Network: f.Network, Subnet: f.Subnet, Node: f.Node,
 			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Pool: f.Pool,
+			NoOverride: !overrideAllowed(candidateSwarm, f),
 		})
 	}
 	return out
