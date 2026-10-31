@@ -209,6 +209,11 @@ export function CreateAnywayCheck({
   );
 }
 
+// BlockingState is what the findings say about creating the network: none (nothing blocks),
+// overridable (an overlap blocks until Create it anyway is ticked) or final (an overlap between
+// swarm networks on a swarm, which the swarm can't allocate, so no tick can help).
+export type BlockingState = "none" | "overridable" | "final";
+
 export interface SubnetPickerProps {
   envId: string;
   envType: "swarm" | "standalone";
@@ -229,8 +234,8 @@ export interface SubnetPickerProps {
   canCreateAnyway: boolean;
   createAnyway: boolean;
   onCreateAnywayChange: (checked: boolean) => void;
-  // Told whether a finding blocks the create, and how many findings there are.
-  onBlockingChange?: (blocking: boolean) => void;
+  // Told what the findings say about creating the network, and how many findings there are.
+  onBlockingChange?: (state: BlockingState) => void;
   onFindingsChange?: (count: number) => void;
   // A refusal of the subnet by the form, shown under the field.
   error?: string;
@@ -245,7 +250,8 @@ export interface SubnetPickerProps {
 // SubnetPicker helps a person choose a subnet (NET-05): a size from presets or from the number of
 // tasks, the lowest free block on request, and what the subnet collides with, checked by the
 // server 400 ms after each change. Only an overlap inside the environment blocks, and then only
-// until the person ticks Create it anyway. Nothing here stops a create the server would allow.
+// until the person ticks Create it anyway, except between swarm networks on a swarm, which can't
+// be overridden. Nothing here stops a create the server would allow.
 export function SubnetPicker({
   envId,
   envType,
@@ -271,6 +277,7 @@ export function SubnetPicker({
   const ids = useId();
   const subnetId = inputId ?? `${ids}-subnet`;
   const findingsId = `${ids}-findings`;
+  const noOverrideId = `${ids}-no-override`;
   const ownInput = useRef<HTMLInputElement | null>(null);
   const [pickedMask, setPickedMask] = useState<number | null>(null);
   const [tasksText, setTasksText] = useState(replicas === undefined ? "" : String(replicas));
@@ -291,7 +298,13 @@ export function SubnetPicker({
   const typedValid = parseCidr(value) !== null;
   const settled = !check.pending && !check.error && data !== null && typedValid;
   const findings = settled ? (data.findings ?? []) : [];
-  const blocking = findings.some((f) => f.severity === "blocking");
+  const blockingFindings = findings.filter((f) => f.severity === "blocking");
+  const state: BlockingState = blockingFindings.some((f) => f.noOverride)
+    ? "final"
+    : blockingFindings.length > 0
+      ? "overridable"
+      : "none";
+  const blocking = state !== "none";
   const instantError = hostBitsOf(value)
     ? t("subnetPicker.subnet.hostBits", { subnet: value.trim(), network: hostBitsOf(value) })
     : tooSmall(value)
@@ -306,8 +319,13 @@ export function SubnetPicker({
           : undefined;
 
   useEffect(() => {
-    onBlockingChange?.(blocking);
-  }, [blocking, onBlockingChange]);
+    onBlockingChange?.(state);
+  }, [state, onBlockingChange]);
+  // A tick belongs to an overlap that can be overridden: drop it when the overlap turns into one
+  // that can't be.
+  useEffect(() => {
+    if (state === "final" && createAnyway) onCreateAnywayChange(false);
+  }, [state, createAnyway, onCreateAnywayChange]);
   // A closed compact picker opens itself when something in it needs the person: the form refused
   // the subnet, or an overlap blocks until the box is ticked.
   const needsAttention = Boolean(error) || blocking;
@@ -425,7 +443,11 @@ export function SubnetPicker({
             spellCheck={false}
             aria-invalid={Boolean(error) || blocking}
             aria-describedby={
-              [showSuggested ? `${ids}-suggested` : null, blocking ? findingsId : null]
+              [
+                showSuggested ? `${ids}-suggested` : null,
+                blocking ? findingsId : null,
+                state === "final" ? noOverrideId : null,
+              ]
                 .filter(Boolean)
                 .join(" ") || undefined
             }
@@ -522,7 +544,12 @@ export function SubnetPicker({
           </>
         ) : null}
       </div>
-      {blocking ? (
+      {state === "final" ? (
+        <p id={noOverrideId} className="text-sm text-destructive">
+          {t("subnetPicker.noOverride.note")}
+        </p>
+      ) : null}
+      {state === "overridable" ? (
         <CreateAnywayCheck
           envId={envId}
           findingsId={findingsId}

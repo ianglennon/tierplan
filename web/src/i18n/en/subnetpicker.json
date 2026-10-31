@@ -77,11 +77,16 @@
       "needsOnEnvironment": "{{need}} on {{name}}",
       "blocked": "Resolve the overlap, or tick Create it anyway."
     },
+    "noOverride": {
+      "note": "A swarm can't give two of its networks overlapping subnets, so this one can't be created anyway. Choose another subnet.",
+      "blocked": "Choose a subnet that doesn't overlap another swarm network."
+    },
     "compact": {
       "automatic": "Automatic"
     },
     "errors": {
-      "overlapRefused": "Another network in this environment overlaps this subnet. Resolve the overlap, or tick Create it anyway."
+      "overlapRefused": "Another network in this environment overlaps this subnet. Resolve the overlap, or tick Create it anyway.",
+      "overlapSwarm": "This subnet overlaps another swarm network. A swarm can't give its networks overlapping subnets, so choose another one."
     }
   }
 }

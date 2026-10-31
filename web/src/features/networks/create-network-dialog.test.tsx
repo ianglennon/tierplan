@@ -54,6 +54,22 @@ const overlapCheck = () =>
     tooManyTasks: false,
   });
 
+const swarmOverlapCheck = () =>
+  Response.json({
+    findings: [
+      {
+        kind: "same_env",
+        severity: "blocking",
+        network: "ovl-a",
+        subnet: "10.0.1.0/24",
+        noOverride: true,
+      },
+    ],
+    routeChecks: [],
+    ipv6NotChecked: false,
+    tooManyTasks: false,
+  });
+
 const created = () => Response.json({ id: "net-1", name: "app-net" }, { status: 201 });
 const problem = (status: number, type: string) =>
   Response.json({ type, title: "x", status, detail: "d" }, { status });
@@ -530,6 +546,33 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     });
   });
 
+  it("keeps Create disabled for an overlap with another swarm network, with the reason", async () => {
+    checkAnswer = swarmOverlapCheck;
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    const subnet = await openAdvanced(dialog);
+    fireEvent.change(subnet, { target: { value: "10.0.1.0/25" } });
+    expect(await within(dialog).findByText(/can't be created anyway/)).toBeTruthy();
+    expect(within(dialog).queryByRole("checkbox", { name: "Create it anyway" })).toBeNull();
+
+    // The picker tells the dialog in an effect, so the button follows a moment after the note.
+    await waitFor(() =>
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Create network" })
+          .getAttribute("aria-disabled"),
+      ).toBe("true"),
+    );
+    const create = within(dialog).getByRole("button", { name: "Create network" });
+    expect(create.getAttribute("aria-describedby")).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      "Choose a subnet that doesn't overlap another swarm network.",
+    );
+    fireEvent.click(create);
+    expect(posts()).toEqual([]);
+  });
+
   it("does not send createAnyway once the overlap is gone, and asks again for a new one", async () => {
     checkAnswer = (req) => (req.body?.subnet === "10.0.2.0/26" ? overlapCheck() : cleanCheck());
     mount();
@@ -602,6 +645,20 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain(
       "Another network in this environment overlaps this subnet.",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  it("words an overlap the swarm refuses", async () => {
+    answer = () => problem(422, "subnet_overlap_swarm");
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "This subnet overlaps another swarm network. A swarm can't give its networks overlapping subnets, so choose another one.",
     );
     expect(
       within(dialog).getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded"),

@@ -55,3 +55,16 @@ describe("editRefusalOf objects_missing", () => {
     );
   });
 });
+
+describe("editRefusalOf an overlap the swarm refuses", () => {
+  it("shows the server's sentence, which names the network and says why", () => {
+    const detail =
+      "10.77.0.0/25 overlaps swarm network existing (10.77.0.0/24). A swarm can't give two of its networks overlapping subnets, so it can't be created anyway. Choose another subnet.";
+    const r = editRefusalOf(
+      t,
+      new ServiceActionError(422, "subnet_overlap_swarm", new Map(), detail),
+      ctx,
+    );
+    expect(r.message).toBe(detail);
+  });
+});

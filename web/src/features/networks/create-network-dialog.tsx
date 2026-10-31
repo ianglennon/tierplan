@@ -34,7 +34,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { containsAddress, containsCidr, parseCidr } from "@/features/networks/cidr";
-import { SubnetPicker } from "@/features/subnet-picker/subnet-picker";
+import { type BlockingState, SubnetPicker } from "@/features/subnet-picker/subnet-picker";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
@@ -176,8 +176,9 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
   const [options, setOptions] = useState<KeyValueRow[]>([]);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [advanced, setAdvanced] = useState(false);
-  // Whether a finding blocks the create, and whether the person ticked Create it anyway for it.
-  const [blocking, setBlocking] = useState(false);
+  // What the findings say about the create (none, overridable, final), and whether the person
+  // ticked Create it anyway for an overridable one.
+  const [blocking, setBlocking] = useState<BlockingState>("none");
   const [createAnyway, setCreateAnyway] = useState(false);
   const manage = useNeeds("networks.manage", envId);
   const space = useQuery(addressSpaceQuery(envId));
@@ -245,6 +246,9 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
       case "subnet_overlap":
         setAdvanced(true);
         return { message: t("subnetPicker.errors.overlapRefused"), agentPolicy: false };
+      case "subnet_overlap_swarm":
+        setAdvanced(true);
+        return { message: t("subnetPicker.errors.overlapSwarm"), agentPolicy: false };
       case "agent_policy_denied":
         return { message: "", agentPolicy: true };
       case "host_read_only":
@@ -261,7 +265,7 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
   }
 
   function submit(values: Values) {
-    if (create.isPending || (blocking && !createAnyway)) return;
+    if (create.isPending || blocked) return;
     setRefusal(null);
     const labelMap = entriesOf(labels);
     const optionMap = entriesOf(options);
@@ -274,7 +278,9 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
         ...(values.internal ? { internal: true } : {}),
         ...(values.ipv6 ? { ipv6: true } : {}),
         ...(values.subnet ? { subnet: values.subnet } : {}),
-        ...(values.subnet && blocking && createAnyway ? { createAnyway: true } : {}),
+        ...(values.subnet && blocking === "overridable" && createAnyway
+          ? { createAnyway: true }
+          : {}),
         ...(values.gateway ? { gateway: values.gateway } : {}),
         ...(values.ipRange ? { ipRange: values.ipRange } : {}),
         ...(Object.keys(labelMap).length > 0 ? { labels: labelMap } : {}),
@@ -295,11 +301,12 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
     if (ADVANCED_FIELDS.some((f: AdvancedField) => found[f])) setAdvanced(true);
   }
 
-  // The picker reports whether a finding blocks; a tick belongs to the overlap it was given for,
-  // so it goes when the overlap does. A finding opens Advanced, where it can be read.
-  const onBlockingChange = useCallback((now: boolean) => {
+  // The picker reports what the findings say; a tick belongs to an overlap that can be overridden,
+  // so it goes when that overlap does or turns into one that can't be. A finding opens Advanced,
+  // where it can be read.
+  const onBlockingChange = useCallback((now: BlockingState) => {
     setBlocking(now);
-    if (!now) setCreateAnyway(false);
+    if (now !== "overridable") setCreateAnyway(false);
   }, []);
   const onFindingsChange = useCallback((count: number) => {
     if (count > 0) setAdvanced(true);
@@ -320,7 +327,7 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
       ? (pools.find((p) => p.source === "swarm") ?? pools[0])?.mask
       : undefined;
   const nodeMissing = askNode && form.watch("nodeId") === "";
-  const blocked = blocking && !createAnyway;
+  const blocked = blocking === "final" || (blocking === "overridable" && !createAnyway);
 
   const pending = create.isPending;
   const nameTaken = errors.name?.type === "server";
@@ -602,7 +609,15 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
         >
           {t("networks.create.cancel")}
         </Button>
-        <NeedsTooltip reason={blocked ? t("subnetPicker.createAnyway.blocked") : undefined}>
+        <NeedsTooltip
+          reason={
+            blocking === "final"
+              ? t("subnetPicker.noOverride.blocked")
+              : blocked
+                ? t("subnetPicker.createAnyway.blocked")
+                : undefined
+          }
+        >
           <Button type="submit" className={TOUCH_HEIGHT} disabled={pending}>
             {pending ? (
               <>

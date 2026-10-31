@@ -48,6 +48,7 @@ const OBJECT_PROBLEMS = new Set([
   "labels_invalid",
   "subnet_invalid",
   "subnet_overlap",
+  "subnet_overlap_swarm",
 ]);
 
 // editRefusalOf words a review or an apply that was refused, from the problem type the server

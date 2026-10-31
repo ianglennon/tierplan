@@ -321,4 +321,38 @@ describe("StagedObjectDialog: a network", () => {
       createAnyway: true,
     });
   });
+
+  it("keeps Add disabled for an overlap with another swarm network", async () => {
+    answer = (body) =>
+      body.subnet
+        ? clean({
+            findings: [
+              {
+                kind: "same_env",
+                severity: "blocking",
+                network: "existing",
+                subnet: "10.77.0.0/24",
+                noOverride: true,
+              },
+            ],
+          })
+        : clean();
+    renderDialog("network");
+    openSubnet();
+    type(subnetInput(), "10.77.0.0/25");
+    type(name(), "front");
+    expect(await screen.findByText(/can't be created anyway/)).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Create it anyway" })).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Add network" }).getAttribute("aria-disabled"),
+      ).toBe("true"),
+    );
+    const add = screen.getByRole("button", { name: "Add network" });
+    expect(document.body.textContent).toContain(
+      "Choose a subnet that doesn't overlap another swarm network.",
+    );
+    fireEvent.click(add);
+    expect(onAdd).not.toHaveBeenCalled();
+  });
 });

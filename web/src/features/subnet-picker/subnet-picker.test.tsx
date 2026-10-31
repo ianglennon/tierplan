@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubnetCheck, SubnetCheckRequest } from "@/api/address-space";
 import { setCsrfToken } from "@/api/client";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SubnetPicker, type SubnetPickerProps } from "@/features/subnet-picker/subnet-picker";
+import {
+  type BlockingState,
+  SubnetPicker,
+  type SubnetPickerProps,
+} from "@/features/subnet-picker/subnet-picker";
 import { CHECK_DEBOUNCE_MS, checkTiming } from "@/features/subnet-picker/use-subnet-check";
 import "@/i18n";
 import { makeMe } from "@/test-me";
@@ -69,11 +73,13 @@ afterEach(() => {
 
 interface HarnessProps extends Partial<SubnetPickerProps> {
   initial?: string;
-  onBlocking?: (blocking: boolean) => void;
+  onBlocking?: (state: BlockingState) => void;
+  // Told each time the picker changes the tick.
+  onTick?: (checked: boolean) => void;
 }
 
 // The picker as the create dialog holds it: the subnet and the tick are the parent's.
-function Harness({ initial = "", onBlocking, ...props }: HarnessProps) {
+function Harness({ initial = "", onBlocking, onTick, ...props }: HarnessProps) {
   const [value, setValue] = useState(initial);
   const [createAnyway, setCreateAnyway] = useState(false);
   return (
@@ -84,7 +90,10 @@ function Harness({ initial = "", onBlocking, ...props }: HarnessProps) {
       onChange={setValue}
       canCreateAnyway
       createAnyway={createAnyway}
-      onCreateAnywayChange={setCreateAnyway}
+      onCreateAnywayChange={(checked) => {
+        setCreateAnyway(checked);
+        onTick?.(checked);
+      }}
       onBlockingChange={onBlocking}
       {...props}
     />
@@ -334,7 +343,7 @@ describe("SubnetPicker", () => {
     const list = screen.getAllByRole("listitem")[0] as HTMLElement;
     expect(list.closest("[aria-live=polite]")).toBeTruthy();
     expect(subnetInput().getAttribute("aria-invalid")).toBe("true");
-    expect(onBlocking).toHaveBeenLastCalledWith(true);
+    expect(onBlocking).toHaveBeenLastCalledWith("overridable");
     expect(screen.queryByText("No overlaps found.")).toBeNull();
   });
 
@@ -356,7 +365,7 @@ describe("SubnetPicker", () => {
     typeSubnet("192.168.4.0/24");
     await screen.findByText(/Overlaps a route on node-1: 192\.168\.4\.0\/24 on eth0/);
     expect(subnetInput().getAttribute("aria-invalid")).toBe("false");
-    expect(onBlocking).toHaveBeenLastCalledWith(false);
+    expect(onBlocking).toHaveBeenLastCalledWith("none");
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
@@ -380,6 +389,80 @@ describe("SubnetPicker", () => {
     fireEvent.click(box);
     expect(box.getAttribute("aria-checked")).toBe("true");
     expect(await screen.findByText("Overlap accepted")).toBeTruthy();
+  });
+
+  it("offers no Create it anyway for an overlap between swarm networks, and says why", async () => {
+    const onBlocking = vi.fn();
+    answer = () =>
+      clean({
+        findings: [
+          {
+            kind: "same_env",
+            severity: "blocking",
+            network: "ovl-a",
+            subnet: "10.0.1.0/24",
+            noOverride: true,
+          },
+        ],
+      });
+    mount({ onBlocking });
+    typeSubnet("10.0.1.0/25");
+    const note = await screen.findByText(
+      "A swarm can't give two of its networks overlapping subnets, so this one can't be created anyway. Choose another subnet.",
+    );
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(onBlocking).toHaveBeenLastCalledWith("final");
+    expect(subnetInput().getAttribute("aria-invalid")).toBe("true");
+    expect((subnetInput().getAttribute("aria-describedby") ?? "").split(" ")).toContain(note.id);
+  });
+
+  it("clears a tick when the overlap can no longer be overridden", async () => {
+    const onTick = vi.fn();
+    answer = (body) =>
+      clean({
+        findings: [
+          {
+            kind: "same_env",
+            severity: "blocking",
+            network: "a",
+            subnet: "10.0.5.0/24",
+            ...(body.subnet === "10.0.1.0/25" ? { noOverride: true } : {}),
+          },
+        ],
+      });
+    mount({ onTick });
+    typeSubnet("10.0.5.0/26");
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Create it anyway" }));
+    expect(onTick).toHaveBeenLastCalledWith(true);
+    typeSubnet("10.0.1.0/25");
+    await screen.findByText(/can't be created anyway/);
+    expect(onTick).toHaveBeenLastCalledWith(false);
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("opens the compact variant by itself for an overlap that can't be overridden", async () => {
+    answer = () =>
+      clean({
+        findings: [
+          {
+            kind: "same_env",
+            severity: "blocking",
+            network: "ovl-a",
+            subnet: "10.0.1.0/24",
+            noOverride: true,
+          },
+        ],
+      });
+    mount({ variant: "compact" });
+    const trigger = screen.getByRole("button", { name: /Subnet\s*Automatic/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    typeSubnet("10.0.1.0/25");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Subnet/ }).getAttribute("aria-expanded")).toBe(
+        "true",
+      ),
+    );
+    expect(await screen.findByText(/can't be created anyway/)).toBeTruthy();
   });
 
   it("leaves Create it anyway aria-disabled below Env Admin, with the reason", async () => {
@@ -435,7 +518,7 @@ describe("SubnetPicker", () => {
       "Couldn't check this subnet. You can still create the network.",
     );
     expect(line.closest("[role=status]")).toBeTruthy();
-    expect(onBlocking).toHaveBeenLastCalledWith(false);
+    expect(onBlocking).toHaveBeenLastCalledWith("none");
     expect(subnetInput().disabled).toBe(false);
   });
 

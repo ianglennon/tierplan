@@ -35,7 +35,7 @@ import {
   valueProblem,
 } from "@/features/secrets/value-source-field";
 import type { StagedKind, StagedObject, Templating } from "@/features/service-editor/staged";
-import { SubnetPicker } from "@/features/subnet-picker/subnet-picker";
+import { type BlockingState, SubnetPicker } from "@/features/subnet-picker/subnet-picker";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
@@ -83,8 +83,9 @@ export function StagedObjectDialog({
   const [value, setValue] = useState<ObjectValue>(EMPTY_VALUE);
   const [templating, setTemplating] = useState<Templating>("none");
   const [subnet, setSubnet] = useState("");
-  // Whether a finding blocks the network, and whether the person ticked Create it anyway for it.
-  const [blocking, setBlocking] = useState(false);
+  // What the findings say about the network (none, overridable, final), and whether the person
+  // ticked Create it anyway for an overridable one.
+  const [blocking, setBlocking] = useState<BlockingState>("none");
   const [createAnyway, setCreateAnyway] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -96,7 +97,7 @@ export function StagedObjectDialog({
     setValue(EMPTY_VALUE);
     setTemplating("none");
     setSubnet("");
-    setBlocking(false);
+    setBlocking("none");
     setCreateAnyway(false);
     setAdvanced(false);
     setSubmitted(false);
@@ -115,12 +116,14 @@ export function StagedObjectDialog({
     kind === "network" ? undefined : valueProblem(kind, value);
   const subnetBad = kind === "network" && subnet.trim() !== "" && parseCidr(subnet.trim()) === null;
 
-  // A tick belongs to the overlap it was given for, so it goes when the overlap does.
-  const onBlockingChange = useCallback((now: boolean) => {
+  // A tick belongs to an overlap that can be overridden, so it goes when that overlap does or
+  // turns into one that can't be.
+  const onBlockingChange = useCallback((now: BlockingState) => {
     setBlocking(now);
-    if (!now) setCreateAnyway(false);
+    if (now !== "overridable") setCreateAnyway(false);
   }, []);
-  const blocked = kind === "network" && blocking && !createAnyway;
+  const blocked =
+    kind === "network" && (blocking === "final" || (blocking === "overridable" && !createAnyway));
 
   function submit() {
     setSubmitted(true);
@@ -131,7 +134,7 @@ export function StagedObjectDialog({
         kind,
         name: trimmed,
         ...(chosen ? { subnet: chosen } : {}),
-        ...(chosen && blocking && createAnyway ? { createAnyway: true } : {}),
+        ...(chosen && blocking === "overridable" && createAnyway ? { createAnyway: true } : {}),
       });
     } else if (kind === "config") {
       onAdd({ kind, name: trimmed, value, templating });
@@ -275,7 +278,15 @@ export function StagedObjectDialog({
           >
             {t("serviceForm.staged.cancel")}
           </Button>
-          <NeedsTooltip reason={blocked ? t("subnetPicker.createAnyway.blocked") : undefined}>
+          <NeedsTooltip
+            reason={
+              blocking === "final"
+                ? t("subnetPicker.noOverride.blocked")
+                : blocked
+                  ? t("subnetPicker.createAnyway.blocked")
+                  : undefined
+            }
+          >
             <Button type="button" className="max-md:h-11" onClick={submit}>
               {t(`serviceForm.staged.${kind}.submit`)}
             </Button>
@@ -294,7 +305,7 @@ interface StagedSubnetProps {
   error?: string;
   createAnyway: boolean;
   onCreateAnywayChange: (checked: boolean) => void;
-  onBlockingChange: (blocking: boolean) => void;
+  onBlockingChange: (state: BlockingState) => void;
 }
 
 // StagedSubnet is the compact Subnet picker of a staged network (D-19): a closed section reading
