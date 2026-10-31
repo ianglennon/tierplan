@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   containsAddress,
   containsCidr,
+  hostBitsOf,
   overlaps,
   overlapsWith,
   parseCidr,
+  tooSmall,
 } from "@/features/networks/cidr";
 
 describe("parseCidr", () => {
@@ -162,5 +164,28 @@ describe("containsAddress and containsCidr", () => {
     expect(containsCidr("10.20.0.0/24", "10.20.0.0/16")).toBe(false);
     expect(containsCidr("10.20.0.0/24", "10.20.1.0/25")).toBe(false);
     expect(containsCidr("10.20.0.0/24", "10.20.0.5")).toBe(false);
+  });
+});
+
+describe("hostBitsOf and tooSmall", () => {
+  it("names the network address an IPv4 subnet with host bits was meant to be", () => {
+    expect(hostBitsOf("10.0.0.5/24")).toBe("10.0.0.0/24");
+    expect(hostBitsOf("172.17.5.9/12")).toBe("172.16.0.0/12");
+    expect(hostBitsOf(" 10.0.5.64/26 ")).toBeNull();
+  });
+
+  it("says nothing of a network address, IPv6 or a string that is not a prefix", () => {
+    expect(hostBitsOf("10.0.0.0/24")).toBeNull();
+    expect(hostBitsOf("fd00::5/64")).toBeNull();
+    expect(hostBitsOf("10.0.0.5")).toBeNull();
+    expect(hostBitsOf("10.0.0.5/33")).toBeNull();
+  });
+
+  it("calls a subnet smaller than a /29 too small", () => {
+    expect(tooSmall("10.0.0.0/30")).toBe(true);
+    expect(tooSmall("10.0.0.0/32")).toBe(true);
+    expect(tooSmall("10.0.0.0/29")).toBe(false);
+    expect(tooSmall("fd00::/120")).toBe(false);
+    expect(tooSmall("nonsense")).toBe(false);
   });
 });

@@ -79,6 +79,42 @@ export function parseCidr(input: string): Cidr | null {
   return { family, base: (raw >> hostBits) << hostBits, bits };
 }
 
+// formatV4 writes an IPv4 address as four dotted octets.
+function formatV4(n: bigint): string {
+  return [24n, 16n, 8n, 0n].map((shift) => String((n >> shift) & 255n)).join(".");
+}
+
+// splitV4 reads an IPv4 prefix without dropping its host bits: the address as typed, and the length.
+function splitV4(input: string): { raw: bigint; bits: number } | null {
+  const parts = input.trim().split("/");
+  if (parts.length !== 2) return null;
+  const [addr, len] = parts as [string, string];
+  if (!PREFIX_LEN.test(len)) return null;
+  const raw = parseV4(addr);
+  const bits = Number(len);
+  if (raw === null || bits > 32) return null;
+  return { raw, bits };
+}
+
+// hostBitsOf says what an IPv4 subnet was meant to be when it has host bits set, for example
+// 10.0.0.0/24 for 10.0.0.5/24. It is null for a subnet that is a network address, that is IPv6 or
+// that is not a prefix at all. The server decides again; this is the instant feedback before it
+// answers.
+export function hostBitsOf(input: string): string | null {
+  const v4 = splitV4(input);
+  if (v4 === null) return null;
+  const hostBits = BigInt(32 - v4.bits);
+  const network = (v4.raw >> hostBits) << hostBits;
+  return network === v4.raw ? null : `${formatV4(network)}/${v4.bits}`;
+}
+
+// tooSmall says whether an IPv4 subnet is smaller than a /29, which cannot hold a gateway and any
+// containers.
+export function tooSmall(input: string): boolean {
+  const v4 = splitV4(input);
+  return v4 !== null && v4.bits > 29;
+}
+
 // overlaps says whether two prefixes share an address: one contains the other, or
 // they are equal. Adjacent prefixes do not overlap, prefixes of different
 // families never do, and anything that is not a prefix overlaps nothing.
