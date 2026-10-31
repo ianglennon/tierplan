@@ -7,14 +7,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/coaming/internal/audit"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/internal/rbac"
 	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
@@ -25,6 +29,13 @@ import (
 
 const (
 	problemSettingsChanged = "settings_changed"
+	problemNotStandalone   = "not_standalone"
+	problemPoolBaseInvalid = "pool_base_invalid"
+	problemPoolSizeInvalid = "pool_size_invalid"
+	problemPoolOverlap     = "pool_overlap"
+
+	// maxAuditPoolsText bounds one list of pools in an audit row.
+	maxAuditPoolsText = 512
 
 	auditTargetEnvironment = "environment"
 )
@@ -70,6 +81,20 @@ type SmallSubnetsInput struct {
 	Body      SmallSubnetsRequest
 }
 
+// AddressPoolsRequest is the body of PUT /api/env/{envId}/address-space/pools.
+type AddressPoolsRequest struct {
+	Pools   []PoolEntryBody `json:"pools" maxItems:"16" doc:"The pools of the host, up to 16, replacing the ones saved. An empty list goes back to the host's own or Docker's default pools"`
+	Version int64           `json:"version" minimum:"0" doc:"The version read with the settings; a save against another version is 409 settings_changed"`
+}
+
+// AddressPoolsInput is the path and body of the pools route.
+type AddressPoolsInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      AddressPoolsRequest
+}
+
 // registerAddressSettings registers the address-space settings routes. RegisterAddressSpace calls it.
 func registerAddressSettings(r *httpx.Router, d AddressSpaceDeps) {
 	httpx.Register(r, huma.Operation{
@@ -105,6 +130,34 @@ func registerAddressSettings(r *httpx.Router, d AddressSpaceDeps) {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			body, err := setSmallSubnets(ctx, d, p, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &AddressSettingsOutput{CacheControl: "no-store", Body: body}, nil
+		})
+	httpx.Register(r, huma.Operation{
+		OperationID: "setAddressPools", Method: http.MethodPut, Path: "/api/env/{envId}/address-space/pools",
+		Summary: "Enter the address pools of a standalone host",
+		Description: "An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). " +
+			"At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). " +
+			"Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. " +
+			"version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. " +
+			"Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermNetworksAddressing, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *AddressPoolsInput) (*AddressSettingsOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.Store == nil || d.Audit == nil || d.Clusters == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			swarm, err := d.Clusters.IsSwarm(ctx, env.ID)
+			if err != nil {
+				return nil, snapshotProblem(d.Log, env.ID, err)
+			}
+			if swarm {
+				return nil, httpx.Problem(http.StatusConflict, problemNotStandalone, "A swarm has its own address pools. They are set when the swarm is created, so they cannot be entered here.")
+			}
+			body, err := setAddressPools(ctx, d, p, env.ID, in)
 			if err != nil {
 				return nil, err
 			}
@@ -209,4 +262,109 @@ func addressSettingsError(d AddressSpaceDeps, envID, what string, err error) err
 	}
 	d.Log.Error("address settings request failed", "step", what, "environment", envID, "error", err)
 	return huma.Error500InternalServerError("internal error")
+}
+
+// validatePools checks the pools a person entered and returns them as the reader counts them. Every
+// row is checked on its own first (base, then size), then the rows against each other, and the first
+// failure is a 422 that names the row (T-10-53).
+func validatePools(in []PoolEntryBody) ([]netspace.Pool, error) {
+	pools := make([]netspace.Pool, 0, len(in))
+	for i, e := range in {
+		base, err := netip.ParsePrefix(strings.TrimSpace(e.Base))
+		if err != nil || !base.Addr().Is4() || base != base.Masked() {
+			return nil, poolProblem(problemPoolBaseInvalid, i, "base",
+				fmt.Sprintf("Pool %d: the base must be an IPv4 range with no host bits set, such as 10.20.0.0/16.", i+1))
+		}
+		pool := netspace.Pool{Base: base, Size: e.Size}
+		if !pool.Valid() {
+			return nil, poolProblem(problemPoolSizeInvalid, i, "size",
+				fmt.Sprintf("Pool %d: the size must be from /%d (the base's own mask) to /30.", i+1, base.Bits()))
+		}
+		pools = append(pools, pool)
+	}
+	for j := range pools {
+		for i := range j {
+			if pools[i].Base.Overlaps(pools[j].Base) {
+				return nil, poolProblem(problemPoolOverlap, j, "base",
+					fmt.Sprintf("Pool %d overlaps pool %d (%s and %s).", j+1, i+1, pools[j].Base, pools[i].Base))
+			}
+		}
+	}
+	return pools, nil
+}
+
+// poolProblem is the 422 for one row of the pools: the code is the problem type and the row (counted
+// from 0) and the field are in the error location.
+func poolProblem(code string, row int, field, detail string) error {
+	return &huma.ErrorModel{
+		Type: code, Title: http.StatusText(http.StatusUnprocessableEntity), Status: http.StatusUnprocessableEntity, Detail: detail,
+		Errors: []*huma.ErrorDetail{{Location: fmt.Sprintf("body.pools[%d].%s", row, field), Message: code, Value: row}},
+	}
+}
+
+// poolsText is a list of pools as an audit row shows it: base and size, comma separated, cut to what
+// an audit detail may hold.
+func poolsText(pools []netspace.Pool) string {
+	parts := make([]string, 0, len(pools))
+	for _, p := range pools {
+		parts = append(parts, p.Base.String()+"/"+strconv.Itoa(p.Size))
+	}
+	text := strings.Join(parts, ",")
+	if len(text) > maxAuditPoolsText {
+		text = text[:maxAuditPoolsText]
+	}
+	return text
+}
+
+// setAddressPools saves the entered pools. The old list is read, the new one written and the audit row
+// recorded in one transaction, and the reader's last answer is dropped so the next read uses the new
+// pools. A save that changes nothing writes nothing.
+func setAddressPools(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, envID string, in *AddressPoolsInput) (AddressSettingsBody, error) {
+	pools, err := validatePools(in.Body.Pools)
+	if err != nil {
+		return AddressSettingsBody{}, err
+	}
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return AddressSettingsBody{}, addressSettingsError(d, envID, "begin", err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	old, err := q.GetAddressSettings(ctx, envID)
+	if err != nil {
+		return AddressSettingsBody{}, addressSettingsError(d, envID, "read the settings", err)
+	}
+	if in.Body.Version != old.AddressSettingsVersion {
+		return AddressSettingsBody{}, settingsConflict(ctx, d, old)
+	}
+	stored := envs.EncodeEnteredPools(pools)
+	if stored == envs.EncodeEnteredPools(envs.DecodeEnteredPools(old.AddressPools)) {
+		return addressSettingsBody(ctx, d, old), nil
+	}
+	n, err := q.SetAddressPools(ctx, sqlc.SetAddressPoolsParams{
+		AddressPools: stored, AddressSettingsBy: p.ID, UpdatedAt: d.Now().UTC().UnixNano(), ID: envID, AddressSettingsVersion: old.AddressSettingsVersion,
+	})
+	if err != nil {
+		return AddressSettingsBody{}, addressSettingsError(d, envID, "save the pools", err)
+	}
+	if n == 0 {
+		return AddressSettingsBody{}, settingsConflict(ctx, d, old)
+	}
+	if err := d.Audit.RecordTx(ctx, tx, audit.Entry{
+		Actor: p.AuditActor(), Action: audit.ActionEnvironmentAddressPoolsSaved, TargetType: auditTargetEnvironment, TargetID: envID, EnvID: envID,
+		Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: in.UserAgent,
+		Details: map[string]string{"pools": poolsText(pools), "previous_pools": poolsText(envs.DecodeEnteredPools(old.AddressPools))},
+	}); err != nil {
+		return AddressSettingsBody{}, addressSettingsError(d, envID, "audit", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return AddressSettingsBody{}, addressSettingsError(d, envID, "commit", err)
+	}
+	if d.AddressSpaces != nil {
+		d.AddressSpaces.Invalidate(envID)
+	}
+	old.AddressPools = stored
+	old.AddressSettingsVersion++
+	old.AddressSettingsBy = p.ID
+	return addressSettingsBody(ctx, d, old), nil
 }

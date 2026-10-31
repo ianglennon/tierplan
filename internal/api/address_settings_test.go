@@ -6,6 +6,7 @@ package api_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ianglennon/coaming/internal/audit"
@@ -38,6 +39,7 @@ func (f *envFix) settings(t *testing.T, e envBody) settingsBody {
 
 func (f *envFix) putSettings(t *testing.T, e envBody, what, body string) *envRec {
 	t.Helper()
+	awaitOnline(t, f.mon, e.ID)
 	return f.req(t, http.MethodPut, "/api/env/"+e.ID+"/address-space/"+what, body)
 }
 
@@ -144,5 +146,145 @@ func TestSmallSubnetsNoChangeWritesNothing(t *testing.T) {
 	}
 	if got := f.settings(t, e); got.Version != 1 {
 		t.Errorf("version = %d, want 1", got.Version)
+	}
+}
+
+func poolsBody(version int64, pools ...string) string {
+	list := ""
+	for i, p := range pools {
+		if i > 0 {
+			list += ","
+		}
+		list += p
+	}
+	return fmt.Sprintf(`{"pools":[%s],"version":%d}`, list, version)
+}
+
+func pool(base string, size int) string { return fmt.Sprintf(`{"base":%q,"size":%d}`, base, size) }
+
+func TestAddressPoolsSaveAndRead(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine())
+	rec := f.putSettings(t, e, "pools", poolsBody(0, pool("10.20.0.0/16", 24)))
+	if rec.code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.code, rec.body)
+	}
+	if got := f.settings(t, e); len(got.Pools) != 1 || got.Pools[0].Base != "10.20.0.0/16" || got.Pools[0].Size != 24 || got.Version != 1 || got.ChangedBy != "admin" {
+		t.Fatalf("settings = %+v, want the one pool at version 1 saved by admin", got)
+	}
+	// The standalone read now answers the entered pool, estimated, and not the engine's own.
+	awaitOnline(t, f.mon, e.ID)
+	space := decode[addressSpace](t, f.get(t, e, "address-space"))
+	if len(space.Pools) != 1 || space.Pools[0].CIDR != "10.20.0.0/16" || space.Pools[0].Mask != 24 || space.Pools[0].Source != "entered" || !space.Pools[0].Estimated {
+		t.Fatalf("pools = %+v, want the entered pool, source entered, estimated", space.Pools)
+	}
+	rows := f.auditRows(t, audit.ActionEnvironmentAddressPoolsSaved)
+	if len(rows) != 1 || rows[0].Details["pools"] != "10.20.0.0/16/24" || rows[0].Details["previous_pools"] != "" || rows[0].EnvID != e.ID {
+		t.Fatalf("audit rows = %+v, want one environment.address_pools_saved", rows)
+	}
+	// Clearing the pools goes back to Docker's defaults, at once.
+	if rec := f.putSettings(t, e, "pools", poolsBody(1)); rec.code != http.StatusOK {
+		t.Fatalf("clear: %d %s", rec.code, rec.body)
+	}
+	space = decode[addressSpace](t, f.get(t, e, "address-space"))
+	if len(space.Pools) < 2 || space.Pools[0].Source != "defaults" || !space.Pools[0].Estimated {
+		t.Errorf("pools = %+v after clearing, want Docker's defaults", space.Pools)
+	}
+	rows = f.auditRows(t, audit.ActionEnvironmentAddressPoolsSaved)
+	if len(rows) != 2 || rows[1].Details["pools"] != "" || rows[1].Details["previous_pools"] != "10.20.0.0/16/24" {
+		t.Errorf("audit rows = %+v, want the clear with the pools it replaced", rows)
+	}
+	// Saving what is stored writes nothing.
+	if rec := f.putSettings(t, e, "pools", poolsBody(2)); rec.code != http.StatusOK {
+		t.Fatalf("repeat: %d", rec.code)
+	}
+	if n := len(f.auditRows(t, audit.ActionEnvironmentAddressPoolsSaved)); n != 2 {
+		t.Errorf("audit rows = %d, want 2: the repeat changed nothing", n)
+	}
+}
+
+func TestAddressPoolsValidation(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine())
+	cases := []struct {
+		name, body, ptyp, loc string
+	}{
+		{"host bits in the base", poolsBody(0, pool("10.20.0.1/16", 24)), "pool_base_invalid", "body.pools[0].base"},
+		{"not a range", poolsBody(0, pool("ten", 24)), "pool_base_invalid", "body.pools[0].base"},
+		{"an IPv6 base", poolsBody(0, pool("fd00::/48", 64)), "pool_base_invalid", "body.pools[0].base"},
+		{"size narrower than the base", poolsBody(0, pool("10.20.0.0/16", 12)), "pool_size_invalid", "body.pools[0].size"},
+		{"size over 30", poolsBody(0, pool("10.20.0.0/16", 31)), "pool_size_invalid", "body.pools[0].size"},
+		{"the bad row is named", poolsBody(0, pool("10.20.0.0/16", 24), pool("10.30.0.0/16", 8)), "pool_size_invalid", "body.pools[1].size"},
+		{"overlapping pools", poolsBody(0, pool("10.20.0.0/16", 24), pool("10.20.128.0/17", 26)), "pool_overlap", "body.pools[1].base"},
+	}
+	for _, tc := range cases {
+		rec := f.putSettings(t, e, "pools", tc.body)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != tc.ptyp || !strings.Contains(string(rec.body), tc.loc) {
+			t.Errorf("%s: %d %q %s, want 422 %s at %s", tc.name, rec.code, rec.ptyp, rec.body, tc.ptyp, tc.loc)
+		}
+	}
+	var many []string
+	for i := range 17 {
+		many = append(many, pool(fmt.Sprintf("10.%d.0.0/16", i), 24))
+	}
+	if rec := f.putSettings(t, e, "pools", poolsBody(0, many...)); rec.code != http.StatusUnprocessableEntity {
+		t.Errorf("17 pools: %d %s, want 422", rec.code, rec.body)
+	}
+	if rec := f.putSettings(t, e, "pools", poolsBody(0, many[:16]...)); rec.code != http.StatusOK {
+		t.Errorf("16 pools: %d %s, want 200", rec.code, rec.body)
+	}
+	if got := f.settings(t, e); len(got.Pools) != 16 || got.Version != 1 {
+		t.Errorf("settings = %d pools at version %d: a refused list must store nothing", len(got.Pools), got.Version)
+	}
+	if rows := f.auditRows(t, audit.ActionEnvironmentAddressPoolsSaved); len(rows) != 1 {
+		t.Errorf("audit rows = %d, want only the accepted save", len(rows))
+	}
+}
+
+func TestAddressPoolsSwarmRefused(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, nil)
+	raw := s.call(t, authReq{
+		method: http.MethodPut, path: "/api/env/" + s.env.ID + "/address-space/pools",
+		body: poolsBody(0, pool("10.20.0.0/16", 24)), cookie: s.cookie, csrf: s.csrf,
+	})
+	if raw.Code != http.StatusConflict || problemType(t, raw) != "not_standalone" {
+		t.Fatalf("swarm: %d %s, want 409 not_standalone", raw.Code, raw.Body)
+	}
+	var n int
+	if err := s.st.Read.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE action = 'environment.address_pools_saved'`).Scan(&n); err != nil || n != 0 {
+		t.Errorf("audit rows = %d (%v), want none", n, err)
+	}
+}
+
+func TestAddressSettingsVersionConflict(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, orphanEngine())
+	for i := range 3 {
+		mask := 26 + i%2 + 1
+		if rec := f.putSettings(t, e, "small-subnets", smallBody(true, mask, int64(i))); rec.code != http.StatusOK {
+			t.Fatalf("save %d: %d %s", i, rec.code, rec.body)
+		}
+	}
+	// Two admins read version 3.
+	second := loopAs(t, f, e, "second", "admin")
+	if got := f.settings(t, e); got.Version != 3 {
+		t.Fatalf("version = %d, want 3", got.Version)
+	}
+	if rec := f.putSettings(t, e, "pools", poolsBody(3, pool("10.20.0.0/16", 24))); rec.code != http.StatusOK {
+		t.Fatalf("first admin's save: %d %s", rec.code, rec.body)
+	}
+	for what, body := range map[string]string{
+		"pools":         poolsBody(3, pool("10.30.0.0/16", 24)),
+		"small-subnets": smallBody(false, 28, 3),
+	} {
+		rec := second(http.MethodPut, "address-space/"+what, body)
+		if rec.code != http.StatusConflict || rec.ptyp != "settings_changed" || !strings.Contains(string(rec.body), "admin") {
+			t.Errorf("second admin's %s save: %d %q %s, want 409 settings_changed naming admin", what, rec.code, rec.ptyp, rec.body)
+		}
+	}
+	got := f.settings(t, e)
+	if len(got.Pools) != 1 || got.Pools[0].Base != "10.20.0.0/16" || got.Version != 4 {
+		t.Errorf("settings = %+v: the refused saves must not have changed anything", got)
 	}
 }

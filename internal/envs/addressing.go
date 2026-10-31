@@ -606,22 +606,24 @@ func (s *AddressSpaces) fetchStandalone(ctx context.Context, agg Aggregate, out 
 		return AddressSpace{}, ErrNodeUnavailable
 	}
 	node := agg.Nodes[0]
-	var pools dockerx.AddressPools
-	err := s.agg.OnNode(ctx, out.EnvID, node.ID, func(c *dockerx.Client) (err error) {
-		pools, err = c.AddressPools(ctx)
-		return err
-	})
-	if err != nil {
-		return AddressSpace{}, err
-	}
-
-	source := PoolSourceDaemon
-	var defs []netspace.Pool
-	for _, p := range pools.DaemonPools {
-		defs = append(defs, netspace.Pool{Base: p.Base, Size: p.Size})
-	}
+	// Pools a person entered replace what the daemon reports, so the daemon is not asked.
+	source, defs := PoolSourceEntered, s.enteredPools(ctx, out.EnvID)
 	if len(defs) == 0 {
-		source, defs = PoolSourceDefaults, netspace.DockerDefaultPools
+		var pools dockerx.AddressPools
+		err := s.agg.OnNode(ctx, out.EnvID, node.ID, func(c *dockerx.Client) (err error) {
+			pools, err = c.AddressPools(ctx)
+			return err
+		})
+		if err != nil {
+			return AddressSpace{}, err
+		}
+		source = PoolSourceDaemon
+		for _, p := range pools.DaemonPools {
+			defs = append(defs, netspace.Pool{Base: p.Base, Size: p.Size})
+		}
+		if len(defs) == 0 {
+			source, defs = PoolSourceDefaults, netspace.DockerDefaultPools
+		}
 	}
 	// Only the host's own networks take its local pools: an overlay is the swarm's.
 	subnets := networkSubnets(agg.Networks, func(n NetworkRow) bool { return n.Scope != dockerx.ScopeSwarm })
@@ -633,6 +635,32 @@ func (s *AddressSpaces) fetchStandalone(ctx context.Context, agg Aggregate, out 
 		out.Pools = append(out.Pools, PoolUsage{PoolStat: netspace.Stat(p, subnets), Source: source, Estimated: true})
 	}
 	return out, nil
+}
+
+// enteredPools are the pools a person entered for the environment, none when there are none or the
+// setting cannot be read: the host's own pools are then used, as before.
+func (s *AddressSpaces) enteredPools(ctx context.Context, envID string) []netspace.Pool {
+	if s.svc == nil || s.svc.st == nil {
+		return nil
+	}
+	row, err := s.svc.st.RQ.GetAddressSettings(ctx, envID)
+	if err != nil {
+		s.log.Warn("could not read the entered address pools", "environment", envID, "error", err)
+		return nil
+	}
+	return DecodeEnteredPools(row.AddressPools)
+}
+
+// Invalidate drops the last read of an environment, so the next one starts from the engines and the
+// current settings. A save of the entered pools calls it, so the page never shows the old pools.
+func (s *AddressSpaces) Invalidate(envID string) {
+	e := s.entry(envID)
+	// Waiting for a read in flight keeps it from storing, after this, a value it began before.
+	e.read.Lock()
+	defer e.read.Unlock()
+	e.mu.Lock()
+	e.have = false
+	e.mu.Unlock()
 }
 
 // networkSubnets are the distinct IPv4 subnets of the networks for which keep is true, in the

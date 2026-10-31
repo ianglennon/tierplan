@@ -244,6 +244,96 @@ func TestAddressSpaceStandaloneLocalSocket(t *testing.T) {
 	}
 }
 
+// setEnteredPools stores the pools a person entered for an environment, as the settings route does.
+func setEnteredPools(t *testing.T, r *tunRig, envID string, pools ...netspace.Pool) {
+	t.Helper()
+	if _, err := r.svc.st.Write.ExecContext(testsupport.Context(t), `UPDATE environments SET address_pools = ? WHERE id = ?`, EncodeEnteredPools(pools), envID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pool(base string, size int) netspace.Pool {
+	return netspace.Pool{Base: netip.MustParsePrefix(base), Size: size}
+}
+
+// Pools a person entered replace what the daemon reports, are counted like any other and read source
+// entered; clearing them, and dropping the reader's last answer, goes back to the daemon's pools.
+func TestAddressSpaceEnteredPools(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Edge")
+	r.connect(t, env, dockertest.FakeConfig{
+		Hostname:            "edge-1",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 26}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "app", Name: "app", Driver: "bridge", Scope: "local", Subnets: []string{"10.20.0.0/24", "10.20.1.0/24"}},
+		},
+	}, nil)
+	r.whenOnline(t, env.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+
+	setEnteredPools(t, r, env.ID, pool("10.20.0.0/16", 24), pool("10.99.0.0/24", 28))
+	v, err := as.Read(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	want := "10.20.0.0/16/24 used=2 cap=256 entered est=true|10.99.0.0/24/28 used=0 cap=16 entered est=true"
+	if got := strings.Join(poolLines(v), "|"); got != want {
+		t.Fatalf("pools = %s\nwant    %s", got, want)
+	}
+	if v.Swarm || v.Measured {
+		t.Errorf("space = %+v, want a standalone host that is not measured", v)
+	}
+
+	// The cached read is kept until it is dropped.
+	setEnteredPools(t, r, env.ID)
+	if again, _ := as.Read(testsupport.Context(t), env.ID); len(again.Pools) != 2 {
+		t.Fatalf("pools = %v, want the cached read within the TTL", poolLines(again))
+	}
+	as.Invalidate(env.ID)
+	v, err = as.Read(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("Read after clearing: %v", err)
+	}
+	if got := strings.Join(poolLines(v), "|"); got != "10.50.0.0/16/26 used=0 cap=1024 daemon est=true" {
+		t.Fatalf("pools = %s, want the daemon's pool back", got)
+	}
+}
+
+// Every pool row of a standalone host says where it came from and is an estimate, whatever the
+// source (D-07 as amended, the assumption-delta invariant).
+func TestStandalonePoolRowsCarrySourceAndEstimate(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	cases := map[string]struct {
+		cfg     dockertest.FakeConfig
+		entered []netspace.Pool
+		source  string
+	}{
+		"daemon":   {dockertest.FakeConfig{Hostname: "a", DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 26}}}, nil, PoolSourceDaemon},
+		"defaults": {dockertest.FakeConfig{Hostname: "b"}, nil, PoolSourceDefaults},
+		"entered":  {dockertest.FakeConfig{Hostname: "c"}, []netspace.Pool{pool("10.20.0.0/16", 24)}, PoolSourceEntered},
+	}
+	for name, tc := range cases {
+		env := r.srv.NewEnvironment(t, name)
+		r.connect(t, env, tc.cfg, nil)
+		r.whenOnline(t, env.ID)
+		setEnteredPools(t, r, env.ID, tc.entered...)
+		c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+		as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+		v, err := as.Read(testsupport.Context(t), env.ID)
+		if err != nil || len(v.Pools) == 0 {
+			t.Fatalf("%s: Read = %v, %v", name, v.Pools, err)
+		}
+		for _, p := range v.Pools {
+			if p.Source != tc.source || !p.Estimated {
+				t.Errorf("%s: pool %s has source %q estimated %v, want %q and true", name, p.Pool.Base, p.Source, p.Estimated, tc.source)
+			}
+		}
+	}
+}
+
 func TestAddressSpaceNoManager(t *testing.T) {
 	r := newTunRig(t, nil)
 	r.pastGrace()

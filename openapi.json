@@ -449,6 +449,33 @@
         ],
         "type": "object"
       },
+      "AddressPoolsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "pools": {
+            "description": "The pools of the host, up to 16, replacing the ones saved. An empty list goes back to the host's own or Docker's default pools",
+            "items": {
+              "$ref": "#/components/schemas/PoolEntryBody"
+            },
+            "maxItems": 16,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "The version read with the settings; a save against another version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pools",
+          "version"
+        ],
+        "type": "object"
+      },
       "AddressSettingsBody": {
         "additionalProperties": false,
         "properties": {
@@ -22095,6 +22122,67 @@
           }
         },
         "summary": "Delete an orphaned or unused network",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space/pools": {
+      "put": {
+        "description": "An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.",
+        "operationId": "setAddressPools",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressPoolsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Enter the address pools of a standalone host",
         "tags": [
           "environments"
         ]

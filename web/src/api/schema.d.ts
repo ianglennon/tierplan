@@ -492,6 +492,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Enter the address pools of a standalone host
+         * @description An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.
+         */
+        put: operations["setAddressPools"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/address-space/settings": {
         parameters: {
             query?: never;
@@ -5010,6 +5030,15 @@ export interface components {
              * @description How many blocks of the pool, each of the size the mask gives, any subnet overlaps. A /28 inside one /26 block uses 1; a /16 in a /24-size pool uses 256. IPv6 subnets are not counted. At most 2^30, so it always fits
              */
             used: number;
+        };
+        AddressPoolsRequest: {
+            /** @description The pools of the host, up to 16, replacing the ones saved. An empty list goes back to the host's own or Docker's default pools */
+            pools: components["schemas"]["PoolEntryBody"][] | null;
+            /**
+             * Format: int64
+             * @description The version read with the settings; a save against another version is 409 settings_changed
+             */
+            version: number;
         };
         AddressSettingsBody: {
             /** @description The display name of whoever saved either setting last; empty when none was saved or that person is not known */
@@ -14046,6 +14075,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrphanDeleteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setAddressPools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddressPoolsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
                 };
             };
             /** @description Error */
