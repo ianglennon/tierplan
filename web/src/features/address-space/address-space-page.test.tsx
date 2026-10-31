@@ -413,4 +413,41 @@ describe("the Address space page", () => {
     expect(reads).toBe(0);
     expect(screen.queryByRole("meter")).toBeNull();
   });
+
+  it("shows the orphans card and the kept list under the map", async () => {
+    body = space({
+      orphans: [
+        {
+          class: "orphaned",
+          formerOwner: "shop",
+          formerOwnerKind: "stack",
+          idleSince: "2026-10-01T10:00:00Z",
+          idleSinceSource: "seen",
+          name: "shop_default",
+          networkId: "n1",
+          node: "Cluster",
+          nodeId: "m1",
+          scope: "swarm",
+          subnets: ["10.0.9.0/24"],
+        },
+      ],
+      kept: [
+        {
+          keptBy: "user",
+          keptByName: "ian",
+          keptAt: "2026-10-02T10:00:00Z",
+          name: "backend",
+          node: "Cluster",
+          nodeId: "",
+          present: true,
+          subnets: [],
+        },
+      ],
+    });
+    mount();
+    const card = await screen.findByText("Orphaned (1)");
+    expect(card).toBeTruthy();
+    expect(document.getElementById("orphans")?.contains(card)).toBe(true);
+    expect(screen.getByRole("button", { name: "Kept networks (1)" })).toBeTruthy();
+  });
 });

@@ -181,7 +181,11 @@
         "kept": "Network kept off the orphan list",
         "unkept": "Network no longer kept off the orphan list",
         "connected": "Container connected to network",
-        "disconnected": "Container disconnected from network"
+        "disconnected": "Container disconnected from network",
+        "kept_named": "Kept network {{name}}",
+        "unkept_named": "Stopped keeping network {{name}}",
+        "inspect_saved_named": "Saved the details of network {{name}} before deleting it",
+        "removed_orphan_cleanup_named": "Deleted orphaned network {{name}}"
       },
       "volume": {
         "created": "Volume created",

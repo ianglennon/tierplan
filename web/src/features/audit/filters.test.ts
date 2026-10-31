@@ -100,6 +100,42 @@ describe("rangeFor", () => {
   });
 });
 
+describe("actionLabel (networks)", () => {
+  it("names the network a keep, a stop and the saved details were about", () => {
+    expect(actionLabel("network.kept", echo, { name: "backend" })).toBe(
+      "t:audit.actions.network.kept_named",
+    );
+    expect(actionLabel("network.unkept", echo, { name: "backend" })).toBe(
+      "t:audit.actions.network.unkept_named",
+    );
+    expect(actionLabel("network.inspect_saved", echo, { name: "backend" })).toBe(
+      "t:audit.actions.network.inspect_saved_named",
+    );
+    expect(audit.audit.actions.network.kept_named).toBe("Kept network {{name}}");
+    expect(audit.audit.actions.network.unkept_named).toBe("Stopped keeping network {{name}}");
+    expect(audit.audit.actions.network.inspect_saved_named).toBe(
+      "Saved the details of network {{name}} before deleting it",
+    );
+    // Without a name the plain label stands.
+    expect(actionLabel("network.kept", echo)).toBe("t:audit.actions.network.kept");
+  });
+
+  it("words a removal by the orphan clean-up, and any other removal as a removal", () => {
+    expect(
+      actionLabel("network.removed", echo, { name: "backend", source: "orphan_cleanup" }),
+    ).toBe("t:audit.actions.network.removed_orphan_cleanup_named");
+    expect(audit.audit.actions.network.removed_orphan_cleanup_named).toBe(
+      "Deleted orphaned network {{name}}",
+    );
+    expect(actionLabel("network.removed", echo, { name: "backend" })).toBe(
+      "t:audit.actions.network.removed",
+    );
+    expect(actionLabel("network.removed", echo, { name: "backend", source: "other" })).toBe(
+      "t:audit.actions.network.removed",
+    );
+  });
+});
+
 describe("actionLabel", () => {
   it("looks up the human label of a known action", () => {
     expect(actionLabel("auth.login", echo)).toBe("t:audit.actions.auth.login");

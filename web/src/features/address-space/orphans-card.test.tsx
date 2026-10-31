@@ -418,3 +418,63 @@ describe("OrphansCard (several)", () => {
     expect(deletes()).toHaveLength(0);
   });
 });
+
+describe("OrphansCard (states)", () => {
+  it("shows the empty state", () => {
+    mount({ orphans: [] });
+    expect(screen.getByText("No orphaned or unused networks")).toBeTruthy();
+    expect(
+      screen.getByText("Coaming lists a network here when nothing has used it for 24 hours."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows the loading skeleton", () => {
+    mount({ orphans: undefined });
+    const table = screen.getByRole("table", { name: "Orphaned and unused networks" });
+    expect(table.querySelectorAll("[data-slot=skeleton-row]")).toHaveLength(8);
+    expect(screen.getByText("Loading orphaned and unused networks")).toBeTruthy();
+    expect(table.closest("[aria-busy=true]")).toBeTruthy();
+  });
+
+  it("says the judgement is withheld when a node is not reporting", () => {
+    mount({
+      orphans: [orphan("maybe", { class: "cant_tell" })],
+      withheld: { managerMissing: false, nodes: ["worker-2", "worker-3"], stacks: [] },
+    });
+    expect(screen.getByText("Waiting for worker-2, worker-3 to report.")).toBeTruthy();
+    expect(screen.queryByText(/^Orphaned \(/)).toBeNull();
+  });
+
+  it("disables actions below Env Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount({ orphans: [orphan("a")] });
+    openMenu("a");
+    for (const label of ["Keep", "Delete…"]) {
+      await waitFor(() =>
+        expect(
+          screen.getByRole("menuitem", { name: new RegExp(label) }).getAttribute("aria-disabled"),
+        ).toBe("true"),
+      );
+    }
+    expect(screen.getAllByText("Needs Admin on Dev swarm").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete…/ }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sent.some((s) => s.method === "DELETE" || s.method === "PUT")).toBe(false);
+  });
+
+  it("disables the bulk actions below Env Admin", async () => {
+    me = makeMe({ envs: { [ENV]: "operator" } });
+    mount({ orphans: [orphan("a")] });
+    fireEvent.click(box("Select a"));
+    const bar = screen.getByRole("toolbar", { name: "Bulk actions" });
+    await waitFor(() =>
+      expect(within(bar).getByRole("button", { name: "Keep" }).getAttribute("aria-disabled")).toBe(
+        "true",
+      ),
+    );
+    expect(within(bar).getByRole("button", { name: "Delete…" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
+  });
+});

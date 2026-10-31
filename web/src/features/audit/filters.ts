@@ -377,6 +377,17 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
   }
+  // Keeping a network off the orphan list, and the details saved before a delete, name the network.
+  if (
+    (key === "network.kept" || key === "network.unkept" || key === "network.inspect_saved") &&
+    details?.name
+  ) {
+    return t(`audit.actions.${key}_named`, { name: details.name });
+  }
+  // A removal made by the orphan clean-up says so, with the network's name.
+  if (key === "network.removed" && details?.source === "orphan_cleanup" && details.name) {
+    return t("audit.actions.network.removed_orphan_cleanup_named", { name: details.name });
+  }
   // A git connection change names the credential or repository it was about.
   if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {
     return t(`audit.actions.${key}_named`, { name: details.name });
