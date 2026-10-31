@@ -107,8 +107,8 @@ type Deps struct {
 	// given a block of (D-20), and holds the allocation lock a deploy shares with the network dialog. Nil means
 	// no deploy gives a network a subnet of its own making.
 	AddressSpaces *envs.AddressSpaces
-	// subnetPlanHook, when set, is called by a swarm deploy right after it has planned the subnets of its new
-	// networks and before it creates any, while it holds the allocation lock. Tests order a second allocation
+	// subnetPlanHook, when set, is called by a swarm or standalone deploy right after it has planned the subnets of its new
+	// networks and before it creates any (a standalone deploy: before the SDK's up), while it holds the allocation lock. Tests order a second allocation
 	// against the deploy with it, never with a sleep; nothing sets it in production.
 	subnetPlanHook func()
 	// Log receives server-side failures. Nil means slog.Default().

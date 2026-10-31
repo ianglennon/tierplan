@@ -666,6 +666,8 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	standaloneIn := stackops.StandaloneDeployInput{
 		EnvID: env.ID, NodeID: node, Stack: st, Copy: draft.Copy, Reviewed: body.Pins, Update: update,
 		Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+		// The subnets small stack subnets gave its networks, read from the last good revision and stored on this one.
+		Subnets: repo,
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -833,6 +835,9 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		standaloneIn := stackops.StandaloneDeployInput{
 			EnvID: env.ID, NodeID: node, Stack: st, Copy: target.Copy, Reviewed: pins, Rollback: true,
 			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+			// The revision's own record of the subnets its networks were given, which a network the roll back
+			// has to create again takes while it is free, and which a network that exists keeps.
+			Subnets: repo, RestoredSubnets: target.Subnets,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {

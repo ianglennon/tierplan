@@ -27,9 +27,9 @@ func (s *AddressSpaces) SmallSubnetSetting(ctx context.Context, envID string) (e
 	return row.SmallSubnets != 0, int(row.SmallSubnetMask)
 }
 
-// AllocationInputs are what choosing a free block for a new network of a swarm needs: the swarm's
-// pools, every IPv4 subnet of every network on every node, and the destinations of the nodes'
-// routes that are not Docker's own bridges.
+// AllocationInputs are what choosing a free block for a new network needs: the swarm's pools (a standalone
+// host's own), every IPv4 subnet of every network on every node (of the host), and the destinations of the
+// nodes' routes that are not Docker's own bridges.
 type AllocationInputs struct {
 	Pools    []netspace.Pool
 	Occupied []netip.Prefix
@@ -38,7 +38,9 @@ type AllocationInputs struct {
 
 // AllocationInputs reads them. With fresh true the cached snapshot of every node is dropped first,
 // so a network made a moment ago, through Coaming or not, is seen; a caller holds LockAllocation
-// across the read and the create that follows. A swarm no manager answers for is ErrNoManager.
+// across the read and the create that follows. A swarm no manager answers for is ErrNoManager. A
+// standalone host's pools are the ones a person entered, else the daemon's, else Docker's defaults, and
+// only its local networks count.
 func (s *AddressSpaces) AllocationInputs(ctx context.Context, envID string, fresh bool) (AllocationInputs, error) {
 	if s == nil || s.agg == nil || s.clusters == nil {
 		return AllocationInputs{}, ErrNoManager
@@ -52,6 +54,13 @@ func (s *AddressSpaces) AllocationInputs(ctx context.Context, envID string, fres
 	}
 	if err != nil {
 		return AllocationInputs{}, err
+	}
+	swarm, err := s.clusters.IsSwarm(ctx, envID)
+	if err != nil {
+		return AllocationInputs{}, err
+	}
+	if !swarm {
+		return s.standaloneInputs(ctx, envID, agg)
 	}
 	var pools dockerx.AddressPools
 	if err := s.clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) (err error) {
@@ -81,6 +90,29 @@ func (s *AddressSpaces) AllocationInputs(ctx context.Context, envID string, fres
 		in.Pools = append(in.Pools, p)
 	}
 	in.Occupied = networkSubnets(agg.Networks, func(NetworkRow) bool { return true })
+	in.Avoid = s.routeAvoid(ctx, envID, agg)
+	return in, nil
+}
+
+// standaloneInputs is AllocationInputs for a standalone host: the pools its daemon hands local networks out
+// of, the subnets of its local networks (an overlay is a swarm's) and the destinations of its routes.
+func (s *AddressSpaces) standaloneInputs(ctx context.Context, envID string, agg Aggregate) (AllocationInputs, error) {
+	if len(agg.Nodes) == 0 {
+		return AllocationInputs{}, ErrNodeUnavailable
+	}
+	defs, _, err := s.standalonePools(ctx, envID, agg.Nodes[0].ID)
+	if err != nil {
+		return AllocationInputs{}, err
+	}
+	var in AllocationInputs
+	for _, p := range defs {
+		if !p.Valid() {
+			s.log.Warn("a daemon reported an address pool that cannot be used", "environment", envID, "pool", p.Base, "size", p.Size)
+			continue
+		}
+		in.Pools = append(in.Pools, p)
+	}
+	in.Occupied = networkSubnets(agg.Networks, func(n NetworkRow) bool { return n.Scope != dockerx.ScopeSwarm })
 	in.Avoid = s.routeAvoid(ctx, envID, agg)
 	return in, nil
 }

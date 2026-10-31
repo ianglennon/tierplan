@@ -621,24 +621,9 @@ func (s *AddressSpaces) fetchStandalone(ctx context.Context, agg Aggregate, out 
 		return AddressSpace{}, ErrNodeUnavailable
 	}
 	node := agg.Nodes[0]
-	// Pools a person entered replace what the daemon reports, so the daemon is not asked.
-	source, defs := PoolSourceEntered, s.enteredPools(ctx, out.EnvID)
-	if len(defs) == 0 {
-		var pools dockerx.AddressPools
-		err := s.agg.OnNode(ctx, out.EnvID, node.ID, func(c *dockerx.Client) (err error) {
-			pools, err = c.AddressPools(ctx)
-			return err
-		})
-		if err != nil {
-			return AddressSpace{}, err
-		}
-		source = PoolSourceDaemon
-		for _, p := range pools.DaemonPools {
-			defs = append(defs, netspace.Pool{Base: p.Base, Size: p.Size})
-		}
-		if len(defs) == 0 {
-			source, defs = PoolSourceDefaults, netspace.DockerDefaultPools
-		}
+	defs, source, err := s.standalonePools(ctx, out.EnvID, node.ID)
+	if err != nil {
+		return AddressSpace{}, err
 	}
 	// Only the host's own networks take its local pools: an overlay is the swarm's.
 	subnets := networkSubnets(agg.Networks, func(n NetworkRow) bool { return n.Scope != dockerx.ScopeSwarm })
@@ -660,6 +645,32 @@ func (s *AddressSpaces) fetchStandalone(ctx context.Context, agg Aggregate, out 
 		out.Pools = append(out.Pools, use)
 	}
 	return out, nil
+}
+
+// standalonePools are the address pools a standalone host hands networks out of and where they came from: the pools
+// a person entered, else the ones the daemon reports, else Docker's defaults.
+func (s *AddressSpaces) standalonePools(ctx context.Context, envID, nodeID string) ([]netspace.Pool, string, error) {
+	// Pools a person entered replace what the daemon reports, so the daemon is not asked.
+	source, defs := PoolSourceEntered, s.enteredPools(ctx, envID)
+	if len(defs) > 0 {
+		return defs, source, nil
+	}
+	var pools dockerx.AddressPools
+	err := s.agg.OnNode(ctx, envID, nodeID, func(c *dockerx.Client) (err error) {
+		pools, err = c.AddressPools(ctx)
+		return err
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	source = PoolSourceDaemon
+	for _, p := range pools.DaemonPools {
+		defs = append(defs, netspace.Pool{Base: p.Base, Size: p.Size})
+	}
+	if len(defs) == 0 {
+		source, defs = PoolSourceDefaults, netspace.DockerDefaultPools
+	}
+	return defs, source, nil
 }
 
 // hostRoutePrefixes are the destinations of the routes of the environment's hosts whose route check
