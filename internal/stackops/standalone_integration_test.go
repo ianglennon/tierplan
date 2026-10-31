@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1113,5 +1114,208 @@ func TestStandaloneRollbackOnARealEngine(t *testing.T) {
 		if strings.Contains(req, "/distribution/") {
 			t.Errorf("the engine was asked %q during the roll back, a roll back looks no tag up", req)
 		}
+	}
+}
+
+// TestSmallSubnetHashStableOnARealEngine shows on a real engine that small stack subnets never make the Compose SDK
+// recreate a network (plan 10-25, D-20, D-22, RESEARCH F5, Pitfall 1, NET-06): the SDK stamps a hash of the whole
+// network on it, so a deploy that sent the network a different subnet than it was made with would recreate it under its
+// running containers. A stack deployed with small subnets on at /26 keeps the same network, ID and subnet, when it is
+// deployed again with the setting off, when a service changes, and when it is rolled back; and a stack deployed before
+// the setting was turned on keeps its network, with no subnet override, when it is deployed again with the setting on.
+func TestSmallSubnetHashStableOnARealEngine(t *testing.T) {
+	// The SDK's process-wide state: its private configuration directory and its logging.
+	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatalf("InitCompose: %v", err)
+	}
+	node := dockertest.StartHost(t, "")
+	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
+	image := registry + "/cm/web:1"
+	dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
+	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
+	if err != nil {
+		t.Fatalf("dockerx.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
+	rig.deps.ConvergeTimeout = 3 * time.Minute
+	repo := subnetRepo(t, rig)
+	ctx := testsupport.Context(t)
+	compose := func(extra string) string {
+		return "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n" + extra +
+			"    networks: [backend]\nnetworks:\n  backend: {}\n"
+	}
+
+	// stack is a stack in the store, deployed revision by revision.
+	type stack struct {
+		name string
+		st   stackops.Stack
+		revs []stackops.Snapshot
+	}
+	newStack := func(name string) *stack {
+		t.Helper()
+		copy := stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(compose(""))}}}
+		st, _, err := repo.CreateStack(ctx, rig.envID, name, stacks.TargetStandalone, "root", copy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &stack{name: name, st: st}
+	}
+	// deploy runs the next revision of the stack and marks it good. A rollback restores the revision seq.
+	deploy := func(s *stack, text string, rollback int) stackops.DeployResult {
+		t.Helper()
+		rev, err := repo.NewRevision(ctx, s.st.ID, "root", stackops.OriginDeploy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.revs = append(s.revs, rev)
+		in := stackops.StandaloneDeployInput{
+			Stack: s.st, Copy: stacks.WorkingCopy{Files: []stacks.File{{Path: stacks.ComposeFile, Content: []byte(text)}}},
+			Pins: repo, Subnets: repo, RevisionID: rev.ID,
+		}
+		if rollback > 0 {
+			target := s.revs[rollback-1]
+			pins, err := repo.RevisionPins(ctx, target.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := repo.Revision(ctx, s.st.ID, target.Seq)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in.Rollback, in.Reviewed, in.RestoredSubnets = true, pins, got.Subnets
+		}
+		res, job := rig.deployStandalone(t, in)
+		if !res.OK() {
+			var words []string
+			for _, it := range job.Items {
+				if it.Detail != "" {
+					words = append(words, it.ID+": "+it.Detail)
+				}
+			}
+			t.Fatalf("deploy of %s revision %d: %+v items %v details %q", s.name, len(s.revs), res, itemStates(job), words)
+		}
+		if err := repo.SetOutcome(ctx, rev.ID, stackops.OutcomeGood, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	// network and web read back the stack's network and its one container with the network it is attached to.
+	network := func(s *stack) dockerx.NetworkRow {
+		t.Helper()
+		rows, err := cli.NetworksWithLabel(ctx, stacks.LabelComposeProject, s.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range rows {
+			if n.Name == s.name+"_backend" {
+				return n
+			}
+		}
+		t.Fatalf("%s has no network %s_backend: %+v", s.name, s.name, rows)
+		return dockerx.NetworkRow{}
+	}
+	web := func(s *stack) (dockerx.ContainerDetail, dockerx.NetAttachment) {
+		t.Helper()
+		rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, s.name)
+		if err != nil || len(rows) != 1 || rows[0].State != "running" {
+			t.Fatalf("%s's containers = %+v (%v), want one running", s.name, rows, err)
+		}
+		d, _, err := cli.ContainerDetail(ctx, rows[0].ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range d.Networks {
+			if a.Name == s.name+"_backend" {
+				return d, a
+			}
+		}
+		t.Fatalf("%s's container is on %+v, want %s_backend", s.name, d.Networks, s.name)
+		return d, dockerx.NetAttachment{}
+	}
+	subnetOf := func(n dockerx.NetworkRow) string {
+		if len(n.Subnets) != 1 {
+			t.Fatalf("network %s has the subnets %v, want one", n.Name, n.Subnets)
+		}
+		return n.Subnets[0]
+	}
+
+	// legacy is deployed before the setting is turned on: its network has the daemon's own subnet and a hash made without one.
+	legacy := newStack("legacy")
+	deploy(legacy, compose(""), 0)
+	legacyNet := network(legacy)
+	if bits := netip.MustParsePrefix(subnetOf(legacyNet)).Bits(); bits == 26 {
+		t.Fatalf("legacy's network has %s before the setting was on", subnetOf(legacyNet))
+	}
+
+	rig.setSmallSubnets(t, true, 26)
+	itest := newStack("itest")
+	if res := deploy(itest, compose(""), 0); res.Networks != 1 {
+		t.Fatalf("first deploy = %+v, want one network created", res)
+	}
+	net1 := network(itest)
+	subnet1 := subnetOf(net1)
+	if p := netip.MustParsePrefix(subnet1); p.Bits() != 26 {
+		t.Fatalf("itest's network has %s, want a /26 chosen by small stack subnets", subnet1)
+	}
+	if rec := itest.revs[0]; rec.ID == "" {
+		t.Fatal("no first revision")
+	}
+	if got, err := repo.Revision(ctx, itest.st.ID, itest.revs[0].Seq); err != nil || got.Subnets["itest_backend"] != subnet1 {
+		t.Fatalf("revision 1 recorded %v (%v), want itest_backend on %s", got.Subnets, err, subnet1)
+	}
+	c1, att1 := web(itest)
+	if att1.NetworkID != net1.ID {
+		t.Fatalf("the container is on network %s, want %s", att1.NetworkID, net1.ID)
+	}
+	// same asserts the network is the one first made, with the subnet first chosen.
+	same := func(step string) {
+		t.Helper()
+		n := network(itest)
+		if n.ID != net1.ID || subnetOf(n) != subnet1 {
+			t.Errorf("%s: the network is %s on %s, want %s on %s: the SDK recreated it", step, n.ID, subnetOf(n), net1.ID, subnet1)
+		}
+		if _, att := web(itest); att.NetworkID != net1.ID {
+			t.Errorf("%s: the container is on network %s, want %s", step, att.NetworkID, net1.ID)
+		}
+	}
+
+	// 1. Deployed again with the setting off: nothing changes, the record still sends the same subnet.
+	rig.setSmallSubnets(t, false, 26)
+	if res := deploy(itest, compose(""), 0); res.Networks != 0 || res.Updated != 0 {
+		t.Errorf("redeploy with the setting off = %+v, want nothing created or recreated", res)
+	}
+	same("redeploy with the setting off")
+	if c, att := web(itest); c.ID != c1.ID || att.IPv4 != att1.IPv4 {
+		t.Errorf("redeploy with the setting off: container %s at %s, want %s at %s untouched", c.ID, att.IPv4, c1.ID, att1.IPv4)
+	}
+
+	// 2. A service changes: the container is recreated, the network is not.
+	if res := deploy(itest, compose("    environment:\n      MODE: two\n"), 0); res.Updated != 1 {
+		t.Errorf("changed service = %+v, want the container recreated", res)
+	}
+	same("a changed service")
+	c2, _ := web(itest)
+	if c2.ID == c1.ID {
+		t.Errorf("the container %s is the old one after the change", c2.ID)
+	}
+
+	// 3. Rolled back to revision 1: the network is kept, with the subnet revision 1 recorded.
+	if res := deploy(itest, compose(""), 1); res.Networks != 0 {
+		t.Errorf("roll back = %+v, want no network created", res)
+	}
+	same("the roll back")
+
+	// 4. The stack deployed before the setting existed keeps its network, with no subnet override, with the setting on.
+	rig.setSmallSubnets(t, true, 26)
+	if res := deploy(legacy, compose(""), 0); res.Networks != 0 || res.Updated != 0 {
+		t.Errorf("legacy redeploy with the setting on = %+v, want nothing created or recreated", res)
+	}
+	if n := network(legacy); n.ID != legacyNet.ID || subnetOf(n) != subnetOf(legacyNet) {
+		t.Errorf("legacy's network is %s on %s, want %s on %s: the setting changed a network that was made without it", n.ID, subnetOf(n), legacyNet.ID, subnetOf(legacyNet))
+	}
+	if got, err := repo.Revision(ctx, legacy.st.ID, legacy.revs[len(legacy.revs)-1].Seq); err != nil || len(got.Subnets) != 0 {
+		t.Errorf("legacy's revision recorded %v (%v), want no subnet", got.Subnets, err)
 	}
 }
