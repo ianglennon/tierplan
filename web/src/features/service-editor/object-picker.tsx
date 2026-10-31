@@ -63,6 +63,8 @@ interface ObjectPickerProps {
   // from keep is listed disabled and says reason, and choosing it does nothing. A staged choice and
   // Create new are not affected (Create new has its own rule).
   restrict?: { keep: readonly string[]; reason: string };
+  // The service's replica count: a new network's Expected tasks starts from it.
+  replicas?: number;
 }
 
 interface Choice {
@@ -87,6 +89,7 @@ export function ObjectPicker({
   "aria-describedby": describedBy,
   onBlur,
   restrict,
+  replicas,
 }: ObjectPickerProps) {
   const t = useT();
   const store = useStagedStore();
@@ -257,6 +260,8 @@ export function ObjectPicker({
       </Popover>
       <StagedObjectDialog
         kind={kind}
+        envId={envId}
+        replicas={replicas}
         open={creating}
         onOpenChange={setCreating}
         taken={taken}

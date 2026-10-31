@@ -225,9 +225,7 @@
         "body": "It's created when you apply the service, as an attachable overlay network.",
         "submit": "Add network",
         "advanced": "Advanced",
-        "driver": "Driver",
-        "subnet": "Subnet (optional)",
-        "subnetPlaceholder": "10.20.0.0/24"
+        "driver": "Driver"
       },
       "errors": {
         "nameRequired": "Enter a name.",

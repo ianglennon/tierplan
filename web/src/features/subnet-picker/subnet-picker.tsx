@@ -311,6 +311,12 @@ export function SubnetPicker({
   useEffect(() => {
     onBlockingChange?.(blocking);
   }, [blocking, onBlockingChange]);
+  // A closed compact picker opens itself when something in it needs the person: the form refused
+  // the subnet, or an overlap blocks until the box is ticked.
+  const needsAttention = Boolean(error) || blocking;
+  useEffect(() => {
+    if (needsAttention) setOpen(true);
+  }, [needsAttention]);
   const findingCount = findings.length;
   useEffect(() => {
     onFindingsChange?.(findingCount);
