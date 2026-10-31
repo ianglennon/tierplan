@@ -33,6 +33,9 @@ const TOUCH_HEIGHT = "h-11 md:h-8";
 interface ActiveReason {
   code: string;
   node?: string;
+  // address_space_full: the pool or network that is nearly full, and how full it is.
+  subject?: string;
+  percent?: number;
   since?: string;
   // How many more problems there are than the one shown.
   more: number;
@@ -51,6 +54,8 @@ function activeReason(env: EnvironmentItem): ActiveReason | undefined {
   return {
     code: first.code,
     node: first.node,
+    subject: first.subject,
+    percent: first.percent,
     since: first.since,
     more: issues.length - 1,
   };
@@ -140,7 +145,12 @@ function ConnectionCard({
         <div className="flex flex-col gap-2">
           <ReasonText
             code={reason.code}
-            params={{ node: reason.node, envType: env.envType }}
+            params={{
+              node: reason.node,
+              envType: env.envType,
+              subject: reason.subject,
+              percent: reason.percent,
+            }}
             since={reason.since}
           />
           {reason.more > 0 ? (

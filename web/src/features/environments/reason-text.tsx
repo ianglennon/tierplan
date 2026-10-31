@@ -29,6 +29,11 @@ export interface ReasonParams {
   // version is off.
   command?: string;
   direction?: "older" | "newer";
+  // address_space_full: the address pool (its CIDR) or the network (its name) that is nearly
+  // full, how full it is in whole percent, and what kind it is when the caller knows.
+  subject?: string;
+  percent?: number;
+  kind?: "pool" | "ingress" | "overlay";
 }
 
 // A command a fix hint points at. It is shown in CopyableCode, never inside a
@@ -81,6 +86,19 @@ const HINT_NEEDS: Record<string, string[]> = {
 const TEXT_MIDDLE: Record<string, { suffix: string; needs: string[] }> = {
   duplicate_environment: { suffix: "Host", needs: ["host"] },
 };
+
+// The sentence for address_space_full (D-06 item 3). A pool is worded "The address pool … is …%
+// used", a network "The network … is …% full", and with no subject or percent it stays general so
+// no placeholder is ever on screen. A subject with a slash is a CIDR (a Docker network name cannot
+// hold one), which is how a caller that does not know the kind still gets the right sentence.
+function addressSpaceKey(params: ReasonParams): "textPool" | "textNetwork" | "textGeneric" {
+  const { subject, percent } = params;
+  if (typeof subject !== "string" || subject === "" || typeof percent !== "number") {
+    return "textGeneric";
+  }
+  const pool = params.kind ? params.kind === "pool" : subject.includes("/");
+  return pool ? "textPool" : "textNetwork";
+}
 
 const STANDALONE_CHECK = "docker ps --filter name=coaming-agent";
 const SWARM_CHECK = "docker service ps coaming-agent";
@@ -176,7 +194,10 @@ export function useReasonText(): (code: string, params?: ReasonParams) => Reason
     const hint = pick(t, base, "hint", params, HINT_NEEDS[code]);
     const direction = params.direction;
     return {
-      text: pick(t, base, "text", params, TEXT_NEEDS[code], TEXT_MIDDLE[code]),
+      text:
+        code === "address_space_full"
+          ? t(`${base}.${addressSpaceKey(params)}`, { ...params })
+          : pick(t, base, "text", params, TEXT_NEEDS[code], TEXT_MIDDLE[code]),
       hint,
       fullHint:
         code === "version_incompatible" && commands.length > 0 ? t(`${base}.hintCommand`) : hint,
