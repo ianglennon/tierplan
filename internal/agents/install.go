@@ -256,6 +256,22 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 	return ""
 }
 
+// HostRouteMountCommand is the command that gives an agent installed before the host-route check
+// the one mount it needs (hostRouteSrc read-only), for the picker to show (D-17). An agent
+// cannot get a mount by self-update (RESEARCH F7), so an admin runs this: a swarm adds the mount
+// to the service, which rolls through the nodes one at a time with the install's update delay;
+// a standalone host recreates the container, which is the manual update command and carries the
+// mount. An unknown type, or a standalone host whose command cannot be built, answers "".
+func HostRouteMountCommand(envType string, p InstallParams) string {
+	switch envType {
+	case "swarm":
+		return " docker service update --mount-add type=bind,src=" + hostRouteSrc + ",dst=" + hostRouteDst + ",ro " + ServiceName
+	case "standalone":
+		return ManualUpdateCommand("standalone", AgentImage(p.ServerVersion), p)
+	}
+	return ""
+}
+
 // UpdateHint is the sentence a version_incompatible refusal appends for an agent
 // that is too old: the manual command for the agent's environment type (D-25). An
 // agent that is too new needs the server updated, which no agent command fixes,

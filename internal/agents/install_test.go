@@ -178,6 +178,51 @@ func TestInstallCommandMountsOnlyTheRouteFile(t *testing.T) {
 	}
 }
 
+func TestHostRouteMountCommand(t *testing.T) {
+	p := goldenParams()
+	p.Token = "" // an agent that is already installed has its identity; the fix carries no join token
+
+	const swarm = " docker service update --mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro coaming-agent"
+	if got := agents.HostRouteMountCommand("swarm", p); got != swarm {
+		t.Errorf("swarm = %q, want %q", got, swarm)
+	}
+
+	got := agents.HostRouteMountCommand("standalone", p)
+	for _, want := range []string{
+		"-v /proc/1/net/route:/host/route:ro", "docker rm -f coaming-agent", "--read-only", "--cap-drop ALL",
+		"--cap-add SETUID", "--cap-add SETGID", "--security-opt no-new-privileges",
+		"-v coaming-agent:/var/lib/coaming-agent", "COAMING_AGENT_URL=" + goldenEndpoint,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("standalone lacks %q:\n%s", want, got)
+		}
+	}
+	if want := agents.ManualUpdateCommand("standalone", agents.AgentImage(p.ServerVersion), p); got != want {
+		t.Errorf("standalone = %q, want the recreate the manual update gives (%q)", got, want)
+	}
+	if strings.Contains(got, "JOIN_TOKEN") || strings.Contains(got, "--network host") {
+		t.Errorf("standalone carries a join token or the host network:\n%s", got)
+	}
+	for name, cmd := range map[string]string{"swarm": agents.HostRouteMountCommand("swarm", p), "standalone": got} {
+		if !strings.HasPrefix(cmd, " ") || strings.HasPrefix(cmd, "  ") || strings.Contains(cmd, "\n") {
+			t.Errorf("%s is not a one-liner with one leading space: %q", name, cmd)
+		}
+	}
+
+	if got := agents.HostRouteMountCommand("unknown", p); got != "" {
+		t.Errorf("an unknown type answered %q, want nothing", got)
+	}
+	if got := agents.HostRouteMountCommand("", p); got != "" {
+		t.Errorf("no type answered %q, want nothing", got)
+	}
+	// A standalone host whose recreate cannot be built has no fix to show.
+	bad := p
+	bad.Endpoint = ""
+	if got := agents.HostRouteMountCommand("standalone", bad); got != "" {
+		t.Errorf("a standalone host with no endpoint answered %q, want nothing", got)
+	}
+}
+
 func TestInstallCommandWithoutAPinNamesNone(t *testing.T) {
 	p := goldenParams()
 	p.Pin = ""
