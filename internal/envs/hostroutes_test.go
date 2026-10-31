@@ -4,8 +4,13 @@
 package envs
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/netip"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/coaming/internal/tunnel"
 	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
@@ -113,5 +118,263 @@ func TestHostRoutesStates(t *testing.T) {
 	}
 	if _, err := h.Get(testsupport.Context(t), "no-such-env"); err == nil {
 		t.Error("an unknown environment was answered")
+	}
+}
+
+// fakeHostNet is a HostNetSource that counts its calls per agent and answers from
+// what the test staged.
+type fakeHostNet struct {
+	mu    sync.Mutex
+	calls map[string]int
+	docs  map[string]wire.HostNetDoc
+	errs  map[string]error
+	// started, when set, receives the agent ID of each call as it begins, and gate,
+	// when set, holds every call until it is closed.
+	started chan string
+	gate    chan struct{}
+}
+
+func newFakeHostNet() *fakeHostNet {
+	return &fakeHostNet{calls: map[string]int{}, docs: map[string]wire.HostNetDoc{}, errs: map[string]error{}}
+}
+
+func (f *fakeHostNet) HostNet(ctx context.Context, agentID string) (wire.HostNetDoc, error) {
+	f.mu.Lock()
+	f.calls[agentID]++
+	doc, err, started, gate := f.docs[agentID], f.errs[agentID], f.started, f.gate
+	f.mu.Unlock()
+	if started != nil {
+		started <- agentID
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return wire.HostNetDoc{}, ctx.Err()
+		}
+	}
+	return doc, err
+}
+
+func (f *fakeHostNet) count(agentID string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[agentID]
+}
+
+func (f *fakeHostNet) answer(agentID string, doc wire.HostNetDoc) {
+	f.mu.Lock()
+	f.docs[agentID] = doc
+	f.mu.Unlock()
+}
+
+func manyRoutes(n int) []wire.HostRoute {
+	out := make([]wire.HostRoute, 0, n)
+	for i := range n {
+		out = append(out, wire.HostRoute{Iface: "eth0", Dst: fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)})
+	}
+	return out
+}
+
+func TestHostRoutesValidation(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Cluster")
+	a := hostNetNode(t, r, env, "n-1", wire.HostNetOK, nil)
+
+	// A hostile agent answers anything it likes. One bad entry makes the node failed
+	// with no routes: a partial list would look measured and be wrong.
+	bad := map[string]wire.HostNetDoc{
+		"an unknown version":                {V: 2, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24"}}},
+		"no version":                        {Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24"}}},
+		"513 routes":                        {V: 1, Routes: manyRoutes(513)},
+		"host bits set":                     {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24"}, {Iface: "eth0", Dst: "10.0.0.1/24"}}},
+		"an IPv6 prefix":                    {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "fd00::/64"}}},
+		"an IPv4-mapped IPv6 prefix":        {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "::ffff:10.0.0.0/104"}}},
+		"the default route":                 {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "0.0.0.0/0"}}},
+		"a single host":                     {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.0.0.5/32"}}},
+		"a destination that is not a route": {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "not-a-prefix"}}},
+		"a gateway that is not an address":  {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24", Gateway: "not-an-ip"}}},
+		"an IPv6 gateway":                   {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24", Gateway: "fe80::1"}}},
+		"an interface name over 15 bytes":   {V: 1, Routes: []wire.HostRoute{{Iface: "abcdefghijklmnop", Dst: "10.8.0.0/24"}}},
+		"an interface name with markup":     {V: 1, Routes: []wire.HostRoute{{Iface: "<b>x</b>", Dst: "10.8.0.0/24"}}},
+		"an interface name with a newline":  {V: 1, Routes: []wire.HostRoute{{Iface: "eth0\n", Dst: "10.8.0.0/24"}}},
+		"an error the agent reports":        {V: 1, Routes: []wire.HostRoute{}, Error: wire.HostNetUnreadable},
+		"an error with routes beside it":    {V: 1, Routes: []wire.HostRoute{{Iface: "eth0", Dst: "10.8.0.0/24"}}, Error: wire.HostNetTooLarge},
+	}
+	for name, doc := range bad {
+		t.Run("refused/"+name, func(t *testing.T) {
+			src := newFakeHostNet()
+			src.answer(a.id, doc)
+			got, err := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: newStepClock().now}).Get(testsupport.Context(t), env.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := byNode(t, got, "n-1"); n.State != RouteCheckFailed || len(n.Routes) != 0 || n.Truncated {
+				t.Fatalf("node = %+v, want failed with no routes", n)
+			}
+		})
+	}
+
+	t.Run("accepted/two routes, masked and sorted by address", func(t *testing.T) {
+		src := newFakeHostNet()
+		src.answer(a.id, wire.HostNetDoc{V: 1, Truncated: true, Routes: []wire.HostRoute{
+			{Iface: "eth0", Dst: "192.168.2.0/24", Gateway: "192.168.1.1"}, {Iface: "wg0", Dst: "10.8.0.0/24"},
+		}})
+		got, err := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: newStepClock().now}).Get(testsupport.Context(t), env.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := byNode(t, got, "n-1")
+		if n.State != RouteCheckOK || !n.Truncated || len(n.Routes) != 2 ||
+			n.Routes[0].Dst != netip.MustParsePrefix("10.8.0.0/24") || n.Routes[0].Iface != "wg0" || n.Routes[0].Gateway.IsValid() ||
+			n.Routes[1].Dst != netip.MustParsePrefix("192.168.2.0/24") || n.Routes[1].Gateway != netip.MustParseAddr("192.168.1.1") {
+			t.Fatalf("node = %+v, want ok with 10.8.0.0/24 then 192.168.2.0/24", n)
+		}
+	})
+	t.Run("accepted/512 routes, and none at all", func(t *testing.T) {
+		for _, routes := range [][]wire.HostRoute{manyRoutes(512), {}, nil} {
+			src := newFakeHostNet()
+			src.answer(a.id, wire.HostNetDoc{V: 1, Routes: routes})
+			got, err := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: newStepClock().now}).Get(testsupport.Context(t), env.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := byNode(t, got, "n-1"); n.State != RouteCheckOK || len(n.Routes) != len(routes) {
+				t.Fatalf("%d routes: node = %+v, want ok with all of them", len(routes), n)
+			}
+		}
+	})
+}
+
+func TestHostRoutesCache(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Cluster")
+	a := hostNetNode(t, r, env, "n-1", wire.HostNetOK, nil)
+	src := newFakeHostNet()
+	src.answer(a.id, wire.HostNetDoc{V: 1, Routes: []wire.HostRoute{{Iface: "wg0", Dst: "10.8.0.0/24"}}})
+	clk := newStepClock()
+	h := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: clk.now})
+	get := func() NodeRoutes {
+		t.Helper()
+		got, err := h.Get(testsupport.Context(t), env.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return byNode(t, got, "n-1")
+	}
+
+	// A picker that checks every 400 ms reads the agent once, not every time.
+	for range 5 {
+		if n := get(); n.State != RouteCheckOK || len(n.Routes) != 1 {
+			t.Fatalf("node = %+v, want ok with its route", n)
+		}
+		clk.advance(400 * time.Millisecond)
+	}
+	if c := src.count(a.id); c != 1 {
+		t.Fatalf("%d reads inside the TTL, want 1", c)
+	}
+	clk.advance(5*time.Minute - 2*time.Second - time.Millisecond) // 1 ms short of 5 minutes since the read
+	get()
+	if c := src.count(a.id); c != 1 {
+		t.Fatalf("%d reads 1 ms before the TTL ended, want 1", c)
+	}
+	clk.advance(time.Millisecond)
+	get()
+	if c := src.count(a.id); c != 2 {
+		t.Fatalf("%d reads once the TTL ended, want 2", c)
+	}
+
+	// A session that ended drops the cache entry, and the node reads offline.
+	_ = a.conn.WS.CloseNow()
+	awaitGone(t, r, a.id)
+	if n := get(); n.State != RouteCheckOffline || len(n.Routes) != 0 {
+		t.Fatalf("node = %+v, want offline with no routes", n)
+	}
+	h.mu.Lock()
+	kept := len(h.cache)
+	h.mu.Unlock()
+	if kept != 0 {
+		t.Fatalf("%d cache entries after the session ended, want none", kept)
+	}
+	if c := src.count(a.id); c != 2 {
+		t.Fatalf("%d reads for an agent that is offline, want the 2 before", c)
+	}
+
+	// A new session is a new agent process, possibly on a changed host: it is asked
+	// again at once, however recently the old one was.
+	r.clk.Advance(time.Minute) // no session is open, so the watchdog has nothing to close
+	c := r.srv.Hello(t, a.conn.Identity)
+	if c.Welcome == nil {
+		t.Fatalf("hello was refused: %+v (%v)", c.Refuse, c.Err)
+	}
+	c.AnswerHostNet(t)
+	r.awaitSessions(t, a.id)
+	if n := get(); n.State != RouteCheckOK {
+		t.Fatalf("node = %+v after the reconnect, want ok", n)
+	}
+	if c := src.count(a.id); c != 3 {
+		t.Fatalf("%d reads after the reconnect, want 3", c)
+	}
+}
+
+func TestHostRoutesSingleFlight(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Cluster")
+	a := hostNetNode(t, r, env, "n-1", wire.HostNetOK, nil)
+	src := newFakeHostNet()
+	src.answer(a.id, wire.HostNetDoc{V: 1, Routes: []wire.HostRoute{{Iface: "wg0", Dst: "10.8.0.0/24"}}})
+	src.started, src.gate = make(chan string, 4), make(chan struct{})
+	joined := make(chan struct{}, 4)
+	h := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: newStepClock().now})
+	h.onJoin = func() { joined <- struct{}{} }
+
+	type result struct {
+		got []NodeRoutes
+		err error
+	}
+	first, second := make(chan result, 1), make(chan result, 1)
+	ctx := testsupport.Context(t)
+	go func() { g, err := h.Get(ctx, env.ID); first <- result{g, err} }()
+	<-src.started // the first Get has a read under way and holds it
+	go func() { g, err := h.Get(ctx, env.ID); second <- result{g, err} }()
+	<-joined // the second Get found that read and waits for it
+	close(src.gate)
+
+	for _, ch := range []chan result{first, second} {
+		res := <-ch
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		if n := byNode(t, res.got, "n-1"); n.State != RouteCheckOK || len(n.Routes) != 1 {
+			t.Fatalf("node = %+v, want ok with its route", n)
+		}
+	}
+	if c := src.count(a.id); c != 1 {
+		t.Fatalf("%d reads for two concurrent Gets, want 1", c)
+	}
+}
+
+func TestHostRoutesOneNodeFails(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Cluster")
+	bad := hostNetNode(t, r, env, "n-bad", wire.HostNetOK, nil)
+	good := hostNetNode(t, r, env, "n-good", wire.HostNetOK, nil)
+	src := newFakeHostNet()
+	src.errs[bad.id] = errors.New("the agent did not answer")
+	src.answer(good.id, wire.HostNetDoc{V: 1, Routes: []wire.HostRoute{{Iface: "wg0", Dst: "10.8.0.0/24"}}})
+
+	got, err := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: newStepClock().now}).Get(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("one node failing failed the whole answer: %v", err)
+	}
+	if n := byNode(t, got, "n-bad"); n.State != RouteCheckFailed || len(n.Routes) != 0 {
+		t.Errorf("n-bad = %+v, want failed with no routes", n)
+	}
+	if n := byNode(t, got, "n-good"); n.State != RouteCheckOK || len(n.Routes) != 1 {
+		t.Errorf("n-good = %+v, want ok with its route", n)
 	}
 }

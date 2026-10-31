@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sort"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -81,6 +82,10 @@ type HostRoutes struct {
 	now   func() time.Time
 	local string
 	log   *slog.Logger
+
+	mu     sync.Mutex
+	cache  map[string]struct{}
+	onJoin func()
 }
 
 // NewHostRoutes returns the route check over the registry's agents and src.
