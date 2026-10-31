@@ -19,8 +19,11 @@ docker run -d --name coaming --restart unless-stopped \
   -p 7480:7480 \
   -v coaming-data:/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /proc/1/net/route:/host/route:ro \
   ghcr.io/ianglennon/coaming:edge
 ```
+
+The last `-v` is optional: it lets the subnet picker check Coaming's own host's routes against a subnet you choose; without it that check is skipped and says so.
 
 The same thing as a Compose file:
 
@@ -35,6 +38,7 @@ services:
     volumes:
       - coaming-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - /proc/1/net/route:/host/route:ro  # optional, see above
 
 volumes:
   coaming-data:

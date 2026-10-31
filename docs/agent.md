@@ -8,6 +8,7 @@ A remote Docker host or swarm is managed through a small agent that you install 
 - [Install on a swarm](#install-on-a-swarm)
 - [Install on a standalone host](#install-on-a-standalone-host)
 - [Rotate or disable the join token](#rotate-or-disable-the-join-token)
+- [Host routes](#host-routes)
 - [Settings on the host: read-only and self-update](#settings-on-the-host-read-only-and-self-update)
 - [A proxy with its own certificate: COAMING_AGENT_PIN](#a-proxy-with-its-own-certificate-coaming_agent_pin)
 - [Troubleshooting](#troubleshooting)
@@ -180,6 +181,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
    --secret source=coaming-agent-token-g1,target=coaming-agent-token,mode=0400 \
    --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
    --mount type=volume,src=coaming-agent,dst=/var/lib/coaming-agent \
+   --mount type=bind,src=/proc/1/net/route,dst=/host/route,ro \
    --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID \
    --update-parallelism 1 --update-delay 10s \
    --label coaming.agent=true --container-label coaming.agent=true \
@@ -198,6 +200,7 @@ Run the command on **any manager** node. It creates the join token as a Docker s
 | `--secret source=…,target=coaming-agent-token,mode=0400` | Mounts the token at `/run/secrets/coaming-agent-token`, readable by root only. |
 | `--mount …docker.sock` | Gives the agent the Docker socket. This is root-equivalent on the host, which is why the agent is small, read-only and drops its privileges. |
 | `--mount type=volume,src=coaming-agent` | The agent's key, certificate, pins and the addresses it dials. It is what lets the agent keep its identity across restarts and updates. |
+| `--mount type=bind,src=/proc/1/net/route,dst=/host/route,ro` | The host's IPv4 route table, one read-only file, so the subnet picker can warn about a LAN or VPN overlap (see [Host routes](#host-routes)). |
 | `--read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID` | The agent's root file system is read-only and it has no Linux capabilities except the two it needs to drop from root to an unprivileged user at start. |
 | `--update-parallelism 1 --update-delay 10s` | A rolling update changes one node at a time with a ten-second pause. |
 | `--label` and `--container-label coaming.agent=true` | How Coaming finds the agent's service and containers, whatever the service is called. |
@@ -222,6 +225,7 @@ Run the command on the host:
  docker run -d --name coaming-agent --restart unless-stopped \
    --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
    -v /var/run/docker.sock:/var/run/docker.sock -v coaming-agent:/var/lib/coaming-agent \
+   -v /proc/1/net/route:/host/route:ro \
    --label coaming.agent=true \
    -e 'COAMING_AGENT_URL=wss://coaming.example.com/agent/connect' \
    [-e 'COAMING_AGENT_PIN=sha256/...'] \
@@ -233,6 +237,7 @@ The flags mean what they do on a swarm, with these differences:
 
 - `--restart unless-stopped` brings the agent back after a reboot or a Docker restart.
 - `--security-opt no-new-privileges` stops anything inside the container from gaining privileges.
+- `-v /proc/1/net/route:/host/route:ro` is the same route-file mount as on a swarm (see [Host routes](#host-routes)).
 - The join token is an environment variable here, so it stays visible in `docker inspect coaming-agent` until you rotate the token (see below). Once the agent has enrolled the token is not needed again, so rotating it afterwards removes the exposure.
 
 The **Compose file** view gives the same container for `docker compose -f coaming-agent.yml up -d`.
@@ -287,6 +292,35 @@ To put the token back on a swarm, take a new token from **Show install command**
  printf %s '<join token>' | docker secret create coaming-agent-token-g<N> - \
    && docker service update --secret-add source=coaming-agent-token-g<N>,target=coaming-agent-token,mode=0400 --env-add COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/coaming-agent-token coaming-agent
 ```
+
+## Host routes
+
+The subnet picker warns when a subnet you are about to choose overlaps a route on the host, such as your LAN or a VPN. To know the host's routes, every install mounts **one file** into the agent, read-only:
+
+- a swarm service: `--mount type=bind,src=/proc/1/net/route,dst=/host/route,ro`
+- a standalone container: `-v /proc/1/net/route:/host/route:ro`
+
+The agent reads `/host/route` when Coaming asks. Set `COAMING_AGENT_HOST_ROUTE_FILE` to read it from another path. It reads only IPv4 routes, at most 512 of them, and nothing else about the host.
+
+**Why one file and not `/proc`.** Mounting `/proc/1/net` fails, and mounting `/proc` would show the agent every process on the host. The single file is the smallest thing that answers the question. The agent keeps `--read-only`, no capabilities beyond the two it drops privileges with, and no host network.
+
+**An agent you installed before this release has no such mount, and cannot get one by updating itself.** An update changes the image, not the mounts. The subnet picker then skips the check for that host and says it can't read the host's routes. To add the mount, run one of these, on a manager for a swarm and on the host for a standalone agent:
+
+```sh
+# swarm
+docker service update --mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro coaming-agent
+
+# standalone: the same recreate as the update command, with the mount (add the COAMING_AGENT_PIN line if your install had one)
+docker pull ghcr.io/ianglennon/coaming-agent:<version> && docker rm -f coaming-agent && docker run -d --name coaming-agent --restart unless-stopped \
+  --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
+  -v /var/run/docker.sock:/var/run/docker.sock -v coaming-agent:/var/lib/coaming-agent \
+  -v /proc/1/net/route:/host/route:ro --label coaming.agent=true \
+  -e 'COAMING_AGENT_URL=wss://coaming.example.com/agent/connect' ghcr.io/ianglennon/coaming-agent:<version>
+```
+
+A swarm update rolls through the nodes one at a time, with the ten-second pause the install set (`--update-parallelism 1 --update-delay 10s`), so the agents reconnect one by one. The standalone agent keeps its identity in its state volume, so it needs no join token and reconnects as the same agent.
+
+**Hosts that may refuse the mount.** Rootless Docker, a user-namespace remap (`userns-remap`), some SELinux or AppArmor profiles and Docker Desktop can refuse to bind-mount a `/proc` file, or show the agent an empty or different table. The agent then reports the file as unmounted. That is not an error: nothing else about the agent changes, and the picker says "the agent can't read the host's routes" and skips that one check.
 
 ## Settings on the host: read-only, self-update and privileged services
 
