@@ -313,6 +313,31 @@ func TestNetworkRowsCarryLabelsAndFlags(t *testing.T) {
 	}
 }
 
+func TestNetworkRowsCarryConfigOnlyAndConfigFrom(t *testing.T) {
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{Networks: []dockertest.FakeNetwork{
+		{ID: "tpl", Name: "tpl", Driver: "macvlan", Scope: "local", ConfigOnly: true},
+		{ID: "mv", Name: "mv", Driver: "macvlan", Scope: "swarm", ConfigFrom: "tpl"},
+		{ID: "plain", Name: "plain", Driver: "bridge", Scope: "local"},
+	}})
+	snap, err := newClient(t, fake).Snapshot(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]dockerx.NetworkRow{}
+	for _, n := range snap.Networks {
+		by[n.Name] = n
+	}
+	if !by["tpl"].ConfigOnly || by["tpl"].ConfigFrom != "" {
+		t.Errorf("tpl = %+v, want a config-only template", by["tpl"])
+	}
+	if by["mv"].ConfigOnly || by["mv"].ConfigFrom != "tpl" {
+		t.Errorf("mv = %+v, want a network configured from tpl", by["mv"])
+	}
+	if p := by["plain"]; p.ConfigOnly || p.ConfigFrom != "" {
+		t.Errorf("plain = %+v, want neither", p)
+	}
+}
+
 // Network detail (plan 04-14, D-42): one network read on its own, with its addressing,
 // its options and, for a swarm-scoped network read on a manager, the services on it.
 

@@ -587,6 +587,8 @@ func TestAddressSpaceOrphansRoute(t *testing.T) {
 		Networks: []dockertest.FakeNetwork{
 			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: long},
 			{ID: "idle", Name: "idle", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: long},
+			{ID: "gone", Name: "shop_default", Driver: "bridge", Scope: "local", Created: long,
+				Labels: map[string]string{"com.docker.compose.project": "shop"}},
 			{ID: "fresh", Name: "fresh", Driver: "bridge", Scope: "local", Created: time.Now()},
 		},
 	})
@@ -603,10 +605,13 @@ func TestAddressSpaceOrphansRoute(t *testing.T) {
 		t.Errorf("nothing was withheld, so orphansWithheld is absent: %s", raw.body)
 	}
 	got := decode[addressSpace](t, raw)
-	if got.Orphans == nil || len(got.Orphans) != 1 {
-		t.Fatalf("orphans = %+v, want only the unlabelled idle network: not bridge, not the one made just now", got.Orphans)
+	if got.Orphans == nil || len(got.Orphans) != 2 {
+		t.Fatalf("orphans = %+v, want the project-labelled network and the unlabelled one, in that order; not bridge, not the one made just now", got.Orphans)
 	}
-	u := got.Orphans[0]
+	o, u := got.Orphans[0], got.Orphans[1]
+	if o.Name != "shop_default" || o.Class != "orphaned" || o.FormerOwner != "shop" || o.FormerOwnerKind != "project" || o.IdleSinceSource != "created" || o.Scope != "local" || o.Node != "node-1" {
+		t.Errorf("orphaned row = %+v", o)
+	}
 	if u.Name != "idle" || u.Class != "unused" || u.FormerOwner != "" || u.FormerOwnerKind != "" || u.IdleSince != "2020-01-01T00:00:00Z" || !slices.Equal(u.Subnets, []string{"172.30.0.0/24"}) {
 		t.Errorf("unused row = %+v", u)
 	}

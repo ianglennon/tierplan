@@ -123,12 +123,32 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 		seen[NetKey{NodeID: r.NodeID, NetworkID: r.NetworkID}] = r
 	}
 
+	keepRows, err := s.svc.st.RQ.ListNetworkKeeps(ctx, envID)
+	if err != nil {
+		return OrphanReport{}, fmt.Errorf("read the networks kept from the orphan list: %w", err)
+	}
+	keeps := make(map[NetKey]bool, len(keepRows))
+	for _, k := range keepRows {
+		keeps[NetKey{NodeID: k.NodeID, NetworkID: k.Name}] = true
+	}
+	sf, err := s.stackFacts(ctx, envID)
+	if err != nil {
+		return OrphanReport{}, err
+	}
+	work := s.workloads(ctx, envID, agg, usage)
+	targets := map[string]bool{}
+	for _, row := range agg.Networks {
+		if row.ConfigFrom != "" {
+			targets[row.ConfigFrom] = true
+		}
+	}
+
 	rep := OrphanReport{Rows: []OrphanRow{}, WithheldNodes: []string{}, WithheldStacks: []string{}}
 	complete := len(usage.Missing) == 0 && (!usage.Swarm || usage.ManagerRead)
 	rep.Complete = complete
 	var stamps []seenStamp
 	done := map[NetKey]bool{}
-	var byKnowledge bool
+	var byKnowledge, byStacks bool
 	for _, row := range agg.Networks {
 		key := usage.key(row)
 		if done[key] {
@@ -140,10 +160,14 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 
 		old, have := seen[key]
 		in := netspace.OrphanInput{
-			Builtin: dockerx.IsBuiltinNetwork(row.Name, row.Ingress),
-			InUse:   inUse,
-			Known:   usage.Known(row),
-			Created: row.Created,
+			Builtin:          dockerx.IsBuiltinNetwork(row.Name, row.Ingress) || row.ConfigOnly || targets[row.Name],
+			InUse:            inUse,
+			Known:            usage.Known(row),
+			Created:          row.Created,
+			KeepLabel:        row.Labels[labelKeep] == "true",
+			KeepRow:          keeps[NetKey{NodeID: key.NodeID, NetworkID: row.Name}],
+			External:         sf.externals[row.Name],
+			ExternalsUnknown: len(sf.unknown) > 0,
 		}
 		if have {
 			if in.Created.IsZero() {
@@ -162,9 +186,12 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 		}
 		owner, kind := networkOwnerOf(row.Labels)
 		in.OwnerLabel = owner
-		// Until a network's owner is checked against the stacks and the workloads that still carry
-		// its label, an owned network is taken to have a live owner.
-		in.StackExists = owner != ""
+		if owner != "" {
+			in.StackExists = sf.exists(owner, row.Labels[labelStackID]) || work.carry(kind, owner)
+			// What the workloads say is only the whole story when they were all read.
+			in.Known = in.Known && work.complete
+		}
+		in.Busy = sf.busy != "" && owner == sf.busy
 
 		class := netspace.Classify(in, now)
 		switch class {
@@ -172,8 +199,12 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 		default:
 			continue
 		}
-		if class == netspace.ClassCantTell && !in.Known {
-			byKnowledge = true
+		if class == netspace.ClassCantTell {
+			if in.Known {
+				byStacks = true
+			} else {
+				byKnowledge = true
+			}
 		}
 		idle := netspace.IdleSince(in.Created, in.LastInUse)
 		rep.Rows = append(rep.Rows, OrphanRow{
@@ -184,17 +215,104 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 	}
 	if byKnowledge {
 		rep.WithheldNodes = append(rep.WithheldNodes, usage.Missing...)
-		rep.ManagerMissing = usage.Swarm && !usage.ManagerRead
+		rep.ManagerMissing = usage.Swarm && (!usage.ManagerRead || !work.complete)
+	}
+	if byStacks {
+		rep.WithheldStacks = append(rep.WithheldStacks, sf.unknown...)
 	}
 	sortOrphans(rep.Rows)
 	s.noteSeen(ctx, envID, now, stamps, seen, complete)
 	return rep, nil
 }
 
+// stackKnowledge is what Coaming's own stacks say about an environment, read once for a check.
+type stackKnowledge struct {
+	names, ids map[string]bool
+	// externals are the names of the networks a Coaming stack declares external; unknown names
+	// the stacks that did not load.
+	externals map[string]bool
+	unknown   []string
+	// busy is the stack holding the environment's operation lock, empty for none.
+	busy string
+}
+
+// exists reports whether a Coaming stack record has this name or this ID.
+func (k stackKnowledge) exists(name, id string) bool {
+	return k.names[name] || (id != "" && k.ids[id])
+}
+
+// stackFacts reads what Coaming's stacks say. With no source of facts no stack record exists and
+// nothing is declared external; the workload rule still applies.
+func (s *AddressSpaces) stackFacts(ctx context.Context, envID string) (stackKnowledge, error) {
+	k := stackKnowledge{names: map[string]bool{}, ids: map[string]bool{}, externals: map[string]bool{}, unknown: []string{}}
+	if s.facts == nil {
+		return k, nil
+	}
+	var err error
+	if k.names, k.ids, err = s.facts.Stacks(ctx, envID); err != nil {
+		return stackKnowledge{}, fmt.Errorf("read the stacks of the environment: %w", err)
+	}
+	if k.externals, k.unknown, err = s.facts.ExternalNetworks(ctx, envID); err != nil {
+		return stackKnowledge{}, fmt.Errorf("read the external networks the stacks declare: %w", err)
+	}
+	k.busy, _ = s.facts.Busy(envID)
+	return k, nil
+}
+
+// workloadLabels are the stack and compose-project names that containers and services of an
+// environment still carry, whether or not a Coaming stack of that name exists (user decision 4).
+type workloadLabels struct {
+	stacks, projects map[string]bool
+	// complete is false when a swarm's services could not be read, so a label may be carried by
+	// a service the check did not see.
+	complete bool
+}
+
+// carry reports whether some workload still carries the label of this owner kind and name.
+func (w workloadLabels) carry(kind, name string) bool {
+	if kind == "stack" {
+		return w.stacks[name]
+	}
+	return w.projects[name]
+}
+
+// workloads collects the owner labels of every container the aggregate holds and, on a swarm, of
+// every service of the last cluster read.
+func (s *AddressSpaces) workloads(ctx context.Context, envID string, agg Aggregate, usage Usage) workloadLabels {
+	w := workloadLabels{stacks: map[string]bool{}, projects: map[string]bool{}, complete: true}
+	for _, c := range agg.Containers {
+		if v := c.Labels[labelStackNamespace]; v != "" {
+			w.stacks[v] = true
+		}
+		if v := c.Labels[labelComposeProject]; v != "" {
+			w.projects[v] = true
+		}
+	}
+	if !usage.Swarm {
+		return w
+	}
+	st, err := s.clusters.State(ctx, envID)
+	if err != nil && st.FetchedAt.IsZero() {
+		s.log.Debug("the services of a swarm could not be read to tell whether a stack is gone", "environment", envID, "error", err)
+		w.complete = false
+		return w
+	}
+	for _, sv := range st.Read.Services {
+		if sv.Stack != "" {
+			w.stacks[sv.Stack] = true
+		}
+	}
+	return w
+}
+
 // the owner label keys of a network: a stack's namespace and a compose project.
 const (
 	labelStackNamespace = "com.docker.stack.namespace"
 	labelComposeProject = "com.docker.compose.project"
+	// labelStackID is the label Coaming puts on what it deploys, the ID of the stack record.
+	labelStackID = "coaming.stack.id"
+	// labelKeep, set to "true" on a network, exempts it from the orphan check (D-11).
+	labelKeep = "coaming.keep"
 )
 
 // networkOwnerOf is the stack or compose project a network's labels name; a stack wins when both

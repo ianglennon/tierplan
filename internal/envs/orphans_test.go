@@ -4,13 +4,89 @@
 package envs
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/netspace"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 	"github.com/ianglennon/coaming/proto/testsupport"
 )
+
+// orphanEpoch is the instant the rigs' clocks start at; a network made before it by more than a day is
+// past its grace period once the rig has advanced a couple of minutes.
+var orphanEpoch = time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+func oldNet(n dockertest.FakeNetwork) dockertest.FakeNetwork {
+	n.Created = orphanEpoch.Add(-48 * time.Hour)
+	return n
+}
+
+func freshNet(n dockertest.FakeNetwork) dockertest.FakeNetwork {
+	n.Created = orphanEpoch.Add(-time.Hour)
+	return n
+}
+
+// fakeFacts is a StackFacts the tests set.
+type fakeFacts struct {
+	names, ids, externals map[string]bool
+	unknown               []string
+	busy                  string
+	err                   error
+}
+
+func (f *fakeFacts) Stacks(context.Context, string) (map[string]bool, map[string]bool, error) {
+	return f.names, f.ids, f.err
+}
+
+func (f *fakeFacts) ExternalNetworks(context.Context, string) (map[string]bool, []string, error) {
+	return f.externals, f.unknown, f.err
+}
+
+func (f *fakeFacts) Busy(string) (string, bool) { return f.busy, f.busy != "" }
+
+// rowLines projects the rows to name, node and class.
+func rowLines(rep OrphanReport) []string {
+	out := []string{}
+	for _, r := range rep.Rows {
+		out = append(out, fmt.Sprintf("%s@%s=%s", r.Name, r.Node, r.Class))
+	}
+	return out
+}
+
+// forgetReport drops the report the reader keeps for its TTL, so the next call judges again.
+func forgetReport(as *AddressSpaces, envID string) {
+	e := as.entry(envID)
+	e.omu.Lock()
+	defer e.omu.Unlock()
+	e.haveOrphans = false
+}
+
+func orphans(t *testing.T, as *AddressSpaces, envID string) OrphanReport {
+	t.Helper()
+	rep, err := as.Orphans(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatalf("Orphans: %v", err)
+	}
+	return rep
+}
+
+func wantRows(t *testing.T, rep OrphanReport, want ...string) {
+	t.Helper()
+	if got := rowLines(rep); !slices.Equal(got, append([]string{}, want...)) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+}
+
+// fanOrphans is the fan rig (three managers and a worker) and its reader; cfg tunes each node.
+func fanOrphans(t *testing.T, cfg func(i int, c *dockertest.FakeConfig)) (*fanRig, *AddressSpaces) {
+	t.Helper()
+	f := newFanRig(t, nil, cfg)
+	return f, NewAddressSpaces(f.svc, f.agg, f.c, AddressSpaceOptions{Now: f.clk.Now})
+}
 
 // The orphan check (plan 10-10, NET-04, D-08 to D-10, D-13). The agents are real sessions of the
 // real hub answering from fake daemons, as in addressing_test.go; the clock is the rig's.
@@ -62,5 +138,132 @@ func TestOrphansUnusedAfterGrace(t *testing.T) {
 		if s.LastInUseAt != 0 || s.FirstSeenAt != r.clk.Now().UnixNano() {
 			t.Errorf("clock = %+v, want first seen now and never in use", s)
 		}
+	}
+}
+
+func TestOrphansClassesOnSwarm(t *testing.T) {
+	ns := func(v string) map[string]string { return map[string]string{"com.docker.stack.namespace": v} }
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i == 4 {
+			// A stopped container of a stack that is gone, on the worker.
+			c.Containers = []dockertest.FakeContainer{{ID: "ghost", Names: []string{"/ghost_job"}, State: "exited", Labels: ns("ghost")}}
+			return
+		}
+		c.Networks = []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "ing", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true}),
+			oldNet(dockertest.FakeNetwork{ID: "n-gone", Name: "shop_default", Driver: "overlay", Scope: "swarm", Labels: ns("shop")}),
+			oldNet(dockertest.FakeNetwork{ID: "n-live", Name: "live_default", Driver: "overlay", Scope: "swarm", Labels: ns("live")}),
+			oldNet(dockertest.FakeNetwork{ID: "n-rec", Name: "recorded_default", Driver: "overlay", Scope: "swarm", Labels: ns("recorded")}),
+			oldNet(dockertest.FakeNetwork{ID: "n-ghost", Name: "ghost_default", Driver: "overlay", Scope: "swarm", Labels: ns("ghost")}),
+			oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"}),
+			oldNet(dockertest.FakeNetwork{ID: "n-used", Name: "used", Driver: "overlay", Scope: "swarm"}),
+			freshNet(dockertest.FakeNetwork{ID: "n-new", Name: "fresh_default", Driver: "overlay", Scope: "swarm", Labels: ns("fresh")}),
+		}
+		c.ServiceRows = []dockertest.FakeService{
+			{ID: "svc-l", Name: "live_web", Mode: "replicated", Running: 1, Desired: 1, Labels: ns("live")},
+			{ID: "svc-u", Name: "user", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"n-used"}},
+		}
+	})
+	as.WithStackFacts(&fakeFacts{names: map[string]bool{"recorded": true}})
+	rep := orphans(t, as, f.env.ID)
+	wantRows(t, rep, "shop_default@Cluster=orphaned", "loose@Cluster=unused")
+	o := rep.Rows[0]
+	if o.FormerOwner != "shop" || o.FormerOwnerKind != "stack" || o.Scope != "swarm" {
+		t.Errorf("orphaned row = %+v, want the former stack shop", o)
+	}
+	if !rep.Complete || len(rep.WithheldNodes) != 0 || len(rep.WithheldStacks) != 0 || rep.ManagerMissing {
+		t.Errorf("report = %+v, want a complete check with nothing withheld", rep)
+	}
+}
+
+func TestOrphansSpecialNetworksExcluded(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "gw", Name: "docker_gwbridge", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "mesh", Name: "renamed_mesh", Driver: "overlay", Scope: "swarm", Ingress: true}),
+			oldNet(dockertest.FakeNetwork{ID: "tpl", Name: "macvlan_tpl", Driver: "macvlan", Scope: "local", ConfigOnly: true}),
+			oldNet(dockertest.FakeNetwork{ID: "mv", Name: "macvlan_lan", Driver: "macvlan", Scope: "local", ConfigFrom: "macvlan_tpl"}),
+			oldNet(dockertest.FakeNetwork{ID: "tpl2", Name: "referenced_only", Driver: "macvlan", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "mv2", Name: "macvlan_two", Driver: "macvlan", Scope: "local", ConfigFrom: "referenced_only"}),
+			oldNet(dockertest.FakeNetwork{ID: "plain", Name: "plain", Driver: "bridge", Scope: "local"}),
+		}
+	})
+	rep := orphans(t, as, envID)
+	// The configured macvlan networks are not special, only the templates they name are: they are idle and unlabelled.
+	wantRows(t, rep, "macvlan_lan@edge-1=unused", "macvlan_two@edge-1=unused", "plain@edge-1=unused")
+}
+
+func TestOrphansKeepLabelAndRow(t *testing.T) {
+	r, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "k1", Name: "kept_by_label", Driver: "bridge", Scope: "local", Labels: map[string]string{"coaming.keep": "true"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k2", Name: "kept_by_row", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "k3", Name: "label_not_true", Driver: "bridge", Scope: "local", Labels: map[string]string{"coaming.keep": "false"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k4", Name: "other", Driver: "bridge", Scope: "local"}),
+		}
+	})
+	agg, _, err := r.agg.Snapshot(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Q.InsertNetworkKeep(testsupport.Context(t), sqlc.InsertNetworkKeepParams{
+		EnvID: envID, NodeID: agg.Networks[0].NodeID, Name: "kept_by_row", KeptBy: "u1", KeptAt: orphanEpoch.UnixNano(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wantRows(t, orphans(t, as, envID), "label_not_true@edge-1=unused", "other@edge-1=unused")
+}
+
+func TestOrphansExternalAndBusy(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "e1", Name: "traefik_public", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "e2", Name: "web_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "web"}}),
+			oldNet(dockertest.FakeNetwork{ID: "e3", Name: "db_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "db"}}),
+		}
+	})
+	facts := &fakeFacts{externals: map[string]bool{"traefik_public": true}, busy: "web"}
+	as.WithStackFacts(facts)
+	// A declared external network is excluded, and the network of the stack that holds the lock is skipped.
+	wantRows(t, orphans(t, as, envID), "db_default@edge-1=orphaned")
+	facts.busy = ""
+	forgetReport(as, envID)
+	wantRows(t, orphans(t, as, envID), "db_default@edge-1=orphaned", "web_default@edge-1=orphaned")
+}
+
+func TestOrphansLocalPerNode(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		switch i {
+		case 1:
+			c.Networks = []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "work-m", Name: "work", Driver: "bridge", Scope: "local"})}
+			c.Containers = append(c.Containers, dockertest.FakeContainer{
+				ID: "cw", Names: []string{"/uses-work"}, State: "running",
+				Networks: map[string]dockertest.FakeEndpoint{"work": {NetworkID: "work-m"}},
+			})
+		case 4:
+			c.Networks = []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "work-w", Name: "work", Driver: "bridge", Scope: "local"})}
+		}
+	})
+	rep := orphans(t, as, f.env.ID)
+	wantRows(t, rep, "work@wrk-1=unused")
+	if rep.Rows[0].Scope != "local" || rep.Rows[0].NodeID == "" {
+		t.Errorf("row = %+v, want a local network with the node it is on", rep.Rows[0])
+	}
+}
+
+func TestOrphansStandaloneProject(t *testing.T) {
+	project := func(v string) map[string]string { return map[string]string{"com.docker.compose.project": v} }
+	_, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "p1", Name: "shop_default", Driver: "bridge", Scope: "local", Labels: project("shop")}),
+			oldNet(dockertest.FakeNetwork{ID: "p2", Name: "blog_default", Driver: "bridge", Scope: "local", Labels: project("blog")}),
+		}
+	}, dockertest.FakeContainer{ID: "b1", Names: []string{"/blog-db-1"}, State: "exited", Labels: project("blog")})
+	rep := orphans(t, as, envID)
+	// blog still has a (stopped) container, so its stack exists; shop has nothing left.
+	wantRows(t, rep, "shop_default@edge-1=orphaned")
+	if rep.Rows[0].FormerOwner != "shop" || rep.Rows[0].FormerOwnerKind != "project" {
+		t.Errorf("row = %+v, want the former project shop", rep.Rows[0])
 	}
 }
