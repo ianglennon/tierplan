@@ -22,6 +22,8 @@ import { useT } from "@/i18n/use-t";
 
 interface RevisionContentsProps {
   detail: StackRevisionDetail;
+  // The stack's name: a swarm names its networks name_network, and the list shows the name the file gives.
+  stackName?: string;
 }
 
 // A titled block with its count; the table inside it scrolls sideways on a narrow screen.
@@ -48,12 +50,25 @@ function Section({
 // RevisionContents is exactly what a roll back to the revision would restore (STK-08, D-05): its files, its
 // variables and the images it pinned. The server withholds a secret variable's value and a secret file's
 // content, so a secret is drawn as hidden and there is no way to reveal it from History (P6 D-39).
-export function RevisionContents({ detail }: RevisionContentsProps) {
+export function RevisionContents({ detail, stackName }: RevisionContentsProps) {
   const t = useT();
   const seq = detail.item.seq;
   const files = detail.files ?? [];
   const vars = detail.vars ?? [];
   const pins = detail.pins ?? [];
+  // The subnets the revision's deploy gave its networks (D-20), by network name. A rollback re-uses the ones
+  // it copied, so its rows say so. A revision that recorded none has no section.
+  const prefix = stackName ? `${stackName}_` : "";
+  const subnets = Object.entries(detail.subnets ?? {})
+    .map(([name, subnet]) => ({
+      name:
+        prefix && name.startsWith(prefix) && name.length > prefix.length
+          ? name.slice(prefix.length)
+          : name,
+      subnet,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const reused = detail.item.origin === "rollback";
   return (
     <div className="flex min-w-0 flex-col gap-6">
       <p className="text-sm text-muted-foreground">{t("stackRevision.contents.helper")}</p>
@@ -147,6 +162,29 @@ export function RevisionContents({ detail }: RevisionContentsProps) {
           </Table>
         )}
       </Section>
+
+      {subnets.length > 0 ? (
+        <Section
+          title={t("stackHistory.network.title")}
+          count={t("stackHistory.network.count", { count: subnets.length })}
+        >
+          <ul className="flex flex-col divide-y text-sm">
+            {subnets.map((n) => (
+              <li key={n.name} className="flex flex-wrap items-baseline gap-x-2 px-3 py-2">
+                <span className="break-all">
+                  {t("stackHistory.network.line", { name: n.name })}{" "}
+                  <span className="font-mono">{n.subnet}</span>
+                </span>
+                {reused ? (
+                  <span className="text-xs text-muted-foreground">
+                    {t("stackHistory.network.reused")}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
 
       <Section
         title={t("stackRevision.contents.pins.title")}

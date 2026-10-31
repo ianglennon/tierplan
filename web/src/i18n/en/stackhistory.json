@@ -81,6 +81,13 @@
       "title": "Couldn't load the history.",
       "body": "Check the connection and try again.",
       "retry": "Retry loading history"
+    },
+    "network": {
+      "title": "Networks",
+      "count_one": "{{count, number}} subnet",
+      "count_other": "{{count, number}} subnets",
+      "line": "network {{name}}:",
+      "reused": "reused on rollback"
     }
   }
 }
