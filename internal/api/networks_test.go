@@ -889,16 +889,25 @@ func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWit
 	s.noDeletes(t)
 }
 
-// swarmWith is a swarm fixture whose managers also have the swarm-scoped overlay `extra` and the
-// services svcs, as a manager lists them.
-func swarmWith(t *testing.T, extra dockertest.FakeNetwork, svcs ...dockertest.FakeService) *swarmFix {
+// swarmTuned is a swarm fixture whose managers (not the worker) are tuned by tune, so each lists
+// the same services, networks and tasks, as the managers of one swarm do.
+func swarmTuned(t *testing.T, tune func(cfg *dockertest.FakeConfig)) *swarmFix {
 	t.Helper()
 	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
 		if strings.HasPrefix(host, "mgr-") {
-			cfg.Networks = append(cfg.Networks, extra)
-			cfg.ServiceRows = append(cfg.ServiceRows, svcs...)
-			cfg.Services = len(cfg.ServiceRows)
+			tune(cfg)
 		}
+	})
+}
+
+// swarmWith is a swarm fixture whose managers also have the swarm-scoped overlay `extra` and the
+// services svcs.
+func swarmWith(t *testing.T, extra dockertest.FakeNetwork, svcs ...dockertest.FakeService) *swarmFix {
+	t.Helper()
+	return swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, extra)
+		cfg.ServiceRows = append(cfg.ServiceRows, svcs...)
+		cfg.Services = len(cfg.ServiceRows)
 	})
 }
 
@@ -917,6 +926,90 @@ func TestNetworkDeleteRefusesPreviousSpecUser(t *testing.T) {
 		t.Errorf("the detail does not name the previous spec user: %s", rec.body)
 	}
 	s.noDeletes(t)
+}
+
+// The endpoint of a service still holds a virtual IP on a network its spec no longer names: the
+// network is in use.
+func TestNetworkDeleteRefusesVIPUser(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "vip-id", Name: "vipnet", Driver: "overlay", Scope: "swarm"})
+		cfg.ServiceRows = append(cfg.ServiceRows, dockertest.FakeService{ID: "svc-vip", Name: "vipped", Mode: "replicated", Running: 1, Desired: 1})
+		cfg.ServiceVIPNetworks = map[string][]string{"vipped": {"vip-id"}}
+	})
+	rec := s.del(t, "vip-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "service vipped (virtual IP)") {
+		t.Errorf("the detail does not name the virtual IP user: %s", rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// A task that an update has told to shut down is still attached until it has: the network is in use,
+// though no spec names it any more.
+func TestNetworkDeleteRefusesTaskUser(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "tnet-id", Name: "tnet", Driver: "overlay", Scope: "swarm"})
+		cfg.ServiceRows = append(cfg.ServiceRows, dockertest.FakeService{ID: "svc-t", Name: "tasked", Mode: "replicated", Running: 1, Desired: 1,
+			Spec: &swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "tasked"}}})
+		cfg.TasksFollowWrites = true
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetServiceTasks("tasked",
+			dockertest.FakeServiceTask{Node: "node-mgr-1", State: "running", Desired: "shutdown", Networks: []string{"tnet"}},
+			dockertest.FakeServiceTask{Node: "node-mgr-2", State: "shutdown", Desired: "shutdown", Networks: []string{"tnet"}})
+	}
+	rec := s.del(t, "tnet-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "task of service tasked on node-mgr-1") {
+		t.Errorf("the detail does not name the task: %s", rec.body)
+	}
+	if strings.Contains(string(rec.body), "node-mgr-2") {
+		t.Errorf("a task the swarm has finished with is named: %s", rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// No manager can be asked for the services: the picture is incomplete, so nothing is deleted and
+// the refusal says so.
+func TestNetworkDeleteRefusesWhenManagerReadFails(t *testing.T) {
+	t.Parallel()
+	s := swarmWith(t, dockertest.FakeNetwork{ID: "spare-id", Name: "spare", Driver: "overlay", Scope: "swarm"})
+	s.m1.fake.LoseQuorum()
+	s.m2.fake.LoseQuorum()
+	rec := s.del(t, "spare-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "node_unreachable" || !strings.Contains(string(rec.body), "no manager answered") {
+		t.Fatalf("%d %q, want 409 node_unreachable saying no manager answered: %s", rec.code, rec.ptyp, rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// Everything checks out and the engine still says something is attached, as when a container joins
+// between the check and the call: network_in_use, sent once and never again (P2 D-42).
+func TestNetworkDeleteEngineInUseIsNetworkInUse(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "late-id", Name: "late", Driver: "overlay", Scope: "swarm"})
+		cfg.RemoveErrors = map[string]string{"late": "error while removing network: network late id late-id has active endpoints"}
+	})
+	rec := s.del(t, "late-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	got := s.deletesOn()
+	if n := len(got["m1"]) + len(got["m2"]) + len(got["w"]); n != 1 {
+		t.Fatalf("deletes = %v, want exactly one remove request", got)
+	}
+	audits := s.networkAudits(t)
+	last := audits[len(audits)-1]
+	if last.Action != audit.ActionNetworkRemoved || last.Result != string(audit.ResultFailure) || last.Reason != "network_in_use" || last.Details["code"] != "network_in_use" {
+		t.Fatalf("audit = %+v, want network.removed failure network_in_use", last)
+	}
 }
 
 func TestDeleteNetworkAnOverlayNothingMentionsIsRemovedOnceThroughAManager(t *testing.T) {
