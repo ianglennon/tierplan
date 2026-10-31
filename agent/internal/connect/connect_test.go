@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1275,5 +1277,112 @@ func TestDenialsCapTheMethodAndThePathTheServerSent(t *testing.T) {
 	m := <-d.ch
 	if len(m.Method) > 16 || len(m.Path) > 256 {
 		t.Fatalf("method %d bytes, path %d bytes; want at most 16 and 256", len(m.Method), len(m.Path))
+	}
+}
+
+// hostRouteFixture copies the shared route-table fixture to a temp file, as the
+// bind mount would present it.
+func hostRouteFixture(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "proto", "hostroute", "testdata", "route-host.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "route")
+	if err := os.WriteFile(p, b, 0o600); err != nil { //nolint:gosec // a temp path
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestServeStreamHostNet(t *testing.T) {
+	if binary.NativeEndian.Uint16([]byte{1, 0}) != 1 {
+		t.Skip("the fixture is a little-endian host's /proc/net/route")
+	}
+	route := hostRouteFixture(t)
+	srv, cli := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveStream(srv, http.NotFoundHandler(), route, slog.New(slog.DiscardHandler))
+	}()
+	_ = cli.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := cli.Write([]byte{wire.StreamKindHostNet}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(cli) // returns at close: the stream ends after the document
+	if err != nil {
+		t.Fatalf("read the answer: %v", err)
+	}
+	<-done
+	var doc wire.HostNetDoc
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("decode %q: %v", raw, err)
+	}
+	if dec.More() {
+		t.Fatalf("more than one document: %q", raw)
+	}
+	want := []wire.HostRoute{
+		{Iface: "eth0", Dst: "192.168.2.0/24"},
+		{Iface: "docker0", Dst: "172.17.0.0/16"},
+		{Iface: "wg0", Dst: "10.8.0.0/24"},
+	}
+	if doc.V != 1 || doc.Error != "" || doc.Truncated || !slices.Equal(doc.Routes, want) {
+		t.Fatalf("doc = %+v, want routes %v", doc, want)
+	}
+}
+
+func TestServeStreamHostNetAnswersUnreadableWhenTheFileIsGone(t *testing.T) {
+	srv, cli := net.Pipe()
+	go serveStream(srv, http.NotFoundHandler(), filepath.Join(t.TempDir(), "absent"), slog.New(slog.DiscardHandler))
+	_ = cli.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = cli.Write([]byte{wire.StreamKindHostNet})
+	var doc wire.HostNetDoc
+	if err := json.NewDecoder(cli).Decode(&doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Error != wire.HostNetUnreadable || len(doc.Routes) != 0 {
+		t.Fatalf("doc = %+v", doc)
+	}
+}
+
+func TestServeStreamUnknownKindStillClosed(t *testing.T) {
+	srv, cli := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveStream(srv, http.NotFoundHandler(), "/nonexistent", slog.New(slog.DiscardHandler))
+	}()
+	_ = cli.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := cli.Write([]byte{0x07}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(cli)
+	if err != nil || len(b) != 0 {
+		t.Fatalf("an unknown kind answered %q (%v), want a close with nothing", b, err)
+	}
+	<-done
+}
+
+func TestServeStreamDockerHTTPStillGoesToTheProxy(t *testing.T) {
+	srv, cli := net.Pipe()
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("proxied")) })
+	go serveStream(srv, h, "/nonexistent", slog.New(slog.DiscardHandler))
+	_ = cli.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := cli.Write([]byte{wire.StreamKindDockerHTTP}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.Write([]byte("GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(cli), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "proxied" {
+		t.Fatalf("body = %q", body)
 	}
 }

@@ -78,6 +78,23 @@ func TestTheStreamKindAndSubprotocolAreFrozen(t *testing.T) {
 	if Subprotocol != "coaming.agent.v1" || ProtoVersion != 1 || StreamKindDockerHTTP != 0x01 {
 		t.Fatalf("a frozen wire constant changed: %q %d %#x", Subprotocol, ProtoVersion, StreamKindDockerHTTP)
 	}
+	if StreamKindControl != 0x02 || StreamKindHostNet != 0x03 {
+		t.Fatalf("a stream kind changed: control %#x, host net %#x", StreamKindControl, StreamKindHostNet)
+	}
+}
+
+func TestHostNetDocRoundTrips(t *testing.T) {
+	in := HostNetDoc{V: 1, Routes: []HostRoute{{Iface: "eth0", Dst: "192.168.2.0/24", Gateway: "192.168.2.1"}, {Iface: "wg0", Dst: "10.8.0.0/24"}}, Truncated: true}
+	if out := roundTrip(t, in); !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip changed the document:\n in: %+v\nout: %+v", in, out)
+	}
+	b, err := json.Marshal(HostNetDoc{V: 1, Routes: []HostRoute{{Iface: "wg0", Dst: "10.8.0.0/24"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"v":1,"routes":[{"iface":"wg0","dst":"10.8.0.0/24"}]}`; string(b) != want {
+		t.Fatalf("doc = %s, want %s", b, want)
+	}
 }
 
 func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
