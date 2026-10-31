@@ -549,3 +549,15 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 	})
 	return refs, nil
 }
+
+// TaskNetworkRef is one task of a swarm that is still alive and the networks it is attached
+// to.
+type TaskNetworkRef struct {
+	ID, ServiceID, ServiceName, NodeID, State string
+	Networks                                  []string
+}
+
+// TaskNetworkRefs is not written yet.
+func (c *Client) TaskNetworkRefs(ctx context.Context) ([]TaskNetworkRef, error) {
+	return nil, nil
+}
