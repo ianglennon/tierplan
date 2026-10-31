@@ -90,6 +90,11 @@ type AgentView struct {
 	// that give tasks host access. Known only while the agent is connected; a later
 	// plan reads it to tell, before a write, that a manager refuses host access.
 	PrivilegedServices bool
+	// HostNet is what the connected agent reported about reading its host's routes
+	// (wire.HostNetOK or wire.HostNetUnmounted), empty for an agent that reported
+	// nothing, which is one older than Phase 10. Known only while the agent is
+	// connected; the subnet picker's route check asks an agent only when it is "ok".
+	HostNet string
 }
 
 // TargetKey is the monitor key of the view's Docker engine: the agent's target, or for

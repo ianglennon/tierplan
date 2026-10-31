@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -379,6 +380,11 @@ type Agent struct {
 	// EKM replaces the TLS exporter value sent and signed. NoEKM sends none.
 	EKM   []byte
 	NoEKM bool
+	// HostNet is the hostNet fact reported in the handshake ("", wire.HostNetOK or
+	// wire.HostNetUnmounted). It overrides Facts.HostNet when set.
+	HostNet string
+	// HostRoutes are the routes AnswerHostNet writes on a host-net stream.
+	HostRoutes []wire.HostRoute
 }
 
 // Conn is a connection after the handshake.
@@ -395,7 +401,15 @@ type Conn struct {
 	// connection instead of answering.
 	Err error
 
-	ctx context.Context
+	// Streams counts every stream the server has opened to this agent and an
+	// acceptor of this connection has accepted, whatever its kind.
+	Streams atomic.Int32
+	// HostNetStreams counts the streams among them that began with
+	// wire.StreamKindHostNet.
+	HostNetStreams atomic.Int32
+
+	ctx        context.Context
+	hostRoutes []wire.HostRoute
 }
 
 // Dial runs the agent side of the handshake. It returns after the welcome or the
@@ -470,7 +484,7 @@ func (p *Pending) AwaitServerClose() error {
 func (p *Pending) Finish() *Conn {
 	s, t, a, ws, resp, ch, ctx := p.s, p.t, p.a, p.ws, p.resp, p.ch, p.ctx
 	t.Helper()
-	c := &Conn{WS: ws, ctx: ctx}
+	c := &Conn{WS: ws, ctx: ctx, hostRoutes: a.HostRoutes}
 	var data []byte
 	var err error
 
@@ -500,6 +514,9 @@ func (p *Pending) Finish() *Conn {
 	facts := wire.Facts{EngineID: "ENG:" + defaultHost(a), Hostname: "test-host", EngineReachable: true}
 	if a.Facts != nil {
 		facts = *a.Facts
+	}
+	if a.HostNet != "" {
+		facts.HostNet = a.HostNet
 	}
 
 	nonce := make([]byte, 32)
@@ -660,6 +677,40 @@ func (c *Conn) AnswerDocker(t testing.TB, status int, body string) {
 				_ = req.Body.Close()
 				_, _ = fmt.Fprintf(st, "HTTP/1.1 %d %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
 					status, http.StatusText(status), len(body), body)
+			}()
+		}
+	}()
+}
+
+// AnswerHostNet serves the streams the hub opens on this connection like an agent
+// that can read its host's routes: a stream that begins with wire.StreamKindHostNet
+// is answered with one wire.HostNetDoc holding the Agent's HostRoutes and closed;
+// a stream of any other kind is closed with nothing written, as a real agent does.
+// Streams and HostNetStreams count what arrived. It runs until the connection ends.
+func (c *Conn) AnswerHostNet(t testing.TB) {
+	t.Helper()
+	if c.Mux == nil {
+		t.Fatal("tunneltest: no multiplexer on this connection")
+	}
+	go func() {
+		for {
+			st, err := c.Mux.Accept()
+			if err != nil {
+				return
+			}
+			c.Streams.Add(1)
+			go func() {
+				defer func() { _ = st.Close() }()
+				var kind [1]byte
+				if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != wire.StreamKindHostNet {
+					return
+				}
+				c.HostNetStreams.Add(1)
+				doc := wire.HostNetDoc{V: 1, Routes: c.hostRoutes}
+				if doc.Routes == nil {
+					doc.Routes = []wire.HostRoute{}
+				}
+				_ = json.NewEncoder(st).Encode(doc)
 			}()
 		}
 	}()

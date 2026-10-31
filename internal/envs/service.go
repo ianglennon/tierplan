@@ -318,7 +318,7 @@ func (s *Service) input(ctx context.Context, row sqlc.Environment, now time.Time
 		if l, ok := live[a.ID]; ok {
 			v.Connected, v.ConnectedAt, v.LastSeen, v.Ended, v.LastCode = l.Connected, l.ConnectedAt, l.LastSeen, l.Ended, l.LastCode
 			v.EngineReachable, v.ClockOffset = l.EngineReachable, l.ClockOffset
-			v.ReadOnly, v.PrivilegedServices = l.ReadOnly, l.PrivilegedServices
+			v.ReadOnly, v.PrivilegedServices, v.HostNet = l.ReadOnly, l.PrivilegedServices, l.HostNet
 			if l.Version != "" {
 				v.Version = l.Version
 			}
