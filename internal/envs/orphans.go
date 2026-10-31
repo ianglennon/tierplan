@@ -282,6 +282,92 @@ func (s *AddressSpaces) Recheck(ctx context.Context, envID, networkID, nodeID st
 	return OrphanRow{}, "", ErrNetworkAmbiguous
 }
 
+// KeptRow is one network kept out of the orphan list (D-11): by a keep row a person made, by the
+// coaming.keep=true label on the network, or both.
+type KeptRow struct {
+	Name string
+	// Node is the node's name, empty for a swarm-wide network and for a keep row whose node is no
+	// longer known. NodeID is the node's ID as the keep is keyed, "" for a swarm-wide network.
+	Node, NodeID string
+	// Subnets are the network's, when it is present.
+	Subnets []string
+	// ByLabel is true when the network carries the keep label, which only the network's owner
+	// can remove. KeptBy (a user ID) and KeptAt come from the keep row, empty when there is none.
+	ByLabel bool
+	KeptBy  string
+	KeptAt  time.Time
+	// Present is true when a network of that name (and node) exists now.
+	Present bool
+}
+
+// KeepNodeKey is the node a keep for the network row is keyed by: "" for a swarm-wide network, the
+// node's ID for a local one.
+func KeepNodeKey(row NetworkRow) string {
+	if row.Scope == dockerx.ScopeSwarm {
+		return ""
+	}
+	return row.NodeID
+}
+
+// Kept lists what is kept out of the orphan list: every keep row, whether or not its network
+// exists now, and every network that carries the keep label. A network that has both is one row.
+// Rows are ordered by name, then node.
+func (s *AddressSpaces) Kept(ctx context.Context, envID string) ([]KeptRow, error) {
+	keepRows, err := s.svc.st.RQ.ListNetworkKeeps(ctx, envID)
+	if err != nil {
+		return nil, fmt.Errorf("read the networks kept from the orphan list: %w", err)
+	}
+	agg, _, err := s.agg.Snapshot(ctx, envID)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make(map[string]string, len(agg.Nodes))
+	for _, n := range agg.Nodes {
+		nodes[n.ID] = n.Name
+	}
+
+	out := make([]KeptRow, 0, len(keepRows))
+	at := make(map[NetKey]int, len(keepRows))
+	for _, k := range keepRows {
+		key := NetKey{NodeID: k.NodeID, NetworkID: k.Name}
+		at[key] = len(out)
+		out = append(out, KeptRow{
+			Name: k.Name, NodeID: k.NodeID, Node: nodes[k.NodeID], Subnets: []string{},
+			KeptBy: k.KeptBy, KeptAt: time.Unix(0, k.KeptAt).UTC(),
+		})
+	}
+	seen := map[NetKey]bool{}
+	for _, n := range agg.Networks {
+		key := NetKey{NodeID: KeepNodeKey(n), NetworkID: n.Name}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		i, have := at[key]
+		labelled := n.Labels[labelKeep] == "true"
+		if !have && !labelled {
+			continue
+		}
+		if !have {
+			i = len(out)
+			out = append(out, KeptRow{Name: n.Name})
+		}
+		r := &out[i]
+		r.NodeID, r.Node, r.Present, r.ByLabel = KeepNodeKey(n), n.Node, true, labelled
+		r.Subnets = slices.Clone(n.Subnets)
+		if r.Subnets == nil {
+			r.Subnets = []string{}
+		}
+	}
+	slices.SortFunc(out, func(a, b KeptRow) int {
+		if c := strings.Compare(a.Name, b.Name); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Node, b.Node)
+	})
+	return out, nil
+}
+
 // ForgetOrphans drops the cached orphan report of an environment, so the next read judges again.
 // A removal or a change of the keeps calls it, so the list never shows what was just changed.
 func (s *AddressSpaces) ForgetOrphans(envID string) {

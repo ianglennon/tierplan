@@ -452,6 +452,16 @@
             "$ref": "#/components/schemas/OverlayUsageBody",
             "description": "The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none"
           },
+          "kept": {
+            "description": "The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name",
+            "items": {
+              "$ref": "#/components/schemas/KeptRowBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "measured": {
             "description": "True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set",
             "type": "boolean"
@@ -537,7 +547,8 @@
           "networks",
           "networksTotal",
           "networksTruncated",
-          "orphans"
+          "orphans",
+          "kept"
         ],
         "type": "object"
       },
@@ -7213,6 +7224,119 @@
         },
         "required": [
           "envId"
+        ],
+        "type": "object"
+      },
+      "KeepBody": {
+        "additionalProperties": false,
+        "properties": {
+          "kept": {
+            "description": "How many networks are newly kept. One that was kept already changes and records nothing and is not counted",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kept"
+        ],
+        "type": "object"
+      },
+      "KeepRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "targets": {
+            "description": "The networks to keep, 1 to 100 (T-10-33)",
+            "items": {
+              "$ref": "#/components/schemas/KeepTarget"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "type": "object"
+      },
+      "KeepTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "description": "The network's name. A keep follows the name, so it holds for a network of that name made again",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it",
+            "maxLength": 128,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "KeptRowBody": {
+        "additionalProperties": false,
+        "properties": {
+          "keptAt": {
+            "description": "When it was kept; absent when kept by label alone",
+            "format": "date-time",
+            "type": "string"
+          },
+          "keptBy": {
+            "description": "label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it",
+            "enum": [
+              "label",
+              "user"
+            ],
+            "type": "string"
+          },
+          "keptByName": {
+            "description": "The display name of the person who kept it; empty when kept by label or when that person is not known",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node": {
+            "description": "The node a local network is on, Cluster for a swarm-wide network, empty for a keep whose network is gone and whose node is not known",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The node the keep is for: the node's ID for a local network, empty for a swarm-wide one",
+            "type": "string"
+          },
+          "present": {
+            "description": "True when a network of this name (and node) exists now. A keep outlives its network, so it holds when one of that name is made again",
+            "type": "boolean"
+          },
+          "subnets": {
+            "description": "The network's subnets in CIDR notation; empty when it is not present or has none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "node",
+          "nodeId",
+          "subnets",
+          "keptBy",
+          "keptByName",
+          "present"
         ],
         "type": "object"
       },
@@ -21272,6 +21396,126 @@
           }
         },
         "summary": "The address pools of an environment and how full each is",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space/keeps": {
+      "put": {
+        "description": "Stores a keep for each named network (1 to 100), in one transaction: the networks are never listed as orphaned or unused, and a network of that name made again is kept too. A network that is kept already changes and records nothing. Each new keep is audited as network.kept. 422 node_required when a name is held by a local network on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.",
+        "operationId": "keepNetworks",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeepRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeepBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Keep networks out of the orphan list",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space/keeps/{name}": {
+      "delete": {
+        "description": "Removes the keep of one network, audited as network.unkept. 404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. 422 node_required when a local network of that name is on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.",
+        "operationId": "unkeepNetwork",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The network's name",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The network's name",
+              "maxLength": 128,
+              "type": "string"
+            }
+          },
+          {
+            "description": "The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it",
+            "explode": false,
+            "in": "query",
+            "name": "nodeId",
+            "schema": {
+              "description": "The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it",
+              "maxLength": 128,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Stop keeping a network out of the orphan list",
         "tags": [
           "environments"
         ]

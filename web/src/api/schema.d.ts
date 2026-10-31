@@ -432,6 +432,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space/keeps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Keep networks out of the orphan list
+         * @description Stores a keep for each named network (1 to 100), in one transaction: the networks are never listed as orphaned or unused, and a network of that name made again is kept too. A network that is kept already changes and records nothing. Each new keep is audited as network.kept. 422 node_required when a name is held by a local network on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
+         */
+        put: operations["keepNetworks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/keeps/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Stop keeping a network out of the orphan list
+         * @description Removes the keep of one network, audited as network.unkept. 404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. 422 node_required when a local network of that name is on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
+         */
+        delete: operations["unkeepNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/address-space/orphans/{networkId}": {
         parameters: {
             query?: never;
@@ -4917,6 +4957,8 @@ export interface components {
             envType: "swarm" | "standalone";
             /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
             ingress?: components["schemas"]["OverlayUsageBody"];
+            /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
+            kept: components["schemas"]["KeptRowBody"][] | null;
             /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
             measured: boolean;
             /** @description The subnet map: every network of every reporting node, one row for a swarm-wide network and one per node for a local one, ordered by the numeric start address of the first IPv4 subnet, then its mask, name and node; a network with no IPv4 subnet is last. At most 5000 rows (the page shows 500 and searches the rest); networksTotal is the full count. The overlaps are decided on the server over every row, before the cap */
@@ -7527,6 +7569,46 @@ export interface components {
             type?: string;
             /** @description The registry user name; 422 username_required */
             username?: string;
+        };
+        KeepBody: {
+            /**
+             * Format: int64
+             * @description How many networks are newly kept. One that was kept already changes and records nothing and is not counted
+             */
+            kept: number;
+        };
+        KeepRequest: {
+            /** @description The networks to keep, 1 to 100 (T-10-33) */
+            targets: components["schemas"]["KeepTarget"][] | null;
+        };
+        KeepTarget: {
+            /** @description The network's name. A keep follows the name, so it holds for a network of that name made again */
+            name: string;
+            /** @description The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it */
+            nodeId?: string;
+        };
+        KeptRowBody: {
+            /**
+             * Format: date-time
+             * @description When it was kept; absent when kept by label alone
+             */
+            keptAt?: string;
+            /**
+             * @description label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it
+             * @enum {string}
+             */
+            keptBy: "label" | "user";
+            /** @description The display name of the person who kept it; empty when kept by label or when that person is not known */
+            keptByName: string;
+            name: string;
+            /** @description The node a local network is on, Cluster for a swarm-wide network, empty for a keep whose network is gone and whose node is not known */
+            node: string;
+            /** @description The node the keep is for: the node's ID for a local network, empty for a swarm-wide one */
+            nodeId: string;
+            /** @description True when a network of this name (and node) exists now. A keep outlives its network, so it holds when one of that name is made again */
+            present: boolean;
+            /** @description The network's subnets in CIDR notation; empty when it is not present or has none */
+            subnets: string[] | null;
         };
         LinkBody: {
             /**
@@ -13564,6 +13646,78 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AddressSpaceBody"];
                 };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    keepNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeepRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeepBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unkeepNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network's name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Error */
             default: {

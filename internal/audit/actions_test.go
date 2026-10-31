@@ -108,6 +108,10 @@ var phase4DetailKeys = map[string][]string{
 	// The saved inspect of an orphaned or unused network is written before it is removed
 	// (plan 10-12, D-12): its whole masked inspect document is the inspect detail.
 	audit.ActionNetworkInspectSaved: {"name", "node", "source", "inspect", "masked"},
+	// Keeping a network out of the orphan list, and taking it back (plan 10-12, D-11); bulk is
+	// "true" when one request kept several.
+	audit.ActionNetworkKept:   {"name", "node", "bulk"},
+	audit.ActionNetworkUnkept: {"name", "node", "bulk"},
 	// Connecting a container records the network, the container, its node and, when asked
 	// for, the alias and addresses; disconnecting the first three.
 	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
@@ -532,7 +536,8 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"container.removed": audit.ActionContainerRemoved,
 		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
 		"network.inspect_saved": audit.ActionNetworkInspectSaved,
-		"network.connected":     audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
+		"network.kept":          audit.ActionNetworkKept, "network.unkept": audit.ActionNetworkUnkept,
+		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
 		"logs.viewed": audit.ActionLogsViewed, "logs.downloaded": audit.ActionLogsDownloaded,
 		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed, "shell.ended": audit.ActionShellEnded,

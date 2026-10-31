@@ -65,6 +65,7 @@ type AddressSpaceBody struct {
 	NetworksTruncated bool                `json:"networksTruncated" doc:"True when networksTotal is more than the rows returned"`
 
 	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
+	Kept            []KeptRowBody        `json:"kept" doc:"The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name"`
 	OrphansWithheld *OrphansWithheldBody `json:"orphansWithheld,omitempty" doc:"Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld"`
 }
 
@@ -211,6 +212,7 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			body.Networks, body.NetworksTotal, body.NetworksTruncated = mapRows(agg.Networks, use, known, space.Overlays)
 			body.NotReporting = unionNames(body.NotReporting, agg.NotReporting)
 			body.Orphans, body.OrphansWithheld = orphanBody(ctx, d, env.ID)
+			body.Kept = keptBody(ctx, d, env.ID)
 			return &AddressSpaceOutput{CacheControl: "no-store", Body: body}, nil
 		})
 	registerAddressOrphans(r, d)

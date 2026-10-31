@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/internal/rbac"
 	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 )
 
 const (
@@ -39,7 +41,61 @@ const (
 	reasonInUseAgain  = "in_use_again"
 	reasonNotOrphaned = "not_orphaned"
 	reasonNodeMissing = "node_missing"
+
+	problemKeptByLabel  = "kept_by_label"
+	problemKeepNotFound = "keep_not_found"
 )
+
+// KeepTarget is one network to keep out of the orphan list.
+type KeepTarget struct {
+	Name   string `json:"name" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The network's name. A keep follows the name, so it holds for a network of that name made again"`
+	NodeID string `json:"nodeId,omitempty" maxLength:"128" doc:"The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it"`
+}
+
+// KeepRequest is the body of PUT /api/env/{envId}/address-space/keeps.
+type KeepRequest struct {
+	Targets []KeepTarget `json:"targets" minItems:"1" maxItems:"100" doc:"The networks to keep, 1 to 100 (T-10-33)"`
+}
+
+// KeepInput is the path and body of the keep route.
+type KeepInput struct {
+	EnvironmentPathInput
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+	Body      KeepRequest
+}
+
+// KeepBody is the answer of the keep route.
+type KeepBody struct {
+	Kept int `json:"kept" minimum:"0" doc:"How many networks are newly kept. One that was kept already changes and records nothing and is not counted"`
+}
+
+// KeepOutput wraps KeepBody for huma.
+type KeepOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         KeepBody
+}
+
+// UnkeepInput is the path and query of the unkeep route.
+type UnkeepInput struct {
+	EnvironmentPathInput
+	Name   string `path:"name" maxLength:"128" doc:"The network's name"`
+	NodeID string `query:"nodeId" maxLength:"128" doc:"The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it"`
+	// UserAgent is read only to record it in the audit log; it is not part of the contract.
+	UserAgent string `header:"User-Agent" hidden:"true"`
+}
+
+// KeptRowBody is one network kept out of the orphan list.
+type KeptRowBody struct {
+	Name       string   `json:"name"`
+	Node       string   `json:"node" doc:"The node a local network is on, Cluster for a swarm-wide network, empty for a keep whose network is gone and whose node is not known"`
+	NodeID     string   `json:"nodeId" doc:"The node the keep is for: the node's ID for a local network, empty for a swarm-wide one"`
+	Subnets    []string `json:"subnets" doc:"The network's subnets in CIDR notation; empty when it is not present or has none"`
+	KeptBy     string   `json:"keptBy" enum:"label,user" doc:"label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it"`
+	KeptByName string   `json:"keptByName" doc:"The display name of the person who kept it; empty when kept by label or when that person is not known"`
+	KeptAt     string   `json:"keptAt,omitempty" format:"date-time" doc:"When it was kept; absent when kept by label alone"`
+	Present    bool     `json:"present" doc:"True when a network of this name (and node) exists now. A keep outlives its network, so it holds when one of that name is made again"`
+}
 
 // OrphanDeleteInput is the path and query of the orphan delete route.
 type OrphanDeleteInput struct {
@@ -89,6 +145,242 @@ func registerAddressOrphans(r *httpx.Router, d AddressSpaceDeps) {
 			}
 			return &OrphanDeleteOutput{CacheControl: "no-store", Body: body}, nil
 		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "keepNetworks", Method: http.MethodPut, Path: "/api/env/{envId}/address-space/keeps",
+		Summary: "Keep networks out of the orphan list",
+		Description: "Stores a keep for each named network (1 to 100), in one transaction: the networks are never listed as orphaned or unused, and a network of that name made again is kept too. " +
+			"A network that is kept already changes and records nothing. Each new keep is audited as network.kept. " +
+			"422 node_required when a name is held by a local network on more than one node and no nodeId is given. " +
+			"Needs networks.keep (Admin) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermNetworksKeep, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *KeepInput) (*KeepOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.AddressSpaces == nil || d.Aggregator == nil || d.Audit == nil || d.Store == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			n, err := keepNetworks(ctx, d, p, env.ID, in)
+			if err != nil {
+				return nil, err
+			}
+			return &KeepOutput{CacheControl: "no-store", Body: KeepBody{Kept: n}}, nil
+		})
+
+	httpx.Register(r, huma.Operation{
+		OperationID: "unkeepNetwork", Method: http.MethodDelete, Path: "/api/env/{envId}/address-space/keeps/{name}",
+		Summary: "Stop keeping a network out of the orphan list",
+		Description: "Removes the keep of one network, audited as network.unkept. " +
+			"404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. " +
+			"422 node_required when a local network of that name is on more than one node and no nodeId is given. " +
+			"Needs networks.keep (Admin) on the environment.",
+		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
+	}, rbac.Requirement{Perm: rbac.PermNetworksKeep, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *UnkeepInput) (*struct{}, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.AddressSpaces == nil || d.Aggregator == nil || d.Audit == nil || d.Store == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return nil, unkeepNetwork(ctx, d, p, env.ID, in)
+		})
+}
+
+// keepNode is the node a keep for the network called name is keyed by: "" for a swarm-wide
+// network, else the node's ID. A name held by local networks on several nodes needs the node.
+// labelKept says whether a network of that name on that node carries the keep label.
+func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept bool, err error) {
+	var local []envs.NetworkRow
+	for _, n := range agg.Networks {
+		if n.Name != name {
+			continue
+		}
+		if n.Scope == dockerx.ScopeSwarm {
+			return "", n.Labels["coaming.keep"] == "true", nil
+		}
+		if nodeID == "" || n.NodeID == nodeID {
+			local = append(local, n)
+		}
+	}
+	switch {
+	case nodeID != "":
+		return nodeID, len(local) > 0 && local[0].Labels["coaming.keep"] == "true", nil
+	case len(local) == 1:
+		return local[0].NodeID, local[0].Labels["coaming.keep"] == "true", nil
+	case len(local) > 1:
+		return "", false, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
+			"More than one node has a network named "+name+". Say which one (nodeId).")
+	}
+	return "", false, nil
+}
+
+// keepInternal logs a failure of the store and answers it as a failed request.
+func keepInternal(d AddressSpaceDeps, what, envID string, err error) error {
+	d.Log.Error("could not change the networks kept from the orphan list", "step", what, "environment", envID, "error", err)
+	return huma.Error500InternalServerError("internal error")
+}
+
+// keepNetworks stores a keep for each target not kept already. The rows and their audit entries
+// are one transaction: a request that changes nothing writes nothing.
+func keepNetworks(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, envID string, in *KeepInput) (int, error) {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return 0, snapshotProblem(d.Log, envID, err)
+	}
+	type target struct{ name, node string }
+	var targets []target
+	seen := map[target]bool{}
+	for _, t := range in.Body.Targets {
+		node, _, err := keepNode(agg, t.Name, t.NodeID)
+		if err != nil {
+			return 0, err
+		}
+		k := target{t.Name, node}
+		if !seen[k] {
+			seen[k] = true
+			targets = append(targets, k)
+		}
+	}
+
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, keepInternal(d, "begin", envID, err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	existing, err := q.ListNetworkKeeps(ctx, envID)
+	if err != nil {
+		return 0, keepInternal(d, "list", envID, err)
+	}
+	have := make(map[target]bool, len(existing))
+	for _, k := range existing {
+		have[target{k.Name, k.NodeID}] = true
+	}
+	bulk := ""
+	if len(targets) > 1 {
+		bulk = "true"
+	}
+	kept := 0
+	for _, t := range targets {
+		if have[t] {
+			continue
+		}
+		if err := q.InsertNetworkKeep(ctx, sqlc.InsertNetworkKeepParams{
+			EnvID: envID, NodeID: t.node, Name: t.name, KeptBy: p.ID, KeptAt: d.Now().UTC().UnixNano(),
+		}); err != nil {
+			return 0, keepInternal(d, "keep", envID, err)
+		}
+		if err := d.Audit.RecordTx(ctx, tx, keepEntry(ctx, p, envID, in.UserAgent, audit.ActionNetworkKept, t.name, t.node, bulk)); err != nil {
+			return 0, keepInternal(d, "audit", envID, err)
+		}
+		kept++
+	}
+	if kept == 0 {
+		return 0, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, keepInternal(d, "commit", envID, err)
+	}
+	d.AddressSpaces.ForgetOrphans(envID)
+	return kept, nil
+}
+
+// keepEntry is the audit entry of a keep or an unkeep. The target is the network's name: a keep
+// is keyed by it, and the network may not exist.
+func keepEntry(ctx context.Context, p *rbac.Principal, envID, userAgent, action, name, node, bulk string) audit.Entry {
+	details := map[string]string{"name": name}
+	if node != "" {
+		details["node"] = node
+	}
+	if bulk != "" {
+		details["bulk"] = bulk
+	}
+	return audit.Entry{
+		Actor: p.AuditActor(), Action: action, TargetType: networkTargetType, TargetID: name, EnvID: envID,
+		Result: audit.ResultSuccess, IP: httpx.ClientIP(ctx), UserAgent: userAgent, Details: details,
+	}
+}
+
+// unkeepNetwork removes the keep row of one network. A network kept only by its label has no row
+// to remove, and is told so.
+func unkeepNetwork(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, envID string, in *UnkeepInput) error {
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	node, labelKept, err := keepNode(agg, in.Name, in.NodeID)
+	if err != nil {
+		return err
+	}
+	tx, err := d.Store.Write.BeginTx(ctx, nil)
+	if err != nil {
+		return keepInternal(d, "begin", envID, err)
+	}
+	defer func() { _ = tx.Rollback() }() // a no-op once committed
+	q := d.Store.Q.WithTx(tx)
+	n, err := q.DeleteNetworkKeep(ctx, sqlc.DeleteNetworkKeepParams{EnvID: envID, NodeID: node, Name: in.Name})
+	if err != nil {
+		return keepInternal(d, "unkeep", envID, err)
+	}
+	if n == 0 {
+		if labelKept {
+			return httpx.Problem(http.StatusConflict, problemKeptByLabel,
+				"Kept by the coaming.keep label on the network. Remove the label to stop keeping it.")
+		}
+		return httpx.Problem(http.StatusNotFound, problemKeepNotFound, in.Name+" is not kept.")
+	}
+	if err := d.Audit.RecordTx(ctx, tx, keepEntry(ctx, p, envID, in.UserAgent, audit.ActionNetworkUnkept, in.Name, node, "")); err != nil {
+		return keepInternal(d, "audit", envID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return keepInternal(d, "commit", envID, err)
+	}
+	d.AddressSpaces.ForgetOrphans(envID)
+	return nil
+}
+
+// keptBody is the kept part of the page. A read that fails leaves the list empty and never fails
+// the page.
+func keptBody(ctx context.Context, d AddressSpaceDeps, envID string) []KeptRowBody {
+	rows, err := d.AddressSpaces.Kept(ctx, envID)
+	if err != nil {
+		d.Log.Warn("could not list the networks kept from the orphan list", "environment", envID, "error", err)
+		return []KeptRowBody{}
+	}
+	names := map[string]string{}
+	out := make([]KeptRowBody, 0, len(rows))
+	for _, r := range rows {
+		b := KeptRowBody{Name: r.Name, Node: r.Node, NodeID: r.NodeID, Subnets: append([]string{}, r.Subnets...), KeptBy: "user", Present: r.Present}
+		if r.ByLabel {
+			b.KeptBy = "label"
+		}
+		if r.KeptBy != "" {
+			if !r.ByLabel {
+				b.KeptByName = keeperName(ctx, d, names, r.KeptBy)
+			}
+			b.KeptAt = r.KeptAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// keeperName is the display name of the user who kept a network: the display name, else the
+// username, else empty when the user is not known.
+func keeperName(ctx context.Context, d AddressSpaceDeps, cache map[string]string, userID string) string {
+	if name, ok := cache[userID]; ok {
+		return name
+	}
+	name := ""
+	if d.Store != nil {
+		if u, err := d.Store.RQ.GetUserByID(ctx, userID); err == nil {
+			name = u.DisplayName
+			if name == "" {
+				name = u.Username
+			}
+		}
+	}
+	cache[userID] = name
+	return name
 }
 
 // deleteOrphan removes one orphaned or unused network. It judges the network again from a fresh

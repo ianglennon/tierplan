@@ -46,6 +46,7 @@ This page is generated from the permission registry in `internal/rbac/permission
 | `images.read` | environment | yes | yes | yes | yes | no | View images |
 | `janitor.policy` | environment | no | extra | yes | yes | yes | Change cleanup policy |
 | `networks.connect` | environment | no | yes | yes | yes | no | Connect and disconnect containers and networks |
+| `networks.keep` | environment | no | no | yes | yes | no | Keep or stop keeping networks out of the orphan list |
 | `networks.manage` | environment | no | no | yes | yes | no | Create and delete networks |
 | `networks.read` | environment | yes | yes | yes | yes | no | View networks |
 | `nodes.manage` | environment | no | no | yes | yes | no | Drain, pause, activate, promote, demote, label and remove nodes |

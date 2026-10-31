@@ -178,6 +178,8 @@
         "created": "Network created",
         "removed": "Network removed",
         "inspect_saved": "Network details saved before removal",
+        "kept": "Network kept off the orphan list",
+        "unkept": "Network no longer kept off the orphan list",
         "connected": "Container connected to network",
         "disconnected": "Container disconnected from network"
       },

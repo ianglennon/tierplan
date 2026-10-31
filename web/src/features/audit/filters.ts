@@ -97,6 +97,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "network.created",
   "network.removed",
   "network.inspect_saved",
+  "network.kept",
+  "network.unkept",
   "network.connected",
   "network.disconnected",
   "volume.created",

@@ -145,6 +145,8 @@ const (
 	ActionNetworkCreated             = "network.created"
 	ActionNetworkRemoved             = "network.removed"
 	ActionNetworkInspectSaved        = "network.inspect_saved" // the whole masked inspect of a network, saved before it is removed (D-12)
+	ActionNetworkKept                = "network.kept"          // a person asked never to list a network as orphaned or unused (D-11)
+	ActionNetworkUnkept              = "network.unkept"        // and took it back
 	ActionNetworkConnected           = "network.connected"
 	ActionNetworkDisconnected        = "network.disconnected"
 	ActionVolumeCreated              = "volume.created"

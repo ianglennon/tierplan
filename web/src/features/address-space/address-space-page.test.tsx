@@ -59,6 +59,7 @@ const space = (extra: Partial<AddressSpace> = {}): AddressSpace => ({
   networksTruncated: false,
   notReporting: [],
   orphans: [],
+  kept: [],
   overlays: [],
   pools: [pool()],
   ...extra,
