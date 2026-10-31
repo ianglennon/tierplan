@@ -166,6 +166,7 @@ type AddressPoolBody struct {
 	LargestFreeSubnets int64  `json:"largestFreeSubnets" minimum:"0" doc:"How many blocks of the pool's mask largestFree holds. 0 with an empty largestFree"`
 	Source             string `json:"source" enum:"swarm,daemon,defaults,entered" doc:"Where the pool came from: swarm (the swarm's own, or its built-in 10.0.0.0/8), daemon (the host's default-address-pools setting), defaults (Docker's built-in pools, because the host sets none) or entered (a pool a person entered)"`
 	Estimated          bool   `json:"estimated" doc:"True when the numbers cannot be taken as exact. Every standalone row is: the daemon skips pool slots that overlap routes of the host, and engines differ"`
+	HostRouteBlocks    int64  `json:"hostRouteBlocks" minimum:"0" doc:"How many of the used blocks only a route of the host takes: blocks the daemon will not hand out because a route overlaps them and no Docker network holds. 0 for a swarm and when the host's routes could not be read"`
 }
 
 // RegisterAddressSpace registers the address-space routes. Nothing here is cached beyond the
@@ -283,7 +284,7 @@ func addressSpaceBody(s envs.AddressSpace) AddressSpaceBody {
 		row := AddressPoolBody{
 			CIDR: p.Pool.Base.String(), Mask: p.Pool.Size,
 			Used: blocks(p.Used), Capacity: blocks(p.Capacity), Percent: p.Percent, State: string(p.State),
-			LargestFreeSubnets: blocks(p.LargestFreeBlocks), Source: p.Source, Estimated: p.Estimated,
+			LargestFreeSubnets: blocks(p.LargestFreeBlocks), Source: p.Source, Estimated: p.Estimated, HostRouteBlocks: blocks(p.HostRouteBlocks),
 		}
 		if p.LargestFree.IsValid() {
 			row.LargestFree = p.LargestFree.String()

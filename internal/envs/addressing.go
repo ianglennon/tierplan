@@ -83,6 +83,10 @@ type PoolUsage struct {
 	netspace.PoolStat
 	Source    string
 	Estimated bool
+	// HostRouteBlocks is how many of the blocks counted in Used only the host's routes take: blocks
+	// the daemon will not hand out because a route of the host overlaps them, and that no Docker
+	// network holds. Zero unless the host's route check was ok (RESEARCH F1).
+	HostRouteBlocks uint64
 }
 
 // OverlayUsage is one swarm overlay network and how many of its addresses are handed out. The
@@ -186,6 +190,10 @@ type AddressSpaces struct {
 	// facts are what Coaming's own stacks say about a network (WithStackFacts); nil until set.
 	facts StackFacts
 
+	// routes reads the routes of a standalone host (WithHostRoutes); nil until set, and no route
+	// is then counted.
+	routes *HostRoutes
+
 	mu      sync.Mutex
 	entries map[string]*addressEntry
 
@@ -248,6 +256,13 @@ func (s *AddressSpaces) entry(envID string) *addressEntry {
 		s.entries[envID] = e
 	}
 	return e
+}
+
+// WithHostRoutes sets the reader of the hosts' routes. A standalone host's pools then count the
+// blocks its routes overlap, which its daemon skips. It returns s.
+func (s *AddressSpaces) WithHostRoutes(h *HostRoutes) *AddressSpaces {
+	s.routes = h
+	return s
 }
 
 // LockAllocation takes the environment's allocation lock and returns the function that gives it
@@ -627,14 +642,48 @@ func (s *AddressSpaces) fetchStandalone(ctx context.Context, agg Aggregate, out 
 	}
 	// Only the host's own networks take its local pools: an overlay is the swarm's.
 	subnets := networkSubnets(agg.Networks, func(n NetworkRow) bool { return n.Scope != dockerx.ScopeSwarm })
+	routes := s.hostRoutePrefixes(ctx, out.EnvID)
 	for _, p := range defs {
 		if !p.Valid() {
 			s.log.Warn("a daemon reported an address pool that cannot be counted", "environment", out.EnvID, "pool", p.Base, "size", p.Size)
 			continue
 		}
-		out.Pools = append(out.Pools, PoolUsage{PoolStat: netspace.Stat(p, subnets), Source: source, Estimated: true})
+		use := PoolUsage{PoolStat: netspace.Stat(p, subnets), Source: source, Estimated: true}
+		if len(routes) > 0 {
+			// The daemon skips a slot a route of the host overlaps, so those blocks are as taken as
+			// the ones a network holds. A route equal to a network's subnet touches the same blocks
+			// and changes nothing.
+			withRoutes := netspace.Stat(p, append(slices.Clone(subnets), routes...))
+			use.HostRouteBlocks = withRoutes.Used - use.Used
+			use.PoolStat = withRoutes
+		}
+		out.Pools = append(out.Pools, use)
 	}
 	return out, nil
+}
+
+// hostRoutePrefixes are the destinations of the routes of the environment's hosts whose route check
+// is ok. Nothing is returned when the routes are not read, or when a host's check did not succeed:
+// a guess is then no better than none, and the row stays an estimate either way.
+func (s *AddressSpaces) hostRoutePrefixes(ctx context.Context, envID string) []netip.Prefix {
+	if s.routes == nil {
+		return nil
+	}
+	nodes, err := s.routes.Get(ctx, envID)
+	if err != nil {
+		s.log.Warn("could not read the host routes for the address pools", "environment", envID, "error", err)
+		return nil
+	}
+	var out []netip.Prefix
+	for _, n := range nodes {
+		if n.State != RouteCheckOK {
+			continue
+		}
+		for _, r := range n.Routes {
+			out = append(out, r.Dst)
+		}
+	}
+	return out
 }
 
 // enteredPools are the pools a person entered for the environment, none when there are none or the

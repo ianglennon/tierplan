@@ -4998,6 +4998,11 @@ export interface components {
             cidr: string;
             /** @description True when the numbers cannot be taken as exact. Every standalone row is: the daemon skips pool slots that overlap routes of the host, and engines differ */
             estimated: boolean;
+            /**
+             * Format: int64
+             * @description How many of the used blocks only a route of the host takes: blocks the daemon will not hand out because a route overlaps them and no Docker network holds. 0 for a swarm and when the host's routes could not be read
+             */
+            hostRouteBlocks: number;
             /** @description The largest free block made of whole blocks of the pool, aligned to the pool, in CIDR form. Empty when no block is free or the pool was not measured */
             largestFree: string;
             /**

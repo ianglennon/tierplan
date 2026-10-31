@@ -5,10 +5,13 @@ package envs
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -331,6 +334,83 @@ func TestStandalonePoolRowsCarrySourceAndEstimate(t *testing.T) {
 				t.Errorf("%s: pool %s has source %q estimated %v, want %q and true", name, p.Pool.Base, p.Source, p.Estimated, tc.source)
 			}
 		}
+	}
+}
+
+// routeFile writes a route table as /proc/net/route has it, in the byte order of the host running the
+// test, with an interface-less UP route for each destination.
+func routeFile(t *testing.T, dsts ...string) string {
+	t.Helper()
+	hex := func(a netip.Addr) string {
+		b := a.As4()
+		return fmt.Sprintf("%08X", binary.NativeEndian.Uint32(b[:]))
+	}
+	var b strings.Builder
+	b.WriteString("Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n")
+	for _, d := range dsts {
+		p := netip.MustParsePrefix(d)
+		mask := netip.MustParseAddr("255.255.255.255").As4()
+		for i := range 4 {
+			bitsHere := min(8, max(0, p.Bits()-8*i))
+			mask[i] = byte(0xFF << (8 - bitsHere))
+		}
+		fmt.Fprintf(&b, "eth0\t%s\t00000000\t0001\t0\t0\t0\t%s\t0\t0\t0\n", hex(p.Addr()), hex(netip.AddrFrom4(mask)))
+	}
+	path := filepath.Join(t.TempDir(), "route")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The daemon skips a pool slot that overlaps a route of its host (RESEARCH F1), so a standalone host's
+// pool counts those blocks as used and says how many only a route takes. A route equal to a network's
+// subnet touches the blocks that network already holds and adds none.
+func TestAddressSpaceStandaloneSkipsHostRouteSlots(t *testing.T) {
+	if binary.NativeEndian.Uint16([]byte{1, 0}) != 1 {
+		t.Skip("the fixture is a little-endian host's route table")
+	}
+	local := dockertest.NewFake(t, dockertest.FakeConfig{
+		Hostname: "this-host",
+		Networks: []dockertest.FakeNetwork{{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}}},
+	})
+	r := newTunRig(t, local)
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitProbed(t, r.mon, e.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	last := func(v AddressSpace) PoolUsage { return v.Pools[len(v.Pools)-1] }
+
+	// Without the routes the last default pool has nothing in it.
+	plain := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+	v, err := plain.Read(testsupport.Context(t), e.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if p := last(v); p.Pool.Base.String() != "192.168.0.0/16" || p.Used != 0 || p.HostRouteBlocks != 0 {
+		t.Fatalf("last pool = %+v, want 192.168.0.0/16 with nothing used", p)
+	}
+
+	routes := NewHostRoutes(r.svc, newFakeHostNet(), HostRoutesOptions{Now: r.clk.Now, LocalRouteFile: routeFile(t, "172.17.0.0/16", "192.168.0.0/20")})
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now}).WithHostRoutes(routes)
+	v, err = as.Read(testsupport.Context(t), e.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if p := last(v); p.Used != 1 || p.HostRouteBlocks != 1 || p.Capacity != 16 || !p.Estimated || p.Source != PoolSourceDefaults {
+		t.Errorf("last pool = %+v, want the /20 block counted, hostRouteBlocks 1, still an estimate", p)
+	}
+	if p := v.Pools[0]; p.Pool.Base.String() != "172.17.0.0/16" || p.Used != 1 || p.HostRouteBlocks != 0 {
+		t.Errorf("first pool = %+v, want its block used by the bridge once and no route-only block", p)
+	}
+
+	// A host whose routes cannot be read adds nothing and is no worse than before.
+	unread := NewHostRoutes(r.svc, newFakeHostNet(), HostRoutesOptions{Now: r.clk.Now, LocalRouteFile: filepath.Join(t.TempDir(), "no-such-route")})
+	as = NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now}).WithHostRoutes(unread)
+	if v, err = as.Read(testsupport.Context(t), e.ID); err != nil || last(v).Used != 0 || last(v).HostRouteBlocks != 0 {
+		t.Errorf("unreadable routes: %+v, %v, want nothing counted", last(v), err)
 	}
 }
 

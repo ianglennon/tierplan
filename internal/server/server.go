@@ -725,6 +725,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The subnet check reads the routes of each node's host: through the agents' tunnels, and for
 	// Coaming's own host from the route file mounted into its container (COAMING_HOST_ROUTE_FILE).
 	hostRoutes := envs.NewHostRoutes(envSvc, tunnelHub, envs.HostRoutesOptions{LocalRouteFile: cfg.HostRouteFile, Log: log})
+	// A standalone host's pools count the blocks its routes overlap, which its daemon skips.
+	addressSpaces.WithHostRoutes(hostRoutes)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	// The wizard restore routes share the setup routes' gate, limiter and audit.

@@ -34,6 +34,7 @@ const pool = (extra: Partial<AddressPool> = {}): AddressPool => ({
   source: "swarm",
   largestFree: "10.128.0.0/9",
   largestFreeSubnets: 32768,
+  hostRouteBlocks: 0,
   ...extra,
 });
 
