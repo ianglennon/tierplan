@@ -80,6 +80,21 @@ type SubnetErrorBody struct {
 	Corrected string `json:"corrected,omitempty" doc:"With host_bits, the network address the subnet is meant to be, for example 10.0.0.0/24 for 10.0.0.5/24"`
 }
 
+// SubnetFindingBody is one thing the checked subnet collides with. Only the fields its kind names
+// are set.
+type SubnetFindingBody struct {
+	Kind        string `json:"kind" enum:"same_env,other_env,host_route,common_range,outside_pool" doc:"same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. common_range: a range many home networks and VPNs use. outside_pool: the subnet is in none of the pools"`
+	Severity    string `json:"severity" enum:"blocking,warning" doc:"blocking: creating the network is refused until createAnyway is true (same_env only). warning: shown, never stops anything"`
+	Network     string `json:"network,omitempty" doc:"same_env, other_env: the network the subnet overlaps"`
+	Subnet      string `json:"subnet,omitempty" doc:"same_env, other_env: the subnet of that network that overlaps"`
+	Node        string `json:"node,omitempty" doc:"The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network"`
+	Environment string `json:"environment,omitempty" doc:"other_env: the name of the other environment"`
+	Route       string `json:"route,omitempty" doc:"host_route: the route's destination in CIDR form"`
+	Iface       string `json:"iface,omitempty" doc:"host_route: the interface the route is on"`
+	Range       string `json:"range,omitempty" doc:"common_range: the range the subnet falls inside"`
+	Pool        string `json:"pool,omitempty" doc:"outside_pool: the pool the subnet should be in; several pools are joined with a comma"`
+}
+
 // SubnetCheckBody is the answer of the subnet check.
 type SubnetCheckBody struct {
 	Suggestion        *SubnetSuggestionBody `json:"suggestion,omitempty" doc:"The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set"`
@@ -90,6 +105,7 @@ type SubnetCheckBody struct {
 	TooManyTasks      bool                  `json:"tooManyTasks" doc:"True when not even a /24 holds needed"`
 	SubnetError       *SubnetErrorBody      `json:"subnetError,omitempty" doc:"Why the typed subnet is refused; absent when it is fine or none was sent"`
 	IPv6NotChecked    bool                  `json:"ipv6NotChecked" doc:"True when the typed subnet is IPv6, which is not checked"`
+	Findings          []SubnetFindingBody   `json:"findings" doc:"What the typed subnet collides with, never null: this environment's networks on every node (blocking), other environments' networks the caller may read, host routes, common home and VPN ranges, and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6"`
 }
 
 // SubnetCheckOutput wraps SubnetCheckBody for huma.
@@ -145,6 +161,7 @@ func registerSubnetCheck(r *httpx.Router, d AddressSpaceDeps) {
 			"When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. " +
 			"With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. " +
 			"With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. " +
+			"With a valid IPv4 subnet, answers findings: the networks of this environment it overlaps (blocking: the create refuses it without createAnyway), networks of other environments the caller may read from their last read, and the pools it lies outside of (warnings). The overlap rule is the subnet map's: an overlay against every network, a local network of a node against that node's local networks and every swarm network. " +
 			"IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermNetworksRead, Scope: rbac.ScopeEnvironment},
@@ -169,10 +186,19 @@ func registerSubnetCheck(r *httpx.Router, d AddressSpaceDeps) {
 }
 
 // checkSubnet answers one subnet check. The size recommendation and the check of the typed
-// subnet need no read at all; only a suggestion reads the (cached) address space.
+// subnet's form need no read at all; a suggestion or the findings of a valid subnet read the
+// (cached) address space.
 func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest) (SubnetCheckBody, error) {
-	var out SubnetCheckBody
-	space, agg, err := readForSubnetCheck(ctx, d, envID, req)
+	out := SubnetCheckBody{Findings: []SubnetFindingBody{}}
+	if req.Subnet != "" {
+		out.SubnetError, out.IPv6NotChecked = validateTypedSubnet(req.Subnet)
+	}
+	var candidate netip.Prefix
+	if req.Subnet != "" && out.SubnetError == nil && !out.IPv6NotChecked {
+		candidate, _ = netip.ParsePrefix(req.Subnet)
+		candidate = candidate.Masked()
+	}
+	space, agg, err := readForSubnetCheck(ctx, d, envID, req, candidate.IsValid())
 	if err != nil {
 		return out, err
 	}
@@ -200,31 +226,42 @@ func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req Subn
 		}
 	}
 
-	if req.Subnet != "" {
-		out.SubnetError, out.IPv6NotChecked = validateTypedSubnet(req.Subnet)
+	var pools []netspace.Pool
+	if req.Suggest || candidate.IsValid() {
+		var perr error
+		if pools, perr = poolsForSubnet(ctx, d, envID, req, space); perr != nil {
+			// A suggestion needs the pools. A check of a typed subnet only loses its
+			// outside-the-pool note.
+			if req.Suggest {
+				return out, perr
+			}
+			pools = nil
+		}
 	}
-
 	if req.Suggest {
-		if err := suggestSubnet(ctx, d, envID, req, space, agg, &out); err != nil {
+		if err := suggestSubnet(pools, req, agg, &out); err != nil {
 			return out, err
 		}
+	}
+	if candidate.IsValid() {
+		out.Findings = subnetFindings(ctx, d, envID, req, candidate, space, agg, pools)
 	}
 	return out, nil
 }
 
-// readForSubnetCheck reads the cached address space (for a suggestion) and the cached aggregate
-// (for a suggestion, or for the swarm's node count of a size recommendation), and nothing
-// otherwise.
-func readForSubnetCheck(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest) (envs.AddressSpace, envs.Aggregate, error) {
+// readForSubnetCheck reads the cached address space (for a suggestion or the findings of a
+// typed subnet) and the cached aggregate (for those, or for the swarm's node count of a size
+// recommendation), and nothing otherwise.
+func readForSubnetCheck(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, checked bool) (envs.AddressSpace, envs.Aggregate, error) {
 	var space envs.AddressSpace
 	var agg envs.Aggregate
-	if req.Suggest {
+	if req.Suggest || checked {
 		var err error
 		if space, err = d.AddressSpaces.Read(ctx, envID); err != nil {
 			return space, agg, snapshotProblem(d.Log, envID, err)
 		}
 	}
-	if req.Suggest || (req.Tasks != nil && req.Nodes == nil) {
+	if req.Suggest || checked || (req.Tasks != nil && req.Nodes == nil) {
 		var err error
 		if agg, _, err = d.Aggregator.Snapshot(ctx, envID); err != nil {
 			return space, agg, snapshotProblem(d.Log, envID, err)
@@ -233,12 +270,41 @@ func readForSubnetCheck(ctx context.Context, d AddressSpaceDeps, envID string, r
 	return space, agg, nil
 }
 
-// suggestSubnet fills the suggestion, or noFreeBlock, of out.
-func suggestSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, space envs.AddressSpace, agg envs.Aggregate, out *SubnetCheckBody) error {
-	pools, err := poolsForSubnet(ctx, d, envID, req, space)
-	if err != nil {
-		return err
+// subnetScope says which networks a network of the request is compared with: all is true for an
+// overlay (or no driver), for a host that is not a swarm and when the node of a local network is
+// not known; else node is the name of the node it is local to.
+func subnetScope(space envs.AddressSpace, req SubnetCheckRequest, agg envs.Aggregate) (all bool, node string) {
+	local := req.Driver != "" && req.Driver != "overlay"
+	if !space.Swarm || !local || req.NodeID == "" {
+		return true, ""
 	}
+	if name, ok := nodeName(agg, req.NodeID); ok {
+		return false, name
+	}
+	return true, ""
+}
+
+// subnetFindings is what the typed subnet collides with.
+func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, candidate netip.Prefix, space envs.AddressSpace, agg envs.Aggregate, pools []netspace.Pool) []SubnetFindingBody {
+	all, node := subnetScope(space, req, agg)
+	in := netspace.OverlapInput{
+		Swarm: all, Node: node,
+		Same:  envs.NetworkItems(agg.Networks),
+		Pools: pools,
+	}
+	found := netspace.FindOverlaps(candidate, in)
+	out := make([]SubnetFindingBody, 0, len(found))
+	for _, f := range found {
+		out = append(out, SubnetFindingBody{
+			Kind: string(f.Kind), Severity: string(f.Severity), Network: f.Network, Subnet: f.Subnet, Node: f.Node,
+			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Range: f.Range, Pool: f.Pool,
+		})
+	}
+	return out
+}
+
+// suggestSubnet fills the suggestion, or noFreeBlock, of out from the pools to search.
+func suggestSubnet(pools []netspace.Pool, req SubnetCheckRequest, agg envs.Aggregate, out *SubnetCheckBody) error {
 	if len(pools) == 0 {
 		return nil
 	}

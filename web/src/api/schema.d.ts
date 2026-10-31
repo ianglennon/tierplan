@@ -503,7 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Suggest a free subnet, recommend a size and check a typed subnet
-         * @description With suggest true, answers suggestion: the lowest free block of mask (or of the recommended size) inside the pools of the network to be made, clear of every IPv4 subnet of every network on every node. An overlay (or no driver) on a swarm takes the swarm's pools; a local driver on a swarm takes the daemon pools of the node nodeId (or Docker's defaults when it sets none); a standalone host takes its pools as the address space reads them. When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.
+         * @description With suggest true, answers suggestion: the lowest free block of mask (or of the recommended size) inside the pools of the network to be made, clear of every IPv4 subnet of every network on every node. An overlay (or no driver) on a swarm takes the swarm's pools; a local driver on a swarm takes the daemon pools of the node nodeId (or Docker's defaults when it sets none); a standalone host takes its pools as the address space reads them. When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. With a valid IPv4 subnet, answers findings: the networks of this environment it overlaps (blocking: the create refuses it without createAnyway), networks of other environments the caller may read from their last read, and the pools it lies outside of (warnings). The overlap rule is the subnet map's: an overlay against every network, a local network of a node against that node's local networks and every swarm network. IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.
          */
         post: operations["checkSubnet"];
         delete?: never;
@@ -1383,7 +1383,7 @@ export interface paths {
         put?: never;
         /**
          * Create a network
-         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true; the check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
          */
         post: operations["createNetwork"];
         delete?: never;
@@ -7764,6 +7764,8 @@ export interface components {
         NetworkCreateRequest: {
             /** @description Let standalone containers join it. Only for an overlay network on a swarm */
             attachable?: boolean;
+            /** @description Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Recorded in the audit log */
+            createAnyway?: boolean;
             /**
              * @description The network driver. Ingress, config-only and config-from networks cannot be created
              * @enum {string}
@@ -12068,6 +12070,8 @@ export interface components {
             unhealthy: number;
         };
         SubnetCheckBody: {
+            /** @description What the typed subnet collides with, never null: this environment's networks on every node (blocking), other environments' networks the caller may read, host routes, common home and VPN ranges, and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6 */
+            findings: components["schemas"]["SubnetFindingBody"][] | null;
             /** @description True when the typed subnet is IPv6, which is not checked */
             ipv6NotChecked: boolean;
             /**
@@ -12135,6 +12139,34 @@ export interface components {
             code: "subnet_invalid" | "host_bits" | "too_small";
             /** @description With host_bits, the network address the subnet is meant to be, for example 10.0.0.0/24 for 10.0.0.5/24 */
             corrected?: string;
+        };
+        SubnetFindingBody: {
+            /** @description other_env: the name of the other environment */
+            environment?: string;
+            /** @description host_route: the interface the route is on */
+            iface?: string;
+            /**
+             * @description same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. common_range: a range many home networks and VPNs use. outside_pool: the subnet is in none of the pools
+             * @enum {string}
+             */
+            kind: "same_env" | "other_env" | "host_route" | "common_range" | "outside_pool";
+            /** @description same_env, other_env: the network the subnet overlaps */
+            network?: string;
+            /** @description The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network */
+            node?: string;
+            /** @description outside_pool: the pool the subnet should be in; several pools are joined with a comma */
+            pool?: string;
+            /** @description common_range: the range the subnet falls inside */
+            range?: string;
+            /** @description host_route: the route's destination in CIDR form */
+            route?: string;
+            /**
+             * @description blocking: creating the network is refused until createAnyway is true (same_env only). warning: shown, never stops anything
+             * @enum {string}
+             */
+            severity: "blocking" | "warning";
+            /** @description same_env, other_env: the subnet of that network that overlaps */
+            subnet?: string;
         };
         SubnetNoFreeBody: {
             /**

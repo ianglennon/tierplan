@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/internal/rbac"
 )
 
@@ -30,6 +32,7 @@ const (
 	codeCreated       = "created"
 
 	problemSubnetInvalid         = "subnet_invalid"
+	problemSubnetOverlap         = "subnet_overlap"
 	problemGatewayOutsideSubnet  = "gateway_outside_subnet"
 	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
 	problemAttachableOverlayOnly = "attachable_overlay_only"
@@ -83,6 +86,8 @@ type NetworkCreateRequest struct {
 	Subnet     string            `json:"subnet,omitempty" maxLength:"64" doc:"The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one"`
 	Gateway    string            `json:"gateway,omitempty" maxLength:"64" doc:"The gateway address, inside the subnet"`
 	IPRange    string            `json:"ipRange,omitempty" maxLength:"64" doc:"The range containers are given addresses from, in CIDR form, inside the subnet"`
+	// CreateAnyway lets a subnet that overlaps another network of this environment through.
+	CreateAnyway bool `json:"createAnyway,omitempty" doc:"Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Recorded in the audit log"`
 }
 
 // NetworkCreateInput is the path and body of the create route.
@@ -238,6 +243,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
 			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
 			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
+			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true; the check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
 			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
@@ -374,6 +380,12 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemAttachableOverlayOnly,
 			"Only an overlay network on a swarm can be attachable.")
 	}
+	// The check of the subnet and the create are one step: two creates through Coaming cannot
+	// both pass the check with the same subnet (NET-05). The lock is taken before the networks
+	// are read, so the second create sees the first one's network.
+	if body.Subnet != "" && d.AddressSpaces != nil {
+		defer d.AddressSpaces.LockAllocation(envID)()
+	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, envID, err)
@@ -393,18 +405,9 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		Labels: body.Labels, Options: body.Options, Subnet: body.Subnet, Gateway: body.Gateway, IPRange: body.IPRange,
 	}
 	scope := dockerx.NetworkScope(body.Driver)
+	clusterWide := swarm && scope == dockerx.ScopeSwarm
 	var id, nodeID string
-	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-	defer cancel()
-	create := func(c *dockerx.Client) error {
-		var e error
-		id, _, e = c.NetworkCreate(writeCtx, spec)
-		return e
-	}
-	if swarm && scope == dockerx.ScopeSwarm {
-		spec.Scope = dockerx.ScopeSwarm
-		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
-	} else {
+	if !clusterWide {
 		nodeID = body.NodeID
 		if nodeID == "" {
 			if swarm || len(agg.Nodes) != 1 {
@@ -413,15 +416,92 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 			}
 			nodeID = agg.Nodes[0].ID
 		}
+	}
+	var extra map[string]string
+	if body.Subnet != "" && d.AddressSpaces != nil {
+		overlaps := sameEnvOverlaps(body.Subnet, agg, swarm && !clusterWide, nodeID)
+		if len(overlaps) > 0 && !body.CreateAnyway {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(body.Subnet, overlaps[0]))
+		}
+		if len(overlaps) > 0 {
+			extra = map[string]string{"overlap_override": "true", "overlaps": overlapNames(overlaps)}
+		}
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	create := func(c *dockerx.Client) error {
+		var e error
+		id, _, e = c.NetworkCreate(writeCtx, spec)
+		return e
+	}
+	if clusterWide {
+		spec.Scope = dockerx.ScopeSwarm
+		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
+	} else {
 		err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, create)
 	}
 	if err != nil {
 		code, problem := networkCreateProblem(d.Log, envID, body.Name, err)
-		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code)
+		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code, extra)
 		return nil, problem
 	}
-	auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, id, body.Name, nodeID, scope, spec, codeCreated)
+	auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, id, body.Name, nodeID, scope, spec, codeCreated, extra)
 	return &NetworkCreateOutput{CacheControl: "no-store", Body: NetworkCreateBody{ID: id, Name: body.Name}}, nil
+}
+
+// maxOverlapNamesAudited is the most bytes of network names the audit row of an override holds.
+const maxOverlapNamesAudited = 512
+
+// sameEnvOverlaps are the networks of this environment whose subnets overlap the subnet of a
+// create, by the scope rule of the subnet map: a cluster network or a host's only network is
+// compared with every network, a local network of a node with that node's local networks and
+// every swarm network. An IPv6 subnet is not checked.
+func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeID string) []netspace.Finding {
+	candidate, err := netip.ParsePrefix(subnet)
+	if err != nil {
+		return nil
+	}
+	in := netspace.OverlapInput{Swarm: true, Same: envs.NetworkItems(agg.Networks)}
+	if localOnSwarm {
+		if name, ok := nodeName(agg, nodeID); ok {
+			in.Swarm, in.Node = false, name
+		}
+	}
+	return netspace.FindOverlaps(candidate, in)
+}
+
+// nodeName is the name of the node of the aggregate with this ID.
+func nodeName(agg envs.Aggregate, nodeID string) (string, bool) {
+	for _, n := range agg.Nodes {
+		if n.ID == nodeID {
+			return n.Name, true
+		}
+	}
+	return "", false
+}
+
+// overlapMessage is the sentence of a refused overlap, naming the first network.
+func overlapMessage(subnet string, f netspace.Finding) string {
+	on := ""
+	if f.Node != "" {
+		on = " on " + f.Node
+	}
+	return subnet + " overlaps " + f.Network + " (" + f.Subnet + ")" + on + ". Choose another subnet, or create it anyway."
+}
+
+// overlapNames lists the networks of the findings once each, cut to what an audit row holds.
+func overlapNames(fs []netspace.Finding) string {
+	var names []string
+	for _, f := range fs {
+		if !slices.Contains(names, f.Network) {
+			names = append(names, f.Network)
+		}
+	}
+	joined := strings.Join(names, ", ")
+	if len(joined) > maxOverlapNamesAudited {
+		joined = strings.ToValidUTF8(joined[:maxOverlapNamesAudited], "")
+	}
+	return joined
 }
 
 // validateAddressing checks the subnet, gateway and IP range of a create with net/netip,
@@ -487,7 +567,7 @@ func networkWriteProblem(log *slog.Logger, envID string, err error) (string, err
 
 // auditNetwork writes the row of one network create attempt. A row that cannot be written
 // is logged: the network has been made or refused, and the caller must still be told which.
-func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, node, scope string, spec dockerx.NetworkCreateSpec, code string) {
+func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, node, scope string, spec dockerx.NetworkCreateSpec, code string, extra map[string]string) {
 	details := map[string]string{
 		"name": name, "driver": spec.Driver, "scope": scope, "code": code,
 		"internal": strconv.FormatBool(spec.Internal), "attachable": strconv.FormatBool(spec.Attachable),
@@ -502,6 +582,8 @@ func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID,
 	if spec.Gateway != "" {
 		details["gateway"] = spec.Gateway
 	}
+	// A create a person let through an overlap says so, and with which networks (D-18).
+	maps.Copy(details, extra)
 	recordNetwork(ctx, d, p, envID, userAgent, action, targetID, name, code, details)
 }
 

@@ -32,7 +32,32 @@ type subnetCheckAnswer struct {
 		Code      string `json:"code"`
 		Corrected string `json:"corrected"`
 	} `json:"subnetError"`
-	IPv6NotChecked bool `json:"ipv6NotChecked"`
+	IPv6NotChecked bool            `json:"ipv6NotChecked"`
+	Findings       []subnetFinding `json:"findings"`
+}
+
+type subnetFinding struct {
+	Kind        string `json:"kind"`
+	Severity    string `json:"severity"`
+	Network     string `json:"network"`
+	Subnet      string `json:"subnet"`
+	Node        string `json:"node"`
+	Environment string `json:"environment"`
+	Route       string `json:"route"`
+	Iface       string `json:"iface"`
+	Range       string `json:"range"`
+	Pool        string `json:"pool"`
+}
+
+// ofKind are the findings of one kind, in the order given.
+func (a subnetCheckAnswer) ofKind(kind string) []subnetFinding {
+	var out []subnetFinding
+	for _, f := range a.Findings {
+		if f.Kind == kind {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func (f *agentFix) subnetCheck(t *testing.T, envID, body string) *envRec {
@@ -303,5 +328,38 @@ func TestSubnetCheckViewerAllowed(t *testing.T) {
 	rec = f.call(t, authReq{method: http.MethodPost, path: path, body: `{}`, cookie: cookie, csrf: csrf})
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("a user without the environment: status = %d, want 404: %s", rec.Code, rec.Body)
+	}
+}
+
+// The overlap findings (plan 10-16, NET-05, D-16, D-18).
+
+func TestSubnetCheckSameEnvBlocking(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.1.0/25","driver":"overlay"}`))
+	same := got.ofKind("same_env")
+	if len(same) != 1 || same[0].Severity != "blocking" || same[0].Network != "ovl-a" || same[0].Subnet != "10.0.1.0/24" || same[0].Node != "" {
+		t.Fatalf("findings = %+v, want one blocking same_env naming ovl-a", got.Findings)
+	}
+	// Findings are never null, and a subnet that only touches the network does not collide.
+	got = checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.0.2.0/24"}`))
+	if got.Findings == nil || len(got.ofKind("same_env")) != 0 {
+		t.Errorf("an adjacent subnet = %+v, want no same_env finding", got.Findings)
+	}
+	if rec := s.subnetCheck(t, s.env.ID, `{"tasks":3}`); !strings.Contains(string(rec.body), `"findings":[]`) {
+		t.Errorf("findings is not always present: %s", rec.body)
+	}
+}
+
+func TestSubnetCheckOutsidePool(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t)
+	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"172.20.0.0/24"}`))
+	out := got.ofKind("outside_pool")
+	if len(out) != 1 || out[0].Severity != "warning" || out[0].Pool != "10.0.0.0/8" {
+		t.Errorf("a subnet outside the swarm pool = %+v, want one outside_pool warning naming 10.0.0.0/8", got.Findings)
+	}
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.9.0.0/24"}`)); len(got.ofKind("outside_pool")) != 0 {
+		t.Errorf("a subnet inside the pool = %+v, want no outside_pool", got.Findings)
 	}
 }

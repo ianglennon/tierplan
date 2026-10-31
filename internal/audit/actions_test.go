@@ -103,7 +103,7 @@ var phase4DetailKeys = map[string][]string{
 	// 04-13 records the name, node and scope, and the code of a refusal. A network, secret or config
 	// made or removed by a service apply also records its source, service_apply or
 	// service_apply_cleanup (plan 06-26).
-	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "source", "code"},
+	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "source", "overlap_override", "overlaps", "code"},
 	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "source", "code", "reason"},
 	// The saved inspect of an orphaned or unused network is written before it is removed
 	// (plan 10-12, D-12): its whole masked inspect document is the inspect detail.

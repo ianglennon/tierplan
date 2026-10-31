@@ -138,6 +138,15 @@ type addressEntry struct {
 	orphans     OrphanReport
 	orphansAt   time.Time
 	haveOrphans bool
+
+	// nets are the networks of the last aggregate a read used, for the checks of other
+	// environments' subnets (guarded by mu); netsAt is when that read was made.
+	nets     []netspace.MapItemNamed
+	netsAt   time.Time
+	haveNets bool
+
+	// alloc serialises the check and the create of a network's subnet (LockAllocation).
+	alloc sync.Mutex
 }
 
 // AddressSpaces reads how full the address pools of an environment are. Docker is the source of
@@ -189,6 +198,82 @@ func (s *AddressSpaces) entry(envID string) *addressEntry {
 		s.entries[envID] = e
 	}
 	return e
+}
+
+// LockAllocation takes the environment's allocation lock and returns the function that gives it
+// back. A create that checks a subnet against the environment's networks and then makes the
+// network holds it across both, so two creates through Coaming cannot both pass the check with
+// the same subnet (NET-05). It does not stop a network made outside Coaming.
+func (s *AddressSpaces) LockAllocation(envID string) (unlock func()) {
+	e := s.entry(envID)
+	e.alloc.Lock()
+	return e.alloc.Unlock
+}
+
+// CachedNetworks are the networks of the environment as the last Read saw them, and when that
+// was. It is false before any read. It never reads an engine, so a check of another
+// environment's networks costs nothing there.
+func (s *AddressSpaces) CachedNetworks(envID string) ([]netspace.MapItemNamed, time.Time, bool) {
+	s.mu.Lock()
+	e := s.entries[envID]
+	s.mu.Unlock()
+	if e == nil {
+		return nil, time.Time{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.haveNets {
+		return nil, time.Time{}, false
+	}
+	return slices.Clone(e.nets), e.netsAt, true
+}
+
+// Environments are the IDs of the environments with cached networks, sorted.
+func (s *AddressSpaces) Environments() []string {
+	s.mu.Lock()
+	entries := make(map[string]*addressEntry, len(s.entries))
+	for id, e := range s.entries {
+		entries[id] = e
+	}
+	s.mu.Unlock()
+	var ids []string
+	for id, e := range entries {
+		e.mu.Lock()
+		if e.haveNets {
+			ids = append(ids, id)
+		}
+		e.mu.Unlock()
+	}
+	slices.Sort(ids)
+	return ids
+}
+
+// NetworkItems are the networks of an aggregate as items of the subnet scope rule: a swarm-wide
+// network once whatever number of managers listed it, a local network once per node, each with
+// its IPv4 subnets. A subnet that cannot be parsed is skipped.
+func NetworkItems(nets []NetworkRow) []netspace.MapItemNamed {
+	seen := map[string]bool{}
+	out := make([]netspace.MapItemNamed, 0, len(nets))
+	for _, n := range nets {
+		swarm := n.Scope == dockerx.ScopeSwarm
+		if swarm {
+			if seen[n.ID] {
+				continue
+			}
+			seen[n.ID] = true
+		}
+		var ps []netip.Prefix
+		for _, raw := range n.Subnets {
+			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is4() {
+				ps = append(ps, p.Masked())
+			}
+		}
+		if len(ps) == 0 {
+			continue
+		}
+		out = append(out, netspace.MapItemNamed{MapItem: netspace.MapItem{Swarm: swarm, Node: n.Node, Prefixes: ps}, Name: n.Name})
+	}
+	return out
 }
 
 // Read is the address space of the environment. A read younger than the TTL is reused. An
@@ -248,6 +333,9 @@ func (s *AddressSpaces) fetch(ctx context.Context, e *addressEntry, envID string
 	if err != nil {
 		return AddressSpace{}, err
 	}
+	e.mu.Lock()
+	e.nets, e.netsAt, e.haveNets = NetworkItems(agg.Networks), s.now(), true
+	e.mu.Unlock()
 	out := AddressSpace{EnvID: envID, Swarm: swarm, Pools: []PoolUsage{}, Overlays: []OverlayUsage{}, NotReporting: slices.Clone(agg.NotReporting)}
 	if out.NotReporting == nil {
 		out.NotReporting = []string{}

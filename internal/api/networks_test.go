@@ -422,16 +422,18 @@ func TestCreateNetworkRefusesBadAddressingWithItsOwnProblemTypeAndSendsNothing(t
 func TestCreateNetworkTheGatewayMayBeTheFirstAndLastAddressOfTheSubnetButNotTheNextOne(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
+	// Each made network has a subnet of its own: one that overlaps a network of the environment is
+	// refused (subnet_overlap), which is not what this test is about.
 	for i, tc := range []struct {
-		gateway string
-		code    int
+		subnet, gateway string
+		code            int
 	}{
-		{"10.20.0.0", http.StatusCreated},
-		{"10.20.0.255", http.StatusCreated},
-		{"10.20.1.0", http.StatusUnprocessableEntity},
-		{"10.19.255.255", http.StatusUnprocessableEntity},
+		{"10.20.0.0/24", "10.20.0.0", http.StatusCreated},
+		{"10.21.0.0/24", "10.21.0.255", http.StatusCreated},
+		{"10.22.0.0/24", "10.22.1.0", http.StatusUnprocessableEntity},
+		{"10.23.0.0/24", "10.22.255.255", http.StatusUnprocessableEntity},
 	} {
-		body := fmt.Sprintf(`{"name":"edge%d","driver":"bridge","subnet":"10.20.0.0/24","gateway":%q}`, i, tc.gateway)
+		body := fmt.Sprintf(`{"name":"edge%d","driver":"bridge","subnet":%q,"gateway":%q}`, i, tc.subnet, tc.gateway)
 		if rec := f.createNet(t, e, body); rec.code != tc.code {
 			t.Errorf("gateway %s: %d, want %d: %s", tc.gateway, rec.code, tc.code, rec.body)
 		}
@@ -1837,5 +1839,74 @@ func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsC
 	rows := f.networkAudits(t)
 	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != string(audit.ResultSuccess) {
 		t.Fatalf("audit = %+v, want initiated then connection_lost with result success", rows)
+	}
+}
+
+// A subnet that overlaps another network of the environment (plan 10-16, D-18, T-10-40).
+
+func TestCreateNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("status = %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps ovl-a (10.0.1.0/24)") {
+		t.Errorf("the problem does not name the network: %s", rec.body)
+	}
+	if got := s.createsOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
+		t.Errorf("a refused create reached an engine: %v", got)
+	}
+	// A subnet beside it is made.
+	if rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.2.0/24"}`); rec.code != http.StatusCreated {
+		t.Fatalf("a free subnet: %d: %s", rec.code, rec.body)
+	}
+}
+
+func TestCreateNetworkOverlapCreateAnyway(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25","createAnyway":true}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	s.onlyCreate(t)
+	audits := s.networkAudits(t)
+	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "ovl-a" || audits[0].Result != "success" {
+		t.Fatalf("audit = %+v, want a success with overlap_override and overlaps ovl-a", audits)
+	}
+}
+
+// A local network is compared with its own node's networks and the swarm's, not other nodes'.
+func TestCreateNetworkOverlapLocalScope(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if host == "mgr-2" {
+			cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "br-x", Name: "br-x", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}})
+		}
+	})
+	// mgr-2 has the bridge; the same subnet on mgr-1 is another host's address space.
+	if rec := s.post(t, `{"name":"mine","driver":"bridge","nodeId":"`+s.m1.id+`","subnet":"172.30.0.0/24"}`); rec.code != http.StatusCreated {
+		t.Fatalf("the same subnet on another node: %d: %s", rec.code, rec.body)
+	}
+	rec := s.post(t, `{"name":"mine2","driver":"bridge","nodeId":"`+s.m2.id+`","subnet":"172.30.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("on the node that has it: %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+// Two creates of one subnet through Coaming at once: one is made, the other refused (NET-05).
+func TestCreateNetworkConcurrentSameSubnet(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t)
+	codes := make(chan int, 2)
+	for _, name := range []string{"race-a", "race-b"} {
+		go func() {
+			codes <- s.post(t, `{"name":"`+name+`","driver":"overlay","subnet":"10.5.0.0/24"}`).code
+		}()
+	}
+	a, b := <-codes, <-codes
+	if a+b != http.StatusCreated+http.StatusUnprocessableEntity || a == b {
+		t.Fatalf("statuses = %d and %d, want one 201 and one 422", a, b)
 	}
 }
