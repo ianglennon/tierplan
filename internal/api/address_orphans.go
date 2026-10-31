@@ -403,13 +403,25 @@ func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, en
 		o.node = row.NodeID
 	}
 
+	if row.Builtin {
+		o.record(ctx, audit.ActionNetworkRemoved, problemNetworkBuiltin, "")
+		return OrphanDeleteBody{}, httpx.Problem(http.StatusConflict, problemNetworkBuiltin, row.Name+" is built in and can't be deleted.")
+	}
 	var reason string
 	switch class {
 	case netspace.ClassOrphaned:
 		reason = "orphan"
 	case netspace.ClassUnused:
 		reason = "unused"
+	case netspace.ClassInUse:
+		// Something attached after the list was read: kept, which is the check doing its job.
+		return o.kept(ctx, reasonInUseAgain, reasonInUseAgain), nil
+	case netspace.ClassCantTell:
+		// A node or the manager stopped answering, so Coaming cannot be sure nothing uses it.
+		return o.kept(ctx, reasonNodeMissing, reasonNodeMissing), nil
 	default:
+		// Its stack exists again, it was kept, it is declared external, its stack is busy, or it is
+		// inside the grace period.
 		return o.kept(ctx, reasonNotOrphaned, reasonNotOrphaned), nil
 	}
 
@@ -446,6 +458,11 @@ func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, en
 	if err != nil {
 		code, problem := networkRemoveProblem(d.Log, envID, row.Name, err)
 		o.record(ctx, audit.ActionNetworkRemoved, code, "")
+		// The engine refusing because something is attached is the safety working, not a failure,
+		// and it is never retried.
+		if dockerx.IsNetworkInUse(err) {
+			return OrphanDeleteBody{Outcome: outcomeKept, Reason: reasonInUseAgain, Name: row.Name}, nil
+		}
 		return OrphanDeleteBody{}, problem
 	}
 	o.record(ctx, audit.ActionNetworkRemoved, codeRemoved, reason)
