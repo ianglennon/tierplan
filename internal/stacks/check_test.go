@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 
 	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/lint"
 	"github.com/ianglennon/coaming/internal/stacks/stackstest"
 )
 
@@ -1282,5 +1284,28 @@ func TestCheckSwarmObjectNamesPassForPhase7Stacks(t *testing.T) {
 		if ps := swarmNameProblems(swarmNameCheck(t, name, stacks.StarterCompose)); len(ps) != 0 {
 			t.Errorf("starter under %q: %+v, want no swarm_name_invalid", name, ps)
 		}
+	}
+}
+
+// A review, a deploy, a git sync, a rebuild and an adoption check a file without the environment (plan 10-08): the
+// explicit-subnet hints belong to the editor, so the same file answers the same problems as before them.
+func TestCheckWithoutEnvHasNoNetworkFindings(t *testing.T) {
+	t.Parallel()
+	const compose = "services:\n  web:\n    image: nginx:1.27\n    networks: [backend]\nnetworks:\n  backend:\n    ipam:\n      config:\n        - subnet: 10.0.1.0/24\n"
+	plain := stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose)})
+	if len(plain.Problems) != 0 {
+		t.Fatalf("problems = %+v, want none without an environment", plain.Problems)
+	}
+	// With the environment the same file is warned about, so the absence above is the Env, not the file.
+	env := &lint.NetEnv{
+		Networks: []lint.NetInfo{{Name: "other", Subnets: []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")}}},
+		Pools:    []netip.Prefix{netip.MustParsePrefix("10.0.0.0/16")},
+	}
+	with := stacks.Check(context.Background(), stacks.CheckInput{Name: "probe", Target: stacks.TargetSwarm, Copy: copyOf(compose), Env: env})
+	if len(with.Problems) != 1 || with.Problems[0].Code != stacks.CodeNetworkSubnetOverlap || with.Problems[0].Severity != stacks.SeverityWarning {
+		t.Errorf("problems with an environment = %+v, want the one overlap warning", with.Problems)
+	}
+	if with.Problems.Errors() != 0 || with.Loaded == nil {
+		t.Errorf("a warning must not block a deploy: errors %d, loaded %v", with.Problems.Errors(), with.Loaded)
 	}
 }
