@@ -362,6 +362,7 @@ type StackSnapshot struct {
 	ComposeFiles  string
 	SyncTrigger   string
 	RevertedDrift string
+	Subnets       string
 }
 
 type StackSnapshotFile struct {

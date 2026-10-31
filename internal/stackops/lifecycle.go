@@ -634,7 +634,7 @@ func (l *lifecycle) recreate(ctx context.Context, plan startPlan, writes *[]serv
 	if hasExternal(plan.prep.Plan) {
 		liveNets = owned.AllNetworks
 	}
-	if _, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, plan.prep.Plan.Networks, liveNets, l.prog); err != nil {
+	if _, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, plan.prep.Plan.Networks, liveNets, l.prog, nil); err != nil {
 		l.failStep(ctx, ItemServices, err)
 		return false
 	}

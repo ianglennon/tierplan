@@ -49,7 +49,7 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 // network_conflict. Every other network is created with all its pools, its IPAM driver, its driver
 // options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
 // the call with a *stepError; the networks created before it stay in created.
-func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress) (created []string, err error) {
+func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress, subnets *SubnetPlan) (created []string, err error) {
 	own := OwnershipOf(stack)
 	for _, n := range plans {
 		if n.External {
@@ -73,10 +73,25 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 		}
 		spec := networkSpec(n)
 		prog.start(idNetwork + n.Name)
-		werr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
-			_, _, e := c.NetworkCreate(wctx, spec)
-			return e
-		})
+		create := func() error {
+			return d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
+				_, _, e := c.NetworkCreate(wctx, spec)
+				return e
+			})
+		}
+		werr := create()
+		// The engine refused a subnet this deploy chose as overlapping something it could not see. Nothing was
+		// created, so the choice is made again for this one network, once; a second refusal is a failure.
+		if refused, chosen := subnets.assigned(n); werr != nil && chosen && isOverlapRefusal(werr) && ctx.Err() == nil {
+			d.log().Warn("the engine refused the subnet chosen for a stack network as overlapping", "environment", envID, "stack", stack.Name, "network", n.Name, "subnet", refused)
+			next, ok := subnets.reassign(n.Key, n.Name, refused)
+			if !ok {
+				return created, &stepError{code: CodeNoFreeSubnet, name: n.Name, err: werr}
+			}
+			n.Pools = []convert.Pool{{Subnet: next}}
+			spec = networkSpec(n)
+			werr = create()
+		}
 		if werr != nil {
 			d.log().Warn("could not create a stack network", "environment", envID, "stack", stack.Name, "network", n.Name, "error", werr)
 			code := codeOf(ctx, werr)

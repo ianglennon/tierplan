@@ -111,6 +111,10 @@ type Snapshot struct {
 	// Platforms are the swarm platforms each service of a revision was deployed with, by swarm service name; a
 	// revision stored before they were recorded, a draft and a service sent none have none (G-08-4).
 	Platforms map[string][]swarm.Platform
+	// Subnets are the subnets a swarm deploy gave the networks it created for a revision under the environment's
+	// small stack subnets, by network name (D-20). A revision stored before they were recorded, a draft and a
+	// deploy that gave none have none.
+	Subnets map[string]string
 	// Git is where the content of a git stack's snapshot came from: the commit, the tree hash of the folder and
 	// the source (D-08). It is the zero value for an inline or adopted stack.
 	Git GitRevision
@@ -164,7 +168,7 @@ func snapshotOf(row sqlc.StackSnapshot) Snapshot {
 		ID: row.ID, StackID: row.StackID, Kind: row.Kind, Seq: row.Seq, BaseSeq: row.BaseSeq, Version: row.Version,
 		Outcome: row.Outcome, CreatedBy: row.CreatedBy, CreatedAt: time.Unix(0, row.CreatedAt).UTC(),
 		Origin: row.Origin, RestoredFrom: row.RestoredFrom, IsDraft: row.Kind == KindDraft,
-		Platforms: platformsOf(row), Git: gitRevisionOf(row), SyncTrigger: row.SyncTrigger,
+		Platforms: platformsOf(row), Subnets: subnetsOf(row), Git: gitRevisionOf(row), SyncTrigger: row.SyncTrigger,
 		// The ordered compose files are a column of the snapshot; fillContent keeps them when it reads the files.
 		Copy: stacks.WorkingCopy{ComposeFiles: composeFilesOf(row.ID, row.ComposeFiles)},
 	}
@@ -180,6 +184,21 @@ func platformsOf(row sqlc.StackSnapshot) map[string][]swarm.Platform {
 	var out map[string][]swarm.Platform
 	if err := json.Unmarshal([]byte(row.Platforms), &out); err != nil {
 		slog.Default().Warn("could not read the platforms of a stack revision", "snapshot", row.ID, "error", err)
+		return nil
+	}
+	return out
+}
+
+// subnetsOf reads the recorded subnets of a snapshot row. A record that is not valid JSON reads as none and is logged,
+// as platformsOf does: a revision must stay readable, and no record is the same as a revision from before they were
+// recorded.
+func subnetsOf(row sqlc.StackSnapshot) map[string]string {
+	if row.Subnets == "" || row.Subnets == "{}" {
+		return nil
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(row.Subnets), &out); err != nil {
+		slog.Default().Warn("could not read the subnets of a stack revision", "snapshot", row.ID, "error", err)
 		return nil
 	}
 	return out
@@ -783,13 +802,23 @@ func (r Repo) CopyRevision(ctx context.Context, from Snapshot, actor, origin str
 			return Snapshot{}, fmt.Errorf("copy platforms: %w", err)
 		}
 	}
+	// And with the subnets it gave its networks, so a roll back that has to create one again reuses it (D-20).
+	if len(from.Subnets) > 0 {
+		raw, err := json.Marshal(from.Subnets)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("encode subnets: %w", err)
+		}
+		if _, err := q.SetSnapshotSubnets(ctx, sqlc.SetSnapshotSubnetsParams{Subnets: string(raw), ID: id.String()}); err != nil {
+			return Snapshot{}, fmt.Errorf("copy subnets: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return Snapshot{}, fmt.Errorf("commit: %w", err)
 	}
 	return Snapshot{
 		ID: id.String(), StackID: from.StackID, Kind: KindRevision, Seq: seq, BaseSeq: from.Seq, Version: 1,
 		Outcome: OutcomePending, CreatedBy: actor, CreatedAt: now, Origin: origin, RestoredFrom: from.Seq, Git: from.Git, Copy: from.Copy,
-		Platforms: recorded,
+		Platforms: recorded, Subnets: from.Subnets,
 	}, nil
 }
 
@@ -876,6 +905,39 @@ func (r Repo) SetPlatforms(ctx context.Context, snapshotID string, platforms map
 		return fmt.Errorf("set platforms: no revision %s", snapshotID)
 	}
 	return nil
+}
+
+// SetSubnets stores on a revision the subnets a deploy gave the networks it created, by network name, so a roll back
+// or a redeploy that has to create one of them again can use the same block while it is free (D-20).
+func (r Repo) SetSubnets(ctx context.Context, snapshotID string, subnets map[string]string) error {
+	if subnets == nil {
+		subnets = map[string]string{}
+	}
+	raw, err := json.Marshal(subnets)
+	if err != nil {
+		return fmt.Errorf("encode subnets: %w", err)
+	}
+	n, err := r.Store.Q.SetSnapshotSubnets(ctx, sqlc.SetSnapshotSubnetsParams{Subnets: string(raw), ID: snapshotID})
+	if err != nil {
+		return fmt.Errorf("set subnets: %w", err)
+	}
+	if n != 1 {
+		return fmt.Errorf("set subnets: no revision %s", snapshotID)
+	}
+	return nil
+}
+
+// GoodSubnets is what the stack's newest good revision recorded for its networks, by network name. A stack with no
+// good revision, or one that recorded none, has none.
+func (r Repo) GoodSubnets(ctx context.Context, stackID string) (map[string]string, error) {
+	row, err := r.Store.RQ.LatestGoodRevision(ctx, stackID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read revision: %w", err)
+	}
+	return subnetsOf(row), nil
 }
 
 // GoodPins is what the stack's newest good revision ran, by swarm service name. AsWritten is the

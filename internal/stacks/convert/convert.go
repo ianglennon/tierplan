@@ -150,6 +150,11 @@ type Options struct {
 	// created for them. It may be nil for a stack that references none; a reference it cannot
 	// resolve is an error.
 	Objects ObjectResolver
+	// Subnets gives a network a subnet, by the network's key in the compose file, for a deploy that chooses
+	// addressing on the user's behalf (small stack subnets, D-20). It is applied only to a network the file
+	// leaves without an ipam config and does not mark external; an explicit ipam block is the file's word.
+	// The file itself is never changed. Nil gives no network a subnet.
+	Subnets map[string]string
 }
 
 // ObjectResolver turns the name the compose file uses for a secret or config (its key under the

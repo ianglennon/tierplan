@@ -103,6 +103,14 @@ type Deps struct {
 	// registry, once for each looked-up digest, for that digest's platforms. One memo is shared by every stack route of a
 	// server.
 	Platforms *PlatformMemo
+	// AddressSpaces reads the environment's small stack subnet setting and the address space a new network is
+	// given a block of (D-20), and holds the allocation lock a deploy shares with the network dialog. Nil means
+	// no deploy gives a network a subnet of its own making.
+	AddressSpaces *envs.AddressSpaces
+	// subnetPlanHook, when set, is called by a swarm deploy right after it has planned the subnets of its new
+	// networks and before it creates any, while it holds the allocation lock. Tests order a second allocation
+	// against the deploy with it, never with a sleep; nothing sets it in production.
+	subnetPlanHook func()
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

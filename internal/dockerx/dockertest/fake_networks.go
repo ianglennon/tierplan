@@ -46,6 +46,14 @@ func (f *Fake) serveNetworkCreate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
 		return true
 	}
+	if req.IPAM != nil {
+		for _, c := range req.IPAM.Config {
+			if c.Subnet.IsValid() && slices.Contains(cfg.OverlapSubnets, c.Subnet.String()) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"message": "invalid pool request: Pool overlaps with other one on this address space"})
+				return true
+			}
+		}
+	}
 	for _, n := range cfg.Networks {
 		if n.Name == req.Name {
 			writeJSON(w, http.StatusConflict, map[string]string{"message": "network with name " + req.Name + " already exists"})

@@ -42,6 +42,8 @@ type swarmRig struct {
 	envID string
 	hub   *jobs.Hub
 	store *store.Store
+	// addr is the environment's address reader, which a deploy reads the small stack subnet setting through.
+	addr *envs.AddressSpaces
 }
 
 func newSwarmRig(t *testing.T, tune func(*dockertest.FakeConfig), services ...dockertest.FakeService) *swarmRig {
@@ -90,9 +92,10 @@ func newRigOver(t *testing.T, socket string) *swarmRig {
 	}
 	hub := jobs.New(jobs.Options{})
 	t.Cleanup(hub.Close)
+	addr := envs.NewAddressSpaces(svc, agg, clusters, envs.AddressSpaceOptions{Now: time.Now})
 	return &swarmRig{
-		envID: env.ID, hub: hub, store: st,
-		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), Log: slog.New(slog.DiscardHandler)},
+		envID: env.ID, hub: hub, store: st, addr: addr,
+		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), AddressSpaces: addr, Log: slog.New(slog.DiscardHandler)},
 	}
 }
 

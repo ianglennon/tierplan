@@ -222,7 +222,7 @@ func (d StacksDeps) revisionsKept() int {
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, AddressSpaces: d.AddressSpaces, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
 	}
 }
 

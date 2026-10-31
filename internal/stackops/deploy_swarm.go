@@ -100,6 +100,7 @@ var codeMessages = map[string]string{
 	CodeNetworkFull:         "A network of the service has no free addresses, so the swarm cannot start all of its tasks.",
 	CodeNeedsAdmin:          "The stack uses host access that needs Admin.",
 	CodePolicyUnavailable:   "The host-access policy could not be applied, so nothing was deployed.",
+	CodeNoFreeSubnet:        "A network of the stack can't get a small subnet: no block of the size chosen for this environment is free. Free up space, or choose a smaller size in this environment's settings.",
 	CodePinsInvalid:         "The images in the request don't match what the deploy would use. Review the stack again.",
 }
 
@@ -156,6 +157,13 @@ type SwarmDeployInput struct {
 	// service name (Snapshot.Platforms). They are sent as they are and no registry is asked. A service the record
 	// says nothing for keeps the platforms the swarm runs when it runs the same image (G-08-4, T-08-101).
 	RestoredPlatforms map[string][]swarm.Platform
+	// Subnets is where the subnets of the stack's last good revision are read from and where this deploy's are
+	// stored, on the revision RevisionID (D-20). Nil means neither.
+	Subnets SubnetStore
+	// RestoredSubnets, for a Rollback, is the revision's own record of the subnets its networks were given
+	// (Snapshot.Subnets): a network the rollback has to create again takes its recorded subnet while that is
+	// still free, else the next free block.
+	RestoredSubnets map[string]string
 	// OnDone, when set, is called once with the result before the job's last item is finished,
 	// so a job that reads as finished has already been recorded by the caller.
 	OnDone func(DeployResult)
@@ -345,6 +353,35 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	if hasExternal(planned) {
 		liveNets = allNets
 	}
+	// Small stack subnets (D-20): the networks this deploy is about to create get a block of the size the
+	// environment chose, decided under the allocation lock, which is held until they exist. Off, or with
+	// nothing new to create, this changes nothing.
+	recorded := in.RestoredSubnets
+	if !in.Rollback && in.Subnets != nil {
+		var serr error
+		if recorded, serr = in.Subnets.GoodSubnets(ctx, in.Stack.ID); serr != nil {
+			d.log().Warn("could not read the subnets of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+		}
+	}
+	subnets, serr := d.planSmallSubnets(ctx, in.EnvID, planned.Networks, liveNets, recorded, true)
+	defer subnets.Release()
+	if serr != nil {
+		d.log().Warn("could not plan the subnets of a stack's new networks", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+		code := CodeEngineError
+		if errors.Is(serr, envs.ErrNoManager) {
+			code = CodeNoManagerConnected
+		}
+		return failErr(ItemCheck, code, "", serr)
+	}
+	if len(subnets.Missing) > 0 {
+		return failWith(ItemCheck, CodeNoFreeSubnet, subnets.Missing[0], subnets.Message(subnets.Missing[0]))
+	}
+	if len(subnets.ByKey) > 0 {
+		if planned, err = convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: plannedRefs(in.Stack.Name, objs), Subnets: subnets.ByKey}); err != nil {
+			d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", convertLogText(err, in.Copy))
+			return fail(ItemCheck, CodeStackInvalid, "")
+		}
+	}
 	for _, n := range planned.Networks {
 		if _, found := findNetwork(liveNets, n.Name); !n.External && !found {
 			prog.addNetwork(n.Name)
@@ -439,10 +476,22 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	// 3. Networks: create each one the stack uses that does not exist yet, and check that the
 	// external ones are there.
 	r.Update(ItemNetworks, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	createdNets, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, planned.Networks, liveNets, prog)
+	if d.subnetPlanHook != nil {
+		d.subnetPlanHook()
+	}
+	createdNets, err := d.ensureNetworks(ctx, in.EnvID, in.Stack, planned.Networks, liveNets, prog, &subnets)
 	res.Networks, res.CreatedNetworks = len(createdNets), createdNets
+	// The networks exist now (or the deploy stops): the block is no longer only a plan.
+	subnets.Release()
 	if err != nil {
 		return failStep(ItemNetworks, err)
+	}
+	if in.Subnets != nil && in.RevisionID != "" {
+		if rec := subnetsToRecord(recorded, liveNets, subnets.ByName); len(rec) > 0 {
+			if err := in.Subnets.SetSubnets(ctx, in.RevisionID, rec); err != nil {
+				d.log().Error("could not store the subnets of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+			}
+		}
 	}
 	r.Finish(ItemNetworks, jobs.ItemDone, "", "", nil)
 
@@ -458,7 +507,7 @@ func (d Deps) DeploySwarm(ctx context.Context, in SwarmDeployInput, r *jobs.Repo
 	// 5. Services: convert again with the objects that now exist, update the services that exist at
 	// the version just read and create the rest.
 	r.Update(ItemServices, func(it *jobs.Item) { it.State = jobs.ItemRunning })
-	plan, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs})
+	plan, err := convert.Convert(in.Project, convert.Options{StackName: in.Stack.Name, StackID: in.Stack.ID, Objects: refs, Subnets: subnets.ByKey})
 	if err != nil {
 		d.log().Warn("a stack could not be converted for a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", convertLogText(err, in.Copy))
 		return fail(ItemServices, CodeStackInvalid, "")

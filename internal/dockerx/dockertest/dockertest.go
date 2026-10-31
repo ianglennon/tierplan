@@ -106,6 +106,10 @@ type FakeConfig struct {
 	// reads in this fake (a real one reports 24).
 	SwarmDefaultAddrPool []string
 	SwarmSubnetSize      uint32
+	// OverlapSubnets are subnets the daemon refuses a network create for, as a real one does when the pool overlaps a
+	// network or route it holds that Coaming cannot see: nothing is created and the answer is 403 "Pool overlaps with
+	// other one on this address space".
+	OverlapSubnets []string
 	// DefaultAddressPools is Info.DefaultAddressPools, the daemon's default-address-pools
 	// setting. Empty leaves it out of /info, as a real daemon does when none is configured.
 	DefaultAddressPools []FakeAddressPool
