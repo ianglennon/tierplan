@@ -84,4 +84,20 @@ describe("BlockingList", () => {
     expect(screen.getByText("<b>bad</b>").querySelector("b")).toBeNull();
     expect(screen.queryByRole("link", { name: /:/ })).toBeNull();
   });
+
+  it("links a no-free-block problem to the address space", () => {
+    const message =
+      "network backend can't get a /26 subnet: no free block is left in 10.0.0.0/24. Free up space, or choose a smaller size in this environment's settings.";
+    mount([problem({ code: "small_subnet_no_free_block", message, line: 1 })]);
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open address space" }).getAttribute("href")).toBe(
+      "/env/e1/address-space",
+    );
+    expect(screen.queryByRole("link", { name: "compose.yaml:1" })).toBeNull();
+  });
+
+  it("offers no address space link on any other error", () => {
+    mount([problem({})]);
+    expect(screen.queryByRole("link", { name: "Open address space" })).toBeNull();
+  });
 });

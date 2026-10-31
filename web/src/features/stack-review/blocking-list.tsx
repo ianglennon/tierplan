@@ -9,6 +9,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/use-t";
 
+// NO_FREE_SUBNET is the code of the error for a new network that small stack subnets cannot give a block to
+// (D-20): it has no place in a file worth a link, its way out is the environment's address space.
+const NO_FREE_SUBNET = "small_subnet_no_free_block";
+
 interface BlockingListProps {
   problems: StackProblem[];
   envId: string;
@@ -41,7 +45,8 @@ export function ProblemLink({
 
 // BlockingList is the alert that lists every error that stops the deploy, each with its file and
 // line (STK-06, D-10): the person goes back to the editor at the line, with the draft as it was
-// saved. The server decides what is an error, and its messages are the page's words (T-07-71).
+// saved. The server decides what is an error, and its messages are the page's words (T-07-71). A network
+// that cannot get a small subnet is also offered the environment's address space.
 // It draws nothing when there is no error.
 export function BlockingList({ problems, envId, stackId }: BlockingListProps) {
   const t = useT();
@@ -59,7 +64,15 @@ export function BlockingList({ problems, envId, stackId }: BlockingListProps) {
               className="flex flex-wrap items-baseline gap-x-2"
             >
               <span className="break-words">{p.message}</span>
-              <ProblemLink problem={p} envId={envId} stackId={stackId} />
+              {p.code === NO_FREE_SUBNET ? (
+                <Button asChild variant="outline" size="sm" className="max-md:h-11">
+                  <Link to="/env/$envId/address-space" params={{ envId }}>
+                    {t("stackReview.network.openAddressSpace")}
+                  </Link>
+                </Button>
+              ) : (
+                <ProblemLink problem={p} envId={envId} stackId={stackId} />
+              )}
             </li>
           ))}
         </ul>
