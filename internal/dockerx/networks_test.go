@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
@@ -923,4 +924,173 @@ func TestNetworkSwarmUsageHasNoUsageWhenThePartialIDReadBringsNoSwarmCount(t *te
 			t.Errorf("%d network reads, want 1", got)
 		}
 	})
+}
+
+// allocFake is a swarm manager whose managers' allocator leaves the networks of the given subnets
+// unallocated for that many inspects (negative: for good).
+func allocFake(t *testing.T, unalloc map[string]int, removeErrs map[string]string) (*dockerx.Client, *dockertest.Fake) {
+	t.Helper()
+	fake := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true, SwarmUnallocated: unalloc, RemoveErrors: removeErrs,
+	})
+	return newClient(t, fake), fake
+}
+
+// atOnce is an AllocationWait whose clock fires at once, so no test waits.
+func atOnce(attempts int) dockerx.AllocationWait {
+	return dockerx.AllocationWait{
+		Attempts: attempts,
+		After: func(time.Duration) <-chan time.Time {
+			ch := make(chan time.Time, 1)
+			ch <- time.Time{}
+			return ch
+		},
+	}
+}
+
+// readsOf is how many times the fake was asked to inspect the network. Requests lists writes too,
+// so the removals are taken off.
+func readsOf(fake *dockertest.Fake, id string) int {
+	n := 0
+	for _, p := range fake.Requests() {
+		if strings.HasSuffix(p, "/networks/"+id) {
+			n++
+		}
+	}
+	for _, w := range fake.Writes() {
+		if w == "DELETE /networks/"+id {
+			n--
+		}
+	}
+	return n
+}
+
+func swarmSpec(subnet string) dockerx.NetworkCreateSpec {
+	return dockerx.NetworkCreateSpec{Name: "ovl", Driver: "overlay", Scope: dockerx.ScopeSwarm, Subnet: subnet}
+}
+
+func TestNetworkCreateAllocatedReady(t *testing.T) {
+	c, fake := allocFake(t, nil, nil)
+	id, warning, err := c.NetworkCreateAllocated(context.Background(), swarmSpec("10.9.0.0/24"), atOnce(5))
+	if err != nil || id == "" || warning != "" {
+		t.Fatalf("NetworkCreateAllocated = %q, %q, %v", id, warning, err)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/create"}) {
+		t.Fatalf("writes = %v, want one create and no removal", got)
+	}
+	if n := readsOf(fake, id); n != 1 {
+		t.Errorf("reads = %d, want 1", n)
+	}
+}
+
+func TestNetworkCreateAllocatedLate(t *testing.T) {
+	c, fake := allocFake(t, map[string]int{"10.9.0.0/24": 2}, nil)
+	id, _, err := c.NetworkCreateAllocated(context.Background(), swarmSpec("10.9.0.0/24"), atOnce(5))
+	if err != nil || id == "" {
+		t.Fatalf("NetworkCreateAllocated = %q, %v", id, err)
+	}
+	if n := readsOf(fake, id); n != 3 {
+		t.Errorf("reads = %d, want 3", n)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/create"}) {
+		t.Fatalf("writes = %v, want no removal for a network that was only late", got)
+	}
+}
+
+func TestNetworkCreateAllocatedNever(t *testing.T) {
+	c, fake := allocFake(t, map[string]int{"10.9.0.0/24": -1}, nil)
+	id, _, err := c.NetworkCreateAllocated(context.Background(), swarmSpec("10.9.0.0/24"), atOnce(4))
+	var na *dockerx.NotAllocatedError
+	if !errors.As(err, &na) || !errors.Is(err, dockerx.ErrNetworkNotAllocated) {
+		t.Fatalf("err = %v, want a *NotAllocatedError", err)
+	}
+	if !na.Removed || na.RemoveErr != nil || na.ID != id || na.Name != "ovl" || na.Subnet != "10.9.0.0/24" {
+		t.Errorf("error = %+v", na)
+	}
+	if n := readsOf(fake, id); n != 4 {
+		t.Errorf("reads = %d, want 4 (Attempts)", n)
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/create", "DELETE /networks/" + id}) {
+		t.Fatalf("writes = %v, want the create then one removal by ID", got)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "overlap") || dockerx.IsPoolOverlap(err) {
+		t.Errorf("a not allocated error must not read as an overlap refusal: %v", err)
+	}
+}
+
+func TestNetworkCreateAllocatedStubLeft(t *testing.T) {
+	c, _ := allocFake(t, map[string]int{"10.9.0.0/24": -1}, map[string]string{"ovl": "boom"})
+	_, _, err := c.NetworkCreateAllocated(context.Background(), swarmSpec("10.9.0.0/24"), atOnce(2))
+	var na *dockerx.NotAllocatedError
+	if !errors.As(err, &na) || !errors.Is(err, dockerx.ErrNetworkNotAllocated) {
+		t.Fatalf("err = %v, want a *NotAllocatedError", err)
+	}
+	if na.Removed || na.RemoveErr == nil || !strings.Contains(na.RemoveErr.Error(), "boom") {
+		t.Errorf("error = %+v, want Removed false and the removal's error", na)
+	}
+}
+
+func TestNetworkCreateAllocatedLocalNotRead(t *testing.T) {
+	c, fake := networkFake(t)
+	id, _, err := c.NetworkCreateAllocated(context.Background(), dockerx.NetworkCreateSpec{Name: "lan", Driver: "bridge", Subnet: "10.9.0.0/24"}, atOnce(3))
+	if err != nil || id == "" {
+		t.Fatalf("NetworkCreateAllocated = %q, %v", id, err)
+	}
+	if n := readsOf(fake, id); n != 0 {
+		t.Errorf("reads = %d, want none for a local network", n)
+	}
+}
+
+func TestNetworkCreateAllocatedContextEnds(t *testing.T) {
+	c, fake := allocFake(t, map[string]int{"10.9.0.0/24": -1}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := dockerx.AllocationWait{
+		Attempts: 5,
+		After: func(time.Duration) <-chan time.Time {
+			cancel() // the caller gives up while the wait is on; the clock never fires
+			return nil
+		},
+	}
+	id, _, err := c.NetworkCreateAllocated(ctx, swarmSpec("10.9.0.0/24"), w)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, dockerx.ErrNetworkNotAllocated) {
+		t.Fatalf("err = %v, want the context's error and not a not allocated one", err)
+	}
+	if id == "" {
+		t.Errorf("id is empty: the caller needs it to find the network it may have left")
+	}
+	if got := fake.Writes(); !slices.Equal(got, []string{"POST /networks/create"}) {
+		t.Fatalf("writes = %v, want no removal", got)
+	}
+}
+
+func TestNetworkCreateAllocatedReadFailureLeavesTheNetwork(t *testing.T) {
+	c, fake := allocFake(t, nil, nil)
+	fake.Reconfigure(dockertest.FakeConfig{SwarmState: "active", SwarmControl: true, PolicyDeny: true})
+	_, _, err := c.NetworkCreateAllocated(context.Background(), swarmSpec("10.9.0.0/24"), atOnce(3))
+	if err == nil || errors.Is(err, dockerx.ErrNetworkNotAllocated) {
+		t.Fatalf("err = %v, want the failure, not a not allocated one", err)
+	}
+}
+
+func TestIsPoolOverlap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"the default IPAM", errors.New("Error response from daemon: invalid pool request: Pool overlaps with other one on this address space"), true},
+		{"the bridge driver", errors.New("Error response from daemon: networks have overlapping IPv4"), true},
+		{"a taken name", fmt.Errorf("create: %w", cerrdefs.ErrConflict.WithMessage("network with name x already exists")), false},
+		{"not found", cerrdefs.ErrNotFound.WithMessage("network gone"), false},
+		{"a policy denial", errors.New("agent_policy_denied: POST /networks/create overlap"), false},
+		{"not allocated", &dockerx.NotAllocatedError{Name: "x", Removed: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := dockerx.IsPoolOverlap(tc.err); got != tc.want {
+				t.Errorf("IsPoolOverlap(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
 }

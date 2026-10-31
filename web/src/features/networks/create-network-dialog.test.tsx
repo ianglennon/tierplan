@@ -665,6 +665,17 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     ).toBe("true");
   });
 
+  it("says the swarm did not allocate the network", async () => {
+    answer = () => problem(422, "network_not_allocated");
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "The swarm didn't give this network an address range, so Coaming removed it again.",
+    );
+  });
+
   it("opens advanced at 70 percent, with the line that says why", async () => {
     addressSpace = {
       envType: "swarm",

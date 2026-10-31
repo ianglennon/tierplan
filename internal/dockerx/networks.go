@@ -105,6 +105,135 @@ func (c *Client) NetworkCreate(ctx context.Context, spec NetworkCreateSpec) (id,
 	return res.ID, strings.Join(res.Warning, "; "), nil
 }
 
+// ErrNetworkNotAllocated is what a *NotAllocatedError matches: the swarm accepted a network
+// create but never allocated the network.
+var ErrNetworkNotAllocated = errors.New("dockerx: the swarm did not allocate the network")
+
+// NotAllocatedError is the result of NetworkCreateAllocated when the swarm accepted a create
+// and never allocated the network (UAT G-10-8). It matches ErrNetworkNotAllocated with
+// errors.Is.
+type NotAllocatedError struct {
+	// ID and Name are the stub network the create left; Subnet is the subnet asked for, empty
+	// when the create left the choice to the swarm.
+	ID, Name, Subnet string
+	// Removed is true when the stub was removed again. When it is not, RemoveErr is why.
+	Removed   bool
+	RemoveErr error
+}
+
+// Error names the network. It never says "overlap", so a message match for an engine refusal
+// (IsPoolOverlap) can not take this for one.
+func (e *NotAllocatedError) Error() string {
+	if e.Removed {
+		return fmt.Sprintf("the swarm did not allocate network %s, and it was removed again", e.Name)
+	}
+	return fmt.Sprintf("the swarm did not allocate network %s, and removing it failed: %v", e.Name, e.RemoveErr)
+}
+
+// Is matches ErrNetworkNotAllocated.
+func (e *NotAllocatedError) Is(target error) bool { return target == ErrNetworkNotAllocated }
+
+// Unwrap gives the failed removal, if there was one.
+func (e *NotAllocatedError) Unwrap() error { return e.RemoveErr }
+
+// AllocationWait is how NetworkCreateAllocated waits for the swarm to allocate a network. The
+// zero value is the real defaults.
+type AllocationWait struct {
+	// Interval is the time between reads; zero means 200 ms.
+	Interval time.Duration
+	// Attempts is how many reads are made before the network is given up on; zero means 30,
+	// about 6 s.
+	Attempts int
+	// After returns a channel that fires once d has passed; nil means time.After. Tests pass
+	// one that fires at once, so that nothing waits on the wall clock.
+	After func(d time.Duration) <-chan time.Time
+}
+
+const (
+	defaultAllocationInterval = 200 * time.Millisecond
+	defaultAllocationAttempts = 30
+	// allocationRemoveTimeout bounds the removal of a stub, which runs detached from the
+	// caller's context so that a caller that gave up still has the stub cleaned up.
+	allocationRemoveTimeout = 30 * time.Second
+)
+
+// NetworkCreateAllocated creates a network once, as NetworkCreate does, and for a swarm-scoped
+// network then reads it back until the swarm has allocated it. A local network (Scope not
+// swarm) is returned at once: the engine allocates it before it answers.
+//
+// Allocated means the inspected network has a driver or at least one IPAM config. A swarm
+// manager accepts a create and only then runs its allocator. When that fails (the pool overlaps
+// another swarm network, or the pools are full) the managers keep a stub that the inspect shows
+// with Driver "" and IPAM.Config null, because the inspect takes the driver from the
+// allocator's DriverState and the config from the allocated IPAM (moby BasicNetworkFromGRPC),
+// and tasks on it stay in New (UAT G-10-8).
+//
+// When the attempts run out the stub is removed once, by the ID the create returned and never by
+// name, and the error is a *NotAllocatedError that says whether that worked. A context that
+// ends during the wait returns its error and leaves the network, which may yet be allocated; so
+// does a read that fails. The create is never retried (P2 D-42). When the network is allocated
+// the ID and warning are exactly NetworkCreate's.
+func (c *Client) NetworkCreateAllocated(ctx context.Context, spec NetworkCreateSpec, w AllocationWait) (id, warning string, err error) {
+	id, warning, err = c.NetworkCreate(ctx, spec)
+	if err != nil || spec.Scope != ScopeSwarm {
+		return id, warning, err
+	}
+	interval, attempts, after := w.Interval, w.Attempts, w.After
+	if interval <= 0 {
+		interval = defaultAllocationInterval
+	}
+	if attempts <= 0 {
+		attempts = defaultAllocationAttempts
+	}
+	if after == nil {
+		after = time.After
+	}
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			select {
+			case <-after(interval):
+			case <-ctx.Done():
+				return id, warning, ctx.Err()
+			}
+		}
+		res, ierr := c.cur().NetworkInspect(ctx, id, client.NetworkInspectOptions{})
+		if ierr != nil {
+			return id, warning, fmt.Errorf("read back network on %s: %w", c.t.Describe(), ierr)
+		}
+		if res.Network.Driver != "" || len(res.Network.IPAM.Config) > 0 {
+			return id, warning, nil
+		}
+	}
+	na := &NotAllocatedError{ID: id, Name: spec.Name, Subnet: spec.Subnet}
+	if na.Subnet == "" && len(spec.Pools) > 0 {
+		na.Subnet = spec.Pools[0].Subnet
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), allocationRemoveTimeout)
+	defer cancel()
+	if rerr := c.NetworkRemove(rctx, id); rerr != nil {
+		na.RemoveErr = rerr
+	} else {
+		na.Removed = true
+	}
+	return id, warning, na
+}
+
+// IsPoolOverlap reports whether err is the engine refusing a network create because its subnet
+// overlaps another network. There are two sentences: the default IPAM's "invalid pool request:
+// Pool overlaps with other one on this address space" (403), and the bridge driver's "networks
+// have overlapping IPv4". It is a message match, like stackops' isOverlapRefusal, since the
+// engine gives no code for it (review A-IN-02). A conflict (a name already taken) and a
+// *NotAllocatedError are not one.
+func IsPoolOverlap(err error) bool {
+	if err == nil || cerrdefs.IsConflict(err) || errors.Is(err, ErrNetworkNotAllocated) {
+		return false
+	}
+	if strings.Contains(err.Error(), "agent_policy_denied") {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "overlap")
+}
+
 // ipamOf builds the address management of a create from its pools and IPAM driver, or nil when
 // none is set. The single Subnet, Gateway and IPRange fields are one pool; they cannot be
 // combined with Pools. A pool with nothing in it is left out.

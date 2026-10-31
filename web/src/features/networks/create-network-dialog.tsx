@@ -249,6 +249,8 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
       case "subnet_overlap_swarm":
         setAdvanced(true);
         return { message: t("subnetPicker.errors.overlapSwarm"), agentPolicy: false };
+      case "network_not_allocated":
+        return { message: t("networks.errors.notAllocated"), agentPolicy: false };
       case "agent_policy_denied":
         return { message: "", agentPolicy: true };
       case "host_read_only":

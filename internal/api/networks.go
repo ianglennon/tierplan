@@ -34,6 +34,8 @@ const (
 	problemSubnetInvalid         = "subnet_invalid"
 	problemSubnetOverlap         = "subnet_overlap"
 	problemSubnetOverlapSwarm    = "subnet_overlap_swarm"
+	problemNetworkNotAllocated   = "network_not_allocated"
+	problemSubnetRefused         = "subnet_refused"
 	problemGatewayOutsideSubnet  = "gateway_outside_subnet"
 	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
 	problemAttachableOverlayOnly = "attachable_overlay_only"
@@ -44,6 +46,12 @@ const (
 	problemNetworkNotFound = "network_not_found"
 	problemNodeUnreachable = codeNodeUnreachable
 	codeRemoved            = "removed"
+	// codeNotAllocated and codeRemoveFailed are the audit codes of a swarm network the swarm never
+	// allocated (G-10-8): the create's, and the removal of its stub when that failed.
+	codeNotAllocated = "not_allocated"
+	codeRemoveFailed = "remove_failed"
+	// sourceAllocationCheck is the audit source of the removal of an unallocated stub.
+	sourceAllocationCheck = "allocation_check"
 
 	problemNodeMismatch             = "node_mismatch"
 	problemNetworkNotAttachable     = "network_not_attachable"
@@ -70,6 +78,10 @@ type NetworksDeps struct {
 	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A
 	// connect or disconnect of that container, or of an agent's, needs its name typed.
 	SelfContainerID string
+	// AllocationWait is how a swarm network create waits for the swarm to allocate the network. The
+	// zero value is the real defaults (every 200 ms, up to 30 times); tests pass a clock that fires
+	// at once.
+	AllocationWait dockerx.AllocationWait
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -245,6 +257,8 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
 			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
 			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
+			"A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network Coaming could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. " +
+			"A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. " +
 			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
@@ -438,7 +452,7 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 	defer cancel()
 	create := func(c *dockerx.Client) error {
 		var e error
-		id, _, e = c.NetworkCreate(writeCtx, spec)
+		id, _, e = c.NetworkCreateAllocated(writeCtx, spec, d.AllocationWait)
 		return e
 	}
 	if clusterWide {
@@ -448,7 +462,21 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, create)
 	}
 	if err != nil {
-		code, problem := networkCreateProblem(d.Log, envID, body.Name, err)
+		code, problem := networkCreateProblem(d.Log, envID, body.Name, body.Subnet, err)
+		// A network the swarm did not allocate was made, so the row is about the stub, and the removal of
+		// the stub has a row of its own.
+		var na *dockerx.NotAllocatedError
+		if errors.As(err, &na) {
+			auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, na.ID, body.Name, nodeID, scope, spec, code, extra)
+			removal := codeRemoved
+			if !na.Removed {
+				removal = codeRemoveFailed
+			}
+			recordNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkRemoved, na.ID, body.Name, removal, map[string]string{
+				"name": body.Name, "driver": spec.Driver, "scope": scope, "source": sourceAllocationCheck, "code": removal,
+			})
+			return nil, problem
+		}
 		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code, extra)
 		return nil, problem
 	}
@@ -534,12 +562,42 @@ func validateAddressing(subnet, gateway, ipRange string) error {
 }
 
 // networkCreateProblem turns the error of a create into the audit code and the problem
-// the SPA understands.
-func networkCreateProblem(log *slog.Logger, envID, name string, err error) (string, error) {
+// the SPA understands. subnet is the subnet the request asked for, empty when it left the
+// choice to the engine.
+func networkCreateProblem(log *slog.Logger, envID, name, subnet string, err error) (string, error) {
+	var na *dockerx.NotAllocatedError
+	if errors.As(err, &na) {
+		return codeNotAllocated, httpx.Problem(http.StatusUnprocessableEntity, problemNetworkNotAllocated, notAllocatedMessage(na))
+	}
+	if subnet != "" && dockerx.IsPoolOverlap(err) {
+		// The engine's own sentence is for the log: it is not echoed to the browser (T-10-71).
+		log.Warn("the engine refused a network subnet as overlapping", "environment", envID, "network", name, "error", err.Error())
+		return problemSubnetRefused, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetRefused,
+			"Docker refused "+subnet+": it overlaps another network on that host. Choose another subnet.")
+	}
 	if dockerx.IsConflict(err) {
 		return problemNameTaken, httpx.Problem(http.StatusConflict, problemNameTaken, "A network named "+name+" already exists.")
 	}
 	return networkWriteProblem(log, envID, err)
+}
+
+// notAllocatedMessage is the sentence for a swarm network the swarm accepted and never allocated.
+func notAllocatedMessage(na *dockerx.NotAllocatedError) string {
+	msg := "The swarm didn't give " + na.Name + " an address range"
+	if na.Removed {
+		msg += ", so Coaming removed it again."
+	} else {
+		msg += "."
+	}
+	if na.Subnet != "" {
+		msg += " Its subnet " + na.Subnet + " probably overlaps another swarm network. Choose another subnet."
+	} else {
+		msg += " The swarm's address pools may be full. Open the Address space page to free some."
+	}
+	if !na.Removed {
+		msg += " Coaming couldn't remove it, so delete " + na.Name + " on the Networks page."
+	}
+	return msg
 }
 
 // networkWriteProblem is the part of a network write's failure that every write shares:

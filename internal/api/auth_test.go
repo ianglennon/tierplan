@@ -401,7 +401,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
 			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
-		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, Log: log,
@@ -1387,4 +1387,15 @@ func refusalSource(c *auth.RefusalCoalescer) interface{ Bursts(time.Time) []auth
 		return nil
 	}
 	return c
+}
+
+// atOnceWait is the read-back wait of the network routes with a clock that fires at once, so no
+// API test waits on the wall clock for the swarm to allocate a network. The attempts are the real
+// default; the fake allocates at once unless FakeConfig.SwarmUnallocated says otherwise.
+func atOnceWait() dockerx.AllocationWait {
+	return dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}}
 }

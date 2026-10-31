@@ -110,6 +110,13 @@ type FakeConfig struct {
 	// network or route it holds that Coaming cannot see: nothing is created and the answer is 403 "Pool overlaps with
 	// other one on this address space".
 	OverlapSubnets []string
+	// SwarmUnallocated are subnets of swarm-scoped networks the managers accept but their allocator refuses (UAT G-10-8: the
+	// pool overlaps another swarm network, or the pools are full). The create answers 201 as usual, but the network inspects
+	// and lists as the stub the managers keep: no driver and no IPAM config. The value is how many inspects answer that
+	// way before the network reads as allocated; a negative value means it is never allocated. The key "" matches a
+	// create that names no subnet (the pools being full). Removal works as on any
+	// created network (RemoveErrors makes it fail).
+	SwarmUnallocated map[string]int
 	// DefaultAddressPools is Info.DefaultAddressPools, the daemon's default-address-pools
 	// setting. Empty leaves it out of /info, as a real daemon does when none is configured.
 	DefaultAddressPools []FakeAddressPool
@@ -597,6 +604,9 @@ type Fake struct {
 	// netGone are the IDs of networks removed through the fake; withoutNetworks
 	// leaves them out of every list.
 	netGone map[string]bool
+	// netUnalloc is, by ID, how many more inspects show a created network as the unallocated stub of
+	// FakeConfig.SwarmUnallocated; a negative count is for good (fake_networks.go).
+	netUnalloc map[string]int
 	// netConnects and netDisconnects are the bodies of the connects and disconnects the
 	// fake accepted, and epChanges the attachments they left, by container ID and
 	// network name: a nil endpoint is a disconnect (fake_networks.go).
@@ -870,7 +880,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {

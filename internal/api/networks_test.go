@@ -1959,3 +1959,117 @@ func TestCreateNetworkConcurrentSameSubnet(t *testing.T) {
 		t.Fatalf("statuses = %d and %d, want one 201 and one 422", a, b)
 	}
 }
+
+// unallocatedSwarm is a swarm whose managers accept a create of the subnet and never allocate it
+// (G-10-8), and whose removal of the network called failRemove fails.
+func unallocatedSwarm(t *testing.T, subnet, failRemove string) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.SwarmUnallocated = map[string]int{subnet: -1}
+		if failRemove != "" {
+			cfg.RemoveErrors = map[string]string{failRemove: "network is busy"}
+		}
+	})
+}
+
+// A swarm network the managers accept and never allocate is removed again, refused with
+// network_not_allocated and audited twice (G-10-8, T-10-73, T-10-74, T-10-76).
+func TestCreateNetworkNotAllocatedIsRemoved(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "")
+	rec := s.post(t, `{"name":"stub","driver":"overlay","subnet":"10.77.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for _, want := range []string{"The swarm didn't give stub an address range", "Coaming removed it again", "10.77.0.0/24"} {
+		if !strings.Contains(string(rec.body), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.body)
+		}
+	}
+	a := s.onlyCreate(t)
+	var removed []string
+	for _, w := range a.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE /networks/") {
+			removed = append(removed, w)
+		}
+	}
+	if len(removed) != 1 {
+		t.Fatalf("removals = %v, want exactly one, by ID", removed)
+	}
+	list := decode[nodeListBody[nodeNetwork]](t, s.get(t, s.env.ID, "networks"))
+	for _, n := range list.Items {
+		if n.Name == "stub" {
+			t.Errorf("the stub is still listed: %+v", n)
+		}
+	}
+	rows := s.networkAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v, want network.created then network.removed", rows)
+	}
+	c, r := rows[0], rows[1]
+	if c.Action != audit.ActionNetworkCreated || c.Result != string(audit.ResultFailure) || c.Reason != "not_allocated" || c.Details["code"] != "not_allocated" {
+		t.Errorf("created row = %+v", c)
+	}
+	if r.Action != audit.ActionNetworkRemoved || r.Result != string(audit.ResultSuccess) || r.Details["source"] != "allocation_check" || r.Details["code"] != "removed" || r.TargetID != c.TargetID {
+		t.Errorf("removed row = %+v", r)
+	}
+	if "DELETE /networks/"+c.TargetID != removed[0] {
+		t.Errorf("the removal %q is not of the stub's ID %q", removed[0], c.TargetID)
+	}
+}
+
+// A stub that cannot be removed is said so and audited as remove_failed.
+func TestCreateNetworkNotAllocatedAndNotRemovable(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "stub")
+	rec := s.post(t, `{"name":"stub","driver":"overlay","subnet":"10.77.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "Coaming couldn't remove it, so delete stub on the Networks page.") || strings.Contains(string(rec.body), "removed it again") {
+		t.Errorf("the problem does not say the stub is left: %s", rec.body)
+	}
+	if strings.Contains(string(rec.body), "network is busy") {
+		t.Errorf("the engine's own sentence reached the browser: %s", rec.body)
+	}
+	rows := s.networkAudits(t)
+	if len(rows) != 2 || rows[1].Action != audit.ActionNetworkRemoved || rows[1].Result != string(audit.ResultFailure) || rows[1].Details["code"] != "remove_failed" || rows[1].Details["source"] != "allocation_check" {
+		t.Fatalf("audit rows = %+v, want created (not_allocated) then removed (remove_failed)", rows)
+	}
+}
+
+// With no subnet the sentence points at the pools instead.
+func TestCreateNetworkNotAllocatedWithoutASubnetPointsAtThePools(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "", "")
+	rec := s.post(t, `{"name":"stub","driver":"overlay"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "The swarm's address pools may be full. Open the Address space page to free some.") || strings.Contains(string(rec.body), "overlaps another swarm network") {
+		t.Errorf("the sentence does not point at the pools: %s", rec.body)
+	}
+}
+
+// An overlay the swarm allocates is created as before and nothing is removed.
+func TestCreateNetworkAllocatedOverlayIsKept(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "")
+	rec := s.post(t, `{"name":"fine","driver":"overlay","subnet":"10.78.0.0/24"}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	a := s.onlyCreate(t)
+	for _, w := range a.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE") {
+			t.Errorf("an allocated network was removed: %v", a.fake.Writes())
+		}
+	}
+	if rows := s.networkAudits(t); len(rows) != 1 || rows[0].Details["code"] != "created" {
+		t.Errorf("audit rows = %+v", rows)
+	}
+}
