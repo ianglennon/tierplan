@@ -48,8 +48,8 @@ type OrphanRow struct {
 	// Builtin is true for the engine's or swarm's own network, a config-only network and the
 	// target of a config-from: never removed.
 	Builtin bool
-	Subnets                              []string
-	Class                                netspace.Class
+	Subnets []string
+	Class   netspace.Class
 	// FormerOwner is the stack or compose project the network's labels name, and FormerOwnerKind
 	// is stack or project; both are empty for a network with no owner label.
 	FormerOwner, FormerOwnerKind string
