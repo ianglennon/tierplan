@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { addressSettingsQuery } from "@/api/address-space";
 import { setCsrfToken } from "@/api/client";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -25,6 +26,7 @@ interface Sent {
 let sent: Sent[];
 let settings: Record<string, unknown>;
 let putAnswer: () => Response;
+let client: QueryClient;
 
 beforeEach(() => {
   sent = [];
@@ -58,7 +60,7 @@ afterEach(() => {
 });
 
 async function mount(canEdit = true) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <TestRouter>
@@ -293,5 +295,104 @@ describe("AddressPoolsCard", () => {
     expect(document.body.textContent).toContain("Needs Admin on lab");
     fireEvent.click(save());
     expect(puts()).toEqual([]);
+  });
+
+  function enterPool() {
+    fireEvent.click(add());
+    type(base(1), "10.20.0.0/16");
+    type(size(1), "24");
+  }
+
+  const conflictAnswer = (by: string) => () =>
+    Response.json(
+      { status: 409, type: "settings_changed", errors: [{ location: "changedBy", message: by }] },
+      { status: 409 },
+    );
+
+  it("sends the newer version when only Default stack subnets was saved since the edit began", async () => {
+    await mount();
+    enterPool();
+    await act(async () => {
+      client.setQueryData(addressSettingsQuery("e1").queryKey, {
+        smallSubnets: { enabled: true, mask: 27 },
+        pools: [],
+        version: 8,
+        changedBy: "Ian",
+      });
+      // The observers are told on the next tick.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The rows being edited were not replaced by the newer read.
+    expect(base(1).value).toBe("10.20.0.0/16");
+    fireEvent.click(save());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ pools: [{ base: "10.20.0.0/16", size: 24 }], version: 8 });
+    expect(await screen.findByText("Saved the address pools.")).toBeTruthy();
+    expect(screen.queryByText(/changed these settings/)).toBeNull();
+  });
+
+  it("re-sends once after a 409 when the pools are unchanged", async () => {
+    let calls = 0;
+    putAnswer = () => {
+      calls++;
+      if (calls === 1) {
+        settings = { ...settings, smallSubnets: { enabled: true, mask: 27 }, version: 8 };
+        return conflictAnswer("Ian")();
+      }
+      return Response.json({ ...settings, version: 9 });
+    };
+    await mount();
+    enterPool();
+    fireEvent.click(save());
+    expect(await screen.findByText("Saved the address pools.")).toBeTruthy();
+    expect(puts().map((p) => p.body)).toEqual([
+      { pools: [{ base: "10.20.0.0/16", size: 24 }], version: 7 },
+      { pools: [{ base: "10.20.0.0/16", size: 24 }], version: 8 },
+    ]);
+    expect(screen.queryByText(/changed these settings/)).toBeNull();
+  });
+
+  it("still conflicts when someone else changed the pools", async () => {
+    putAnswer = () => {
+      settings = {
+        ...settings,
+        pools: [{ base: "10.99.0.0/16", size: 24 }],
+        version: 8,
+        changedBy: "Alice",
+      };
+      return conflictAnswer("Sam")();
+    };
+    await mount();
+    enterPool();
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "Alice changed these settings while you were editing. Reload to see them.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+    expect(puts()).toHaveLength(1);
+    // The pending rows stay until Reload.
+    expect(base(1).value).toBe("10.20.0.0/16");
+  });
+
+  it("never re-sends twice in one Save", async () => {
+    let calls = 0;
+    putAnswer = () => {
+      calls++;
+      settings = { ...settings, version: 7 + calls, changedBy: "Ian" };
+      return conflictAnswer("Ian")();
+    };
+    await mount();
+    enterPool();
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "Ian changed these settings while you were editing. Reload to see them.",
+      ),
+    ).toBeTruthy();
+    expect(puts()).toHaveLength(2);
+    await act(async () => {});
+    expect(puts()).toHaveLength(2);
   });
 });

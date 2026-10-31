@@ -7,6 +7,7 @@ import { Plus, X } from "lucide-react";
 import { type FormEvent, useId, useMemo, useRef, useState } from "react";
 
 import {
+  type AddressSettings,
   type AddressSettingsError,
   addressSettingsQuery,
   conflictBy,
@@ -28,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { samePools, versionToSend } from "@/features/address-space/settings-version";
 import { ConflictLine, TOUCH_HEIGHT } from "@/features/address-space/small-subnets-card";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { hostBitsOf, overlaps, parseCidr } from "@/features/networks/cidr";
@@ -97,6 +99,8 @@ interface Edit {
   rows: KeyedRow[];
   // The version of the settings the person started editing, which is the one a save sends.
   version: number;
+  // The pools as saved when the editing began; a save is re-based only while they still hold.
+  base: PoolEntry[];
 }
 
 type Failure =
@@ -136,6 +140,7 @@ export function AddressPoolsCard({ envId, envName, canEdit }: AddressPoolsCardPr
     if (!settings.data || !canEdit) return;
     setEdit((prev) => ({
       version: prev?.version ?? settings.data.version,
+      base: prev?.base ?? settings.data.pools ?? [],
       rows: next(prev?.rows ?? saved),
     }));
     setFailure(null);
@@ -162,35 +167,65 @@ export function AddressPoolsCard({ envId, envName, canEdit }: AddressPoolsCardPr
     void settings.refetch();
   }
 
-  function submit(event: FormEvent) {
+  function saveDone() {
+    setEdit(null);
+    setFailure(null);
+    setTried(false);
+    toastSuccess(t("envsettings.addressPools.saved"));
+  }
+
+  function failureOf(error: AddressSettingsError): Failure {
+    const row = poolRowError(error);
+    return error.type === "settings_changed"
+      ? { kind: "conflict", by: conflictBy(error) }
+      : row
+        ? { kind: "row", ...row }
+        : { kind: "failed" };
+  }
+
+  // submit sends the newest version this card may (see versionToSend). A 409 settings_changed
+  // reads the settings once more: if the pools are unchanged the other card's save moved the
+  // version, and the save is sent again, once, with the fresh version. Otherwise it is a conflict.
+  // A 422 naming a row is a row failure and is never sent again.
+  async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canEdit || save.isPending || !settings.data) return;
     setTried(true);
     if (errors.some((e) => e.base || e.size)) return;
-    save.mutate(
-      {
-        pools: rows.map((r) => ({ base: r.base.trim(), size: Number(r.size.trim()) })),
-        version: edit?.version ?? settings.data.version,
-      },
-      {
-        onSuccess: () => {
-          setEdit(null);
-          setFailure(null);
-          setTried(false);
-          toastSuccess(t("envsettings.addressPools.saved"));
-        },
-        onError: (error: AddressSettingsError) => {
-          const row = poolRowError(error);
-          setFailure(
-            error.type === "settings_changed"
-              ? { kind: "conflict", by: conflictBy(error) }
-              : row
-                ? { kind: "row", ...row }
-                : { kind: "failed" },
-          );
-        },
-      },
+    const current = settings.data;
+    const base = edit?.base ?? current.pools ?? [];
+    const pools = rows.map((r) => ({ base: r.base.trim(), size: Number(r.size.trim()) }));
+    const sent = versionToSend(
+      { version: edit?.version ?? current.version, base },
+      { version: current.version, slice: current.pools ?? [] },
+      samePools,
     );
+    try {
+      await save.mutateAsync({ pools, version: sent });
+      saveDone();
+    } catch (e) {
+      const error = e as AddressSettingsError;
+      if (error.type !== "settings_changed") {
+        setFailure(failureOf(error));
+        return;
+      }
+      const read = await settings.refetch();
+      const fresh: AddressSettings | undefined = read.isError ? undefined : read.data;
+      if (!fresh || fresh.version === sent) {
+        setFailure({ kind: "conflict", by: conflictBy(error) });
+        return;
+      }
+      if (!samePools(fresh.pools ?? [], base)) {
+        setFailure({ kind: "conflict", by: fresh.changedBy || conflictBy(error) });
+        return;
+      }
+      try {
+        await save.mutateAsync({ pools, version: fresh.version });
+        saveDone();
+      } catch (again) {
+        setFailure(failureOf(again as AddressSettingsError));
+      }
+    }
   }
 
   // The line a row shows: what the client refuses (once Save was pressed, or the row was edited

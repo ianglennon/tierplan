@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/rea
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { addressSettingsKey } from "@/api/address-space";
 import { setCsrfToken } from "@/api/client";
 import { queryClient } from "@/api/query-client";
 import { FakeEventSource } from "@/features/dashboard/fake-event-source";
@@ -92,8 +93,22 @@ const NODE = {
 let current: Record<string, unknown>;
 let items: Record<string, unknown>[];
 let seen: string[];
+// The environment's address-space settings as the server keeps them: one version for both cards,
+// checked and bumped by each save.
+let addressSettings: {
+  smallSubnets: { enabled: boolean; mask: number };
+  pools: { base: string; size: number }[];
+  version: number;
+  changedBy: string;
+};
 
 beforeEach(() => {
+  addressSettings = {
+    smallSubnets: { enabled: false, mask: 26 },
+    pools: [],
+    version: 1,
+    changedBy: "",
+  };
   current = me(ALL);
   items = [AGENT_ENV, LOCAL];
   seen = [];
@@ -143,13 +158,31 @@ beforeEach(() => {
           disabled: false,
         });
       }
-      if (path.endsWith("/address-space/settings")) {
-        return Response.json({
-          smallSubnets: { enabled: false, mask: 26 },
-          pools: [],
-          version: 1,
-          changedBy: "",
-        });
+      if (path.endsWith("/address-space/settings")) return Response.json(addressSettings);
+      if (
+        req.method === "PUT" &&
+        (path.endsWith("/address-space/small-subnets") || path.endsWith("/address-space/pools"))
+      ) {
+        const body = (await req.json()) as Record<string, unknown>;
+        if (body.version !== addressSettings.version) {
+          return Response.json(
+            {
+              status: 409,
+              type: "settings_changed",
+              errors: [{ location: "changedBy", message: "Ian" }],
+            },
+            { status: 409 },
+          );
+        }
+        addressSettings = {
+          ...addressSettings,
+          ...(path.endsWith("/small-subnets")
+            ? { smallSubnets: { enabled: body.enabled as boolean, mask: body.mask as number } }
+            : { pools: body.pools as { base: string; size: number }[] }),
+          version: addressSettings.version + 1,
+          changedBy: "Ian",
+        };
+        return Response.json(addressSettings);
       }
       if (path.endsWith("/address-space")) {
         return Response.json({ envType: "swarm", measured: true, pools: [], overlays: [] });
@@ -277,6 +310,44 @@ describe("/settings/environments/$envId", () => {
     expect(
       screen.getByRole("heading", { level: 3, name: "Address pools" }).closest("section")?.id,
     ).toBe("address-pools");
+  });
+
+  it.each([
+    ["Default stack subnets then Address pools", ["Save subnet settings", "Save address pools"]],
+    ["Address pools then Default stack subnets", ["Save address pools", "Save subnet settings"]],
+  ])("saves both address-space cards in either order without a conflict: %s", async (_, order) => {
+    items = [AGENT_ENV, { ...LOCAL, id: "e3", name: "lab-3", kind: "agent", isLocalSocket: false }];
+    current = me([...ALL, "networks.read", "networks.addressing"]);
+    const settingsKey = addressSettingsKey("e3");
+    renderAt("/settings/environments/e3");
+    await screen.findByRole("heading", { level: 3, name: "Address pools" });
+    const toggle = await screen.findByRole("switch", {
+      name: "Use smaller subnets for new stack networks",
+    });
+    // Both cards are edited before either is saved.
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: "Add pool" }));
+    fireEvent.change(screen.getByLabelText("Base for pool 1"), {
+      target: { value: "10.20.0.0/16" },
+    });
+    fireEvent.change(screen.getByLabelText("Size for pool 1"), { target: { value: "24" } });
+    for (const name of order) {
+      const before = addressSettings.version;
+      fireEvent.click(screen.getByRole("button", { name }));
+      // The save has landed once the shared settings read carries the bumped version.
+      await waitFor(() =>
+        expect(queryClient.getQueryData<{ version: number }>(settingsKey)?.version).toBe(
+          before + 1,
+        ),
+      );
+    }
+    expect(addressSettings.smallSubnets).toEqual({ enabled: true, mask: 26 });
+    expect(addressSettings.pools).toEqual([{ base: "10.20.0.0/16", size: 24 }]);
+    expect(screen.queryByText(/changed these settings/)).toBeNull();
+    // No save was refused and sent again.
+    expect(seen.filter((r) => r.startsWith("PUT ") && r.includes("/address-space/"))).toHaveLength(
+      2,
+    );
   });
 
   it("makes Remove environment the last card, with the anchor remove, and scrolls to it for #remove", async () => {
