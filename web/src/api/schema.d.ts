@@ -11806,6 +11806,10 @@ export interface components {
             kind: "network" | "volume" | "secret" | "config";
             /** @description Its name in the compose file (the swarm name for an external one) */
             name: string;
+            /** @description True when subnet was chosen by the environment's small stack subnets and not by the file: the row shows the Small-subnet default badge. Absent otherwise */
+            smallSubnetDefault?: boolean;
+            /** @description For an added network, the subnet it will be created with; absent when the file leaves the choice to the engine and for any other row */
+            subnet?: string;
         };
         StackReviewRequest: {
             /**
@@ -11914,6 +11918,10 @@ export interface components {
             pins: components["schemas"]["StackRevisionPinBody"][] | null;
             /** @description The rendering stored with the revision, masked when it was stored: a secret value is <hidden>. Empty for a revision with none */
             rendered: string;
+            /** @description The subnets the revision's deploy gave the networks it created under the environment's small stack subnets, by network name on the swarm (name to CIDR). Empty when it gave none */
+            subnets: {
+                [key: string]: string;
+            };
             /** @description The stack's variables in the revision, by name */
             vars: components["schemas"]["StackRevisionVarBody"][] | null;
             /** @description The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering */

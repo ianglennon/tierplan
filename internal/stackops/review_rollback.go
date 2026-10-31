@@ -140,7 +140,11 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	}
 
 	var problems stacks.Problems
-	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live)
+	// The revision's own record of the subnets its networks were given: one that has to be created again takes it
+	// while it is free, as the deploy of the revision does (D-20).
+	subnets := d.reviewSubnets(ctx, in.EnvID, in.Stack, plan, live, target.Subnets)
+	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live, subnets)
+	problems = append(problems, subnetProblems(plan, subnets)...)
 	rv.Problems = append(rv.Problems, placeProblems(prep.Files, problems)...)
 	for _, o := range rv.Objects {
 		switch o.Kind {

@@ -1101,3 +1101,90 @@ func TestAReviewedDeploySendsThePlacementTheReviewShowed(t *testing.T) {
 		t.Errorf("the deploy sent %v, want the platforms the last good revision recorded %v", sent, []swarm.Platform{amd})
 	}
 }
+
+// A review shows the subnet each new network will get under small stack subnets, the block the deploy then uses
+// (Phase 10, D-20).
+func TestReviewShowsSmallSubnet(t *testing.T) {
+	t.Parallel()
+	const compose = `
+services:
+  web:
+    image: nginx:1.27-alpine
+    networks: [b, a, fixed]
+networks:
+  a: {}
+  b: {}
+  fixed:
+    ipam:
+      config:
+        - subnet: 10.0.9.0/24
+`
+	rig := subnetRig(t, 26)
+	rv := rig.review(t, "shop", compose, nil)
+	rows := map[string]stackops.ObjectChange{}
+	for _, o := range rv.Objects {
+		if o.Kind == "network" {
+			rows[o.Name] = o
+		}
+	}
+	if a := rows["shop_a"]; a.Subnet != "10.0.2.0/26" || !a.SmallSubnetDefault {
+		t.Errorf("shop_a = %+v, want 10.0.2.0/26 with the small-subnet default", a)
+	}
+	if b := rows["shop_b"]; b.Subnet != "10.0.2.64/26" || !b.SmallSubnetDefault {
+		t.Errorf("shop_b = %+v, want 10.0.2.64/26 with the small-subnet default", b)
+	}
+	if f := rows["shop_fixed"]; f.Subnet != "10.0.9.0/24" || f.SmallSubnetDefault {
+		t.Errorf("shop_fixed = %+v, want the file's own subnet and no small-subnet default", f)
+	}
+	for _, p := range rv.Problems {
+		if p.Severity == stacks.SeverityError {
+			t.Errorf("problem = %+v, want none", p)
+		}
+	}
+
+	// The deploy then creates the networks on the blocks the review showed.
+	d := storedStack(t, rig, "shop", compose)
+	if res, _ := rig.deploy(t, d.in); !res.OK() {
+		t.Fatalf("deploy = %+v", res)
+	}
+	got := created(rig)
+	if got["shop_a"] != rows["shop_a"].Subnet || got["shop_b"] != rows["shop_b"].Subnet {
+		t.Errorf("deploy created %v, the review showed a %s and b %s", got, rows["shop_a"].Subnet, rows["shop_b"].Subnet)
+	}
+
+	// Networks that exist get no badge and no subnet from the review.
+	again := rig.review(t, "shop", compose, nil)
+	for _, o := range again.Objects {
+		if o.SmallSubnetDefault {
+			t.Errorf("row %+v of a stack whose networks exist carries the small-subnet default", o)
+		}
+	}
+}
+
+func TestReviewBlocksNoFreeSubnet(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID = "cluster-1"
+		c.SwarmDefaultAddrPool = []string{"10.0.0.0/24"}
+		c.SwarmSubnetSize = 24
+		c.Networks = []dockertest.FakeNetwork{{ID: "ovl-0", Name: "other_a", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.0.0/24"}}}
+	})
+	rig.setSmallSubnets(t, true, 26)
+	rv := rig.review(t, "shop", backendCompose, nil)
+	var found *stacks.Problem
+	for i, p := range rv.Problems {
+		if p.Code == stackops.CodeNoFreeSubnet {
+			found = &rv.Problems[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("problems = %+v, want small_subnet_no_free_block", rv.Problems)
+	}
+	if found.Severity != stacks.SeverityError || found.Key != "networks.backend" {
+		t.Errorf("problem = %+v, want a blocking one keyed networks.backend", *found)
+	}
+	want := "network shop_backend can't get a /26 subnet: no free block is left in 10.0.0.0/24. Free up space, or choose a smaller size in this environment's settings."
+	if found.Message != want {
+		t.Errorf("message = %q, want %q", found.Message, want)
+	}
+}

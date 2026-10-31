@@ -98,6 +98,9 @@ type StackReviewObjectBody struct {
 	Kind   string `json:"kind" enum:"network,volume,secret,config" doc:"What it is. A volume is listed for a standalone host only: a swarm creates its volumes on the node that first uses one"`
 	Name   string `json:"name" doc:"Its name in the compose file (the swarm name for an external one)"`
 	Detail string `json:"detail" doc:"A sentence for the row, or empty"`
+	// The subnet of an added network and whether the environment's small stack subnets chose it (D-20).
+	Subnet             string `json:"subnet,omitempty" doc:"For an added network, the subnet it will be created with; absent when the file leaves the choice to the engine and for any other row"`
+	SmallSubnetDefault bool   `json:"smallSubnetDefault,omitempty" doc:"True when subnet was chosen by the environment's small stack subnets and not by the file: the row shows the Small-subnet default badge. Absent otherwise"`
 }
 
 // StackDiffLineBody is one line of a hunk.
@@ -248,7 +251,7 @@ func reviewStack(ctx context.Context, d StacksDeps, in *StackReviewInput) (*Stac
 	}
 	ri := stackops.ReviewInput{
 		EnvID: env.ID, Stack: st, Copy: draft.Copy, DraftVersion: draft.Version,
-		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Revisions: repo,
+		Mode: in.Body.Mode, Services: in.Body.Services, Pins: repo, Subnets: repo, Revisions: repo,
 		Caller: stackops.Caller{Principal: p, Actor: p.Name}, Audit: d.Store,
 	}
 	restore := in.Body.Mode == stackops.ReviewModeRestore
@@ -451,7 +454,7 @@ func stackReviewBody(rv stackops.Review) StackReviewBody {
 		b.Adoption = &StackReviewAdoptionBody{Pending: a.Pending, OwnershipOnly: a.OwnershipOnly}
 	}
 	for _, o := range rv.Objects {
-		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail})
+		b.Objects = append(b.Objects, StackReviewObjectBody{Change: o.Change, Kind: o.Kind, Name: o.Name, Detail: o.Detail, Subnet: o.Subnet, SmallSubnetDefault: o.SmallSubnetDefault})
 	}
 	return b
 }

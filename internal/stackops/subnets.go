@@ -12,6 +12,7 @@ import (
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/netspace"
+	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/stacks/convert"
 )
 
@@ -224,6 +225,42 @@ func subnetsToRecord(recorded map[string]string, live []dockerx.NetworkRow, chos
 	}
 	for name, subnet := range chosen {
 		out[name] = subnet
+	}
+	return out
+}
+
+// reviewSubnets runs the planner a deploy runs, without the lock and on the cached view, so a review
+// shows the blocks the deploy will then use. A swarm whose pools cannot be read leaves the review with
+// no subnet to show and logs why; the deploy itself refuses in that case.
+func (d Deps) reviewSubnets(ctx context.Context, envID string, stack Stack, plan convert.Plan, live liveStack, recorded map[string]string) SubnetPlan {
+	nets := live.Networks
+	if hasExternal(plan) {
+		nets = live.AllNetworks
+	}
+	out, err := d.planSmallSubnets(ctx, envID, plan.Networks, nets, recorded, false)
+	if err != nil {
+		d.log().Debug("the subnets of a stack's new networks could not be planned for a review", "environment", envID, "stack", stack.Name, "error", err)
+		return SubnetPlan{}
+	}
+	return out
+}
+
+// subnetProblems are the blocking problems for the networks no block was free for, one each, keyed by the
+// network's section of the file (UI-SPEC default 19).
+func subnetProblems(plan convert.Plan, sub SubnetPlan) stacks.Problems {
+	var out stacks.Problems
+	for _, name := range sub.Missing {
+		key := ""
+		for _, n := range plan.Networks {
+			if n.Name == name {
+				key = "networks." + n.Key
+				break
+			}
+		}
+		out = append(out, stacks.Problem{
+			Severity: stacks.SeverityError, Code: CodeNoFreeSubnet, Message: sub.Message(name), File: stacks.ComposeFile, Key: key,
+			Line: 1, Col: 1, EndLine: 1, EndCol: 2,
+		})
 	}
 	return out
 }

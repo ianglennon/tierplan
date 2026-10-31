@@ -4,12 +4,14 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/swarm"
@@ -19,6 +21,7 @@ import (
 	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
 	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/stacks/stackstest"
+	"github.com/ianglennon/coaming/internal/store/sqlc"
 	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
@@ -47,6 +50,8 @@ type stackReviewAnswer struct {
 	} `json:"services"`
 	Objects []struct {
 		Change, Kind, Name, Detail string
+		Subnet                     string `json:"subnet"`
+		SmallSubnetDefault         bool   `json:"smallSubnetDefault"`
 	} `json:"objects"`
 	DraftVersion int64             `json:"draftVersion"`
 	Pins         map[string]string `json:"pins"`
@@ -1516,5 +1521,71 @@ func TestAReviewTheCallerSawMaskedStillDeploys(t *testing.T) {
 	job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`,"pins":`+pinsJSON(t, rv.Pins)+`}`)
 	if job.State != "done" {
 		t.Fatalf("deploy of a masked review = %+v, want done", job)
+	}
+}
+
+// With small stack subnets on, the review's network row carries the subnet the deploy will use and the badge, and the
+// revision that deploy took answers the subnet it recorded in History (Phase 10, D-20).
+func TestStackHistoryRevisionSubnets(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID = "cluster-1"
+		c.SwarmDefaultAddrPool = []string{"10.0.0.0/16"}
+		c.SwarmSubnetSize = 24
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "ovl-0", Name: "other_a", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.0.0/24"}},
+			{ID: "ovl-1", Name: "other_b", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+		}
+	})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	st := newStack(t, admin, "shop")
+	const compose = "services:\n  web:\n    image: nginx:1.27-alpine\n    networks: [backend]\nnetworks:\n  backend: {}\n"
+
+	// Off: no subnet in the review, none recorded.
+	version := saveCompose(t, operator, st.ID, compose, `[]`)
+	rv, code, raw := operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	for _, o := range rv.Objects {
+		if o.Subnet != "" || o.SmallSubnetDefault {
+			t.Errorf("row %+v with the setting off, want no subnet", o)
+		}
+	}
+
+	row, err := f.st.Q.GetAddressSettings(context.Background(), e.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.st.Q.SetSmallSubnets(context.Background(), sqlc.SetSmallSubnetsParams{
+		SmallSubnets: 1, SmallSubnetMask: 26, UpdatedAt: time.Now().UnixNano(), ID: e.ID, AddressSettingsVersion: row.AddressSettingsVersion,
+	}); err != nil || n != 1 {
+		t.Fatalf("SetSmallSubnets: %d, %v", n, err)
+	}
+	rv, code, raw = operator.reviewStack(st.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	var shown string
+	for _, o := range rv.Objects {
+		if o.Kind == "network" && o.Name == "shop_backend" {
+			shown = o.Subnet
+			if !o.SmallSubnetDefault {
+				t.Errorf("row %+v, want the small-subnet default", o)
+			}
+		}
+	}
+	if shown != "10.0.2.0/26" {
+		t.Fatalf("review shows %q for shop_backend, want 10.0.2.0/26; objects %+v", shown, rv.Objects)
+	}
+
+	if job := f.deployAndWait(t, operator, st.ID, `{"draftVersion":`+itoaT(version)+`}`); job.State != "done" {
+		t.Fatalf("deploy = %+v", job)
+	}
+	got := answerOf[stackRevisionAnswer](t, viewer.do(http.MethodGet, "stacks/"+st.ID+"/revisions/1", ""))
+	if len(got.Subnets) != 1 || got.Subnets["shop_backend"] != shown {
+		t.Errorf("revision subnets = %v, want shop_backend on %s, the block the review showed", got.Subnets, shown)
 	}
 }

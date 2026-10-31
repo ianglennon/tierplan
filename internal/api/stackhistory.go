@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -174,6 +175,7 @@ type StackRevisionDetailBody struct {
 	Files       []StackRevisionFileBody `json:"files" doc:"The stack's files in the revision, by path"`
 	Vars        []StackRevisionVarBody  `json:"vars" doc:"The stack's variables in the revision, by name"`
 	Pins        []StackRevisionPinBody  `json:"pins" doc:"The images the revision was deployed with, by service"`
+	Subnets     map[string]string       `json:"subnets" doc:"The subnets the revision's deploy gave the networks it created under the environment's small stack subnets, by network name on the swarm (name to CIDR). Empty when it gave none"`
 	YAML        StackTextDiffBody       `json:"yaml" doc:"The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering"`
 }
 
@@ -219,8 +221,9 @@ func getStackRevision(ctx context.Context, d StacksDeps, in *StackRevisionInput)
 	body := StackRevisionDetailBody{
 		Item: revisionItem(st, rev.Row), DeployedSeq: rev.DeployedSeq, Rendered: string(rev.Rendered),
 		Files: make([]StackRevisionFileBody, 0, len(rev.Copy.Files)), Vars: make([]StackRevisionVarBody, 0, len(rev.Copy.Vars)),
-		Pins: make([]StackRevisionPinBody, 0, len(rev.Pins)), YAML: textDiffBody(rev.YAML),
+		Pins: make([]StackRevisionPinBody, 0, len(rev.Pins)), Subnets: map[string]string{}, YAML: textDiffBody(rev.YAML),
 	}
+	maps.Copy(body.Subnets, rev.Subnets)
 	// Only the path of a file is sent, whether plain or secret: the contents of a revision are its rendering.
 	for _, f := range rev.Copy.Files {
 		body.Files = append(body.Files, StackRevisionFileBody{Path: f.Path, Secret: f.Secret})

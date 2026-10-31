@@ -165,8 +165,9 @@ type stackRevisionAnswer struct {
 		Seq      int64 `json:"seq"`
 		Deployed bool  `json:"deployed"`
 	} `json:"item"`
-	DeployedSeq int64  `json:"deployedSeq"`
-	Rendered    string `json:"rendered"`
+	DeployedSeq int64             `json:"deployedSeq"`
+	Rendered    string            `json:"rendered"`
+	Subnets     map[string]string `json:"subnets"`
 	Files       []struct {
 		Path   string `json:"path"`
 		Secret bool   `json:"secret"`
