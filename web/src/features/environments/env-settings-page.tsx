@@ -11,6 +11,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AddressPoolsCard } from "@/features/address-space/address-pools-card";
 import { SmallSubnetsCard } from "@/features/address-space/small-subnets-card";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
@@ -254,6 +255,13 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       {canConfigure ? <RestartLoopCard envId={env.id} /> : null}
       {canNetworks ? (
         <SmallSubnetsCard
+          envId={env.id}
+          envName={env.name}
+          canEdit={hasPermission(me, "networks.addressing", env.id)}
+        />
+      ) : null}
+      {canNetworks && env.envType === "standalone" ? (
+        <AddressPoolsCard
           envId={env.id}
           envName={env.name}
           canEdit={hasPermission(me, "networks.addressing", env.id)}

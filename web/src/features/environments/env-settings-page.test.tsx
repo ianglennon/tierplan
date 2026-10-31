@@ -266,6 +266,19 @@ describe("/settings/environments/$envId", () => {
     expect(list).not.toContain("Address pools");
   });
 
+  it("puts Address pools after Default stack subnets on a standalone host, and not on a swarm", async () => {
+    items = [AGENT_ENV, { ...LOCAL, id: "e3", name: "lab-3", kind: "agent", isLocalSocket: false }];
+    current = me([...ALL, "networks.read", "networks.addressing"]);
+    renderAt("/settings/environments/e3");
+    await screen.findByRole("heading", { level: 3, name: "Address pools" });
+    const list = headings();
+    expect(list.indexOf("Address pools")).toBe(list.indexOf("Default stack subnets") + 1);
+    expect(list.indexOf("Remove environment")).toBe(list.indexOf("Address pools") + 1);
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Address pools" }).closest("section")?.id,
+    ).toBe("address-pools");
+  });
+
   it("makes Remove environment the last card, with the anchor remove, and scrolls to it for #remove", async () => {
     const scroll = vi.fn();
     const original = Element.prototype.scrollIntoView;
