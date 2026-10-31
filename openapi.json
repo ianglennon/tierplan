@@ -285,7 +285,7 @@
             "type": "integer"
           },
           "overlaps": {
-            "description": "The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none",
+            "description": "The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none. At most 50 are named",
             "items": {
               "$ref": "#/components/schemas/MapOverlapBody"
             },

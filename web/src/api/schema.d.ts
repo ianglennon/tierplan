@@ -4825,7 +4825,7 @@ export interface components {
              * @description This row's position in the address order (its index in networks)
              */
             order: number;
-            /** @description The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none */
+            /** @description The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none. At most 50 are named */
             overlaps: components["schemas"]["MapOverlapBody"][] | null;
             /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; for a swarm network with neither, the first service by name whose spec names it; empty otherwise */
             owner: string;

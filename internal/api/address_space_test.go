@@ -409,3 +409,66 @@ func TestAddressSpaceMapRows(t *testing.T) {
 		t.Errorf("a label key leaked into the answer: %s", raw.body)
 	}
 }
+
+func TestAddressSpaceMapOverlaps(t *testing.T) {
+	t.Parallel()
+	s, link := mapSwarm(t, func(host string, nets []dockertest.FakeNetwork) []dockertest.FakeNetwork {
+		nets = append(nets,
+			// Swarm against swarm: inside alpha_default. Both name each other.
+			dockertest.FakeNetwork{ID: "clash-net", Name: "clash", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.128/25"}},
+			// The same local subnet on two nodes is two hosts, not an overlap.
+			dockertest.FakeNetwork{ID: "dup-" + host, Name: "dup", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/16"}},
+		)
+		if host == "mgr-2" {
+			// A local network inside a swarm one overlaps it, and names its node.
+			nets = append(nets, dockertest.FakeNetwork{ID: "inner-net", Name: "inner", Driver: "bridge", Scope: "local", Subnets: []string{"10.0.2.0/25"}})
+		}
+		return nets
+	})
+	link()
+	got := decode[addressSpace](t, s.get(t, s.env.ID, "address-space"))
+
+	overlaps := func(name, node string) []mapOverlap { return mapRowNamed(t, got, name, node).Overlaps }
+	if want := []mapOverlap{{Name: "clash", Subnet: "10.0.1.128/25"}}; !slices.Equal(overlaps("alpha_default", ""), want) {
+		t.Errorf("alpha_default overlaps %+v, want %+v", overlaps("alpha_default", ""), want)
+	}
+	if want := []mapOverlap{{Name: "alpha_default", Subnet: "10.0.1.0/24"}}; !slices.Equal(overlaps("clash", ""), want) {
+		t.Errorf("clash overlaps %+v, want %+v", overlaps("clash", ""), want)
+	}
+	if want := []mapOverlap{{Name: "inner", Subnet: "10.0.2.0/25", Node: "mgr-2"}}; !slices.Equal(overlaps("svc_only", ""), want) {
+		t.Errorf("svc_only overlaps %+v, want %+v", overlaps("svc_only", ""), want)
+	}
+	if want := []mapOverlap{{Name: "svc_only", Subnet: "10.0.2.0/24"}}; !slices.Equal(overlaps("inner", ""), want) {
+		t.Errorf("inner overlaps %+v, want %+v", overlaps("inner", ""), want)
+	}
+	// Adjacent (ingress 10.0.0.0/24 next to alpha_default 10.0.1.0/24) and same-subnet-on-other-host rows are clean.
+	for _, c := range [][2]string{{"ingress", ""}, {"dup", "mgr-1"}, {"dup", "mgr-2"}, {"blog_default", ""}, {"forged", ""}} {
+		if o := overlaps(c[0], c[1]); len(o) != 0 {
+			t.Errorf("%s on %q overlaps %+v, want none", c[0], c[1], o)
+		}
+	}
+
+	// The order: numeric start address, the shorter mask first, rows with no subnet last, and every
+	// row's order is its index.
+	var withSubnet, bare []string
+	for i, r := range got.Networks {
+		if r.Order != i {
+			t.Errorf("row %d (%s) has order %d", i, r.Name, r.Order)
+		}
+		if len(r.Subnets) == 0 {
+			bare = append(bare, r.Name)
+			continue
+		}
+		if len(bare) > 0 {
+			t.Errorf("%s has a subnet and follows %v, which have none", r.Name, bare)
+		}
+		withSubnet = append(withSubnet, r.Name)
+	}
+	want := []string{"ingress", "alpha_default", "clash", "svc_only", "inner", "forged", "blog_default", "dup", "dup"}
+	if !slices.Equal(withSubnet, want) {
+		t.Errorf("rows with a subnet = %v, want %v", withSubnet, want)
+	}
+	if len(bare) == 0 {
+		t.Error("host and bridge rows with no subnet are missing")
+	}
+}

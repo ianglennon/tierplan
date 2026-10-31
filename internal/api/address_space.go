@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/internal/rbac"
 	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/store"
@@ -85,7 +87,7 @@ type AddressMapRowBody struct {
 	BuiltIn            bool              `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own"`
 	Ingress            bool              `json:"ingress" doc:"True for the swarm's ingress (routing mesh) network"`
 	Usage              *NetworkUsageBody `json:"usage,omitempty" doc:"Overlay networks only: addresses used against what the subnet can still hand out. Absent for every other network and when the count could not be read, never a zero"`
-	Overlaps           []MapOverlapBody  `json:"overlaps" doc:"The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none"`
+	Overlaps           []MapOverlapBody  `json:"overlaps" doc:"The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none. At most 50 are named"`
 	Order              int               `json:"order" minimum:"0" doc:"This row's position in the address order (its index in networks)"`
 }
 
@@ -238,12 +240,41 @@ func mapRows(nets []envs.NetworkRow, use networkUsage, known stackIDs, overlays 
 		usage[o.ID] = &NetworkUsageBody{Used: addresses(o.Used), Capacity: addresses(o.Capacity), Percent: o.Percent, State: string(o.State)}
 	}
 	all := make([]AddressMapRowBody, 0, len(nets))
+	items := make([]netspace.MapItem, 0, len(nets))
+	prefixes := make([][]netip.Prefix, 0, len(nets))
+	names := make([]string, 0, len(nets))
 	for _, n := range nets {
 		all = append(all, mapRow(n, use, known, usage))
+		var ps []netip.Prefix
+		for _, raw := range n.Subnets {
+			if p, err := netip.ParsePrefix(raw); err == nil {
+				ps = append(ps, p)
+			}
+		}
+		prefixes = append(prefixes, ps)
+		items = append(items, netspace.MapItem{Swarm: n.Scope == dockerx.ScopeSwarm, Node: n.Node, Prefixes: ps})
+		names = append(names, n.Name)
 	}
+	// Overlaps are decided over every row, before the cap, so a row near the end still names its partner.
+	partners := netspace.MapOverlaps(items)
 	for i := range all {
-		all[i].Order = i
+		for _, j := range partners[i] {
+			subnet, _ := netspace.FirstOverlap(prefixes[i], prefixes[j])
+			node := ""
+			if !items[j].Swarm {
+				node = nets[j].Node
+			}
+			all[i].Overlaps = append(all[i].Overlaps, MapOverlapBody{Name: nets[j].Name, Subnet: subnet.String(), Node: node})
+		}
 	}
+	// Rows leave in address order, each knowing its position.
+	pos := netspace.AddressOrder(items, names)
+	ordered := make([]AddressMapRowBody, len(all))
+	for i, at := range pos {
+		all[i].Order = at
+		ordered[at] = all[i]
+	}
+	all = ordered
 	total = len(all)
 	rows = all[:min(total, maxMapRows)]
 	return rows, total, total > len(rows)
