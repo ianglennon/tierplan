@@ -31,6 +31,7 @@ import { Route as AppSettingsBackupRouteImport } from './routes/_app/settings/ba
 import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
 import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
+import { Route as AppEnvEnvIdAddressSpaceRouteImport } from './routes/_app/env/$envId/address-space'
 import { Route as AppEnvEnvIdConfigsRouteImport } from './routes/_app/env/$envId/configs'
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
 import { Route as AppEnvEnvIdEventsRouteImport } from './routes/_app/env/$envId/events'
@@ -222,6 +223,11 @@ const AppSettingsGeneralRoute = AppSettingsGeneralRouteImport.update({
 const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
+const AppEnvEnvIdAddressSpaceRoute = AppEnvEnvIdAddressSpaceRouteImport.update({
+  id: '/address-space',
+  path: '/address-space',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
 const AppEnvEnvIdConfigsRoute = AppEnvEnvIdConfigsRouteImport.update({
@@ -727,6 +733,7 @@ export interface FileRoutesByFullPath {
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -830,6 +837,7 @@ export interface FileRoutesByTo {
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -927,6 +935,7 @@ export interface FileRoutesById {
   '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/_app/settings/general': typeof AppSettingsGeneralRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/_app/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/_app/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -1035,6 +1044,7 @@ export interface FileRouteTypes {
     | '/settings/environments'
     | '/settings/general'
     | '/settings/'
+    | '/env/$envId/address-space'
     | '/env/$envId/configs'
     | '/env/$envId/containers'
     | '/env/$envId/events'
@@ -1138,6 +1148,7 @@ export interface FileRouteTypes {
     | '/settings/environments'
     | '/settings/general'
     | '/settings'
+    | '/env/$envId/address-space'
     | '/env/$envId/configs'
     | '/env/$envId/containers'
     | '/env/$envId/events'
@@ -1234,6 +1245,7 @@ export interface FileRouteTypes {
     | '/_app/settings/environments'
     | '/_app/settings/general'
     | '/_app/settings/'
+    | '/_app/env/$envId/address-space'
     | '/_app/env/$envId/configs'
     | '/_app/env/$envId/containers'
     | '/_app/env/$envId/events'
@@ -1486,6 +1498,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/env/$envId/'
       preLoaderRoute: typeof AppEnvEnvIdIndexRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
+    '/_app/env/$envId/address-space': {
+      id: '/_app/env/$envId/address-space'
+      path: '/address-space'
+      fullPath: '/env/$envId/address-space'
+      preLoaderRoute: typeof AppEnvEnvIdAddressSpaceRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/configs': {
@@ -2375,6 +2394,7 @@ const AppEnvEnvIdVolumesVolumeNameRouteWithChildren =
   )
 
 interface AppEnvEnvIdRouteChildren {
+  AppEnvEnvIdAddressSpaceRoute: typeof AppEnvEnvIdAddressSpaceRoute
   AppEnvEnvIdConfigsRoute: typeof AppEnvEnvIdConfigsRoute
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
   AppEnvEnvIdEventsRoute: typeof AppEnvEnvIdEventsRoute
@@ -2404,6 +2424,7 @@ interface AppEnvEnvIdRouteChildren {
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
+  AppEnvEnvIdAddressSpaceRoute: AppEnvEnvIdAddressSpaceRoute,
   AppEnvEnvIdConfigsRoute: AppEnvEnvIdConfigsRoute,
   AppEnvEnvIdContainersRoute: AppEnvEnvIdContainersRoute,
   AppEnvEnvIdEventsRoute: AppEnvEnvIdEventsRoute,

@@ -7,6 +7,7 @@ import {
   Boxes,
   Container,
   FileCog,
+  Gauge,
   GitBranch,
   HardDrive,
   KeyRound,
@@ -67,6 +68,8 @@ const RESOURCE_ITEMS = [
   { key: "images", perm: "images.read", to: "/env/$envId/images", icon: Layers },
   { key: "volumes", perm: "volumes.read", to: "/env/$envId/volumes", icon: HardDrive },
   { key: "networks", perm: "networks.read", to: "/env/$envId/networks", icon: Network },
+  // Address space (Phase 10, D-01): below Networks, on swarm and standalone environments alike.
+  { key: "addressSpace", perm: "networks.read", to: "/env/$envId/address-space", icon: Gauge },
   // The events stream already needs environments.read, so no new permission (D-51).
   { key: "events", perm: "environments.read", to: "/env/$envId/events", icon: Activity },
 ] as const;

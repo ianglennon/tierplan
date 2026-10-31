@@ -6,6 +6,7 @@ import { initReactI18next } from "react-i18next";
 
 import actions from "./en/actions.json";
 import activeshells from "./en/activeshells.json";
+import addressspace from "./en/addressspace.json";
 import aggregate from "./en/aggregate.json";
 import audit from "./en/audit.json";
 import auth from "./en/auth.json";
@@ -104,7 +105,7 @@ import volumes from "./en/volumes.json";
 // English only for now (D-65). Resources are bundled statically, so there is
 // no language detector and no backend plugin: nothing is fetched at runtime.
 // Each later plan adds its own namespace file (setup, auth, shell, env,
-// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff, gitSource, stackGit) and registers it
+// dashboard, audit, overview, install, reason, settings, envsettings, fullpage, switcher, aggregate, bell, backup, invite, needs, users, userpage, sessions, teams, grants, envaccess, owned, noaccess, restore, schedule, actions, activeshells, containers, containerdetail, networks, volumes, logs, terminal, events, pulls, jobs, registries, images, usedBy, tags, services, servicedetail, serviceForm, tasks, specedit, placement, nodes, secrets, configs, stats, restartLoop, addressSpace, stacks, stackAcceptLive, stackAdopt, stackAdoptCheck, stackAdoptPaste, stackChanges, stackConverge, stackDeploy, stackDrift, stackDriftCause, stackDriftList, stackEditor, stackGenerated, stackHistory, stackImport, stackLinks, stackLists, stackLogs, stackOverview, stackOwnership, stackProblems, stackPull, stackRendered, stackResources, stackRestore, stackRetention, stackReview, stackRevertsDrift, stackRevision, stackRollback, stackStandalone, stackUnmanaged, stackUnmanagedPage, stackVars, stackYamlDiff, gitSource, stackGit) and registers it
 // here, so parallel work never edits the same JSON. The "containers" namespace
 // holds the containers list copy, and the "terminal" namespace the browser shell's
 // (never "shell", which is the app chrome's). Keys are shaped
@@ -113,6 +114,7 @@ export const resources = {
   en: {
     actions,
     activeshells,
+    addressSpace: addressspace,
     aggregate,
     audit,
     auth,

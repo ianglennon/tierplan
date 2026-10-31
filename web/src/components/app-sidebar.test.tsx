@@ -81,6 +81,7 @@ function mount(width: number, path = "/") {
       createRoute({ getParentRoute: () => root, path: "/env/$envId" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/containers" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/stacks" }),
+      createRoute({ getParentRoute: () => root, path: "/env/$envId/address-space" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/services" }),
       createRoute({ getParentRoute: () => root, path: "/env/$envId/placement" }),
     ]),
@@ -301,5 +302,43 @@ describe("the Stacks item", () => {
     expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
     await settled(client);
     expect(screen.queryByRole("link", { name: "Stacks" })).toBeNull();
+  });
+});
+
+describe("the Address space item", () => {
+  it("sits between Networks and Events, for a user who can read networks, on a swarm", async () => {
+    mount(1280, "/env/e1");
+    const link = await screen.findByRole("link", { name: "Address space" });
+    expect(link.getAttribute("href")).toBe("/env/e1/address-space");
+    const names = screen.getAllByRole("link").map((l) => l.textContent);
+    const resources = names.slice(names.indexOf("Stacks"), names.indexOf("Events") + 1);
+    expect(resources).toEqual([
+      "Stacks",
+      "Containers",
+      "Images",
+      "Volumes",
+      "Networks",
+      "Address space",
+      "Events",
+    ]);
+  });
+
+  it("is there on a standalone environment too", async () => {
+    envType = "standalone";
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Address space" })).toBeTruthy();
+    await settled(client);
+    expect(screen.getByRole("link", { name: "Address space" })).toBeTruthy();
+  });
+
+  it("is left out for a user without networks.read", async () => {
+    me = makeMe({
+      envs: { e1: "viewer" },
+      permissions: splitPermissions(["containers.read", "environments.read"]),
+    });
+    mount(1280, "/env/e1");
+    expect(await screen.findByRole("link", { name: "Containers" })).toBeTruthy();
+    await settled(client);
+    expect(screen.queryByRole("link", { name: "Address space" })).toBeNull();
   });
 });

@@ -1,0 +1,75 @@
+{
+  "addressSpace": {
+    "page": {
+      "title": "Address space",
+      "caption": "Where this environment's network addresses have gone.",
+      "error": {
+        "title": "Couldn't load the address space.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading address space"
+      },
+      "summary": {
+        "gettingFull": "Address space is getting full",
+        "almostFull": "Address space is almost full",
+        "body": "{{name}} is {{percent}}% used. New stacks may fail to deploy when it runs out."
+      },
+      "noManager": {
+        "title": "Coaming can't measure the swarm's pools",
+        "body": "No manager is connected. The subnets below are the last ones read from the nodes that are reporting."
+      }
+    },
+    "meters": {
+      "title": "Pools",
+      "loading": "Loading pools",
+      "none": "No pools to show.",
+      "swarmSource": "Measured from the swarm.",
+      "estimatedBadge": "Estimated",
+      "pool": {
+        "captionFree_one": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · largest free block {{cidr}} ({{count, number}} subnet)",
+        "captionFree_other": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · largest free block {{cidr}} ({{count, number}} subnets)",
+        "captionFull": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · no free /{{mask}} block left",
+        "captionUnknown": "Each network gets a /{{mask}}"
+      },
+      "ingress": {
+        "title": "Ingress",
+        "caption": "{{used, number}} of {{capacity, number}} addresses used",
+        "outside": "Outside the pool",
+        "outsideTip": "Ingress sits outside the default pool, so it has its own meter."
+      },
+      "filling": {
+        "title": "Networks filling up",
+        "caption": "{{used, number}} of {{capacity, number}} addresses used"
+      },
+      "estimatedHealth": "Estimated, so the environment's health isn't affected.",
+      "notMeasuredTip": "Counting used addresses needs Docker Engine 29 or newer on the manager."
+    },
+    "notes": {
+      "estimated": {
+        "daemon": "These numbers are estimated from the address pools the daemon reports and the bridge subnets Coaming can see.",
+        "defaults": "These numbers are estimated. The daemon doesn't set its own address pools, so Coaming counts against Docker's default pools and the bridge subnets it can see.",
+        "entered": "These numbers are estimated from the pools you entered in this environment's settings and the bridge subnets Coaming can see."
+      },
+      "estimatedTip": {
+        "daemon": "Based on the address pools the daemon reports and the bridge subnets Coaming can see.",
+        "defaults": "The daemon sets no pools of its own, so Coaming assumes Docker's documented defaults and counts the bridge subnets it can see.",
+        "entered": "Based on the pools you entered in this environment's settings and the bridge subnets Coaming can see."
+      }
+    },
+    "states": {
+      "gettingFull": "Getting full",
+      "almostFull": "Almost full",
+      "notMeasured": "Not measured",
+      "missing": "—"
+    },
+    "meter": {
+      "value": "{{used}} of {{capacity}} {{unit}} used, {{percent}} percent",
+      "gettingFull": "getting full",
+      "almostFull": "almost full",
+      "estimated": "estimated",
+      "unit": {
+        "subnets": "subnets",
+        "addresses": "addresses"
+      }
+    }
+  }
+}
