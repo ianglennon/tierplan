@@ -4,13 +4,17 @@
 package envs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
 	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/netspace"
@@ -35,6 +39,15 @@ const (
 // answered, so the pools and the cluster's networks are not known now.
 const NotMeasuredNoManager = "no_manager"
 
+// How many overlay networks one read inspects at once. Each is two inspects through a
+// manager, so a swarm with hundreds of overlays cannot fan out without bound (T-10-08).
+const overlayParallel = 8
+
+// maxSubnetAddrs is the most addresses an IPv4 subnet can hold. A count above it is not an
+// IPv4 count (an engine bug, or the saturating counter of an IPv6 subnet) and is not trusted
+// (T-10-09).
+const maxSubnetAddrs = 1 << 32
+
 // AddressSpaceOptions configure AddressSpaces. A zero field takes its default.
 type AddressSpaceOptions struct {
 	// Now is the clock; it defaults to time.Now.
@@ -55,6 +68,29 @@ type PoolUsage struct {
 	Estimated bool
 }
 
+// OverlayUsage is one swarm overlay network and how many of its addresses are handed out. The
+// numbers are the swarm's own (the leader's allocator, read through a manager); Measured is
+// false when they could not be read, and then Used, Capacity and Percent are 0 and State is
+// unknown, never a made-up zero.
+type OverlayUsage struct {
+	ID, Name string
+	// Subnets are the network's IPv4 subnets as the aggregate lists them, in its order.
+	Subnets []string
+	// Used and Capacity are addresses. Capacity is what the allocator has handed out plus
+	// what it can still hand out, over the IPv4 subnets, so an --ip-range counts only the
+	// range.
+	Used, Capacity uint64
+	Percent        int
+	State          netspace.State
+	Measured       bool
+	// Ingress marks the swarm's routing mesh network.
+	Ingress bool
+	// OutsidePool is true for the ingress network when none of its IPv4 subnets lies inside
+	// a pool base of the swarm, so no pool row counts it. It is false for every other
+	// network.
+	OutsidePool bool
+}
+
 // AddressSpace is the address pools of one environment and how full each is.
 type AddressSpace struct {
 	EnvID string
@@ -68,6 +104,11 @@ type AddressSpace struct {
 	NotMeasured string
 	// Pools are in the order the swarm or the daemon lists them.
 	Pools []PoolUsage
+	// Overlays are the swarm's overlay networks, ingress included, the fullest first and then
+	// by name. Empty for a standalone host.
+	Overlays []OverlayUsage
+	// Ingress is the ingress network again, nil when the swarm has none in the aggregate.
+	Ingress *OverlayUsage
 	// NotReporting names the nodes that did not answer, whose networks are therefore left out
 	// of the counts.
 	NotReporting []string
@@ -165,6 +206,15 @@ func (s *AddressSpaces) Read(ctx context.Context, envID string) (AddressSpace, e
 func cloneSpace(v AddressSpace) AddressSpace {
 	v.Pools = slices.Clone(v.Pools)
 	v.NotReporting = slices.Clone(v.NotReporting)
+	v.Overlays = slices.Clone(v.Overlays)
+	for i := range v.Overlays {
+		v.Overlays[i].Subnets = slices.Clone(v.Overlays[i].Subnets)
+	}
+	if v.Ingress != nil {
+		ing := *v.Ingress
+		ing.Subnets = slices.Clone(ing.Subnets)
+		v.Ingress = &ing
+	}
 	return v
 }
 
@@ -178,7 +228,7 @@ func (s *AddressSpaces) fetch(ctx context.Context, e *addressEntry, envID string
 	if err != nil {
 		return AddressSpace{}, err
 	}
-	out := AddressSpace{EnvID: envID, Swarm: swarm, Pools: []PoolUsage{}, NotReporting: slices.Clone(agg.NotReporting)}
+	out := AddressSpace{EnvID: envID, Swarm: swarm, Pools: []PoolUsage{}, Overlays: []OverlayUsage{}, NotReporting: slices.Clone(agg.NotReporting)}
 	if out.NotReporting == nil {
 		out.NotReporting = []string{}
 	}
@@ -216,6 +266,7 @@ func (s *AddressSpaces) fetchSwarm(ctx context.Context, e *addressEntry, agg Agg
 			out.Pools = append(out.Pools, unmeasured(p))
 		}
 		e.mu.Unlock()
+		out.Overlays, out.Ingress = rankOverlays(overlayList(agg.Networks))
 		return out, nil
 	}
 
@@ -237,7 +288,108 @@ func (s *AddressSpaces) fetchSwarm(ctx context.Context, e *addressEntry, agg Agg
 		}
 		out.Pools = append(out.Pools, PoolUsage{PoolStat: netspace.Stat(p, subnets), Source: PoolSourceSwarm})
 	}
+	list := overlayList(agg.Networks)
+	if err := s.measureOverlays(ctx, out.EnvID, list); err != nil {
+		return AddressSpace{}, err
+	}
+	out.Overlays, out.Ingress = rankOverlays(list)
 	return out, nil
+}
+
+// overlayList is the swarm-scoped overlay networks of the aggregate, ingress included, one
+// entry per network ID, none measured, in the order of their names.
+func overlayList(nets []NetworkRow) []OverlayUsage {
+	seen := map[string]bool{}
+	out := []OverlayUsage{}
+	for _, n := range nets {
+		if n.Scope != dockerx.ScopeSwarm || n.Driver != "overlay" || seen[n.ID] {
+			continue
+		}
+		seen[n.ID] = true
+		o := OverlayUsage{ID: n.ID, Name: n.Name, Ingress: n.Ingress, State: netspace.StateUnknown, Subnets: []string{}}
+		for _, raw := range n.Subnets {
+			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is4() {
+				o.Subnets = append(o.Subnets, p.Masked().String())
+			}
+		}
+		out = append(out, o)
+	}
+	slices.SortFunc(out, func(a, b OverlayUsage) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
+// measureOverlays reads the use of the listed overlays in place through one manager. A manager
+// that cannot be reached leaves every overlay unmeasured; only the caller's cancellation and an
+// agent's policy refusal are errors, as for the pools.
+func (s *AddressSpaces) measureOverlays(ctx context.Context, envID string, list []OverlayUsage) error {
+	err := s.clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
+		var g errgroup.Group
+		g.SetLimit(overlayParallel)
+		for i := range list {
+			g.Go(func() error {
+				s.measureOverlay(ctx, c, &list[i], envID)
+				return nil
+			})
+		}
+		return g.Wait()
+	})
+	if err == nil {
+		return nil
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
+	}
+	if denied := ClassifyDockerError(err); isPolicyDenied(denied) {
+		return denied
+	}
+	s.log.Debug("a swarm's overlay networks could not be measured", "environment", envID, "error", err)
+	return nil
+}
+
+// measureOverlay reads one overlay by its full ID, the swarm's count and not the manager's own
+// instance of it. The addresses of its IPv4 subnets are summed: IPv6 subnets report saturating
+// counters and are skipped. One that cannot be read, has no swarm count (an engine before 29,
+// or a manager that cannot ask the leader) or reports a count no IPv4 subnet could hold is left
+// unmeasured; it never fails the read of the others.
+func (s *AddressSpaces) measureOverlay(ctx context.Context, c *dockerx.Client, o *OverlayUsage, envID string) {
+	d, err := c.NetworkSwarmUsage(ctx, o.ID)
+	if err != nil {
+		s.log.Debug("an overlay network could not be measured", "environment", envID, "network", o.Name, "error", err)
+		return
+	}
+	var used, avail uint64
+	for _, u := range d.Usage {
+		p, perr := netip.ParsePrefix(u.Subnet)
+		if perr != nil || !p.Addr().Is4() {
+			continue
+		}
+		if u.InUse > maxSubnetAddrs || u.Available > maxSubnetAddrs {
+			return
+		}
+		used += u.InUse
+		avail += u.Available
+	}
+	if capacity := used + avail; capacity > 0 {
+		o.Used, o.Capacity, o.Measured = used, capacity, true
+		o.Percent, o.State = netspace.PercentOf(used, capacity), netspace.StateOf(used, capacity)
+	}
+}
+
+// rankOverlays orders the overlays fullest first and then by name, and returns the ingress
+// network again.
+func rankOverlays(list []OverlayUsage) ([]OverlayUsage, *OverlayUsage) {
+	slices.SortStableFunc(list, func(a, b OverlayUsage) int {
+		return cmp.Or(cmp.Compare(b.Percent, a.Percent), strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	for _, o := range list {
+		if o.Ingress {
+			ing := o
+			return list, &ing
+		}
+	}
+	return list, nil
 }
 
 // isPolicyDenied reports whether err is an agent's refusal, which is a fault of Coaming's own

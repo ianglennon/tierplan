@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -46,12 +47,41 @@ type AddressSpaceOutput struct {
 
 // AddressSpaceBody is the answer of GET /api/env/{envId}/address-space.
 type AddressSpaceBody struct {
-	EnvType      string            `json:"envType" enum:"swarm,standalone" doc:"What the environment is"`
-	Measured     bool              `json:"measured" doc:"True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set"`
-	NotMeasured  string            `json:"notMeasured,omitempty" enum:"no_manager" doc:"Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone"`
-	Pools        []AddressPoolBody `json:"pools" doc:"One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured"`
-	NotReporting []string          `json:"notReporting" doc:"The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered"`
+	EnvType      string             `json:"envType" enum:"swarm,standalone" doc:"What the environment is"`
+	Measured     bool               `json:"measured" doc:"True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set"`
+	NotMeasured  string             `json:"notMeasured,omitempty" enum:"no_manager" doc:"Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone"`
+	Pools        []AddressPoolBody  `json:"pools" doc:"One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured"`
+	Overlays     []OverlayUsageBody `json:"overlays" doc:"Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero"`
+	Ingress      *OverlayUsageBody  `json:"ingress,omitempty" doc:"The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none"`
+	NotReporting []string           `json:"notReporting" doc:"The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered"`
 }
+
+// OverlayUsageBody is one swarm overlay network and how full its subnet is.
+type OverlayUsageBody struct {
+	ID          string   `json:"id" doc:"The network's full ID"`
+	Name        string   `json:"name" doc:"The network's name"`
+	Subnets     []string `json:"subnets" doc:"The network's IPv4 subnets in CIDR form"`
+	Used        int64    `json:"used" minimum:"0" doc:"Addresses the swarm has handed out on the network's IPv4 subnets, the network and broadcast addresses, gateway, virtual IPs and load-balancer endpoints included. 0 with measured false"`
+	Capacity    int64    `json:"capacity" minimum:"0" doc:"Addresses handed out plus those the swarm can still hand out, so a /24 reads 256 and an ip-range /25 inside a /24 reads 129. 0 with measured false"`
+	Percent     int      `json:"percent" minimum:"0" maximum:"100" doc:"used over capacity as a whole percent, rounded down. 0 with measured false"`
+	State       string   `json:"state" enum:"normal,getting_full,almost_full,unknown" doc:"normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio. unknown when measured is false"`
+	Measured    bool     `json:"measured" doc:"False when the count could not be read: the engine on the manager is older than 29 (no address status), the manager reports no swarm count, or the read failed. The numbers are then 0 and mean nothing"`
+	Ingress     bool     `json:"ingress" doc:"True for the swarm's ingress (routing mesh) network"`
+	OutsidePool bool     `json:"outsidePool" doc:"Only ever true for the ingress network: none of its IPv4 subnets lies inside a pool of the swarm, so no pool row counts it. Ingress inside a pool is counted in that pool once"`
+}
+
+// overlayBody is the wire form of an overlay.
+func overlayBody(o envs.OverlayUsage) OverlayUsageBody {
+	return OverlayUsageBody{
+		ID: o.ID, Name: o.Name, Subnets: append([]string{}, o.Subnets...),
+		Used: addresses(o.Used), Capacity: addresses(o.Capacity), Percent: o.Percent, State: string(o.State),
+		Measured: o.Measured, Ingress: o.Ingress, OutsidePool: o.OutsidePool,
+	}
+}
+
+// addresses is a count of addresses as the wire number. A measured count is at most a few times
+// 2^32 (the reader refuses more), far under the int64 range; the clamp only guards the cast.
+func addresses(n uint64) int64 { return int64(min(n, math.MaxInt64)) } //nolint:gosec // G115: held to MaxInt64 on this line
 
 // AddressPoolBody is one address pool and how much of it is in use.
 type AddressPoolBody struct {
@@ -85,6 +115,8 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			"A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. " +
 			"used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. " +
 			"largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. " +
+			"overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. " +
+			"ingress repeats the ingress network with outsidePool (absent when the swarm lists none). " +
 			"When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. " +
 			"The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. " +
 			"Needs networks.read (Viewer) on the environment.",
@@ -107,7 +139,15 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 func addressSpaceBody(s envs.AddressSpace) AddressSpaceBody {
 	body := AddressSpaceBody{
 		EnvType: "standalone", Measured: s.Measured, NotMeasured: s.NotMeasured,
-		Pools: make([]AddressPoolBody, 0, len(s.Pools)), NotReporting: s.NotReporting,
+		Pools: make([]AddressPoolBody, 0, len(s.Pools)), Overlays: make([]OverlayUsageBody, 0, len(s.Overlays)),
+		NotReporting: s.NotReporting,
+	}
+	for _, o := range s.Overlays {
+		body.Overlays = append(body.Overlays, overlayBody(o))
+	}
+	if s.Ingress != nil {
+		ing := overlayBody(*s.Ingress)
+		body.Ingress = &ing
 	}
 	if s.Swarm {
 		body.EnvType = "swarm"

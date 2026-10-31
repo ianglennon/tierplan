@@ -6,6 +6,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -32,12 +33,27 @@ type addressPool struct {
 	Estimated          bool   `json:"estimated"`
 }
 
+type addressOverlay struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Subnets     []string `json:"subnets"`
+	Used        int64    `json:"used"`
+	Capacity    int64    `json:"capacity"`
+	Percent     int      `json:"percent"`
+	State       string   `json:"state"`
+	Measured    bool     `json:"measured"`
+	Ingress     bool     `json:"ingress"`
+	OutsidePool bool     `json:"outsidePool"`
+}
+
 type addressSpace struct {
-	EnvType      string        `json:"envType"`
-	Measured     bool          `json:"measured"`
-	NotMeasured  string        `json:"notMeasured"`
-	Pools        []addressPool `json:"pools"`
-	NotReporting []string      `json:"notReporting"`
+	Overlays     []addressOverlay `json:"overlays"`
+	Ingress      *addressOverlay  `json:"ingress"`
+	EnvType      string           `json:"envType"`
+	Measured     bool             `json:"measured"`
+	NotMeasured  string           `json:"notMeasured"`
+	Pools        []addressPool    `json:"pools"`
+	NotReporting []string         `json:"notReporting"`
 }
 
 func TestAddressSpaceRoute(t *testing.T) {
@@ -71,6 +87,56 @@ func TestAddressSpaceRoute(t *testing.T) {
 	}
 	if got.Pools[0] != want {
 		t.Fatalf("pool = %+v\nwant   %+v", got.Pools[0], want)
+	}
+}
+
+func TestAddressSpaceRouteOverlays(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = []dockertest.FakeNetwork{
+			{ID: "ingress-id", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.0.0.0/24"}},
+			{ID: "calm-id", Name: "calm", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+			{ID: "busy-id", Name: "busy", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+		}
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("calm", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 8, Available: 248})
+		m.fake.SetNetworkUsage("busy", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 200, Available: 56})
+	}
+
+	raw := s.call(t, authReq{method: http.MethodGet, path: "/api/env/" + s.env.ID + "/address-space", cookie: s.cookie, csrf: s.csrf})
+	if raw.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", raw.Code, raw.Body)
+	}
+	got := decode[addressSpace](t, &envRec{code: raw.Code, body: raw.Body.Bytes()})
+	want := []addressOverlay{
+		{ID: "busy-id", Name: "busy", Subnets: []string{"10.0.2.0/24"}, Used: 200, Capacity: 256, Percent: 78, State: "getting_full", Measured: true},
+		{ID: "calm-id", Name: "calm", Subnets: []string{"10.0.1.0/24"}, Used: 8, Capacity: 256, Percent: 3, State: "normal", Measured: true},
+		// The ingress network has no Status on this engine: not measured, never a zero.
+		{ID: "ingress-id", Name: "ingress", Subnets: []string{"10.0.0.0/24"}, State: "unknown", Ingress: true, OutsidePool: false},
+	}
+	if len(got.Overlays) != len(want) {
+		t.Fatalf("overlays = %+v, want %d", got.Overlays, len(want))
+	}
+	for i := range want {
+		g, w := got.Overlays[i], want[i]
+		if !slices.Equal(g.Subnets, w.Subnets) {
+			t.Errorf("overlay %d subnets = %v, want %v", i, g.Subnets, w.Subnets)
+		}
+		g.Subnets, w.Subnets = nil, nil
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("overlay %d = %+v\nwant      %+v", i, g, w)
+		}
+	}
+	if got.Ingress == nil || got.Ingress.ID != "ingress-id" || !got.Ingress.Ingress || got.Ingress.Measured {
+		t.Errorf("ingress = %+v, want the unmeasured ingress network", got.Ingress)
+	}
+	if !strings.Contains(raw.Body.String(), `"overlays":[`) {
+		t.Errorf("body has no overlays array: %s", raw.Body)
 	}
 }
 

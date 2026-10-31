@@ -307,3 +307,51 @@ func TestAddressSpaceNoManagerAfterAGoodReadKeepsThePoolsWithUnknownState(t *tes
 		t.Errorf("not reporting = %v, want the manager that stopped answering", v.NotReporting)
 	}
 }
+
+// The overlay networks' own fullness (plan 10-03, NET-03, D-04, D-05, RESEARCH F3).
+
+// setUsage gives every manager of the rig the swarm's address count of the network called name,
+// as Engine 29 reports it in an inspect's Status.IPAM.
+func setUsage(s *swarmRig, name string, usage ...dockertest.FakeSubnetUsage) {
+	for _, m := range s.m {
+		m.fake.SetNetworkUsage(name, usage...)
+	}
+}
+
+// overlayLines projects the overlays to what the tests compare.
+func overlayLines(v AddressSpace) []string {
+	var out []string
+	for _, o := range v.Overlays {
+		out = append(out, fmt.Sprintf("%s used=%d cap=%d %d%% %s measured=%v", o.Name, o.Used, o.Capacity, o.Percent, o.State, o.Measured))
+	}
+	return out
+}
+
+func overlayNets(nets ...dockertest.FakeNetwork) func(int, *dockertest.FakeConfig) {
+	return func(_ int, c *dockertest.FakeConfig) { c.Networks = nets }
+}
+
+func TestAddressSpaceOverlayUsage(t *testing.T) {
+	s, as := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "calm-id", Name: "calm", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+		dockertest.FakeNetwork{ID: "busy-id", Name: "busy", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+		dockertest.FakeNetwork{ID: "ranged-id", Name: "ranged", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.99.0.0/24"}},
+		dockertest.FakeNetwork{ID: "bridge-id", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+	))
+	setUsage(s, "calm", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 8, Available: 248})
+	setUsage(s, "busy", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 200, Available: 56})
+	// An --ip-range /25 inside a /24 counts only the range.
+	setUsage(s, "ranged", dockertest.FakeSubnetUsage{Subnet: "10.99.0.0/24", InUse: 3, Available: 126})
+
+	v, err := as.Read(testsupport.Context(t), s.env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	want := "busy used=200 cap=256 78% getting_full measured=true|calm used=8 cap=256 3% normal measured=true|ranged used=3 cap=129 2% normal measured=true"
+	if got := strings.Join(overlayLines(v), "|"); got != want {
+		t.Fatalf("overlays = %s\nwant      %s", got, want)
+	}
+	if v.Overlays[0].ID != "busy-id" || v.Ingress != nil {
+		t.Errorf("first overlay %q, ingress %v; want busy-id and no ingress", v.Overlays[0].ID, v.Ingress)
+	}
+}

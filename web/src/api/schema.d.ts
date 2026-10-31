@@ -421,7 +421,7 @@ export interface paths {
         };
         /**
          * The address pools of an environment and how full each is
-         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
+         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. ingress repeats the ingress network with outsidePool (absent when the swarm lists none). When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
          */
         get: operations["getAddressSpace"];
         put?: never;
@@ -4844,6 +4844,8 @@ export interface components {
              * @enum {string}
              */
             envType: "swarm" | "standalone";
+            /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
+            ingress?: components["schemas"]["OverlayUsageBody"];
             /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
             measured: boolean;
             /**
@@ -4853,6 +4855,8 @@ export interface components {
             notMeasured?: "no_manager";
             /** @description The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered */
             notReporting: string[] | null;
+            /** @description Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero */
+            overlays: components["schemas"]["OverlayUsageBody"][] | null;
             /** @description One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured */
             pools: components["schemas"]["AddressPoolBody"][] | null;
         };
@@ -8153,6 +8157,40 @@ export interface components {
             name: string;
             /** @description The option's value; absent while masked */
             value?: string;
+        };
+        OverlayUsageBody: {
+            /**
+             * Format: int64
+             * @description Addresses handed out plus those the swarm can still hand out, so a /24 reads 256 and an ip-range /25 inside a /24 reads 129. 0 with measured false
+             */
+            capacity: number;
+            /** @description The network's full ID */
+            id: string;
+            /** @description True for the swarm's ingress (routing mesh) network */
+            ingress: boolean;
+            /** @description False when the count could not be read: the engine on the manager is older than 29 (no address status), the manager reports no swarm count, or the read failed. The numbers are then 0 and mean nothing */
+            measured: boolean;
+            /** @description The network's name */
+            name: string;
+            /** @description Only ever true for the ingress network: none of its IPv4 subnets lies inside a pool of the swarm, so no pool row counts it. Ingress inside a pool is counted in that pool once */
+            outsidePool: boolean;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down. 0 with measured false
+             */
+            percent: number;
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio. unknown when measured is false
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /** @description The network's IPv4 subnets in CIDR form */
+            subnets: string[] | null;
+            /**
+             * Format: int64
+             * @description Addresses the swarm has handed out on the network's IPv4 subnets, the network and broadcast addresses, gateway, virtual IPs and load-balancer endpoints included. 0 with measured false
+             */
+            used: number;
         };
         OwnedBody: {
             /** @description The environment it acts on */
