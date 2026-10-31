@@ -961,6 +961,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
+	// Every environment's address space and orphan list are read every minute and after network, container
+	// and service events, so the overview, the health and the last-seen times of networks stay current
+	// when nobody has the page open (D-09).
+	srv.background.Go(func() { addressSpaces.Run(bg) })
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for

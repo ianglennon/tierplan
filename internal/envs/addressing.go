@@ -195,8 +195,17 @@ type AddressSpaces struct {
 
 	// The background reader's state: the context Run was given (nil until it runs), the
 	// environments with a read waiting out the debounce, and the event watchers by environment.
+	bmu     sync.Mutex
+	bg      context.Context
 	pending map[string]bool
 	watches map[string]context.CancelFunc
+	wg      sync.WaitGroup
+
+	// readHook, when set, is called as each background read of an environment starts and the
+	// function it returns as that read ends, and passHook as each pass over every environment
+	// ends. Tests count and wait on them instead of on a clock; nothing sets them in production.
+	readHook func(envID string) (done func())
+	passHook func()
 }
 
 // NewAddressSpaces returns the address reader of svc. agg gives every node's networks and

@@ -11,10 +11,12 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/proto/testsupport"
@@ -624,5 +626,467 @@ func TestLockAllocationIsPerEnvironment(t *testing.T) {
 	unlock()
 	if !as.entry("env-a").alloc.TryLock() {
 		t.Fatal("the lock was not given back by the unlock")
+	}
+}
+
+// The summary, its hysteresis and the background reader (plan 10-17, D-06, D-07, D-09, user decision 3).
+
+// overlaySpace is a measured swarm read with one overlay holding used of 100 addresses.
+func overlaySpace(name string, used uint64) AddressSpace {
+	return AddressSpace{
+		Swarm: true, Measured: true,
+		Overlays: []OverlayUsage{{
+			ID: name + "-id", Name: name, Used: used, Capacity: 100, Percent: netspace.PercentOf(used, 100),
+			State: netspace.StateOf(used, 100), Measured: true,
+		}},
+	}
+}
+
+// fullAfter feeds the reads in turn to summarise and answers whether each left the swarm full.
+func fullAfter(reads ...AddressSpace) []bool {
+	var sum AddressSummary
+	var out []bool
+	for i, v := range reads {
+		sum = summarise(sum, v, t0.Add(time.Duration(i)*time.Minute))
+		out = append(out, sum.Full)
+	}
+	return out
+}
+
+func TestAddressSummaryHysteresis(t *testing.T) {
+	got := fullAfter(overlaySpace("net", 89), overlaySpace("net", 90), overlaySpace("net", 86), overlaySpace("net", 84), overlaySpace("net", 86), overlaySpace("net", 90))
+	want := []bool{false, true, true, false, false, true}
+	if !slices.Equal(got, want) {
+		t.Fatalf("full after each read = %v, want %v", got, want)
+	}
+
+	// The subject, the percent and the time it turned full follow the reads.
+	first := summarise(AddressSummary{}, overlaySpace("net", 91), t0)
+	again := summarise(first, overlaySpace("net", 87), t0.Add(time.Hour))
+	if !again.Full || again.FullName != "net" || again.FullPercent != 87 || !again.FullSince.Equal(t0) {
+		t.Fatalf("summary = %+v, want full on net at 87%% since the first read", again)
+	}
+	off := summarise(again, overlaySpace("net", 40), t0.Add(2*time.Hour))
+	if off.Full || off.FullName != "" || !off.FullSince.IsZero() {
+		t.Fatalf("summary = %+v, want nothing left of the full state", off)
+	}
+	if on := summarise(off, overlaySpace("net", 95), t0.Add(3*time.Hour)); !on.FullSince.Equal(t0.Add(3 * time.Hour)) {
+		t.Errorf("since = %v, want the time it turned full again", on.FullSince)
+	}
+
+	// The exact ratio decides, not the rounded percent: 89.9% is 89 and not enough.
+	nearly := AddressSpace{Swarm: true, Overlays: []OverlayUsage{{ID: "n", Name: "n", Used: 899, Capacity: 1000, Percent: 89, State: netspace.StateGettingFull, Measured: true}}}
+	if summarise(AddressSummary{}, nearly, t0).Full {
+		t.Error("899 of 1000 turned the swarm full")
+	}
+	nearly.Overlays[0].Used = 900
+	if !summarise(AddressSummary{}, nearly, t0).Full {
+		t.Error("900 of 1000 did not turn the swarm full")
+	}
+}
+
+func TestAddressSummaryWorst(t *testing.T) {
+	pool := func(base string, used, capacity uint64) PoolUsage {
+		return PoolUsage{PoolStat: netspace.PoolStat{
+			Pool: netspace.Pool{Base: netip.MustParsePrefix(base), Size: 24}, Used: used, Capacity: capacity,
+			Percent: netspace.PercentOf(used, capacity), State: netspace.StateOf(used, capacity),
+		}, Source: PoolSourceSwarm}
+	}
+	ovl := func(name string, used, capacity uint64, ingress bool) OverlayUsage {
+		return OverlayUsage{
+			ID: name, Name: name, Used: used, Capacity: capacity, Percent: netspace.PercentOf(used, capacity),
+			State: netspace.StateOf(used, capacity), Measured: capacity > 0, Ingress: ingress,
+		}
+	}
+	v := AddressSpace{
+		Swarm: true, Measured: true,
+		Pools:    []PoolUsage{pool("10.0.0.0/16", 50, 256), pool("10.1.0.0/16", 100, 256)},
+		Overlays: []OverlayUsage{ovl("ovl", 100, 256, false), ovl("ingress", 100, 256, true), ovl("unmeasured", 0, 0, false)},
+	}
+	// Tied at 100 of 256: the pool comes before the ingress network, and that before an overlay.
+	w := summarise(AddressSummary{}, v, t0).Worst
+	if w == nil || w.Kind != MeterPool || w.Name != "10.1.0.0/16" || w.Unit != UnitSubnets || w.Used != 100 || w.Capacity != 256 || w.Percent != 39 || w.Estimated {
+		t.Fatalf("worst = %+v, want the second pool", w)
+	}
+	v.Pools = nil
+	if w := summarise(AddressSummary{}, v, t0).Worst; w == nil || w.Kind != MeterIngress || w.Name != "ingress" || w.Unit != UnitAddresses {
+		t.Fatalf("worst = %+v, want the ingress network ahead of the overlay it ties with", w)
+	}
+	v.Overlays = append(v.Overlays, ovl("fuller", 101, 256, false))
+	if w := summarise(AddressSummary{}, v, t0).Worst; w == nil || w.Kind != MeterOverlay || w.Name != "fuller" {
+		t.Fatalf("worst = %+v, want the fuller overlay", w)
+	}
+	// Nothing measured: no worst meter, and the orphan count of the earlier summary is kept.
+	none := summarise(AddressSummary{Orphaned: 3}, AddressSpace{Swarm: true, NotMeasured: NotMeasuredNoManager, Overlays: []OverlayUsage{{Name: "x"}}}, t0)
+	if none.Worst != nil || none.Measured || none.Orphaned != 3 {
+		t.Fatalf("summary = %+v, want no worst meter and 3 orphaned kept", none)
+	}
+}
+
+func TestAddressSummaryEstimatedNeverFull(t *testing.T) {
+	standalone := AddressSpace{Pools: []PoolUsage{{
+		PoolStat: netspace.PoolStat{
+			Pool: netspace.Pool{Base: netip.MustParsePrefix("172.17.0.0/16"), Size: 24}, Used: 9, Capacity: 10, Percent: 90, State: netspace.StateAlmostFull,
+		},
+		Source: PoolSourceDefaults, Estimated: true,
+	}}}
+	sum := summarise(AddressSummary{}, standalone, t0)
+	if sum.Full {
+		t.Fatalf("an estimated pool at 90%% made the host full: %+v", sum)
+	}
+	if w := sum.Worst; w == nil || w.Percent != 90 || w.State != netspace.StateAlmostFull || !w.Estimated || w.Kind != MeterPool {
+		t.Fatalf("worst = %+v, want the estimated pool still shown at 90%% almost_full", w)
+	}
+	// Not even an estimated pool of a swarm, nor with the host full before.
+	standalone.Swarm = true
+	if sum := summarise(AddressSummary{Full: true, FullName: "old", FullPercent: 95}, standalone, t0); sum.Full {
+		t.Fatalf("an estimated pool kept the environment full: %+v", sum)
+	}
+}
+
+func TestAddressSummaryKeepsFullWithoutMeasurement(t *testing.T) {
+	full := summarise(AddressSummary{}, overlaySpace("net", 95), t0)
+	if !full.Full {
+		t.Fatalf("setup: %+v", full)
+	}
+	// The manager stops answering: the pools are remembered with nothing counted and the overlays
+	// are listed without numbers.
+	silent := AddressSpace{Swarm: true, NotMeasured: NotMeasuredNoManager, Overlays: []OverlayUsage{{ID: "net-id", Name: "net", State: netspace.StateUnknown}}}
+	kept := summarise(full, silent, t0.Add(time.Minute))
+	if !kept.Full || kept.FullName != "net" || kept.FullPercent != 95 || !kept.FullSince.Equal(t0) {
+		t.Fatalf("summary = %+v, want full kept as it was", kept)
+	}
+	// Answering, but that one network could not be measured: still not a measurement below 85.
+	partial := overlaySpace("other", 10)
+	partial.Overlays = append(partial.Overlays, OverlayUsage{ID: "net-id", Name: "net", State: netspace.StateUnknown})
+	if kept := summarise(full, partial, t0.Add(time.Minute)); !kept.Full || kept.FullName != "net" {
+		t.Fatalf("summary = %+v, want full kept while the network is unmeasured", kept)
+	}
+	// The network is gone: nothing is full any more.
+	if gone := summarise(full, overlaySpace("other", 10), t0.Add(time.Minute)); gone.Full {
+		t.Fatalf("summary = %+v, want not full once the network is gone", gone)
+	}
+	// A measurement below 85 turns it off.
+	if low := summarise(kept, overlaySpace("net", 84), t0.Add(2*time.Minute)); low.Full {
+		t.Fatalf("summary = %+v, want not full at 84%%", low)
+	}
+}
+
+// A read of a real swarm feeds the summary, and the orphan check adds its count.
+func TestAddressSummaryFromRead(t *testing.T) {
+	s, as := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "hot-id", Name: "hot", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.5.0/24"}},
+	))
+	ctx := testsupport.Context(t)
+	if _, ok := as.Summary(s.env.ID); ok {
+		t.Fatal("a summary before any read")
+	}
+	setUsage(s, "hot", dockertest.FakeSubnetUsage{Subnet: "10.0.5.0/24", InUse: 231, Available: 25})
+	if _, err := as.Read(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	sum, ok := as.Summary(s.env.ID)
+	if !ok || !sum.Full || sum.FullName != "hot" || sum.FullPercent != 90 || sum.Worst == nil || sum.Worst.Name != "hot" || sum.Worst.Kind != MeterOverlay || sum.Worst.Used != 231 {
+		t.Fatalf("summary = %+v, want full on hot at 90%%", sum)
+	}
+	// What is handed out is a copy.
+	sum.Worst.Name = "changed"
+	if again, _ := as.Summary(s.env.ID); again.Worst.Name != "hot" {
+		t.Error("Summary hands out its own meter")
+	}
+	// Back under the line: still full until 85, then not.
+	setUsage(s, "hot", dockertest.FakeSubnetUsage{Subnet: "10.0.5.0/24", InUse: 220, Available: 36})
+	s.clk.Advance(DefaultClusterTTL + time.Second)
+	if _, err := as.Read(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sum, _ := as.Summary(s.env.ID); !sum.Full || sum.FullPercent != 85 {
+		t.Fatalf("summary = %+v, want full still at 85%%", sum)
+	}
+	setUsage(s, "hot", dockertest.FakeSubnetUsage{Subnet: "10.0.5.0/24", InUse: 200, Available: 56})
+	s.clk.Advance(DefaultClusterTTL + time.Second)
+	if _, err := as.Read(ctx, s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	if sum, _ := as.Summary(s.env.ID); sum.Full {
+		t.Fatalf("summary = %+v, want not full at 78%%", sum)
+	}
+	// The orphan count joins the summary without disturbing it.
+	as.setOrphaned(s.env.ID, 2)
+	if sum, _ := as.Summary(s.env.ID); sum.Orphaned != 2 || sum.Worst == nil {
+		t.Fatalf("summary = %+v, want 2 orphaned beside the worst meter", sum)
+	}
+}
+
+// fakeAfter stands in for time.After: each call is recorded and answers when the test says so.
+type fakeAfter struct {
+	mu    sync.Mutex
+	chans []chan time.Time
+	asked chan time.Duration
+}
+
+func newFakeAfter() *fakeAfter { return &fakeAfter{asked: make(chan time.Duration, 64)} }
+
+func (f *fakeAfter) After(d time.Duration) <-chan time.Time {
+	ch := make(chan time.Time, 1)
+	f.mu.Lock()
+	f.chans = append(f.chans, ch)
+	f.mu.Unlock()
+	f.asked <- d
+	return ch
+}
+
+// fire answers the n-th request (from 0).
+func (f *fakeAfter) fire(n int) {
+	f.mu.Lock()
+	ch := f.chans[n]
+	f.mu.Unlock()
+	ch <- time.Time{}
+}
+
+func (f *fakeAfter) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.chans)
+}
+
+// runProbe records what a running reader does: reads started and in flight per environment, and the
+// end of each pass. Nothing in it waits on a clock.
+type runProbe struct {
+	mu       sync.Mutex
+	reads    map[string]int
+	inflight int
+	peak     int
+	enter    func() // called as a read starts, with the probe's lock not held
+	passes   chan struct{}
+	done     chan string
+}
+
+func newRunProbe() *runProbe {
+	return &runProbe{reads: map[string]int{}, passes: make(chan struct{}, 64), done: make(chan string, 64)}
+}
+
+func (p *runProbe) attach(as *AddressSpaces) {
+	as.passHook = func() { p.passes <- struct{}{} }
+	as.readHook = func(envID string) func() {
+		p.mu.Lock()
+		p.reads[envID]++
+		p.inflight++
+		p.peak = max(p.peak, p.inflight)
+		enter := p.enter
+		p.mu.Unlock()
+		if enter != nil {
+			enter()
+		}
+		return func() {
+			p.mu.Lock()
+			p.inflight--
+			p.mu.Unlock()
+			p.done <- envID
+		}
+	}
+}
+
+func (p *runProbe) count(envID string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reads[envID]
+}
+
+// quietEvents is a subscription that never delivers anything.
+func quietEvents(context.Context, string) ([]dockerx.EventRow, <-chan dockerx.EventRow, func()) {
+	return nil, make(chan dockerx.EventRow), func() {}
+}
+
+// runReader is the reader of the swarm rig with the test's ticks, timers and subscriptions, running
+// until the test ends.
+func runReader(t *testing.T, s *swarmRig, o AddressSpaceOptions, p *runProbe) *AddressSpaces {
+	t.Helper()
+	o.Now = s.clk.Now
+	as := NewAddressSpaces(s.svc, s.agg, s.c, o)
+	p.attach(as)
+	ctx, cancel := context.WithCancel(testsupport.Context(t))
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		as.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-finished
+	})
+	return as
+}
+
+func swarmWithNetwork(t *testing.T) *swarmRig {
+	t.Helper()
+	s, _ := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "o1", Name: "o1", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+	))
+	return s
+}
+
+func TestAddressSpacesRunTick(t *testing.T) {
+	s := swarmWithNetwork(t)
+	// A disabled environment, and five more that cannot be read: more than the reader does at once.
+	disabled := s.srv.NewEnvironment(t, "Disabled")
+	s.srv.Exec(t, "UPDATE environments SET enabled = 0 WHERE id = ?", disabled.ID)
+	var others []string
+	for i := range 5 {
+		others = append(others, s.srv.NewEnvironment(t, fmt.Sprintf("Other %d", i)).ID)
+	}
+
+	// The first four reads to start wait for each other, so that a limit above four would show.
+	probe := newRunProbe()
+	var started atomic.Int32
+	barrier := make(chan struct{})
+	probe.enter = func() {
+		if started.Add(1) == addressParallel {
+			close(barrier)
+		}
+		<-barrier
+	}
+	ticks := make(chan time.Time)
+	runReader(t, s, AddressSpaceOptions{Ticks: ticks, Subscribe: quietEvents}, probe)
+
+	<-probe.passes
+	for _, id := range append([]string{s.env.ID}, others...) {
+		if n := probe.count(id); n != 1 {
+			t.Errorf("after the first pass environment %s was read %d times, want 1", id, n)
+		}
+	}
+	if n := probe.count(disabled.ID); n != 0 {
+		t.Errorf("the disabled environment was read %d times", n)
+	}
+	probe.mu.Lock()
+	peak := probe.peak
+	probe.mu.Unlock()
+	if peak > addressParallel {
+		t.Errorf("%d environments were read at once, want at most %d", peak, addressParallel)
+	}
+
+	// The pass ran the orphan check, which stamped the network it saw.
+	rows, err := s.svc.st.RQ.ListNetworkSeen(testsupport.Context(t), s.env.ID)
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("network_seen = %v (%v), want the networks the pass saw", rows, err)
+	}
+
+	// One tick, one more read of each.
+	ticks <- time.Time{}
+	<-probe.passes
+	if n := probe.count(s.env.ID); n != 2 {
+		t.Errorf("after the second pass the environment was read %d times, want 2", n)
+	}
+	if n := probe.count(disabled.ID); n != 0 {
+		t.Errorf("the disabled environment was read %d times", n)
+	}
+}
+
+func TestAddressSpacesEventDebounce(t *testing.T) {
+	s := swarmWithNetwork(t)
+	other := s.srv.NewEnvironment(t, "Other")
+
+	feeds := map[string]chan dockerx.EventRow{s.env.ID: make(chan dockerx.EventRow), other.ID: make(chan dockerx.EventRow)}
+	subscribed := make(chan string, 8)
+	subscribe := func(_ context.Context, id string) ([]dockerx.EventRow, <-chan dockerx.EventRow, func()) {
+		subscribed <- id
+		return nil, feeds[id], func() {}
+	}
+	after := newFakeAfter()
+	probe := newRunProbe()
+	as := runReader(t, s, AddressSpaceOptions{Ticks: make(chan time.Time), Subscribe: subscribe, After: after.After}, probe)
+	<-probe.passes
+	<-subscribed
+	<-subscribed
+	drain := func(n int) {
+		for range n {
+			<-probe.done
+		}
+	}
+	drain(2) // the first pass read both
+	if probe.count(s.env.ID) != 1 || probe.count(other.ID) != 1 {
+		t.Fatalf("reads after the first pass: %d and %d, want 1 and 1", probe.count(s.env.ID), probe.count(other.ID))
+	}
+
+	// An event that says nothing about networks, containers or services starts nothing.
+	feeds[s.env.ID] <- dockerx.EventRow{Type: "image", Action: "pull"}
+	// A network event arms the debounce; a second one, a container event and an explicit trigger
+	// within it ride on the same read.
+	feeds[s.env.ID] <- dockerx.EventRow{Type: "network", Action: "create"}
+	if d := <-after.asked; d != eventDebounce {
+		t.Fatalf("debounce = %v, want %v", d, eventDebounce)
+	}
+	as.Trigger(s.env.ID)
+	as.Trigger(s.env.ID)
+	if n := after.count(); n != 1 {
+		t.Fatalf("%d timers armed, want 1 for the whole burst", n)
+	}
+	if n := probe.count(s.env.ID); n != 1 {
+		t.Fatalf("read %d times before the debounce ended, want 1", n)
+	}
+
+	after.fire(0)
+	if id := <-probe.done; id != s.env.ID {
+		t.Fatalf("read %s, want %s", id, s.env.ID)
+	}
+	if n := probe.count(s.env.ID); n != 2 {
+		t.Fatalf("read %d times, want one extra, 2", n)
+	}
+
+	// The burst is over: the next event arms a new timer. An event of the other environment
+	// reads that environment and never this one.
+	feeds[other.ID] <- dockerx.EventRow{Type: "service", Action: "update"}
+	<-after.asked
+	after.fire(1)
+	if id := <-probe.done; id != other.ID {
+		t.Fatalf("read %s, want %s", id, other.ID)
+	}
+	if n := probe.count(s.env.ID); n != 2 {
+		t.Errorf("an event of another environment read this one: %d reads, want 2", n)
+	}
+	if n := probe.count(other.ID); n != 2 {
+		t.Errorf("the other environment was read %d times, want 2", n)
+	}
+	// A container event counts too.
+	feeds[s.env.ID] <- dockerx.EventRow{Type: "container", Action: "die"}
+	<-after.asked
+	after.fire(2)
+	if id := <-probe.done; id != s.env.ID {
+		t.Fatalf("read %s, want %s", id, s.env.ID)
+	}
+}
+
+func TestAddressSpacesForgetsRemoved(t *testing.T) {
+	s := swarmWithNetwork(t)
+	other := s.srv.NewEnvironment(t, "Other")
+	ticks := make(chan time.Time)
+	probe := newRunProbe()
+	as := runReader(t, s, AddressSpaceOptions{Ticks: ticks, Subscribe: quietEvents}, probe)
+	<-probe.passes
+	// Both have something held, as a page load or an orphan check would leave.
+	as.setOrphaned(other.ID, 1)
+	for _, id := range []string{s.env.ID, other.ID} {
+		if _, ok := as.Summary(id); !ok {
+			t.Fatalf("no summary for %s after a pass", id)
+		}
+	}
+
+	s.srv.Exec(t, "DELETE FROM environments WHERE id = ?", other.ID)
+	ticks <- time.Time{}
+	<-probe.passes
+	if _, ok := as.Summary(other.ID); ok {
+		t.Error("the summary of a removed environment is still held")
+	}
+	if _, ok := as.Summary(s.env.ID); !ok {
+		t.Error("the summary of the environment that stays was dropped")
+	}
+	if n := probe.count(other.ID); n != 1 {
+		t.Errorf("the removed environment was read %d times, want only the first pass's", n)
+	}
+	as.bmu.Lock()
+	_, watched := as.watches[other.ID]
+	as.bmu.Unlock()
+	if watched {
+		t.Error("the removed environment still has an event watcher")
 	}
 }
