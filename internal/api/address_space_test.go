@@ -5,6 +5,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"slices"
@@ -470,5 +471,87 @@ func TestAddressSpaceMapOverlaps(t *testing.T) {
 	}
 	if len(bare) == 0 {
 		t.Error("host and bridge rows with no subnet are missing")
+	}
+}
+
+func TestAddressSpaceMapCap(t *testing.T) {
+	t.Parallel()
+	const total = 5001
+	nets := make([]dockertest.FakeNetwork, 0, total)
+	for i := range total - 2 {
+		nets = append(nets, dockertest.FakeNetwork{
+			ID: fmt.Sprintf("n%05d", i), Name: fmt.Sprintf("net-%05d", i), Driver: "bridge", Scope: "local",
+			Subnets: []string{fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)},
+		})
+	}
+	// The two highest addresses overlap each other. In address order they are the last two rows, so the
+	// cap cuts the second and the first (row 5000) must still name it.
+	nets = append(nets,
+		dockertest.FakeNetwork{ID: "tail-a", Name: "tail-a", Driver: "bridge", Scope: "local", Subnets: []string{"250.0.0.0/24"}},
+		dockertest.FakeNetwork{ID: "tail-b", Name: "tail-b", Driver: "bridge", Scope: "local", Subnets: []string{"250.0.0.128/25"}},
+	)
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", Networks: nets})
+	awaitOnline(t, f.mon, e.ID)
+
+	raw := f.get(t, e, "address-space")
+	if raw.code != http.StatusOK {
+		t.Fatalf("status = %d: %.300s", raw.code, raw.body)
+	}
+	got := decode[addressSpace](t, raw)
+	if len(got.Networks) != 5000 || got.NetworksTotal != total || !got.NetworksTruncated {
+		t.Fatalf("rows/total/truncated = %d/%d/%v, want 5000/%d/true", len(got.Networks), got.NetworksTotal, got.NetworksTruncated, total)
+	}
+	last := got.Networks[4999]
+	if last.Name != "tail-a" || len(last.Overlaps) != 1 || last.Overlaps[0].Name != "tail-b" || last.Overlaps[0].Node != "node-1" {
+		t.Errorf("last row = %s overlaps %+v, want tail-a naming tail-b although tail-b is cut", last.Name, last.Overlaps)
+	}
+	if got.Networks[0].Order != 0 || last.Order != 4999 {
+		t.Errorf("orders = %d..%d, want 0..4999", got.Networks[0].Order, last.Order)
+	}
+
+	// Under the cap nothing is truncated.
+	f2, e2 := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0", Networks: nets[:10]})
+	awaitOnline(t, f2.mon, e2.ID)
+	small := decode[addressSpace](t, f2.get(t, e2, "address-space"))
+	if len(small.Networks) != 10 || small.NetworksTotal != 10 || small.NetworksTruncated {
+		t.Errorf("small = %d/%d/%v, want 10/10/false", len(small.Networks), small.NetworksTotal, small.NetworksTruncated)
+	}
+}
+
+func TestAddressSpaceMapNotReporting(t *testing.T) {
+	t.Parallel()
+	s, link := mapSwarm(t, nil)
+	link()
+	before := decode[addressSpace](t, s.get(t, s.env.ID, "address-space"))
+	if len(before.NotReporting) != 0 || mapRowNamed(t, before, "bridge", "wrk-1").Node != "wrk-1" {
+		t.Fatalf("before: notReporting %v, want every node answering and the worker's bridge listed", before.NotReporting)
+	}
+
+	s.srv.Hub.Kick(s.w.id, tunnel.DisconnectClosed)
+	if _, err := s.srv.Hub.AwaitSession(testsupport.Context(t), s.w.id, func(sess *tunnel.Session) bool { return sess == nil }); err != nil {
+		t.Fatalf("the worker's session never went: %v", err)
+	}
+	after := decode[addressSpace](t, s.get(t, s.env.ID, "address-space"))
+	if !slices.Equal(after.NotReporting, []string{"wrk-1"}) {
+		t.Fatalf("notReporting = %v, want the worker", after.NotReporting)
+	}
+	// Only the worker's rows are gone: every other row is as it was, order included, since its
+	// position among the rows that remain does not move for a worker network with no subnet.
+	var want []mapRow
+	for _, r := range before.Networks {
+		if r.Node != "wrk-1" {
+			want = append(want, r)
+		}
+	}
+	for i := range want {
+		want[i].Order = i
+	}
+	if after.NetworksTotal != len(want) || len(after.Networks) != len(want) {
+		t.Fatalf("rows = %d (total %d), want %d", len(after.Networks), after.NetworksTotal, len(want))
+	}
+	for i := range want {
+		if !reflect.DeepEqual(after.Networks[i], want[i]) {
+			t.Errorf("row %d = %+v\nwant     %+v", i, after.Networks[i], want[i])
+		}
 	}
 }
