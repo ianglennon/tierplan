@@ -128,6 +128,9 @@ type authFixture struct {
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
 	envSvc *envs.Service
+	// addressSpaces is the address reader build made for the routes; nil before build or
+	// without an aggregator.
+	addressSpaces *envs.AddressSpaces
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -384,6 +387,10 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			addrClusters = envs.NewClusters(f.envSvc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 		}
 		addressSpaces := envs.NewAddressSpaces(f.envSvc, f.agg, addrClusters, envs.AddressSpaceOptions{Now: f.clk.now, Log: log})
+		// As on a real server, the cluster views carry the summaries, so health and the
+		// overview show an environment that is out of address space.
+		addrClusters.WithAddressSpaces(addressSpaces)
+		f.addressSpaces = addressSpaces
 		// The route reader of a real server: through the tunnel hub when the fixture has one.
 		var routeSrc envs.HostNetSource
 		if src, ok := f.liveAgents.(envs.HostNetSource); ok {

@@ -971,9 +971,11 @@ type agentStatus struct {
 	Since  string `json:"since"`
 	Reason string `json:"reason"`
 	Issues []struct {
-		Code  string `json:"code"`
-		Node  string `json:"node"`
-		Since string `json:"since"`
+		Code    string `json:"code"`
+		Node    string `json:"node"`
+		Subject string `json:"subject"`
+		Percent int    `json:"percent"`
+		Since   string `json:"since"`
 	} `json:"issues"`
 }
 
@@ -1429,5 +1431,38 @@ func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 				}
 			}
 		})
+	}
+}
+
+// A swarm that runs an overlay to 90% is degraded, with the network named (plan 10-17, D-06 item 3).
+func TestEnvironmentsDegradedAddressSpaceFull(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "hot-id", Name: "hot", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.5.0/24"}})
+	})
+	if e := s.environment(t, s.env.ID); e.Status.State != "online" || len(e.Status.Issues) != 0 {
+		t.Fatalf("before any read the swarm is %+v, want online", e.Status)
+	}
+	// 231 of 256 addresses is 90.2%.
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("hot", dockertest.FakeSubnetUsage{Subnet: "10.0.5.0/24", InUse: 231, Available: 25})
+	}
+	if _, err := s.addressSpaces.Read(testsupport.Context(t), s.env.ID); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	e := s.environment(t, s.env.ID)
+	if e.Status.State != "degraded" || e.Status.Reason != "address_space_full" {
+		t.Fatalf("status = %+v, want degraded / address_space_full", e.Status)
+	}
+	if len(e.Status.Issues) != 1 {
+		t.Fatalf("issues = %+v, want the one", e.Status.Issues)
+	}
+	if is := e.Status.Issues[0]; is.Code != "address_space_full" || is.Subject != "hot" || is.Percent != 90 || is.Node != "" || is.Since == "" {
+		t.Fatalf("issue = %+v, want address_space_full on hot at 90%% with no node", is)
 	}
 }

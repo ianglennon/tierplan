@@ -6512,15 +6512,22 @@ export interface components {
             total: number;
         };
         EnvironmentIssueBody: {
-            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew */
+            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full */
             code: string;
-            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet */
+            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster */
             node?: string;
+            /**
+             * Format: int64
+             * @description For address_space_full, how full that pool or network is, in whole percent; absent for every other code
+             */
+            percent?: number;
             /**
              * Format: date-time
              * @description When this began
              */
             since?: string;
+            /** @description For address_space_full, the address pool (its CIDR) or the network (its name) that is nearly full; absent for every other code */
+            subject?: string;
         };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
@@ -6600,7 +6607,7 @@ export interface components {
              * @description When the most recent probe of the environment's engine finished
              */
             lastAttempt?: string;
-            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm */
             reason?: string;
             /**
              * Format: date-time

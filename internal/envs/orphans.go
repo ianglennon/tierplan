@@ -109,6 +109,13 @@ func (s *AddressSpaces) Orphans(ctx context.Context, envID string) (OrphanReport
 	e.omu.Lock()
 	e.orphans, e.orphansAt, e.haveOrphans = rep, now, true
 	e.omu.Unlock()
+	orphaned := 0
+	for _, r := range rep.Rows {
+		if r.Class == netspace.ClassOrphaned {
+			orphaned++
+		}
+	}
+	s.setOrphaned(envID, orphaned)
 	return cloneReport(rep), nil
 }
 

@@ -84,9 +84,11 @@ type EnvironmentsDeps struct {
 // missing, cannot reach Docker, runs an unsupported engine, or has a certificate or
 // clock that needs attention. It carries only a fixed code and a node name.
 type EnvironmentIssueBody struct {
-	Code  string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew"`
-	Node  string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet"`
-	Since string `json:"since,omitempty" format:"date-time" doc:"When this began"`
+	Code    string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full"`
+	Node    string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster"`
+	Subject string `json:"subject,omitempty" doc:"For address_space_full, the address pool (its CIDR) or the network (its name) that is nearly full; absent for every other code"`
+	Percent int    `json:"percent,omitempty" doc:"For address_space_full, how full that pool or network is, in whole percent; absent for every other code"`
+	Since   string `json:"since,omitempty" format:"date-time" doc:"When this began"`
 }
 
 // EnvironmentStatusBody is the health of an environment: the rollup of its agents
@@ -95,7 +97,7 @@ type EnvironmentIssueBody struct {
 type EnvironmentStatusBody struct {
 	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Coaming does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
 	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
-	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop"`
+	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm"`
 	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
 	Issues      []EnvironmentIssueBody `json:"issues,omitempty" doc:"What is wrong with a degraded environment, worst first, then by node"`
 }
@@ -107,7 +109,7 @@ func statusBody(h envs.Health, lastAttempt time.Time) EnvironmentStatusBody {
 		State: string(h.State), Since: rfc3339(h.Since), Reason: h.Reason, LastAttempt: rfc3339(lastAttempt),
 	}
 	for _, is := range h.Issues {
-		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Since: rfc3339(is.Since)})
+		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Subject: is.Subject, Percent: is.Percent, Since: rfc3339(is.Since)})
 	}
 	return body
 }

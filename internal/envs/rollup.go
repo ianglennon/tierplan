@@ -6,6 +6,8 @@ package envs
 import (
 	"sort"
 	"time"
+
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // States an environment can be in besides the three the monitor reports for one
@@ -36,9 +38,15 @@ const (
 	// IssueCertExpiring is the issue code of a certificate that expires soon. It
 	// is not a connection failure, so it has no D-40 code of its own.
 	IssueCertExpiring = "cert_expiring"
+	// IssueAddressSpaceFull is the issue code of a swarm that has run a pool, the ingress network or
+	// an overlay to 90% (and not yet fallen below 85%). Like IssueCertExpiring it is not a
+	// connection failure: it is not a wire.Reason and an agent never refuses with it.
+	IssueAddressSpaceFull = "address_space_full"
 
 	envTypeSwarm = "swarm"
 	maxNodeLen   = 64
+	// maxSubjectLen is the longest pool or network name an issue carries.
+	maxSubjectLen = 128
 )
 
 // AgentView is everything the rollup knows about one agent row: the stored part
@@ -144,6 +152,9 @@ type ClusterView struct {
 	// Failing counts failing services of a swarm, or failing containers of a
 	// standalone host; nil until it has been worked out.
 	Failing *FailingCounts
+	// AddressSpace is the summary of the environment's address space from its last read, nil
+	// before any. Rollup only reads it: the hysteresis is the reader's (AddressSpaces).
+	AddressSpace *AddressSummary
 }
 
 // RollupInput is everything Rollup decides from. All times are passed in, so the
@@ -180,6 +191,10 @@ type RollupInput struct {
 type Issue struct {
 	Code, Node string
 	Since      time.Time
+	// Subject names what the issue is about when a node does not: the pool or network of an
+	// address_space_full. Percent is how full it is. Both are empty for every other code.
+	Subject string
+	Percent int
 }
 
 // Health is the rolled-up state of one environment (D-33).
@@ -214,7 +229,13 @@ type Health struct {
 // sign of life, so a blip shorter than the window changes nothing (D-41).
 func Rollup(in RollupInput) Health {
 	if in.Kind == KindLocal {
-		return Health{State: in.Local.State, Reason: in.Local.Reason, Since: in.Local.Since}
+		h := Health{State: in.Local.State, Reason: in.Local.Reason, Since: in.Local.Since}
+		// A swarm on the server's own socket that is online but out of address space is
+		// degraded like any other swarm (D-06 item 3); every other state stands.
+		if is, ok := addressSpaceIssue(in.Cluster); ok && h.State == StateOnline && localSwarm(in) {
+			h = Health{State: StateDegraded, Reason: is.Code, Since: firstSet(is.Since, in.Local.Since), Issues: []Issue{is}}
+		}
+		return h
 	}
 	if in.ClusterChanged {
 		return Health{State: StateClusterChanged, Reason: ReasonClusterChanged, Since: firstSet(in.ClusterChangedAt, in.ServerStart)}
@@ -311,6 +332,8 @@ var issueRank = map[string]int{
 	ReasonUnsupportedEngine: 4,
 	IssueCertExpiring:       5,
 	ReasonClockSkew:         6,
+	// A pool filling up is the least urgent of the causes: everything still works.
+	IssueAddressSpaceFull: 7,
 }
 
 // nodeIssues lists what is wrong with the nodes: an agent missing, an engine that
@@ -391,7 +414,28 @@ func clusterIssues(c *ClusterView, have []Issue) []Issue {
 	for _, n := range c.UnsupportedNodes {
 		add(ReasonUnsupportedEngine, cleanText(n.Node, maxNodeLen), n.Since)
 	}
+	if is, ok := addressSpaceIssue(c); ok {
+		out = append(out, is)
+	}
 	return out
+}
+
+// addressSpaceIssue is the address_space_full issue of the view, if it has one.
+func addressSpaceIssue(c *ClusterView) (Issue, bool) {
+	if c == nil || c.AddressSpace == nil || !c.AddressSpace.Full {
+		return Issue{}, false
+	}
+	a := c.AddressSpace
+	return Issue{Code: IssueAddressSpaceFull, Since: a.FullSince, Subject: cleanText(a.FullName, maxSubjectLen), Percent: a.FullPercent}, true
+}
+
+// localSwarm is whether the server's own socket belongs to a swarm.
+func localSwarm(in RollupInput) bool {
+	if in.EnvType == envTypeSwarm {
+		return true
+	}
+	t := in.Local.Probe.Type
+	return t == dockerx.TypeSwarmManager || t == dockerx.TypeSwarmWorker
 }
 
 // presentAt reports whether the agent counts as present at now: connected, or

@@ -169,6 +169,9 @@ type Clusters struct {
 	events *Hub
 	now    func() time.Time
 	log    *slog.Logger
+	// addrs is where the summary of each environment's address space comes from; nil until
+	// WithAddressSpaces.
+	addrs *AddressSpaces
 
 	grace, interval, timeout, ttl time.Duration
 
@@ -895,10 +898,40 @@ func (c *Clusters) Manager(in RollupInput) (string, bool) {
 	return Primary(in)
 }
 
+// WithAddressSpaces sets the reader whose summaries View adds to every cluster view, so the
+// rollup and the overview can tell a swarm that is out of address space. It returns c.
+func (c *Clusters) WithAddressSpaces(a *AddressSpaces) *Clusters {
+	c.addrs = a
+	return c
+}
+
+// notifyHealth tells whoever shows health that an environment's may have changed. Safe on a nil
+// Clusters or one with no publisher.
+func (c *Clusters) notifyHealth(envID string) {
+	if c != nil && c.pub != nil {
+		c.pub.Notify(envID)
+	}
+}
+
 // View is the cluster view of an environment's rollup input, worked out from the
 // last read with no I/O; it is nil for an environment nothing is known of. It also
-// forgets a manager that has come back.
+// forgets a manager that has come back. The address space summary is added to every
+// view, and makes one of an environment whose cluster nothing else is known of.
 func (c *Clusters) View(in RollupInput) *ClusterView {
+	v := c.view(in)
+	if c.addrs == nil {
+		return v
+	}
+	if sum, ok := c.addrs.Summary(in.EnvID); ok {
+		if v == nil {
+			v = &ClusterView{}
+		}
+		v.AddressSpace = &sum
+	}
+	return v
+}
+
+func (c *Clusters) view(in RollupInput) *ClusterView {
 	e, ok := c.lookup(in.EnvID)
 	var st ClusterState
 	var away []NodeSince

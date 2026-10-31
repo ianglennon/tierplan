@@ -719,6 +719,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The address reader tells how full the address pools of an environment are. The networks,
 	// stacks and dashboard routes read it as well as its own route, so it is built once.
 	addressSpaces := envs.NewAddressSpaces(envSvc, aggregator, clusters, envs.AddressSpaceOptions{Now: bo.addressClock, Log: log})
+	// The cluster views carry each environment's address space summary, so a swarm that is out of
+	// address space is degraded wherever health is shown (D-06).
+	clusters.WithAddressSpaces(addressSpaces)
 	// The subnet check reads the routes of each node's host: through the agents' tunnels, and for
 	// Coaming's own host from the route file mounted into its container (COAMING_HOST_ROUTE_FILE).
 	hostRoutes := envs.NewHostRoutes(envSvc, tunnelHub, envs.HostRoutesOptions{LocalRouteFile: cfg.HostRouteFile, Log: log})

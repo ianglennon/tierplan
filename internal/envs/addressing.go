@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/bits"
 	"net/netip"
 	"slices"
 	"strings"
@@ -60,6 +61,17 @@ type AddressSpaceOptions struct {
 	TTL time.Duration
 	// Log receives what cannot be returned; it defaults to the service's.
 	Log *slog.Logger
+	// Interval is how often Run reads every environment; it defaults to DefaultAddressInterval.
+	Interval time.Duration
+	// Ticks, when set, replaces the interval's ticker: Run reads every environment once per
+	// value received. Tests send on it, so they never wait for a clock.
+	Ticks <-chan time.Time
+	// Subscribe opens the events of an environment, as Aggregator.EventRows does, which is its
+	// default.
+	Subscribe func(ctx context.Context, envID string) ([]dockerx.EventRow, <-chan dockerx.EventRow, func())
+	// After returns a channel that receives once d has passed; it defaults to time.After. It
+	// times the debounce of an event and the pause before a subscription is reopened.
+	After func(d time.Duration) <-chan time.Time
 }
 
 // PoolUsage is one address pool and what is in use of it. Source says where the pool came
@@ -147,6 +159,11 @@ type addressEntry struct {
 
 	// alloc serialises the check and the create of a network's subnet (LockAllocation).
 	alloc sync.Mutex
+
+	// sum is the summary of the environment's address space (guarded by mu); haveSum is false
+	// until a read or an orphan check has made one.
+	sum     AddressSummary
+	haveSum bool
 }
 
 // AddressSpaces reads how full the address pools of an environment are. Docker is the source of
@@ -170,21 +187,44 @@ type AddressSpaces struct {
 
 	mu      sync.Mutex
 	entries map[string]*addressEntry
+
+	interval  time.Duration
+	ticks     <-chan time.Time
+	subscribe func(ctx context.Context, envID string) ([]dockerx.EventRow, <-chan dockerx.EventRow, func())
+	after     func(d time.Duration) <-chan time.Time
+
+	// The background reader's state: the context Run was given (nil until it runs), the
+	// environments with a read waiting out the debounce, and the event watchers by environment.
+	pending map[string]bool
+	watches map[string]context.CancelFunc
 }
 
 // NewAddressSpaces returns the address reader of svc. agg gives every node's networks and
 // clusters reads the swarm's pools through a manager. svc is what later readers of the phase
 // reach the store through.
 func NewAddressSpaces(svc *Service, agg *Aggregator, clusters *Clusters, o AddressSpaceOptions) *AddressSpaces {
-	s := &AddressSpaces{svc: svc, agg: agg, clusters: clusters, now: o.Now, ttl: o.TTL, log: o.Log, entries: map[string]*addressEntry{}}
+	s := &AddressSpaces{
+		svc: svc, agg: agg, clusters: clusters, now: o.Now, ttl: o.TTL, log: o.Log, entries: map[string]*addressEntry{},
+		interval: o.Interval, ticks: o.Ticks, subscribe: o.Subscribe, after: o.After,
+		pending: map[string]bool{}, watches: map[string]context.CancelFunc{},
+	}
 	if s.now == nil {
 		s.now = time.Now
 	}
 	if s.ttl <= 0 {
 		s.ttl = DefaultClusterTTL
 	}
-	if s.log == nil {
+	if s.log == nil && svc != nil {
 		s.log = svc.log
+	}
+	if s.interval <= 0 {
+		s.interval = DefaultAddressInterval
+	}
+	if s.subscribe == nil && agg != nil {
+		s.subscribe = agg.EventRows
+	}
+	if s.after == nil {
+		s.after = time.After
 	}
 	return s
 }
@@ -304,7 +344,14 @@ func (s *AddressSpaces) Read(ctx context.Context, envID string) (AddressSpace, e
 	if v.NotMeasured == "" {
 		e.pools = slices.Clone(v.Pools)
 	}
+	wasFull := e.haveSum && e.sum.Full
+	e.sum, e.haveSum = summarise(e.sum, v, now), true
+	changed := e.sum.Full != wasFull
 	e.mu.Unlock()
+	if changed {
+		// Whether the environment is degraded has changed: tell whoever shows health.
+		s.clusters.notifyHealth(envID)
+	}
 	return cloneSpace(v), nil
 }
 
@@ -600,4 +647,198 @@ func networkSubnets(nets []NetworkRow, keep func(NetworkRow) bool) []netip.Prefi
 		}
 	}
 	return out
+}
+
+// The meters a summary names (WorstMeter.Kind) and what each counts (WorstMeter.Unit).
+const (
+	MeterPool    = "pool"
+	MeterIngress = "ingress"
+	MeterOverlay = "overlay"
+
+	UnitSubnets   = "subnets"
+	UnitAddresses = "addresses"
+)
+
+// The percentages at which a swarm becomes, and stops being, address_space_full (user decision 3,
+// 2026-10-30). Leaving takes a lower number than entering, so a network that hovers around 90%
+// does not flip the environment between degraded and online on every read.
+const (
+	fullEnter = 90
+	fullLeave = 85
+)
+
+// DefaultAddressInterval is how often Run reads every enabled environment's address space and
+// orphan list when nobody asks (D-09).
+const DefaultAddressInterval = 60 * time.Second
+
+// WorstMeter is the fullest pool or network of an environment, by the exact ratio of what is used
+// to what there is. Estimated is true for a standalone host's pool, whose number is a guess.
+type WorstMeter struct {
+	// Kind is MeterPool, MeterIngress or MeterOverlay.
+	Kind string
+	// Name is the pool's CIDR or the network's name.
+	Name           string
+	Used, Capacity uint64
+	Percent        int
+	State          netspace.State
+	// Unit is UnitSubnets for a pool and UnitAddresses for a network.
+	Unit      string
+	Estimated bool
+}
+
+// AddressSummary is what the overview, the dashboard and the health of an environment need of its
+// address space, from the last read: the worst meter, how many networks are orphaned and whether
+// the environment counts as out of address space.
+type AddressSummary struct {
+	// Worst is nil when nothing could be measured.
+	Worst *WorstMeter
+	// Orphaned counts the networks the last orphan check called orphaned.
+	Orphaned int
+	// Full is true from the first measured swarm meter at fullEnter percent until every one is
+	// below fullLeave. An estimated pool never sets it. FullName and FullPercent name the meter
+	// that does, and FullSince is when Full turned on.
+	Full        bool
+	FullName    string
+	FullPercent int
+	FullSince   time.Time
+	// Measured is true when Worst is set.
+	Measured bool
+	// At is when the summary was last updated.
+	At time.Time
+}
+
+func (a AddressSummary) clone() AddressSummary {
+	if a.Worst != nil {
+		w := *a.Worst
+		a.Worst = &w
+	}
+	return a
+}
+
+// metersOf are the meters of a read that have a number: the pools, then the ingress network, then
+// the other overlays in the order of the read. Ties go to the earlier one.
+func metersOf(v AddressSpace) []WorstMeter {
+	var out []WorstMeter
+	for _, p := range v.Pools {
+		if p.State == netspace.StateUnknown || p.Capacity == 0 {
+			continue
+		}
+		out = append(out, WorstMeter{
+			Kind: MeterPool, Name: p.Pool.Base.String(), Used: p.Used, Capacity: p.Capacity, Percent: p.Percent,
+			State: p.State, Unit: UnitSubnets, Estimated: p.Estimated,
+		})
+	}
+	for _, ingress := range []bool{true, false} {
+		for _, o := range v.Overlays {
+			if o.Ingress != ingress || !o.Measured || o.Capacity == 0 {
+				continue
+			}
+			kind := MeterOverlay
+			if o.Ingress {
+				kind = MeterIngress
+			}
+			out = append(out, WorstMeter{
+				Kind: kind, Name: o.Name, Used: o.Used, Capacity: o.Capacity, Percent: o.Percent,
+				State: o.State, Unit: UnitAddresses,
+			})
+		}
+	}
+	return out
+}
+
+// fuller reports whether a is strictly fuller than b, by the exact ratio (the cross products are
+// compared in 128 bits, so no count can overflow it).
+func fuller(a, b WorstMeter) bool {
+	ahi, alo := bits.Mul64(a.Used, b.Capacity)
+	bhi, blo := bits.Mul64(b.Used, a.Capacity)
+	return ahi > bhi || ahi == bhi && alo > blo
+}
+
+// atLeast reports whether the meter is at pct percent or more, by the exact ratio.
+func (m WorstMeter) atLeast(pct uint64) bool { return m.Used*100 >= m.Capacity*pct }
+
+// summarise works out the summary of an environment from a fresh read and the summary before it.
+// This is where the hysteresis lives (RESEARCH Pitfall 7); the rollup only reads the answer.
+//
+// Only measured meters of a swarm decide Full: an estimated pool (a standalone host) never does
+// (D-07). Once Full, it stays on while any such meter is at fullLeave percent or more, and while
+// the meter that turned it on cannot be measured now (the manager is not answering); a read that
+// measures nothing, or finds that meter gone, is not a reason to turn it off by itself, but a
+// measurement below fullLeave always is.
+func summarise(prev AddressSummary, v AddressSpace, now time.Time) AddressSummary {
+	ms := metersOf(v)
+	sum := AddressSummary{Orphaned: prev.Orphaned, At: now, Measured: len(ms) > 0}
+	var worst, decisive *WorstMeter
+	for i := range ms {
+		m := &ms[i]
+		if worst == nil || fuller(*m, *worst) {
+			worst = m
+		}
+		if v.Swarm && !m.Estimated && (decisive == nil || fuller(*m, *decisive)) {
+			decisive = m
+		}
+	}
+	if worst != nil {
+		w := *worst
+		sum.Worst = &w
+	}
+	switch {
+	case decisive != nil && decisive.atLeast(fullEnter):
+		sum.Full, sum.FullName, sum.FullPercent = true, decisive.Name, decisive.Percent
+	case prev.Full && decisive != nil && decisive.atLeast(fullLeave):
+		sum.Full, sum.FullName, sum.FullPercent = true, decisive.Name, decisive.Percent
+	case prev.Full && cannotMeasure(prev.FullName, v):
+		sum.Full, sum.FullName, sum.FullPercent = true, prev.FullName, prev.FullPercent
+	}
+	if sum.Full {
+		sum.FullSince = now
+		if prev.Full && !prev.FullSince.IsZero() {
+			sum.FullSince = prev.FullSince
+		}
+	}
+	return sum
+}
+
+// cannotMeasure is true when the read says nothing about the named pool or network: nothing was
+// measured at all (no manager answered), or the network is listed without numbers.
+func cannotMeasure(name string, v AddressSpace) bool {
+	if v.NotMeasured != "" {
+		return true
+	}
+	for _, o := range v.Overlays {
+		if o.Name == name && !o.Measured {
+			return true
+		}
+	}
+	for _, p := range v.Pools {
+		if p.Pool.Base.String() == name && (p.State == netspace.StateUnknown || p.Capacity == 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// Summary is the summary of the environment's address space from the last read, and false before
+// any read or orphan check has been made. It never reads an engine.
+func (s *AddressSpaces) Summary(envID string) (AddressSummary, bool) {
+	s.mu.Lock()
+	e := s.entries[envID]
+	s.mu.Unlock()
+	if e == nil {
+		return AddressSummary{}, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.haveSum {
+		return AddressSummary{}, false
+	}
+	return e.sum.clone(), true
+}
+
+// setOrphaned records the count of orphaned networks the last check found.
+func (s *AddressSpaces) setOrphaned(envID string, n int) {
+	e := s.entry(envID)
+	e.mu.Lock()
+	e.sum.Orphaned, e.haveSum = n, true
+	e.mu.Unlock()
 }
