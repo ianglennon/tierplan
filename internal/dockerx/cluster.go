@@ -551,13 +551,78 @@ func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services
 }
 
 // TaskNetworkRef is one task of a swarm that is still alive and the networks it is attached
-// to.
+// to, as IDs once each. A task keeps its attachments until the swarm has stopped it, even
+// after an update dropped the network from its service's spec, so it is a user of the network
+// when the spec is not. Never a nil Networks.
 type TaskNetworkRef struct {
-	ID, ServiceID, ServiceName, NodeID, State string
-	Networks                                  []string
+	ID, ServiceID, ServiceName string
+	// NodeID is the swarm node the task is on, empty while it is not scheduled.
+	NodeID string
+	// State is the state the swarm last saw the task in.
+	State    string
+	Networks []string
 }
 
-// TaskNetworkRefs is not written yet.
+// liveTaskStates are the states in which a task holds its network attachments: from the
+// moment the allocator gave it addresses until the swarm has finished with it.
+var liveTaskStates = []swarm.TaskState{
+	swarm.TaskStateNew, swarm.TaskStateAllocated, swarm.TaskStatePending, swarm.TaskStateAssigned,
+	swarm.TaskStateAccepted, swarm.TaskStatePreparing, swarm.TaskStateReady, swarm.TaskStateStarting,
+	swarm.TaskStateRunning,
+}
+
+// TaskNetworkRefs reads, from a swarm manager, every task that is still alive with the
+// networks it is attached to: one whose desired state is running or ready, or whose state is
+// not final (a task told to shut down is alive until it has). It is read-only. The tasks are
+// listed once, and the services and networks only when a live task needs a name resolved.
 func (c *Client) TaskNetworkRefs(ctx context.Context) ([]TaskNetworkRef, error) {
-	return nil, nil
+	cli := c.cur()
+	// Every task is desired running, ready or shutdown, so this lists them all; the history a
+	// swarm keeps is bounded by its task history limit.
+	ts, err := cli.TaskList(ctx, client.TaskListOptions{Filters: make(client.Filters).Add("desired-state",
+		string(swarm.TaskStateRunning), string(swarm.TaskStateReady), string(swarm.TaskStateShutdown))})
+	if err != nil {
+		return nil, fmt.Errorf("list tasks on %s: %w", c.t.Describe(), err)
+	}
+	var live []swarm.Task
+	targets := false
+	for _, t := range ts.Items {
+		if t.DesiredState != swarm.TaskStateRunning && t.DesiredState != swarm.TaskStateReady && !slices.Contains(liveTaskStates, t.Status.State) {
+			continue
+		}
+		live = append(live, t)
+		targets = targets || len(t.Spec.Networks) > 0
+	}
+	refs := make([]TaskNetworkRef, 0, len(live))
+	if len(live) == 0 {
+		return refs, nil
+	}
+	idOf, err := c.swarmNetworkIDs(ctx, cli, targets)
+	if err != nil {
+		return nil, err
+	}
+	ss, err := cli.ServiceList(ctx, client.ServiceListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list swarm services on %s: %w", c.t.Describe(), err)
+	}
+	names := make(map[string]string, len(ss.Items))
+	for _, s := range ss.Items {
+		names[s.ID] = s.Spec.Name
+	}
+	for _, t := range live {
+		ref := TaskNetworkRef{ID: t.ID, ServiceID: t.ServiceID, ServiceName: names[t.ServiceID], NodeID: t.NodeID, State: string(t.Status.State), Networks: []string{}}
+		for _, a := range t.NetworksAttachments {
+			if id := a.Network.ID; id != "" && !slices.Contains(ref.Networks, id) {
+				ref.Networks = append(ref.Networks, id)
+			}
+		}
+		for _, id := range networkTargets(t.Spec.Networks, idOf) {
+			if !slices.Contains(ref.Networks, id) {
+				ref.Networks = append(ref.Networks, id)
+			}
+		}
+		refs = append(refs, ref)
+	}
+	slices.SortFunc(refs, func(a, b TaskNetworkRef) int { return cmp.Compare(a.ID, b.ID) })
+	return refs, nil
 }

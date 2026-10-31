@@ -97,10 +97,16 @@ func (u *Usage) readSwarm(ctx context.Context, agg *Aggregator, clusters *Cluste
 	}
 	readCtx, cancel := context.WithTimeout(ctx, usageReadTimeout)
 	defer cancel()
-	var refs []dockerx.ServiceRef
-	err := clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
-		var e error
-		refs, e = c.ServiceRefs(readCtx)
+	var (
+		refs  []dockerx.ServiceRef
+		tasks []dockerx.TaskNetworkRef
+	)
+	// One manager answers both reads: the services and the tasks that are still attached.
+	err := clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) (e error) {
+		if refs, e = c.ServiceRefs(readCtx); e != nil {
+			return e
+		}
+		tasks, e = c.TaskNetworkRefs(readCtx)
 		return e
 	})
 	if err != nil {
@@ -117,6 +123,29 @@ func (u *Usage) readSwarm(ctx context.Context, agg *Aggregator, clusters *Cluste
 		}
 		for _, id := range ref.VIPNetworks {
 			u.add(NetKey{NetworkID: id}, "service "+ref.Name+" (virtual IP)")
+		}
+	}
+	// The node a task is on is named as the cluster read last called it; an unknown one stays its ID.
+	hostOf := map[string]string{}
+	if st, ok := clusters.Cached(envID); ok {
+		for _, n := range st.Read.Nodes {
+			hostOf[n.ID] = n.Hostname
+		}
+	}
+	for _, t := range tasks {
+		user := "task of service " + t.ServiceName
+		if t.ServiceName == "" {
+			user = "task " + t.ID
+		}
+		if t.NodeID != "" {
+			node := t.NodeID
+			if h := hostOf[node]; h != "" {
+				node = h
+			}
+			user += " on " + node
+		}
+		for _, id := range t.Networks {
+			u.add(NetKey{NetworkID: id}, user)
 		}
 	}
 }

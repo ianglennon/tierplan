@@ -36,6 +36,10 @@ type FakeServiceTask struct {
 	Desired string
 	// Err and Message are the swarm's free text about the task.
 	Err, Message string
+	// Networks are the networks the task is attached to, by ID or by name as the daemon knows
+	// them. They are the task's NetworksAttachments, which a task keeps after an update removed
+	// the network from its service's spec.
+	Networks []string
 	// Old puts the task on a spec other than the service's current task template, so its spec hash
 	// differs from the service's.
 	Old bool
@@ -138,7 +142,7 @@ func (c FakeConfig) followingTasks() []swarm.Task {
 			continue
 		}
 		if o, ok := c.taskStates[fs.Name]; ok && o.tasks != nil {
-			out = append(out, scriptedTasks(fs, o.tasks)...)
+			out = append(out, c.scriptedTasks(fs, o.tasks)...)
 			continue
 		}
 		state, errText := swarm.TaskStateRunning, ""
@@ -182,7 +186,7 @@ func (c FakeConfig) followingTasks() []swarm.Task {
 var scriptedBase = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // scriptedTasks are the tasks SetServiceTasks gave the service fs.
-func scriptedTasks(fs FakeService, script []FakeServiceTask) []swarm.Task {
+func (c FakeConfig) scriptedTasks(fs FakeService, script []FakeServiceTask) []swarm.Task {
 	out := make([]swarm.Task, 0, len(script))
 	for i, st := range script {
 		id := st.ID
@@ -204,6 +208,13 @@ func scriptedTasks(fs FakeService, script []FakeServiceTask) []swarm.Task {
 		t := swarm.Task{ID: id, ServiceID: fs.ID, NodeID: node, Slot: st.Slot, DesiredState: desired, Spec: spec}
 		t.CreatedAt = scriptedBase.Add(-time.Duration(i) * time.Second)
 		t.Status = swarm.TaskStatus{State: swarm.TaskState(st.State), Err: st.Err, Message: st.Message}
+		for _, ref := range st.Networks {
+			id := ref
+			if n, ok := c.resolveNetwork(ref); ok {
+				id = n.ID
+			}
+			t.NetworksAttachments = append(t.NetworksAttachments, swarm.NetworkAttachment{Network: swarm.Network{ID: id}})
+		}
 		out = append(out, t)
 	}
 	return out
