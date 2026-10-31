@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 
+import { addressSpaceKey } from "@/api/address-space";
 import { api } from "@/api/client";
 import { listKey } from "@/api/resources";
 import type { components } from "@/api/schema";
@@ -99,7 +100,8 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // config event does the same for the configs list and the config pages. A node event refreshes
 // the nodes list, the node pages (their keys extend the list's) and the services list, whose key
 // the placement view extends, since a node going down or being drained moves tasks. A row of
-// Coaming's own has no list and refreshes the summary only.
+// Coaming's own has no list and refreshes the summary only. A network, container or service event
+// also refreshes the Address space page, since networks, tasks and their addresses move its meters.
 //
 // An event about an object of a stack (touchesStack: it carries the stack's swarm namespace or
 // Compose project label) also refreshes the stacks list and every stack page under it, the
@@ -115,6 +117,7 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         [...listKey(envId, "volumes")],
         [...listKey(envId, "networks")],
         [...listKey(envId, "images")],
+        [...addressSpaceKey(envId)],
         ...stacks,
       ];
     case "network":
@@ -122,6 +125,7 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         summary,
         [...listKey(envId, "networks")],
         [...listKey(envId, "containers")],
+        [...addressSpaceKey(envId)],
         ...stacks,
       ];
     case "volume":
@@ -134,6 +138,7 @@ export function invalidationKeys(type: EventType, envId: string, stack = false):
         [...listKey(envId, "services")],
         [...listKey(envId, "secrets")],
         [...listKey(envId, "configs")],
+        [...addressSpaceKey(envId)],
         ...stacks,
       ];
     case "secret":
