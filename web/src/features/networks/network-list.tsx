@@ -13,6 +13,7 @@ import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AddressesUsedCell, isOverlay } from "@/features/address-space/subnet-map";
 import { SearchBox } from "@/features/containers/container-list";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { CreateNetworkDialog } from "@/features/networks/create-network-dialog";
@@ -143,6 +144,14 @@ export function NetworkList({ envId, node, q, onNodeChange, onSearchChange }: Ne
             })
           : containers;
       },
+    },
+    {
+      id: "addressesUsed",
+      header: t("networks.list.columns.addressesUsed"),
+      className: "min-w-48",
+      cell: (n) => (
+        <AddressesUsedCell usage={n.addressesUsed} overlay={isOverlay(n)} label={n.name} />
+      ),
     },
     {
       id: "owner",

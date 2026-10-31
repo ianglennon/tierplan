@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UsageMeter } from "@/features/address-space/usage-meter";
 import { SearchBox } from "@/features/containers/container-list";
 import {
   type Column,
@@ -50,7 +51,7 @@ export interface MapSearch {
 export const MAP_RENDER_CAP = 500;
 
 // The overlays are the swarm's own networks that cross hosts.
-export function isOverlay(row: Pick<AddressMapRow, "scope" | "driver">): boolean {
+export function isOverlay(row: { scope: string; driver: string }): boolean {
   return row.scope === "swarm" && row.driver === "overlay";
 }
 
@@ -144,6 +145,68 @@ function AttachedCell({ row, swarm }: { row: AddressMapRow; swarm: boolean }) {
         services: t("networks.list.attached.services", { count: row.attachedServices }),
       })
     : containers;
+}
+
+interface AddressesUsedCellProps {
+  // The count the server read for an overlay, or absent.
+  usage: AddressMapRow["usage"];
+  // True for a swarm overlay: the only network whose used addresses the swarm counts.
+  overlay: boolean;
+  // False when no manager is connected, so the count could not be read at all; the cell then has no
+  // Engine-version reason to give.
+  measured?: boolean;
+  // The network's name, the accessible name of its meter.
+  label: string;
+}
+
+// AddressesUsedCell is the Addresses used cell of the subnet map and of the Networks list: a compact
+// meter with "{used} / {capacity}" for an overlay, and from 70% the state as words beside the bar. An
+// overlay whose count could not be read says why in a tooltip; every other network has nothing to count
+// here, so it reads "—" (NET-03).
+export function AddressesUsedCell({
+  usage,
+  overlay,
+  measured = true,
+  label,
+}: AddressesUsedCellProps) {
+  const t = useT();
+  const missing = <span className="text-muted-foreground">{t("addressSpace.states.missing")}</span>;
+  if (!overlay) return missing;
+  if (!usage) {
+    if (!measured) return missing;
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus
+            tabIndex={0}
+            className="rounded-sm text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            {t("addressSpace.states.missing")}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-80">
+          {t("addressSpace.meters.notMeasuredTip")}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <UsageMeter
+        used={usage.used}
+        capacity={usage.capacity}
+        label={label}
+        unit="addresses"
+        variant="compact"
+        state={usage.state}
+        percent={usage.percent}
+      />
+      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        {t("addressSpace.map.used.value", { used: usage.used, capacity: usage.capacity })}
+      </span>
+    </span>
+  );
 }
 
 // OwnerCell words who made the network. A stack Coaming manages is a link to it; a stack or compose
@@ -410,6 +473,15 @@ export function SubnetMap({
       className: "w-28 min-w-28",
       sortKey: "age",
       cell: (row) => <RelativeTime value={row.created} />,
+    },
+    {
+      id: "used",
+      header: t("addressSpace.map.columns.used"),
+      className: "w-48 min-w-48",
+      sortKey: "used",
+      cell: (row) => (
+        <AddressesUsedCell usage={row.usage} overlay={isOverlay(row)} label={row.name} />
+      ),
     },
   ];
 

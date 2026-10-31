@@ -90,7 +90,16 @@ describe("the Subnet map", () => {
     const heads = within(screen.getByRole("table", { name: "Subnet map" }))
       .getAllByRole("columnheader")
       .map((h) => h.textContent);
-    expect(heads).toEqual(["Network", "Subnet", "Scope", "Driver", "Owner", "Attached", "Age"]);
+    expect(heads).toEqual([
+      "Network",
+      "Subnet",
+      "Scope",
+      "Driver",
+      "Owner",
+      "Attached",
+      "Age",
+      "Addresses used",
+    ]);
   });
 
   it("words the owner by kind", () => {
@@ -335,6 +344,51 @@ describe("an empty map", () => {
   it("says so when the environment has no networks", () => {
     mount({ rows: [] });
     expect(screen.getByText("No networks to show.")).toBeTruthy();
+  });
+});
+
+describe("Addresses used", () => {
+  it("shows used addresses for overlays only", async () => {
+    mount({
+      swarm: true,
+      rows: [
+        overlay("calm", 0, { usage: usage(20, 256, "normal") }),
+        overlay("busy", 1, { usage: usage(200, 256, "getting_full") }),
+        overlay("blind", 2),
+        row("bridgey", 3),
+      ],
+    });
+    const table = screen.getByRole("table", { name: "Subnet map" });
+    const last = (name: string) => {
+      const r = within(table)
+        .getAllByRole("row")
+        .find((x) => within(x).queryByRole("link", { name }) !== null) as HTMLElement;
+      return within(r).getAllByRole("cell").at(-1) as HTMLElement;
+    };
+    expect(within(table).getByRole("columnheader", { name: "Addresses used" })).toBeTruthy();
+    // A meter, the numbers and, from 70%, the state as words.
+    const calm = last("calm");
+    expect(within(calm).getByRole("meter", { name: "calm" })).toBeTruthy();
+    expect(calm.textContent).toContain("20 / 256");
+    expect(within(calm).queryByText("Getting full")).toBeNull();
+    const busy = last("busy");
+    expect(busy.textContent).toContain("200 / 256");
+    expect(within(busy).getByText("Getting full")).toBeTruthy();
+    // An overlay whose count could not be read says why; a local network has nothing to count.
+    const blind = last("blind");
+    expect(within(blind).queryByRole("meter")).toBeNull();
+    const dash = within(blind).getByText("—");
+    fireEvent.focus(dash);
+    expect(
+      (
+        await screen.findAllByText(
+          "Counting used addresses needs Docker Engine 29 or newer on the manager.",
+        )
+      ).length,
+    ).toBeGreaterThan(0);
+    const bridgey = last("bridgey");
+    expect(bridgey.textContent).toBe("—");
+    expect(within(bridgey).queryByRole("meter")).toBeNull();
   });
 });
 

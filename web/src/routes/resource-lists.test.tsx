@@ -516,24 +516,26 @@ describe("networks list", () => {
       "Scope",
       "Subnet",
       "Attached",
+      "Addresses used",
       "Owner",
       "Created",
       "Actions",
     ]);
     const rows = screen.getAllByRole("row").slice(1);
     const bridge = cellsOf(rows[0] as HTMLElement);
-    expect(bridge.slice(0, 6)).toEqual([
+    expect(bridge.slice(0, 7)).toEqual([
       "bridge",
       "bridge",
       "Local",
       "172.17.0.0/16",
       "2 containers",
+      "—",
       "shop",
     ]);
     // Ten days old: an absolute date, not "10 d ago" (D-66).
-    expect(bridge[6]).toMatch(/2026/);
+    expect(bridge[7]).toMatch(/2026/);
     const host = cellsOf(rows[1] as HTMLElement);
-    expect(host.slice(3, 6)).toEqual(["—", "None", "—"]);
+    expect(host.slice(3, 7)).toEqual(["—", "None", "—", "—"]);
   });
 });
 
@@ -804,6 +806,7 @@ describe("swarm lists", () => {
       "Scope",
       "Subnet",
       "Attached",
+      "Addresses used",
       "Owner",
       "Created",
       "Actions",
