@@ -39,6 +39,7 @@ The exact list of what each role may do is in [permissions.md](permissions.md), 
 - [Adopting a stack](#adopting-a-stack)
 - [Drift](#drift)
 - [Git stacks](#git-stacks)
+- [Small stack subnets](#small-stack-subnets)
 - [One operation at a time](#one-operation-at-a-time)
 - [What Coaming writes on your hosts](#what-coaming-writes-on-your-hosts)
 - [Host access and who may do what](#host-access-and-who-may-do-what)
@@ -1082,6 +1083,24 @@ only a cache:
 | "N commits behind" | counts up to 2,000 commits |
 | Webhook delivery | 60 a minute per address, 10 a minute per webhook, body at most 5 MiB |
 | Mirrors | removed after 14 days unused or over 2 GiB |
+
+## Small stack subnets
+
+A new swarm network takes a `/24` and a new standalone network a `/16` by default, far more than most stacks use. An
+Env Admin can turn on **Default stack subnets** in the environment's settings (off by default; `/25`, `/26`, `/27`
+or `/28`, `/26` by default) so that a network a deploy **creates** gets a small block instead. In short:
+
+- It applies to **new networks only**, ones with no `ipam` block of their own that are not `external`. A network
+  that exists is never recreated, a subnet you wrote in the file is kept, and **your YAML is never rewritten**.
+- The review shows the block on the network's row with a **Small-subnet default** badge, and stops before anything is
+  created if no free block of that size is left.
+- The block is **recorded with the revision**, so a roll back or a deploy after the network is gone uses the same
+  one. The History tab lists it.
+- It works on standalone hosts too, where it keeps a network's configuration hash steady so a later deploy does not recreate it.
+- **Start** on a stopped swarm stack that has to make a missing network again does not use it yet; deploy instead.
+
+[networks.md](networks.md#small-stack-subnets) has the whole of it, with the subnet picker, the Address space page
+and the orphan rules.
 
 ## One operation at a time
 
