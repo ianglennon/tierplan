@@ -121,7 +121,133 @@
         "query": "No networks match “{{q}}”.",
         "filter": "No networks match this filter.",
         "clear": "Clear filters"
+      },
+      "badge": {
+        "orphaned": "Orphaned",
+        "unused": "Unused",
+        "kept": "Kept"
       }
+    },
+    "orphans": {
+      "title": "Orphaned and unused networks",
+      "caption": "Coaming lists a network here when nothing has used it for 24 hours. It looks at every service, every task and every node before it decides.",
+      "tableLabel": "Orphaned and unused networks",
+      "loading": "Loading orphaned and unused networks",
+      "empty": {
+        "title": "No orphaned or unused networks",
+        "body": "Coaming lists a network here when nothing has used it for 24 hours."
+      },
+      "groups": {
+        "orphaned": {
+          "label": "Orphaned",
+          "name": "Orphaned ({{count, number}})",
+          "caption": "The stack that created these no longer exists, and nothing uses them."
+        },
+        "unused": {
+          "label": "Unused",
+          "name": "Unused ({{count, number}})",
+          "caption": "No stack created these, and nothing uses them. This is for your information, not a problem."
+        },
+        "cantTell": {
+          "label": "Can't tell yet",
+          "name": "Can't tell yet ({{count, number}})",
+          "caption": "Waiting for {{nodes}} to report.",
+          "captionManager": "Waiting for a manager to report.",
+          "captionOther": "Waiting for Coaming to finish reading the environment."
+        }
+      },
+      "columns": {
+        "network": "Network",
+        "node": "Node",
+        "subnet": "Subnet",
+        "formerStack": "Former stack",
+        "formerProject": "Former project",
+        "idleSince": "Idle since",
+        "actions": "Actions"
+      },
+      "onNode": "on {{node}}",
+      "idle": {
+        "seen": "The last time Coaming saw this network in use. Coaming waits 24 hours after that, or after the network was created, before it lists it.",
+        "created": "Coaming hasn't seen this network in use. This is when it was created.",
+        "about": "About idle since"
+      },
+      "select": {
+        "row": "Select {{name}}",
+        "group": "Select all in {{group}}"
+      },
+      "actions": {
+        "menu": "Actions for {{name}}",
+        "keep": "Keep",
+        "delete": "Delete…"
+      },
+      "needsOn": "{{need}} on {{name}}",
+      "waiting": "Waiting for {{nodes}} to report. Coaming won't remove a network until every node has answered.",
+      "waitingUnknown": "Coaming can't be sure yet. Coaming won't remove a network until every node has answered.",
+      "keepDone_one": "Keeping {{name}}. Coaming won't list it again.",
+      "keepDone_other": "Keeping {{count, number}} networks.",
+      "delete": {
+        "title": "Delete “{{name}}”?",
+        "body": "Nothing has used it since {{time}}. Coaming checks again just before it deletes the network, and keeps it if something started using it. The network's details are saved in the audit log first.",
+        "titleBulk_one": "Delete {{count, number}} network?",
+        "titleBulk_other": "Delete {{count, number}} networks?",
+        "bodyBulk": "Coaming checks each one again just before it deletes it, and keeps any that something started using. The details of each network are saved in the audit log first.",
+        "cancel": "Cancel",
+        "confirm": "Delete network",
+        "confirmBulk_one": "Delete {{count, number}} network",
+        "confirmBulk_other": "Delete {{count, number}} networks",
+        "pending": "Deleting…",
+        "progress": "Deleting {{done, number}} of {{total, number}}…",
+        "done": "Deleted {{name}}.",
+        "doneBulk_one": "Deleted {{count, number}} network.",
+        "doneBulk_other": "Deleted {{count, number}} networks.",
+        "summary": "Deleted {{deleted, number}}, kept {{kept, number}}, {{failed, number}} failed",
+        "gone": "{{name}} is already gone.",
+        "targetNote": "Subnet"
+      },
+      "results": {
+        "title": "Delete results",
+        "network": "Network",
+        "deleted": "Deleted",
+        "kept": "Kept",
+        "failed": "Failed"
+      },
+      "kept": {
+        "inUseAgain": "{{name}} is in use again, so Coaming kept it.",
+        "notOrphaned": "{{name}} is no longer orphaned, so Coaming kept it.",
+        "nodeMissing": "Couldn't confirm {{name}} is unused: {{node}} isn't reporting. Coaming kept it."
+      },
+      "refused": {
+        "inspectTooLarge": "Coaming didn't delete {{name}}: its details are over 64 KB, too large to save in the audit log first.",
+        "builtin": "{{name}} is one of Docker's own networks, so Coaming can't delete it.",
+        "gone": "{{name}} is already gone.",
+        "keepBuiltin": "{{name}} is one of Docker's own networks, which Coaming never lists, so there is nothing to keep.",
+        "keepNode": "More than one node has a network called {{name}}. Keep it from its row in the list."
+      }
+    },
+    "kept": {
+      "trigger_one": "Kept networks ({{count, number}})",
+      "trigger_other": "Kept networks ({{count, number}})",
+      "caption": "Coaming never lists these as orphaned or unused, and the janitor leaves them alone.",
+      "tableLabel": "Kept networks",
+      "columns": {
+        "network": "Network",
+        "node": "Node",
+        "subnet": "Subnet",
+        "keptBy": "Kept by",
+        "keptSince": "Kept since",
+        "actions": "Actions"
+      },
+      "by": {
+        "label": "A label on the network",
+        "user": "{{user}} in Coaming",
+        "unknown": "A person in Coaming"
+      },
+      "stop": "Stop keeping",
+      "stopLabel": "Stop keeping {{name}}",
+      "labelReason": "Kept by the coaming.keep label on the network. Remove the label to stop keeping it.",
+      "done": "No longer keeping {{name}}.",
+      "notKept": "{{name}} wasn't being kept.",
+      "byLabel": "{{name}} is kept by a label on the network. Remove the label to stop keeping it."
     }
   }
 }

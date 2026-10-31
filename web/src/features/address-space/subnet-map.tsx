@@ -281,7 +281,11 @@ function OverlapFlag({ overlaps }: { overlaps: NonNullable<AddressMapRow["overla
 }
 
 // SubnetCell is the first subnet in mono with "+n" for the rest, as the Networks list shows it.
-function SubnetCell({ row }: { row: AddressMapRow }) {
+export function SubnetCell({
+  row,
+}: {
+  row: Pick<AddressMapRow, "subnets"> & Partial<Pick<AddressMapRow, "overlaps">>;
+}) {
   const t = useT();
   const [first, ...rest] = row.subnets ?? [];
   const overlaps = row.overlaps ?? [];

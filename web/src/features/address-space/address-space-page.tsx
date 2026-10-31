@@ -14,9 +14,11 @@ import {
   MetersCard,
   MetersCardLoading,
 } from "@/features/address-space/meters-card";
+import { OrphansCard } from "@/features/address-space/orphans-card";
 import { type MapSearch, SubnetMap } from "@/features/address-space/subnet-map";
 import type { MeterState } from "@/features/address-space/usage-meter";
 import { NodesBanner } from "@/features/environments/nodes-banner";
+import { useEnvName } from "@/features/resources/use-env-name";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -66,6 +68,7 @@ export function AddressSpacePage({
   const t = useT();
   const allowed = usePermission("networks.read", envId);
   const query = useQuery({ ...addressSpaceQuery(envId), enabled: allowed });
+  const envName = useEnvName(envId);
   if (!allowed) return <NoPermission />;
   const data = query.data;
   const failed = query.isError && !data;
@@ -144,6 +147,13 @@ export function AddressSpacePage({
             search={search}
             onSearchChange={onSearchChange}
           />
+          <OrphansCard
+            envId={envId}
+            envName={envName}
+            orphans={data.orphans ?? []}
+            withheld={data.orphansWithheld}
+            swarm={data.envType === "swarm"}
+          />
         </>
       ) : (
         <>
@@ -156,6 +166,13 @@ export function AddressSpacePage({
             swarm={false}
             search={search}
             onSearchChange={onSearchChange}
+          />
+          <OrphansCard
+            envId={envId}
+            envName={envName}
+            orphans={undefined}
+            withheld={undefined}
+            swarm={false}
           />
         </>
       )}

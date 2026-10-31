@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
+import { readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
 
 export type AddressSpace = components["schemas"]["AddressSpaceBody"];
 export type AddressPool = components["schemas"]["AddressPoolBody"];
 export type OverlayUsage = components["schemas"]["OverlayUsageBody"];
+export type OrphanRow = components["schemas"]["OrphanRowBody"];
+export type OrphansWithheld = components["schemas"]["OrphansWithheldBody"];
+export type KeptRow = components["schemas"]["KeptRowBody"];
+export type OrphanDelete = components["schemas"]["OrphanDeleteBody"];
+export type KeepTarget = components["schemas"]["KeepTarget"];
 
 // The key of the environment's address space, so the events feed can make it stale.
 export function addressSpaceKey(envId: string) {
@@ -31,5 +37,95 @@ export function addressSpaceQuery(envId: string) {
       return data;
     },
     refetchInterval: LIST_REFETCH_MS,
+  });
+}
+
+// OrphanRequestError is a delete, keep or stop-keeping the server refused or never answered. The
+// status is 0 when the server could not be reached; the type is the problem type it named
+// (inspect_too_large, network_in_use, network_builtin, network_not_found, kept_by_label,
+// keep_not_found, node_required ...).
+export class OrphanRequestError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string, method = "DELETE") {
+    super(`${method} address-space failed (${status})`);
+    this.name = "OrphanRequestError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// deleteOrphanNetwork deletes one orphaned or unused network. The server decides again, from a
+// fresh read, whether it may: a network that is in use again, or that it cannot be sure of, is
+// answered "kept", which is a safe result and not an error. It never retries (P2 D-42): an
+// answer that was lost may mean the network is gone, and the next read says which.
+export async function deleteOrphanNetwork(
+  envId: string,
+  networkId: string,
+  nodeId?: string,
+): Promise<OrphanDelete> {
+  try {
+    const res = await api.DELETE("/api/env/{envId}/address-space/orphans/{networkId}", {
+      params: {
+        path: { envId, networkId },
+        ...(nodeId ? { query: { nodeId } } : {}),
+      },
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new OrphanRequestError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status.
+    throw e instanceof OrphanRequestError ? e : new OrphanRequestError(0);
+  }
+}
+
+// useKeepNetworks is the mutation behind Keep: the address space is read again whatever the
+// answer. It does not retry.
+export function useKeepNetworks(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<number, OrphanRequestError, KeepTarget[]>({
+    retry: false,
+    mutationFn: async (targets) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/address-space/keeps", {
+          params: { path: { envId } },
+          body: { targets },
+        });
+        if (!res.data) {
+          const problem = readProblem(res.error, res.response);
+          throw new OrphanRequestError(problem.status, problem.type, "PUT");
+        }
+        return res.data.kept;
+      } catch (e) {
+        throw e instanceof OrphanRequestError ? e : new OrphanRequestError(0, undefined, "PUT");
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) }),
+  });
+}
+
+// useUnkeepNetwork is the mutation behind Stop keeping: a keep is found by the network's name and,
+// for a local network, its node. It does not retry.
+export function useUnkeepNetwork(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<void, OrphanRequestError, { name: string; nodeId?: string }>({
+    retry: false,
+    mutationFn: async ({ name, nodeId }) => {
+      try {
+        const res = await api.DELETE("/api/env/{envId}/address-space/keeps/{name}", {
+          params: { path: { envId, name }, ...(nodeId ? { query: { nodeId } } : {}) },
+        });
+        if (!res.response.ok) {
+          const problem = readProblem(res.error, res.response);
+          throw new OrphanRequestError(problem.status, problem.type);
+        }
+      } catch (e) {
+        throw e instanceof OrphanRequestError ? e : new OrphanRequestError(0);
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) }),
   });
 }
