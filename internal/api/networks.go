@@ -58,7 +58,11 @@ type NetworksDeps struct {
 	Aggregator *envs.Aggregator
 	// Clusters reads the services of a swarm live before a delete.
 	Clusters *envs.Clusters
-	Audit    *audit.Writer
+	// AddressSpaces reads how full the address pools are, for the gate of a create that
+	// would use the last blocks of a pool. Nil means the feature is off: a create is not
+	// checked against a pool.
+	AddressSpaces *envs.AddressSpaces
+	Audit         *audit.Writer
 	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A
 	// connect or disconnect of that container, or of an agent's, needs its name typed.
 	SelfContainerID string

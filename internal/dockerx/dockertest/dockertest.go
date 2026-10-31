@@ -99,6 +99,16 @@ type FakeConfig struct {
 	SwarmClusterID string
 	// FailInfo makes /info answer 500, for the partial-failure path.
 	FailInfo bool
+	// SwarmDefaultAddrPool and SwarmSubnetSize are Info.Swarm.Cluster.DefaultAddrPool and
+	// SubnetSize, what a manager reports of the pool its swarm allocates networks from. They
+	// make the Cluster exist, as SwarmClusterID does; a manager with neither is reported with a
+	// null pool and a mask of 0, which is how a swarm initialised without --default-addr-pool
+	// reads in this fake (a real one reports 24).
+	SwarmDefaultAddrPool []string
+	SwarmSubnetSize      uint32
+	// DefaultAddressPools is Info.DefaultAddressPools, the daemon's default-address-pools
+	// setting. Empty leaves it out of /info, as a real daemon does when none is configured.
+	DefaultAddressPools []FakeAddressPool
 
 	// Containers, Images, Volumes and Networks are what the list endpoints
 	// answer. Nil means an empty engine: the fake answers an empty list, never
@@ -249,6 +259,13 @@ type FakeConfig struct {
 	// show what must keep working while a list is outstanding (a probe, a stop, a caller that
 	// gave up) by ordering instead of by comparing elapsed time with a bound.
 	ListHold <-chan struct{}
+}
+
+// FakeAddressPool is one entry of a daemon's default-address-pools setting: a range in CIDR
+// form and the mask of each network allocated from it.
+type FakeAddressPool struct {
+	Base string
+	Size int
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.
@@ -956,6 +973,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			MemTotal:        8 << 30,
 			SecurityOptions: cfg.SecurityOptions,
 			Swarm:           cfg.swarmInfo(),
+
+			DefaultAddressPools: cfg.addressPools(),
 		})
 	case "/events":
 		f.serveEvents(w, r)
@@ -1052,14 +1071,30 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
 	}
-	if c.SwarmClusterID != "" || c.HistoryLimit != 0 {
+	if c.SwarmClusterID != "" || c.HistoryLimit != 0 || len(c.SwarmDefaultAddrPool) != 0 || c.SwarmSubnetSize != 0 {
 		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
 	}
 	if c.HistoryLimit != 0 {
 		limit := int64(c.HistoryLimit)
 		info.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
 	}
+	if info.Cluster != nil {
+		for _, p := range c.SwarmDefaultAddrPool {
+			info.Cluster.DefaultAddrPool = append(info.Cluster.DefaultAddrPool, netip.MustParsePrefix(p))
+		}
+		info.Cluster.SubnetSize = c.SwarmSubnetSize
+	}
 	return info
+}
+
+// addressPools is Info.DefaultAddressPools: nil unless the daemon is configured with some, so
+// the field is left out of the answer as a real daemon leaves it.
+func (c FakeConfig) addressPools() []system.NetworkAddressPool {
+	var out []system.NetworkAddressPool
+	for _, p := range c.DefaultAddressPools {
+		out = append(out, system.NetworkAddressPool{Base: netip.MustParsePrefix(p.Base), Size: p.Size})
+	}
+	return out
 }
 
 func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }

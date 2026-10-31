@@ -412,6 +412,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The address pools of an environment and how full each is
+         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getAddressSpace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -4774,6 +4794,67 @@ export interface components {
              * @description How many users were added. Users who were already in the team are not counted and leave no audit entry
              */
             added: number;
+        };
+        AddressPoolBody: {
+            /**
+             * Format: int64
+             * @description How many blocks the pool holds in all (at most 2^30). Zero cannot happen for a listed pool
+             */
+            capacity: number;
+            /** @description The pool's range, for example 10.0.0.0/8 */
+            cidr: string;
+            /** @description True when the numbers cannot be taken as exact. Every standalone row is: the daemon skips pool slots that overlap routes of the host, and engines differ */
+            estimated: boolean;
+            /** @description The largest free block made of whole blocks of the pool, aligned to the pool, in CIDR form. Empty when no block is free or the pool was not measured */
+            largestFree: string;
+            /**
+             * Format: int64
+             * @description How many blocks of the pool's mask largestFree holds. 0 with an empty largestFree
+             */
+            largestFreeSubnets: number;
+            /**
+             * Format: int64
+             * @description The mask of each network allocated from the pool (the swarm's SubnetSize, or the daemon's pool size)
+             */
+            mask: number;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down, so 69.99% is 69
+             */
+            percent: number;
+            /**
+             * @description Where the pool came from: swarm (the swarm's own, or its built-in 10.0.0.0/8), daemon (the host's default-address-pools setting), defaults (Docker's built-in pools, because the host sets none) or entered (a pool a person entered)
+             * @enum {string}
+             */
+            source: "swarm" | "daemon" | "defaults" | "entered";
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio and never on the rounded percent. unknown when the pool could not be measured
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /**
+             * Format: int64
+             * @description How many blocks of the pool, each of the size the mask gives, any subnet overlaps. A /28 inside one /26 block uses 1; a /16 in a /24-size pool uses 256. IPv6 subnets are not counted. At most 2^30, so it always fits
+             */
+            used: number;
+        };
+        AddressSpaceBody: {
+            /**
+             * @description What the environment is
+             * @enum {string}
+             */
+            envType: "swarm" | "standalone";
+            /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
+            measured: boolean;
+            /**
+             * @description Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone
+             * @enum {string}
+             */
+            notMeasured?: "no_manager";
+            /** @description The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered */
+            notReporting: string[] | null;
+            /** @description One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured */
+            pools: components["schemas"]["AddressPoolBody"][] | null;
         };
         AdoptCheckBody: {
             /** @description True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty */
@@ -13239,6 +13320,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getAddressSpace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSpaceBody"];
+                };
             };
             /** @description Error */
             default: {

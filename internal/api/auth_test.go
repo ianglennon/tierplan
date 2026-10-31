@@ -375,7 +375,17 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 	if f.envSvc != nil && f.agg != nil {
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, Log: log})
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Log: log})
-		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		// The address reader of a real server. A fixture of one standalone engine has no cluster
+		// reader; the reader needs one to tell a swarm from a host, so it gets a bare one.
+		addrClusters := f.clusters
+		if addrClusters == nil {
+			addrClusters = envs.NewClusters(f.envSvc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+		}
+		addressSpaces := envs.NewAddressSpaces(f.envSvc, f.agg, addrClusters, envs.AddressSpaceOptions{Now: f.clk.now, Log: log})
+		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
+			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log,
+		})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
 			Audit: f.aud, Checker: checker, Store: f.st, Log: log,

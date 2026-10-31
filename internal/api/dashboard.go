@@ -65,6 +65,10 @@ type DashboardDeps struct {
 	SelfContainerID string
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
+	// AddressSpaces reads how full the address pools of an environment are, for the pool
+	// column of the networks list and the dashboard's address tile. Nil means the feature is
+	// off: nothing is read and no pool is shown.
+	AddressSpaces *envs.AddressSpaces
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

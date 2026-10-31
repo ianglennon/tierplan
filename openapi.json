@@ -235,6 +235,139 @@
         ],
         "type": "object"
       },
+      "AddressPoolBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "description": "How many blocks the pool holds in all (at most 2^30). Zero cannot happen for a listed pool",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cidr": {
+            "description": "The pool's range, for example 10.0.0.0/8",
+            "type": "string"
+          },
+          "estimated": {
+            "description": "True when the numbers cannot be taken as exact. Every standalone row is: the daemon skips pool slots that overlap routes of the host, and engines differ",
+            "type": "boolean"
+          },
+          "largestFree": {
+            "description": "The largest free block made of whole blocks of the pool, aligned to the pool, in CIDR form. Empty when no block is free or the pool was not measured",
+            "type": "string"
+          },
+          "largestFreeSubnets": {
+            "description": "How many blocks of the pool's mask largestFree holds. 0 with an empty largestFree",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mask": {
+            "description": "The mask of each network allocated from the pool (the swarm's SubnetSize, or the daemon's pool size)",
+            "format": "int64",
+            "maximum": 30,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "percent": {
+            "description": "used over capacity as a whole percent, rounded down, so 69.99% is 69",
+            "format": "int64",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "description": "Where the pool came from: swarm (the swarm's own, or its built-in 10.0.0.0/8), daemon (the host's default-address-pools setting), defaults (Docker's built-in pools, because the host sets none) or entered (a pool a person entered)",
+            "enum": [
+              "swarm",
+              "daemon",
+              "defaults",
+              "entered"
+            ],
+            "type": "string"
+          },
+          "state": {
+            "description": "normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio and never on the rounded percent. unknown when the pool could not be measured",
+            "enum": [
+              "normal",
+              "getting_full",
+              "almost_full",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "used": {
+            "description": "How many blocks of the pool, each of the size the mask gives, any subnet overlaps. A /28 inside one /26 block uses 1; a /16 in a /24-size pool uses 256. IPv6 subnets are not counted. At most 2^30, so it always fits",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cidr",
+          "mask",
+          "used",
+          "capacity",
+          "percent",
+          "state",
+          "largestFree",
+          "largestFreeSubnets",
+          "source",
+          "estimated"
+        ],
+        "type": "object"
+      },
+      "AddressSpaceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "envType": {
+            "description": "What the environment is",
+            "enum": [
+              "swarm",
+              "standalone"
+            ],
+            "type": "string"
+          },
+          "measured": {
+            "description": "True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set",
+            "type": "boolean"
+          },
+          "notMeasured": {
+            "description": "Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone",
+            "enum": [
+              "no_manager"
+            ],
+            "type": "string"
+          },
+          "notReporting": {
+            "description": "The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "pools": {
+            "description": "One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured",
+            "items": {
+              "$ref": "#/components/schemas/AddressPoolBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "envType",
+          "measured",
+          "pools",
+          "notReporting"
+        ],
+        "type": "object"
+      },
       "AdoptCheckBody": {
         "additionalProperties": false,
         "properties": {
@@ -20617,6 +20750,57 @@
           }
         },
         "summary": "End someone's shell",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space": {
+      "get": {
+        "description": "One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.",
+        "operationId": "getAddressSpace",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressSpaceBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The address pools of an environment and how full each is",
         "tags": [
           "environments"
         ]
