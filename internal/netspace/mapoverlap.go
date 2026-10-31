@@ -115,11 +115,12 @@ func FirstOverlap(mine, theirs []netip.Prefix) (netip.Prefix, bool) {
 // node. names holds the name of each item.
 func AddressOrder(items []MapItem, names []string) []int {
 	type key struct {
-		lo, bits uint64
-		has      bool
-		name     string
-		node     string
-		idx      int
+		lo   uint64
+		bits int
+		has  bool
+		name string
+		node string
+		idx  int
 	}
 	keys := make([]key, len(items))
 	for i, it := range items {
@@ -130,7 +131,7 @@ func AddressOrder(items []MapItem, names []string) []int {
 		for _, p := range it.Prefixes {
 			if isV4(p) {
 				k.lo, _ = span(p)
-				k.bits, k.has = uint64(p.Bits()), true
+				k.bits, k.has = p.Bits(), true
 				break
 			}
 		}
