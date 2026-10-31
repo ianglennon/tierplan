@@ -183,6 +183,49 @@ func TestPolicyFactsPrivilegedServicesIsOptional(t *testing.T) {
 	}
 }
 
+func TestFactsHostNetIsOptional(t *testing.T) {
+	b, err := json.Marshal(Facts{EngineReachable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "hostNet") {
+		t.Fatalf("facts without a host-net state carry the key: %s", b)
+	}
+	b, err = json.Marshal(Facts{EngineReachable: true, HostNet: HostNetOK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"hostNet":"ok"`) {
+		t.Fatalf("facts = %s, want hostNet ok", b)
+	}
+	var old Facts
+	if err := json.Unmarshal([]byte(`{"engineReachable":true,"policy":{"readOnly":false,"selfUpdate":true}}`), &old); err != nil || old.HostNet != "" {
+		t.Fatalf("facts from an older agent read as %+v (%v)", old, err)
+	}
+	// A receiver built before the field ignores it: the same JSON decodes into a
+	// struct that has no HostNet.
+	var unaware struct {
+		EngineReachable bool `json:"engineReachable"`
+	}
+	if err := json.Unmarshal(b, &unaware); err != nil || !unaware.EngineReachable {
+		t.Fatalf("a receiver without the field failed on %s: %v", b, err)
+	}
+}
+
+func TestAHostNetDocOf512RoutesFitsTheStreamLimit(t *testing.T) {
+	doc := HostNetDoc{V: 1}
+	for range 512 {
+		doc.Routes = append(doc.Routes, HostRoute{Iface: "0123456789abcde", Dst: "255.255.255.254/31", Gateway: "255.255.255.255"})
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) >= MaxHostNetBytes {
+		t.Fatalf("the largest document is %d bytes, the limit is %d", len(b), MaxHostNetBytes)
+	}
+}
+
 func TestValidIdentityAcceptsDockerIDsAndNothingElse(t *testing.T) {
 	for _, ok := range []string{"7TRN:IPZB:QYBB:VPBQ:UWQD:ABJO:SQTX:3IBP:2Q5L:JQR7:EEL2:Z5ZX", "x3k2m9t0q4w5e6r7t8y9u0i1o", "9f2c8a1e-0b3d-4c5f-8a7e-1d2c3b4a5f60", "a_b.c-d", strings.Repeat("a", 128)} {
 		if !ValidIdentity(ok) {
