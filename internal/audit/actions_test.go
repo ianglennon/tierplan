@@ -104,7 +104,10 @@ var phase4DetailKeys = map[string][]string{
 	// made or removed by a service apply also records its source, service_apply or
 	// service_apply_cleanup (plan 06-26).
 	audit.ActionNetworkCreated: {"name", "node", "driver", "scope", "subnet", "gateway", "internal", "attachable", "source", "code"},
-	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "source", "code"},
+	audit.ActionNetworkRemoved: {"name", "node", "driver", "scope", "source", "code", "reason"},
+	// The saved inspect of an orphaned or unused network is written before it is removed
+	// (plan 10-12, D-12): its whole masked inspect document is the inspect detail.
+	audit.ActionNetworkInspectSaved: {"name", "node", "source", "inspect", "masked"},
 	// Connecting a container records the network, the container, its node and, when asked
 	// for, the alias and addresses; disconnecting the first three.
 	audit.ActionNetworkConnected:    {"network", "container", "node", "alias", "ipv4", "ipv6", "code"},
@@ -528,7 +531,8 @@ func TestEveryPhase4ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"container.paused": audit.ActionContainerPaused, "container.unpaused": audit.ActionContainerUnpaused,
 		"container.removed": audit.ActionContainerRemoved,
 		"network.created":   audit.ActionNetworkCreated, "network.removed": audit.ActionNetworkRemoved,
-		"network.connected": audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
+		"network.inspect_saved": audit.ActionNetworkInspectSaved,
+		"network.connected":     audit.ActionNetworkConnected, "network.disconnected": audit.ActionNetworkDisconnected,
 		"volume.created": audit.ActionVolumeCreated, "volume.removed": audit.ActionVolumeRemoved,
 		"logs.viewed": audit.ActionLogsViewed, "logs.downloaded": audit.ActionLogsDownloaded,
 		"shell.opened": audit.ActionShellOpened, "shell.closed": audit.ActionShellClosed, "shell.ended": audit.ActionShellEnded,

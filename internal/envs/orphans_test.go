@@ -395,3 +395,47 @@ func TestOrphansInUseStampsAtMostEveryFiveMinutes(t *testing.T) {
 		t.Errorf("last in use = %d, want now %d: the stored time was six minutes old", got, now)
 	}
 }
+
+// recheckRig is a standalone host with an unused old network, its reader and the fake daemon, so a
+// test can change the host after the list was read.
+func recheckRig(t *testing.T, nets ...dockertest.FakeNetwork) (*tunRig, string, *AddressSpaces, *agentConn) {
+	t.Helper()
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Edge")
+	a := r.connect(t, env, dockertest.FakeConfig{Hostname: "edge-1", Networks: nets}, nil)
+	r.whenOnline(t, env.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	return r, env.ID, NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now}), a
+}
+
+// The re-check never trusts the cached list (plan 10-12, D-12, Pitfall 7): the list says unused, a
+// container attaches, and the re-check says in use.
+func TestRecheckIsFresh(t *testing.T) {
+	ctx := testsupport.Context(t)
+	net := oldNet(dockertest.FakeNetwork{ID: "u1", Name: "app", Driver: "bridge", Scope: "local"})
+	_, envID, as, a := recheckRig(t, net)
+	wantRows(t, orphans(t, as, envID), "app@edge-1=unused")
+
+	row, class, err := as.Recheck(ctx, envID, "u1", "")
+	if err != nil || class != netspace.ClassUnused || row.Name != "app" || row.Driver != "bridge" || row.Builtin {
+		t.Fatalf("Recheck = %+v, %q, %v, want app unused", row, class, err)
+	}
+
+	a.fake.Reconfigure(dockertest.FakeConfig{
+		Hostname: "edge-1", Networks: []dockertest.FakeNetwork{net},
+		Containers: []dockertest.FakeContainer{{ID: "c1", Names: []string{"/app-1"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"app": {NetworkID: "u1"}}}},
+	})
+	// The cached list is still the old one.
+	wantRows(t, orphans(t, as, envID), "app@edge-1=unused")
+	row, class, err = as.Recheck(ctx, envID, "u1", "")
+	if err != nil || class != netspace.ClassInUse || row.NetworkID != "u1" {
+		t.Fatalf("Recheck after a container attached = %+v, %q, %v, want in_use", row, class, err)
+	}
+
+	if _, _, err = as.Recheck(ctx, envID, "nope", ""); err != ErrNetworkGone {
+		t.Fatalf("Recheck of an unknown network: %v, want ErrNetworkGone", err)
+	}
+	as.ForgetOrphans(envID)
+	wantRows(t, orphans(t, as, envID))
+}

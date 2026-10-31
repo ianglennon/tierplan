@@ -213,6 +213,7 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			body.Orphans, body.OrphansWithheld = orphanBody(ctx, d, env.ID)
 			return &AddressSpaceOutput{CacheControl: "no-store", Body: body}, nil
 		})
+	registerAddressOrphans(r, d)
 }
 
 // orphanBody is the orphan part of the page. A check that fails leaves the list empty and says

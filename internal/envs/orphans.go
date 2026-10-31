@@ -5,6 +5,7 @@ package envs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -43,7 +44,10 @@ func (s *AddressSpaces) WithStackFacts(f StackFacts) *AddressSpaces {
 // OrphanRow is one network the orphan check lists: orphaned (its stack is gone), unused (no stack
 // ever owned it) or cant_tell (Coaming cannot be sure).
 type OrphanRow struct {
-	NetworkID, Name, Node, NodeID, Scope string
+	NetworkID, Name, Node, NodeID, Scope, Driver string
+	// Builtin is true for the engine's or swarm's own network, a config-only network and the
+	// target of a config-from: never removed.
+	Builtin bool
 	Subnets                              []string
 	Class                                netspace.Class
 	// FormerOwner is the stack or compose project the network's labels name, and FormerOwnerKind
@@ -98,7 +102,7 @@ func (s *AddressSpaces) Orphans(ctx context.Context, envID string) (OrphanReport
 	}
 	e.omu.Unlock()
 
-	rep, err := s.judge(ctx, envID, now)
+	rep, err := s.judge(ctx, envID, now, nil)
 	if err != nil {
 		return OrphanReport{}, err
 	}
@@ -108,8 +112,9 @@ func (s *AddressSpaces) Orphans(ctx context.Context, envID string) (OrphanReport
 	return cloneReport(rep), nil
 }
 
-// judge makes one orphan check.
-func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) (OrphanReport, error) {
+// judge makes one orphan check. observe, when set, is called for every network the check judged
+// whatever its class, so a caller can ask about one network that Orphans would not list.
+func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, observe func(OrphanRow, netspace.Class)) (OrphanReport, error) {
 	usage, agg, err := ResolveUsage(ctx, s.agg, s.clusters, envID)
 	if err != nil {
 		return OrphanReport{}, err
@@ -194,6 +199,15 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 		in.Busy = sf.busy != "" && owner == sf.busy
 
 		class := netspace.Classify(in, now)
+		idle := netspace.IdleSince(in.Created, in.LastInUse)
+		orow := OrphanRow{
+			NetworkID: row.ID, Name: row.Name, Node: row.Node, NodeID: row.NodeID, Scope: row.Scope, Driver: row.Driver,
+			Builtin: in.Builtin, Subnets: slices.Clone(row.Subnets), Class: class, FormerOwner: owner, FormerOwnerKind: kind,
+			IdleSince: idle, IdleFromSeen: in.LastInUse.After(in.Created),
+		}
+		if observe != nil {
+			observe(orow, class)
+		}
 		switch class {
 		case netspace.ClassOrphaned, netspace.ClassUnused, netspace.ClassCantTell:
 		default:
@@ -206,12 +220,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 				byKnowledge = true
 			}
 		}
-		idle := netspace.IdleSince(in.Created, in.LastInUse)
-		rep.Rows = append(rep.Rows, OrphanRow{
-			NetworkID: row.ID, Name: row.Name, Node: row.Node, NodeID: row.NodeID, Scope: row.Scope,
-			Subnets: slices.Clone(row.Subnets), Class: class, FormerOwner: owner, FormerOwnerKind: kind,
-			IdleSince: idle, IdleFromSeen: in.LastInUse.After(in.Created),
-		})
+		rep.Rows = append(rep.Rows, orow)
 	}
 	if byKnowledge {
 		rep.WithheldNodes = append(rep.WithheldNodes, usage.Missing...)
@@ -223,6 +232,66 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time) 
 	sortOrphans(rep.Rows)
 	s.noteSeen(ctx, envID, now, stamps, seen, complete)
 	return rep, nil
+}
+
+// ErrNetworkGone is Recheck's answer for a network no node that reported holds, when every node
+// reported: it is gone. ErrNetworkAmbiguous is its answer when a local network's ID is held by
+// more than one node and the caller named none.
+var (
+	ErrNetworkGone      = errors.New("envs: no such network")
+	ErrNetworkAmbiguous = errors.New("envs: more than one node has a network with this ID")
+)
+
+// Recheck judges one network again from a fresh read, never from the cached report, and says
+// what the orphan check makes of it now (D-12, Pitfall 7). It is the last thing a removal asks
+// before it acts, so what it answers is the picture of this moment: who uses the network
+// (ResolveUsage), the stacks, the keeps and the grace period are all read again.
+//
+// A swarm-scoped network is found by its ID; a local one by its ID and nodeID (an empty nodeID
+// finds it when one node holds it). When the network is on no node that reported and some node
+// did not report, the answer is netspace.ClassCantTell with a row that names only the ID it was
+// asked for: the network may well be on the node that is out of reach. An error is the
+// environment not being readable, ErrNetworkGone or ErrNetworkAmbiguous.
+func (s *AddressSpaces) Recheck(ctx context.Context, envID, networkID, nodeID string) (OrphanRow, netspace.Class, error) {
+	e := s.entry(envID)
+	e.oread.Lock()
+	defer e.oread.Unlock()
+
+	var found []OrphanRow
+	rep, err := s.judge(ctx, envID, s.now(), func(r OrphanRow, _ netspace.Class) {
+		if r.NetworkID != networkID {
+			return
+		}
+		if r.Scope != dockerx.ScopeSwarm && nodeID != "" && r.NodeID != nodeID {
+			return
+		}
+		found = append(found, r)
+	})
+	if err != nil {
+		return OrphanRow{}, "", err
+	}
+	switch len(found) {
+	case 0:
+		if !rep.Complete {
+			return OrphanRow{NetworkID: networkID, NodeID: nodeID}, netspace.ClassCantTell, nil
+		}
+		return OrphanRow{}, "", ErrNetworkGone
+	case 1:
+		return found[0], found[0].Class, nil
+	}
+	return OrphanRow{}, "", ErrNetworkAmbiguous
+}
+
+// ForgetOrphans drops the cached orphan report of an environment, so the next read judges again.
+// A removal or a change of the keeps calls it, so the list never shows what was just changed.
+func (s *AddressSpaces) ForgetOrphans(envID string) {
+	e := s.entry(envID)
+	// Waiting for a check in flight keeps it from storing, after this, a report it began before.
+	e.oread.Lock()
+	defer e.oread.Unlock()
+	e.omu.Lock()
+	e.haveOrphans = false
+	e.omu.Unlock()
 }
 
 // stackKnowledge is what Coaming's own stacks say about an environment, read once for a check.

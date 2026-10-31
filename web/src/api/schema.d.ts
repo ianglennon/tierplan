@@ -432,6 +432,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space/orphans/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an orphaned or unused network
+         * @description Removes one network from the orphan list, once and never retried. Coaming first reads the environment again and judges this one network from that fresh read, so a network that something started using, whose stack exists again, that was kept, or that sits on a node or manager that stopped answering is kept and not removed: 200 with outcome kept and the reason (in_use_again, not_orphaned or node_missing). The engine refusing the remove because the network is in use is also kept (in_use_again), not an error. Before the remove, the network's whole inspect document as the engine returned it, with secret-like values in its labels and options masked, is written to the audit log as network.inspect_saved. A document over 64 KB cannot be stored whole, so the delete is refused: 409 inspect_too_large and nothing is removed. A failure to write it is a 500 and nothing is removed. 200 with outcome deleted when the network was removed, audited as network.removed with source orphan_cleanup. 404 network_not_found when the network is not there; 409 network_builtin for the engine's own networks; 422 node_required when two nodes have a local network with that ID. Needs networks.manage (Admin) on the environment.
+         */
+        delete: operations["deleteOrphanNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -8254,6 +8274,20 @@ export interface components {
             /** @description The option's value; absent while masked */
             value?: string;
         };
+        OrphanDeleteBody: {
+            /** @description The network's name */
+            name: string;
+            /**
+             * @description deleted: the network was removed. kept: Coaming checked again just before and left it alone, which is a safe answer and not an error
+             * @enum {string}
+             */
+            outcome: "deleted" | "kept";
+            /**
+             * @description Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so Coaming could not be sure
+             * @enum {string}
+             */
+            reason: "in_use_again" | "not_orphaned" | "node_missing" | "";
+        };
         OrphanRowBody: {
             /**
              * @description orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load
@@ -13529,6 +13563,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AddressSpaceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteOrphanNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the networkId of a row of the orphans list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrphanDeleteBody"];
                 };
             };
             /** @description Error */
