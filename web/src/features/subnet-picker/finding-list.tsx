@@ -73,9 +73,6 @@ function FindingRow({ finding }: FindingRowProps) {
 
 interface FindingListProps {
   findings: readonly SubnetFinding[];
-  // The CIDRs of the environment's own address pools, so the finding that every subnet of a pool
-  // shares can be told from one about this subnet alone.
-  pools?: readonly string[];
   // The list's id, for the Create anyway checkbox to point at.
   id?: string;
 }

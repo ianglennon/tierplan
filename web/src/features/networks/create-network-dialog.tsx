@@ -513,7 +513,6 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
                     nodeId={askNode && form.watch("nodeId") ? form.watch("nodeId") : undefined}
                     nodeMissing={nodeMissing}
                     defaultMask={defaultMask}
-                    pools={pools.map((p) => p.cidr)}
                     canCreateAnyway={manage.allowed}
                     createAnyway={createAnyway}
                     onCreateAnywayChange={setCreateAnyway}

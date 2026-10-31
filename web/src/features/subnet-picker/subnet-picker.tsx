@@ -222,8 +222,6 @@ export interface SubnetPickerProps {
   nodeMissing?: boolean;
   // The mask of the swarm's pool; /24 when it is not known.
   defaultMask?: number;
-  // The CIDRs of the environment's address pools.
-  pools?: readonly string[];
   // full is the create dialog's group; compact is a closed "Subnet" section with a summary, for
   // the service editor.
   variant?: "full" | "compact";
@@ -257,7 +255,6 @@ export function SubnetPicker({
   nodeId,
   nodeMissing = false,
   defaultMask,
-  pools = [],
   variant = "full",
   canCreateAnyway,
   createAnyway,
@@ -520,7 +517,7 @@ export function SubnetPicker({
       <div aria-live="polite" className="flex flex-col gap-2">
         {settled ? (
           <>
-            <FindingList findings={findings} pools={pools} id={findingsId} />
+            <FindingList findings={findings} id={findingsId} />
             <RouteCheckNotes checks={data.routeChecks ?? []} envType={envType} />
           </>
         ) : null}

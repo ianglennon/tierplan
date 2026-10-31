@@ -312,7 +312,6 @@ function StagedSubnet({ envId, replicas, ...rest }: StagedSubnetProps) {
       envType="swarm"
       driver="overlay"
       defaultMask={defaultMask}
-      pools={pools.map((p) => p.cidr)}
       replicas={replicas}
       canCreateAnyway={manage.allowed}
       {...rest}
