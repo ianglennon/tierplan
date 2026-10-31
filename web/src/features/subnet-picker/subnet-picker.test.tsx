@@ -163,6 +163,9 @@ describe("SubnetPicker", () => {
     ).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open address space" });
     expect(link.getAttribute("href")).toBe("/env/e1/address-space");
+    expect(screen.getByRole("link", { name: "Open pool guidance" }).getAttribute("href")).toBe(
+      "/env/e1/address-space/guide",
+    );
     expect(subnetInput().value).toBe("");
   });
 

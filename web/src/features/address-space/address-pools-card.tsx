@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { Plus, X } from "lucide-react";
 import { type FormEvent, useId, useMemo, useRef, useState } from "react";
 
@@ -248,7 +249,17 @@ export function AddressPoolsCard({ envId, envName, canEdit }: AddressPoolsCardPr
 
   return (
     <SettingsCard id="address-pools" title={t("envsettings.sections.addressPools")}>
-      <p className="text-sm text-muted-foreground">{t("envsettings.addressPools.description")}</p>
+      <p className="text-sm text-muted-foreground">
+        {t("envsettings.addressPools.description")}{" "}
+        <Link
+          to="/env/$envId/address-space/guide"
+          params={{ envId }}
+          search={{ part: "standalone" }}
+          className="rounded-sm text-accent-ink underline underline-offset-4"
+        >
+          {t("poolGuide.header.generate")}
+        </Link>
+      </p>
       {settings.isPending ? (
         <div className="flex flex-col gap-3" aria-busy="true">
           <Skeleton className="h-8 w-full max-w-md" />

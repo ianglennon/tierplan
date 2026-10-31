@@ -464,13 +464,22 @@ export function SubnetPicker({
               pool: noFree.pool,
             })}
           </p>
-          <Link
-            to="/env/$envId/address-space"
-            params={{ envId }}
-            className="w-fit text-primary underline underline-offset-4 max-md:py-3"
-          >
-            {t("subnetPicker.suggest.openAddressSpace")}
-          </Link>
+          <div className="flex flex-wrap gap-x-4">
+            <Link
+              to="/env/$envId/address-space"
+              params={{ envId }}
+              className="w-fit text-primary underline underline-offset-4 max-md:py-3"
+            >
+              {t("subnetPicker.suggest.openAddressSpace")}
+            </Link>
+            <Link
+              to="/env/$envId/address-space/guide"
+              params={{ envId }}
+              className="w-fit text-primary underline underline-offset-4 max-md:py-3"
+            >
+              {t("poolGuide.header.open")}
+            </Link>
+          </div>
         </div>
       ) : null}
       {suggestFailed ? (

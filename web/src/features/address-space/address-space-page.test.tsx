@@ -122,6 +122,15 @@ describe("the Address space page", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Address space" })).toBeTruthy();
   });
 
+  it("links to the pool guidance from the header, whatever the meters say", async () => {
+    mount();
+    await screen.findByRole("heading", { name: "10.0.0.0/8" });
+    const link = screen.getByRole("link", { name: "Pool guidance" });
+    expect(link.getAttribute("href")).toBe("/env/e1/address-space/guide");
+    // Below 70% there is no summary, so the header link is the only one.
+    expect(screen.queryByRole("link", { name: "Open pool guidance" })).toBeNull();
+  });
+
   it("shows the summary only from 70 percent", async () => {
     body = space({ pools: [pool({ used: 100, percent: 39 })] });
     mount();
@@ -134,6 +143,9 @@ describe("the Address space page", () => {
     mount();
     const gettingFull = await screen.findByRole("status");
     expect(within(gettingFull).getByText("Address space is getting full")).toBeTruthy();
+    expect(
+      within(gettingFull).getByRole("link", { name: "Open pool guidance" }).getAttribute("href"),
+    ).toBe("/env/e1/address-space/guide");
     expect(
       within(gettingFull).getByText(
         "10.0.0.0/8 is 70% used. New stacks may fail to deploy when it runs out.",

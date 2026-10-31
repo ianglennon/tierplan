@@ -11,6 +11,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AddressPoolsCard, validatePoolRows } from "@/features/address-space/address-pools-card";
 import "@/i18n";
+import { TestRouter } from "@/test-router";
 
 // The Address pools card of a standalone host's settings page (D-07 as amended): an optional
 // override, validated before it is sent and saved with the version it was read at.
@@ -60,9 +61,11 @@ async function mount(canEdit = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TooltipProvider>
-        <AddressPoolsCard envId="e1" envName="lab" canEdit={canEdit} />
-      </TooltipProvider>
+      <TestRouter>
+        <TooltipProvider>
+          <AddressPoolsCard envId="e1" envName="lab" canEdit={canEdit} />
+        </TooltipProvider>
+      </TestRouter>
       <Toaster />
     </QueryClientProvider>,
   );
@@ -150,6 +153,10 @@ describe("AddressPoolsCard", () => {
         "Optional. Coaming reads the address pools the daemon reports, or Docker's defaults when daemon.json sets none. Enter pools here only if Coaming should measure against different ones.",
       ),
     ).toBeTruthy();
+    // The description leads to the standalone part of the pool guidance.
+    expect(
+      screen.getByRole("link", { name: "Generate a daemon.json snippet" }).getAttribute("href"),
+    ).toBe("/env/e1/address-space/guide?part=standalone");
     expect(screen.getByText("Using the daemon's pools")).toBeTruthy();
     expect(
       screen.getByText(

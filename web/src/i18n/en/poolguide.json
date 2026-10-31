@@ -116,6 +116,11 @@
       "restart": "Restart the Docker daemon to apply it: sudo systemctl restart docker. Existing networks keep their subnets. Containers stop during the restart unless live-restore is on.",
       "followUp": "Enter the same pools in this environment's settings so Coaming measures against them.",
       "openSettings": "Open address pool settings"
+    },
+    "header": {
+      "action": "Pool guidance",
+      "open": "Open pool guidance",
+      "generate": "Generate a daemon.json snippet"
     }
   }
 }

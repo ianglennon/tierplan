@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { useQuery } from "@tanstack/react-query";
-import { Info, TriangleAlert } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { BookOpen, Info, TriangleAlert } from "lucide-react";
 
 import { type AddressSpace, addressSpaceQuery } from "@/api/address-space";
 import { NoPermission } from "@/components/full-page-state";
@@ -76,9 +77,17 @@ export function AddressSpacePage({
   const worst = data ? worstMeter(data) : undefined;
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-4">
-      <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold">{t("addressSpace.page.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("addressSpace.page.caption")}</p>
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          <h1 className="text-2xl font-semibold">{t("addressSpace.page.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("addressSpace.page.caption")}</p>
+        </div>
+        <Button asChild variant="outline" className="max-md:h-11">
+          <Link to="/env/$envId/address-space/guide" params={{ envId }}>
+            <BookOpen aria-hidden="true" />
+            {t("poolGuide.header.action")}
+          </Link>
+        </Button>
       </header>
 
       {worst ? (
@@ -96,6 +105,13 @@ export function AddressSpacePage({
           <AlertDescription className="text-foreground break-words">
             {t("addressSpace.page.summary.body", { name: worst.name, percent: worst.percent })}
           </AlertDescription>
+          <div className="col-start-2 mt-2">
+            <Button asChild variant="outline" size="sm" className="max-md:h-11">
+              <Link to="/env/$envId/address-space/guide" params={{ envId }}>
+                {t("poolGuide.header.open")}
+              </Link>
+            </Button>
+          </div>
         </Alert>
       ) : null}
 
