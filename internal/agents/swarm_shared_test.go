@@ -29,6 +29,7 @@ var sharedSwarmCases = []struct {
 	name string
 	run  func(*testing.T, *swarmFix)
 }{
+	{"AddressSpacePools", sharedAddressSpacePools},
 	{"ConstraintsMatchPlacement", sharedConstraintsMatchPlacement},
 	{"Enrol", sharedEnrol},
 	{"HostRoutes", sharedHostRoutes},

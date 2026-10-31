@@ -266,12 +266,23 @@ type Option func(*buildOptions)
 type buildOptions struct {
 	selfContainerID string
 	refusalClock    func() time.Time
+	addressClock    func() time.Time
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
 // when a minute of repeated refusals has closed. It exists for tests.
 func WithRefusalClock(now func() time.Time) Option {
 	return func(o *buildOptions) { o.refusalClock = now }
+}
+
+// WithAddressSpaceClock replaces the clock of the address-space reader, which decides
+// when a network has been idle long enough to be listed as orphaned or unused. It exists
+// for tests, which move it past the grace period instead of waiting for it. It is a Go
+// option only: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always reads the real time. Only the reader's clock moves;
+// sessions, tokens and every other clock keep real time. A nil clock keeps time.Now.
+func WithAddressSpaceClock(now func() time.Time) Option {
+	return func(o *buildOptions) { o.addressClock = now }
 }
 
 // WithSelfContainerID supplies the ID of the container Coaming runs in. The
@@ -707,7 +718,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
 	// The address reader tells how full the address pools of an environment are. The networks,
 	// stacks and dashboard routes read it as well as its own route, so it is built once.
-	addressSpaces := envs.NewAddressSpaces(envSvc, aggregator, clusters, envs.AddressSpaceOptions{Log: log})
+	addressSpaces := envs.NewAddressSpaces(envSvc, aggregator, clusters, envs.AddressSpaceOptions{Now: bo.addressClock, Log: log})
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	// The wizard restore routes share the setup routes' gate, limiter and audit.

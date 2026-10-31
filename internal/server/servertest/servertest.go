@@ -56,6 +56,10 @@ type Options struct {
 	// in a test binary is a development build. Servers in one process must not run
 	// at the same time with different versions, so a test that sets it is not parallel.
 	Version string
+	// AddressSpaceClock moves the clock of the address-space reader only, for a test that
+	// needs networks to be past the orphan grace period at once (server.WithAddressSpaceClock).
+	// Nil keeps real time. It is kept across Restart.
+	AddressSpaceClock func() time.Time
 }
 
 // Server is a running Coaming with an admin signed in.
@@ -74,6 +78,7 @@ type Server struct {
 	// env is the COAMING_* settings the server was built from, kept so Restart builds
 	// the same one on the same address. cancel and done stop the running server.
 	env    map[string]string
+	opts   []server.Option
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -98,6 +103,9 @@ func Start(t testing.TB, o Options) *Server {
 
 	dataDir := filepath.Join(t.TempDir(), "data")
 	s := &Server{DataDir: dataDir, t: t}
+	if o.AddressSpaceClock != nil {
+		s.opts = append(s.opts, server.WithAddressSpaceClock(o.AddressSpaceClock))
+	}
 	// The port has to be known before Build (it is in the public URL), so one is
 	// picked by binding and releasing it. The window is small; a taken port makes
 	// Run fail and the next try picks another.
@@ -154,7 +162,7 @@ func (s *Server) boot() bool {
 	if err != nil {
 		s.t.Fatalf("servertest config: %v", err)
 	}
-	srv, err := server.Build(context.Background(), cfg, serverLog())
+	srv, err := server.Build(context.Background(), cfg, serverLog(), s.opts...)
 	if err != nil {
 		s.t.Fatalf("build the server: %v", err)
 	}
