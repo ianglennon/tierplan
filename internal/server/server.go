@@ -753,6 +753,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// which looks at each stack of a monitored environment on a timer, on the Docker events that name it and when an
 	// operation on it ends, and never while an operation holds the lock (D-22).
 	stackLocks, driftStore := stackops.NewLocks(), stackops.NewDriftStore()
+	// The orphan check asks the stacks which networks they declare external and whether one holds an operation, so a
+	// network a stack uses or is deploying is never listed (NET-04). It opens the stacks with the vault, as every
+	// other reader of a stack does.
+	addressSpaces.WithStackFacts(stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks})
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,

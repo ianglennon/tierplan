@@ -267,3 +267,131 @@ func TestOrphansStandaloneProject(t *testing.T) {
 		t.Errorf("row = %+v, want the former project shop", rep.Rows[0])
 	}
 }
+
+func TestOrphansNodeNotReporting(t *testing.T) {
+	ns := map[string]string{"com.docker.stack.namespace": "shop"}
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i == 4 {
+			return
+		}
+		c.Networks = []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"}),
+			oldNet(dockertest.FakeNetwork{ID: "n-gone", Name: "shop_default", Driver: "overlay", Scope: "swarm", Labels: ns}),
+		}
+		if i == 1 {
+			c.Networks = append(c.Networks, oldNet(dockertest.FakeNetwork{ID: "mine", Name: "mine", Driver: "bridge", Scope: "local"}))
+		}
+	})
+	f.kick(t, f.w)
+	if err := f.c.Refresh(testsupport.Context(t), f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep := orphans(t, as, f.env.ID)
+	// Nothing is called orphaned or unused while wrk-1 could still hold an attachment; the local network of a node that answered is still judged.
+	wantRows(t, rep, "mine@mgr-1=unused", "loose@Cluster=cant_tell", "shop_default@Cluster=cant_tell")
+	if rep.Complete || !slices.Equal(rep.WithheldNodes, []string{"wrk-1"}) || rep.ManagerMissing || len(rep.WithheldStacks) != 0 {
+		t.Errorf("report = %+v, want the check incomplete and wrk-1 named", rep)
+	}
+	// The grace clock does not forget networks while a node is out: nothing was pruned.
+	seen, err := f.st.RQ.ListNetworkSeen(testsupport.Context(t), f.env.ID)
+	if err != nil || len(seen) < 3 {
+		t.Errorf("network_seen = %+v, %v, want the clocks kept", seen, err)
+	}
+}
+
+func TestOrphansManagerMissing(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i != 4 {
+			c.Networks = []dockertest.FakeNetwork{
+				oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"}),
+				oldNet(dockertest.FakeNetwork{ID: "mine", Name: "mine", Driver: "bridge", Scope: "local"}),
+			}
+		}
+	})
+	for _, m := range f.m {
+		m.fake.LoseQuorum()
+	}
+	rep := orphans(t, as, f.env.ID)
+	// No manager read the services, so no swarm network is judged; a local network needs no manager.
+	if got := rowLines(rep); !slices.Contains(got, "loose@Cluster=cant_tell") || slices.Contains(got, "loose@Cluster=unused") {
+		t.Fatalf("rows = %v, want the swarm network held back", got)
+	}
+	if !rep.ManagerMissing || rep.Complete || len(rep.WithheldNodes) != 0 {
+		t.Errorf("report = %+v, want a missing manager and no node named", rep)
+	}
+}
+
+func TestOrphansUnloadableStackWithholdsEverythingItMightDeclare(t *testing.T) {
+	_, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "u1", Name: "loose", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "u2", Name: "shop_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}}),
+			oldNet(dockertest.FakeNetwork{ID: "u3", Name: "live_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "live"}}),
+		}
+	})
+	as.WithStackFacts(&fakeFacts{names: map[string]bool{"live": true}, unknown: []string{"broken"}})
+	rep := orphans(t, as, envID)
+	wantRows(t, rep, "loose@edge-1=cant_tell", "shop_default@edge-1=cant_tell")
+	if !slices.Equal(rep.WithheldStacks, []string{"broken"}) || len(rep.WithheldNodes) != 0 || rep.ManagerMissing || !rep.Complete {
+		t.Errorf("report = %+v, want the unloadable stack named and nothing else withheld", rep)
+	}
+}
+
+func TestOrphansStaleClocksArePrunedOnlyAfterACompletePass(t *testing.T) {
+	r, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "u1", Name: "loose", Driver: "bridge", Scope: "local"})}
+	})
+	ctx := testsupport.Context(t)
+	if err := r.st.Q.UpsertNetworkSeen(ctx, sqlc.UpsertNetworkSeenParams{EnvID: envID, NodeID: "elsewhere", NetworkID: "vanished", Name: "vanished", FirstSeenAt: 1, LastInUseAt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	orphans(t, as, envID)
+	seen, err := r.st.RQ.ListNetworkSeen(ctx, envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0].NetworkID != "u1" {
+		t.Fatalf("network_seen = %+v, want only the clock of the network that exists", seen)
+	}
+}
+
+func TestOrphansInUseStampsAtMostEveryFiveMinutes(t *testing.T) {
+	var used dockertest.FakeContainer
+	r, envID, as := standaloneOrphans(t, func(time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "u1", Name: "app", Driver: "bridge", Scope: "local"})}
+	}, func() dockertest.FakeContainer {
+		used = dockertest.FakeContainer{ID: "c1", Names: []string{"/app-1"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"app": {NetworkID: "u1"}}}
+		return used
+	}())
+	ctx := testsupport.Context(t)
+	last := func() int64 {
+		seen, err := r.st.RQ.ListNetworkSeen(ctx, envID)
+		if err != nil || len(seen) != 1 {
+			t.Fatalf("network_seen = %+v, %v", seen, err)
+		}
+		return seen[0].LastInUseAt
+	}
+	setLast := func(at time.Time) {
+		if _, err := r.st.Write.ExecContext(ctx, `UPDATE network_seen SET last_in_use_at = ? WHERE env_id = ?`, at.UnixNano(), envID); err != nil {
+			t.Fatal(err)
+		}
+		forgetReport(as, envID)
+	}
+	wantRows(t, orphans(t, as, envID))
+	if got, now := last(), r.clk.Now().UnixNano(); got != now {
+		t.Fatalf("last in use = %d, want now %d for a network seen in use for the first time", got, now)
+	}
+	// Seen in use again within five minutes of the stored time: nothing is written.
+	recent := r.clk.Now().Add(-4 * time.Minute)
+	setLast(recent)
+	orphans(t, as, envID)
+	if got := last(); got != recent.UnixNano() {
+		t.Errorf("last in use moved to %d, want it left at %d: it is under five minutes old", got, recent.UnixNano())
+	}
+	// Over five minutes old: it moves to now.
+	setLast(r.clk.Now().Add(-6 * time.Minute))
+	orphans(t, as, envID)
+	if got, now := last(), r.clk.Now().UnixNano(); got != now {
+		t.Errorf("last in use = %d, want now %d: the stored time was six minutes old", got, now)
+	}
+}
