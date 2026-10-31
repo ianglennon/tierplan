@@ -209,18 +209,19 @@ warns about a subnet written in the file.
 - **Typed subnets** are checked as you type: a subnet with host bits set (`10.0.0.5/24`) is corrected to its network
   address, and one that is too small is refused. IPv6 subnets are not checked for overlaps, and the picker says so.
 
-**The four overlap sources**
+**The three overlap sources**
 
 | Check | Kind | Effect |
 | --- | --- | --- |
 | This environment's networks, on every node | same environment | **Blocks** until you tick **Create it anyway**. Macvlan sometimes needs an overlap on purpose. The override is recorded in the audit log. |
 | Other environments' networks | other environment | A note, for sites linked by a route or a VPN. Only environments you may read are named. |
 | The host's own IPv4 routes, read by the agent | host route | A warning, named by interface. |
-| A fixed list of home and VPN ranges (`192.168.0.0/16`, `172.16.0.0/12`, `10.0.0.0/8`) | common range | A warning. |
 
-A fifth note, **outside the pool**, says when a subnet you typed is not inside any of the environment's pools.
-On a default swarm the pool is `10.0.0.0/8`, so every subnet inside it falls in a common range. The picker shows that one as a quiet note, not a
-warning, because it is the pool the swarm already uses.
+One more note, **outside the pool**, says when a subnet you typed is not inside any of the environment's pools.
+
+Coaming does not warn about a subnet only because it lies in a private (RFC 1918) range such as `10.0.0.0/8`,
+`172.16.0.0/12` or `192.168.0.0/16`. Docker's own pools and most networks use those ranges, so such a warning would sit on
+nearly every subnet. A subnet that really clashes with a LAN or VPN shows up as a host route, read from the host itself.
 
 Only the same-environment check ever blocks, and the server checks it again when you create the network, so two people creating
 networks at the same moment cannot take the same block. Creating from the service editor does the same check.
