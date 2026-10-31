@@ -7675,6 +7675,8 @@ export interface components {
             };
         };
         NetworkItem: {
+            /** @description Overlay networks only: addresses used against what the subnet can still hand out, from the manager (Engine 29 and later). Absent (null in the table) for every other network and when the count could not be read, never a zero */
+            addressesUsed?: components["schemas"]["NetworkUsageBody"];
             /** @description Standalone containers can join it */
             attachable: boolean;
             /**
@@ -7728,6 +7730,28 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        NetworkUsageBody: {
+            /**
+             * Format: int64
+             * @description Addresses handed out plus those it can still hand out
+             */
+            capacity: number;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down
+             */
+            percent: number;
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full";
+            /**
+             * Format: int64
+             * @description Addresses the swarm has handed out on the network's IPv4 subnets
+             */
+            used: number;
         };
         NodeAgentBody: {
             /**

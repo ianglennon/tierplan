@@ -1100,3 +1100,58 @@ func TestDashboardRestartLoopsIsLeftOutOfAStandaloneHostAndOfASwarmNothingWasRea
 		t.Errorf("standalone summary = %d %s, want no restartLoops", rec.code, rec.body)
 	}
 }
+
+// The Networks list's Addresses used column (plan 10-03, NET-03, D-01): an overlay row carries
+// the numbers of the address reader, every other row and an unmeasured overlay carries null.
+func TestListNetworksAddressesUsed(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = []dockertest.FakeNetwork{
+			{ID: "busy-id", Name: "busy", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+			{ID: "old-engine-id", Name: "old", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.3.0/24"}},
+			{ID: fmt.Sprintf("br-%s", host), Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+		}
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("busy", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 200, Available: 56})
+	}
+
+	rec := s.get(t, s.env.ID, "networks")
+	if rec.code != http.StatusOK {
+		t.Fatalf("networks: %d %s", rec.code, rec.body)
+	}
+	type used struct {
+		Used     int64  `json:"used"`
+		Capacity int64  `json:"capacity"`
+		Percent  int    `json:"percent"`
+		State    string `json:"state"`
+	}
+	type row struct {
+		Name          string `json:"name"`
+		AddressesUsed *used  `json:"addressesUsed"`
+	}
+	got := map[string]*used{}
+	for _, n := range decode[listBody[row]](t, rec).Items {
+		if _, dup := got[n.Name]; dup && n.Name != "bridge" {
+			t.Errorf("network %s listed twice", n.Name)
+		}
+		got[n.Name] = n.AddressesUsed
+	}
+	if u := got["busy"]; u == nil || *u != (used{Used: 200, Capacity: 256, Percent: 78, State: "getting_full"}) {
+		t.Errorf("busy addressesUsed = %+v, want 200 of 256, 78%%, getting_full", u)
+	}
+	if u, ok := got["old"]; !ok || u != nil {
+		t.Errorf("old addressesUsed = %+v (listed %v), want none for an overlay with no count", u, ok)
+	}
+	if u, ok := got["bridge"]; !ok || u != nil {
+		t.Errorf("bridge addressesUsed = %+v (listed %v), want none for a local network", u, ok)
+	}
+	// An unmeasured value is left out of the JSON, never written as zeros.
+	if n := strings.Count(string(rec.body), `"addressesUsed"`); n != 1 {
+		t.Errorf("body has %d addressesUsed members, want only the measured overlay's: %s", n, rec.body)
+	}
+}

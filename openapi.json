@@ -7673,6 +7673,10 @@
       "NetworkItem": {
         "additionalProperties": false,
         "properties": {
+          "addressesUsed": {
+            "$ref": "#/components/schemas/NetworkUsageBody",
+            "description": "Overlay networks only: addresses used against what the subnet can still hand out, from the manager (Engine 29 and later). Absent (null in the table) for every other network and when the count could not be read, never a zero"
+          },
           "attachable": {
             "description": "Standalone containers can join it",
             "type": "boolean"
@@ -7816,6 +7820,46 @@
           "truncated",
           "nodes",
           "notReporting"
+        ],
+        "type": "object"
+      },
+      "NetworkUsageBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "description": "Addresses handed out plus those it can still hand out",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "percent": {
+            "description": "used over capacity as a whole percent, rounded down",
+            "format": "int64",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "description": "normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio",
+            "enum": [
+              "normal",
+              "getting_full",
+              "almost_full"
+            ],
+            "type": "string"
+          },
+          "used": {
+            "description": "Addresses the swarm has handed out on the network's IPv4 subnets",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "used",
+          "capacity",
+          "percent",
+          "state"
         ],
         "type": "object"
       },
