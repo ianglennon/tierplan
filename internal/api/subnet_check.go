@@ -329,7 +329,7 @@ func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeI
 // lives in the node's own address space, and the swarm allocator does not see it. A finding
 // of another kind is not an overlap that blocks, so there is nothing to override.
 func overrideAllowed(candidateSwarm bool, f netspace.Finding) bool {
-	return !(candidateSwarm && f.Kind == netspace.KindSameEnv && f.Swarm)
+	return !candidateSwarm || f.Kind != netspace.KindSameEnv || !f.Swarm
 }
 
 // subnetFindings is what the typed subnet collides with.
