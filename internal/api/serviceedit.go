@@ -73,8 +73,8 @@ type ServiceStagedObject struct {
 	Data         string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
 	Templating   string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
 	Labels       map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
-	Subnet       string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true"`
-	CreateAnyway bool              `json:"createAnyway,omitempty" doc:"A network only: create it even though its subnet overlaps a network of this environment; recorded in the audit log"`
+	Subnet       string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true. One that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it"`
+	CreateAnyway bool              `json:"createAnyway,omitempty" doc:"A network only: create it even though its subnet overlaps a network of this environment; not for an overlap with a swarm network (422 subnet_overlap_swarm). Recorded in the audit log"`
 }
 
 // ServiceApplyRequest is the body of the apply route: the review's body and the objects the spec
@@ -416,7 +416,9 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 // stagedOverlapGate refuses, before anything is created, a staged network whose subnet overlaps a
 // network of this environment, unless the person ticked "create it anyway" for it (D-18, T-10-48). A
 // staged network is an attachable overlay, so the cluster-wide rule of the subnet map applies: it is
-// compared with every network. The refusal is the network dialog's: 422 subnet_overlap naming the
+// compared with every network. One that overlaps a swarm network is refused whatever createAnyway
+// says (422 subnet_overlap_swarm): the managers' allocator would refuse it after the create answered
+// and leave a stub (G-10-8, T-10-69). The refusal is the network dialog's: 422 subnet_overlap naming the
 // first network it overlaps. Like the dialog's override, createAnyway is kept only on a network that
 // does overlap one (it is cleared in objects on the others), so the audit row's overlap_override is
 // true only for an override that was needed.
@@ -437,6 +439,11 @@ func stagedOverlapGate(ctx context.Context, d ServicesDeps, envID string, object
 			continue
 		}
 		overlaps := sameEnvOverlaps(o.Subnet, agg, false, "")
+		for _, f := range overlaps {
+			if !overrideAllowed(true, f) {
+				return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlapSwarm, overlapSwarmMessage(o.Subnet, f))
+			}
+		}
 		if len(overlaps) > 0 && !o.CreateAnyway {
 			return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(o.Subnet, overlaps[0]))
 		}

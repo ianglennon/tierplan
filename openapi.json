@@ -13451,7 +13451,7 @@
         "additionalProperties": false,
         "properties": {
           "createAnyway": {
-            "description": "A network only: create it even though its subnet overlaps a network of this environment; recorded in the audit log",
+            "description": "A network only: create it even though its subnet overlaps a network of this environment; not for an overlap with a swarm network (422 subnet_overlap_swarm). Recorded in the audit log",
             "type": "boolean"
           },
           "data": {
@@ -13480,7 +13480,7 @@
             "type": "string"
           },
           "subnet": {
-            "description": "A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true",
+            "description": "A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true. One that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it",
             "type": "string"
           },
           "templating": {

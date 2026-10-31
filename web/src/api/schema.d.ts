@@ -10180,7 +10180,7 @@ export interface components {
             version: number;
         };
         ServiceStagedObject: {
-            /** @description A network only: create it even though its subnet overlaps a network of this environment; recorded in the audit log */
+            /** @description A network only: create it even though its subnet overlaps a network of this environment; not for an overlap with a swarm network (422 subnet_overlap_swarm). Recorded in the audit log */
             createAnyway?: boolean;
             /** @description A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network */
             data?: string;
@@ -10195,7 +10195,7 @@ export interface components {
             };
             /** @description The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
             name: string;
-            /** @description A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true */
+            /** @description A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true. One that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it */
             subnet?: string;
             /** @description A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid */
             templating?: string;

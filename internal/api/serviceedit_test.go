@@ -1101,11 +1101,14 @@ func TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName
 
 // A staged network whose subnet overlaps a network of the environment (plan 10-19, D-18, T-10-48).
 
-// overlapEnv is an environment that has the overlay "existing" on 10.77.0.0/24.
+// overlapEnv is an environment that has the overlay "existing" on 10.77.0.0/24 and the bridge
+// "lan", local to its node, on 10.88.0.0/24. A staged network that overlaps the overlay cannot be
+// created anyway (G-10-8); one that overlaps only the bridge can.
 func overlapEnv(t *testing.T) (*envFix, envBody) {
 	t.Helper()
 	return actionsEnv(t, func(cfg *dockertest.FakeConfig) {
-		cfg.Networks = append(cfg.Networks, overlayNet("existing", "10.77.0.0/24"))
+		cfg.Networks = append(cfg.Networks, overlayNet("existing", "10.77.0.0/24"),
+			dockertest.FakeNetwork{ID: "lan", Name: "lan", Driver: "bridge", Scope: "local", Subnets: []string{"10.88.0.0/24"}})
 	}, editableService(nil))
 }
 
@@ -1128,11 +1131,11 @@ func TestServiceApplyStagedNetworkOverlapRefused(t *testing.T) {
 	f, e := overlapEnv(t)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	_, body := admin.maskedSpec("svc-api", refsFront)
-	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", false)))
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.88.0.0/25", false)))
 	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap" {
 		t.Fatalf("apply: %d %s, want 422 subnet_overlap", rec.Code, rec.Body)
 	}
-	if !strings.Contains(rec.Body.String(), "10.77.0.0/25 overlaps existing (10.77.0.0/24)") {
+	if !strings.Contains(rec.Body.String(), "10.88.0.0/25 overlaps lan (10.88.0.0/24)") {
 		t.Errorf("the problem does not name the network: %s", rec.Body)
 	}
 	if w := f.fake.Writes(); len(w) != 0 {
@@ -1147,12 +1150,36 @@ func TestServiceApplyStagedNetworkOverlapRefused(t *testing.T) {
 	}
 }
 
+// A staged network that overlaps a swarm network is refused with or without the tick, and nothing
+// is created (G-10-8, T-10-69).
+func TestServiceApplyStagedNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	for _, anyway := range []bool{false, true} {
+		rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", anyway)))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap_swarm" {
+			t.Fatalf("apply (createAnyway %v): %d %s, want 422 subnet_overlap_swarm", anyway, rec.Code, rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), "10.77.0.0/25 overlaps swarm network existing (10.77.0.0/24)") || !strings.Contains(rec.Body.String(), "can't be created anyway") {
+			t.Errorf("the problem does not name the network or say why: %s", rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	if rows := f.auditLike(t, "network.created"); len(rows) != 0 {
+		t.Errorf("network rows = %+v, a refusal made nothing", rows)
+	}
+}
+
 func TestServiceApplyStagedNetworkCreateAnyway(t *testing.T) {
 	t.Parallel()
 	f, e := overlapEnv(t)
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	_, body := admin.maskedSpec("svc-api", refsFront)
-	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", true)))
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.88.0.0/25", true)))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
 	}
