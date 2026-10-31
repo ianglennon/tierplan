@@ -571,3 +571,36 @@ func TestLoadRefusesAURLWithUserInfoAQueryOrAFragmentWithoutRepeatingIt(t *testi
 		}
 	}
 }
+
+func TestLoadDefaultsTheHostRouteFile(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok"}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HostRouteFile != "/host/route" {
+		t.Fatalf("HostRouteFile = %q, want /host/route", cfg.HostRouteFile)
+	}
+}
+
+func TestLoadReadsACustomHostRouteFile(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_HOST_ROUTE_FILE": " /mnt/route ",
+	}), files(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HostRouteFile != "/mnt/route" {
+		t.Fatalf("HostRouteFile = %q", cfg.HostRouteFile)
+	}
+}
+
+func TestLoadRefusesAHostRouteFileThatIsNotAnAbsoluteCleanPath(t *testing.T) {
+	for _, bad := range []string{"route", "./route", "../etc/route", "/host/../etc/route", "/host//route", "/host/route/"} {
+		_, err := Load(env(map[string]string{
+			"COAMING_AGENT_URL": goodURL, "COAMING_AGENT_JOIN_TOKEN": "tok", "COAMING_AGENT_HOST_ROUTE_FILE": bad,
+		}), files(nil))
+		if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_HOST_ROUTE_FILE") {
+			t.Errorf("%q: error = %v, want one naming the variable", bad, err)
+		}
+	}
+}

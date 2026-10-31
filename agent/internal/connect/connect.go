@@ -500,6 +500,14 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	// (set on host)" and show the manual update commands (D-28).
 	reported.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate, PrivilegedServices: r.cfg.AllowPrivilegedServices}
 
+	// Whether the host's route file can be read tells the server whether to ask
+	// for the host's routes (stream kind 0x03). An agent older than this field
+	// sends nothing and is never asked.
+	reported.HostNet = hostnet.Probe(r.routeFile())
+	if reported.HostNet == wire.HostNetUnmounted {
+		r.log.Info("the host's route file is not mounted; the subnet picker skips this host's route check", "path", r.routeFile())
+	}
+
 	cr, err := r.credentials()
 	if err != nil {
 		return false, err

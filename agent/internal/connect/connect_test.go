@@ -1203,6 +1203,21 @@ func TestTheHandshakeReportsThePrivilegedServicesOptIn(t *testing.T) {
 	}
 }
 
+func TestHandshakeReportsHostNet(t *testing.T) {
+	for name, tc := range map[string]struct{ path, want string }{
+		"the route file reads":      {hostRouteFixture(t), wire.HostNetOK},
+		"the route file is missing": {filepath.Join(t.TempDir(), "absent"), wire.HostNetUnmounted},
+		"the route file is a dir":   {t.TempDir(), wire.HostNetUnmounted},
+	} {
+		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
+		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", HostRouteFile: tc.path}, fastEnv())
+		a, _ := srv.authN(t, 1)
+		if a.Facts.HostNet != tc.want {
+			t.Errorf("%s: facts.hostNet = %q, want %q", name, a.Facts.HostNet, tc.want)
+		}
+	}
+}
+
 func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
 	sock := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) })
 	for name, tc := range map[string]struct {
