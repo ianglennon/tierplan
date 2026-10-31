@@ -53,22 +53,24 @@ const (
 	CodeServiceNameTaken   = "service_name_taken"
 	CodeNetworkConflict    = "network_conflict"
 	CodeNetworkFailed      = "network_failed"
-	CodeExternalMissing    = "external_missing"
-	CodeExternalNotSwarm   = "external_not_swarm"
-	CodeObjectInvalid      = "object_invalid"
-	CodeObjectFailed       = "object_failed"
-	CodeObjectNameTaken    = "object_name_taken"
-	CodeStackInvalid       = "stack_invalid"
-	CodeNameClash          = "stack_name_clash"
-	CodeRegistryUnresolved = "registry_unresolved"
-	CodeEngineError        = "engine_error"
-	CodeCancelled          = "cancelled"
-	CodeNotRun             = "not_run"
-	CodeConvergeTimeout    = "converge_timeout"
-	CodeTasksFailed        = "tasks_failed"
-	CodeNetworkFull        = "network_full"
-	CodeUpdateStopped      = "update_stopped"
-	CodePolicyUnavailable  = "policy_unavailable"
+	// CodeNetworkNotAllocated is a network the swarm accepted and never gave an address range (UAT G-10-8).
+	CodeNetworkNotAllocated = "network_not_allocated"
+	CodeExternalMissing     = "external_missing"
+	CodeExternalNotSwarm    = "external_not_swarm"
+	CodeObjectInvalid       = "object_invalid"
+	CodeObjectFailed        = "object_failed"
+	CodeObjectNameTaken     = "object_name_taken"
+	CodeStackInvalid        = "stack_invalid"
+	CodeNameClash           = "stack_name_clash"
+	CodeRegistryUnresolved  = "registry_unresolved"
+	CodeEngineError         = "engine_error"
+	CodeCancelled           = "cancelled"
+	CodeNotRun              = "not_run"
+	CodeConvergeTimeout     = "converge_timeout"
+	CodeTasksFailed         = "tasks_failed"
+	CodeNetworkFull         = "network_full"
+	CodeUpdateStopped       = "update_stopped"
+	CodePolicyUnavailable   = "policy_unavailable"
 )
 
 var codeMessages = map[string]string{
@@ -81,6 +83,7 @@ var codeMessages = map[string]string{
 	CodeServiceNameTaken:    "The swarm already has a service of that name.",
 	CodeNetworkConflict:     "The swarm already has a network of that name that this stack does not own.",
 	CodeNetworkFailed:       "The swarm could not create the network.",
+	CodeNetworkNotAllocated: "The swarm didn't give a network of the stack an address range, so Coaming removed it again. Its subnet probably overlaps another swarm network, or the swarm's address pools are full.",
 	CodeExternalMissing:     "A network, secret or config the stack names as external does not exist.",
 	CodeExternalNotSwarm:    "A network the stack names as external is not a swarm network.",
 	CodeObjectInvalid:       "A secret or config of the stack has no usable content.",

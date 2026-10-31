@@ -95,7 +95,15 @@ func newRigOver(t *testing.T, socket string) *swarmRig {
 	addr := envs.NewAddressSpaces(svc, agg, clusters, envs.AddressSpaceOptions{Now: time.Now})
 	return &swarmRig{
 		envID: env.ID, hub: hub, store: st, addr: addr,
-		deps: stackops.Deps{Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), AddressSpaces: addr, Log: slog.New(slog.DiscardHandler)},
+		deps: stackops.Deps{
+			Aggregator: agg, Clusters: clusters, Checker: rbac.NewChecker(st), AddressSpaces: addr, Log: slog.New(slog.DiscardHandler),
+			// The read-back of a swarm network waits on no clock: each wait ends at once.
+			AllocationWait: dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
+				c := make(chan time.Time, 1)
+				c <- time.Time{}
+				return c
+			}},
+		},
 	}
 }
 
@@ -2172,5 +2180,70 @@ func TestAReviewedDeployOfKeptDigestsAsksNoRegistry(t *testing.T) {
 		if pl := u.Spec.TaskTemplate.Placement; pl == nil || !slices.Equal(pl.Platforms, []swarm.Platform{amd, arm}) {
 			t.Errorf("service %s was updated with placement %+v, want the platforms it runs", u.Spec.Name, pl)
 		}
+	}
+}
+
+// unallocatedCompose is a stack whose network asks for a subnet the swarm will not allocate.
+const unallocatedCompose = `
+services:
+  web:
+    image: nginx:1.27-alpine
+    networks: [back]
+networks:
+  back:
+    ipam:
+      config:
+        - subnet: 10.70.0.0/24
+`
+
+// stackNetworks lists the names of the networks of the stack the swarm holds now, as a manager reports them.
+func (r *swarmRig) stackNetworks(t *testing.T, stack string) []string {
+	t.Helper()
+	var names []string
+	err := r.deps.Clusters.ClusterRead(testsupport.Context(t), r.envID, func(c *dockerx.Client) error {
+		rows, e := c.NetworksWithLabel(testsupport.Context(t), stacks.LabelSwarmNamespace, stack)
+		for _, row := range rows {
+			names = append(names, row.Name)
+		}
+		return e
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+func TestDeploySwarmNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID = "cluster-1"
+		c.SwarmUnallocated = map[string]int{"10.70.0.0/24": -1}
+	})
+	_, in := stackInput(t, "shop", unallocatedCompose, nil)
+	res, job := rig.deploy(t, in)
+
+	if res.OK() || res.Code != stackops.CodeNetworkNotAllocated || res.FailedService != "shop_back" {
+		t.Fatalf("result = %+v, want a failure with code %s naming shop_back", res, stackops.CodeNetworkNotAllocated)
+	}
+	if got := itemStates(job)[stackops.ItemNetworks]; got != "failed:network_not_allocated" {
+		t.Errorf("networks item = %q (%v), want failed:network_not_allocated", got, itemStates(job))
+	}
+	if n := rig.stackNetworks(t, "shop"); len(n) != 0 {
+		t.Errorf("networks left = %v, want none: the stub is removed again", n)
+	}
+	if got := rig.fake.ServiceCreates(); len(got) != 0 {
+		t.Errorf("service creates = %d, want none: no service is made against a stub", len(got))
+	}
+	if countWrites(rig.fake.Writes(), "POST /services/") != 0 {
+		t.Errorf("writes = %v, want no service write", rig.fake.Writes())
+	}
+	if countWrites(rig.fake.Writes(), "DELETE /networks/") != 1 {
+		t.Errorf("writes = %v, want the stub removed once, by ID", rig.fake.Writes())
+	}
+	if len(res.CreatedNetworks) != 0 || len(res.LeftInPlace) != 0 {
+		t.Errorf("CreatedNetworks = %v, LeftInPlace = %v, want both empty", res.CreatedNetworks, res.LeftInPlace)
+	}
+	if m := stackops.CodeMessage(stackops.CodeNetworkNotAllocated); !strings.Contains(m, "didn't give a network of the stack an address range") || !strings.Contains(m, "address pools are full") {
+		t.Errorf("message = %q", m)
 	}
 }

@@ -78,6 +78,10 @@ type Deps struct {
 	Checker *rbac.Checker
 	// Clock is the time the deploy waits on for a service to settle. Nil is the wall clock.
 	Clock Clock
+	// AllocationWait is how a swarm network a deploy or a start creates is read back until the swarm has
+	// allocated it. The zero value is the real defaults. It is not Clock: an at-once clock would also drive
+	// the convergence wait.
+	AllocationWait dockerx.AllocationWait
 	// ConvergeTimeout is how long a deploy waits for each service to settle. Zero is
 	// DefaultConvergeTimeout.
 	ConvergeTimeout time.Duration
