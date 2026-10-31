@@ -15,6 +15,7 @@ import { Item, ItemGroup } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PoolCell, poolPercent, poolRank } from "@/features/environments/pool-cell";
 import { isKnownReason, ReasonText } from "@/features/environments/reason-text";
 import { type SortDir, type SortKey, sortEnvironments } from "@/features/environments/sort";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -50,6 +51,7 @@ const SORTABLE: ReadonlySet<string> = new Set<SortKey>([
   "name",
   "nodes",
   "failing",
+  "addressSpace",
   "lastSeen",
 ]);
 
@@ -59,6 +61,7 @@ const COLUMNS = [
   "type",
   "nodes",
   "failing",
+  "addressSpace",
   "agents",
   "engine",
   "agent",
@@ -121,6 +124,7 @@ function signature(e: EnvironmentItem): string {
     e.nodes,
     e.agents,
     e.failingServices,
+    e.addressSpace,
     e.agentVersion,
     e.updateAvailable,
     e.engineVersion,
@@ -433,6 +437,7 @@ function Header({ sort, dir, onSortChange }: HeaderProps) {
                 // The longest header may take two lines, so the table fits beside
                 // the open sidebar at 1280px without scrolling sideways.
                 column === "failing" && "whitespace-normal",
+                column === "addressSpace" && "w-30 min-w-30",
               )}
             >
               {sortable ? (
@@ -482,6 +487,11 @@ function useSummaryLine(): (env: EnvironmentItem) => string {
     }
     if (env.failingServices) {
       parts.push(t("overview.mobile.failing", { failing: env.failingServices.failing }));
+    }
+    // The pool is mentioned only once it is worth a look: from 70%.
+    const pool = env.status.state === "offline" ? undefined : poolPercent(env);
+    if (pool !== undefined && poolRank(env) > 0) {
+      parts.push(t("overview.mobile.pool", { percent: pool }));
     }
     if (env.agentVersion) parts.push(t("overview.mobile.agent", { version: env.agentVersion }));
     return parts.join(" · ");
@@ -609,7 +619,10 @@ export function EnvOverviewTable({
                     <TableRow key={i} className={ROW}>
                       {COLUMNS.map((column) => (
                         <TableCell key={column} className="px-2 py-0">
-                          <Skeleton className="h-4 w-20" aria-hidden="true" />
+                          <Skeleton
+                            className={cn("h-4", column === "addressSpace" ? "w-12" : "w-20")}
+                            aria-hidden="true"
+                          />
                         </TableCell>
                       ))}
                     </TableRow>
@@ -642,6 +655,12 @@ export function EnvOverviewTable({
                         </TableCell>
                         <TableCell className="px-2 py-0">
                           <FailingCell env={env} />
+                        </TableCell>
+                        <TableCell className="px-2 py-0">
+                          <PoolCell
+                            addressSpace={env.addressSpace}
+                            offline={env.status.state === "offline"}
+                          />
                         </TableCell>
                         <TableCell className="px-2 py-0">
                           <AgentsCell env={env} />

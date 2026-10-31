@@ -13,6 +13,7 @@
       "type": "Type",
       "nodes": "Nodes",
       "failing": "Failing services",
+      "addressSpace": "Address space",
       "agents": "Agents",
       "engine": "Engine",
       "agent": "Agent",
@@ -31,14 +32,25 @@
       "agentsLabel_one": "{{connected}} of {{expected}} agent connected",
       "agentsLabel_other": "{{connected}} of {{expected}} agents connected",
       "update": "Update",
-      "updateLabel": "Agent update available"
+      "updateLabel": "Agent update available",
+      "poolLabel": "{{percent}} percent, {{state}}",
+      "poolState": {
+        "normal": "normal",
+        "getting_full": "getting full",
+        "almost_full": "almost full"
+      },
+      "poolNotMeasured": "Not measured",
+      "poolEstimated": "est.",
+      "poolTip": "{{name}} is the fullest: {{used, number}} of {{capacity, number}} used.",
+      "poolTipEstimated": "Estimated from Docker's default pools."
     },
     "finishSetup": "Finish setup",
     "mobile": {
       "nodes_one": "{{ready}}/{{total}} node",
       "nodes_other": "{{ready}}/{{total}} nodes",
       "failing": "{{failing}} failing",
-      "agent": "agent {{version}}"
+      "agent": "agent {{version}}",
+      "pool": "pool {{percent}}%"
     },
     "announce": "{{name}} is now {{state}}",
     "fold": {
