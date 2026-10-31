@@ -12343,18 +12343,16 @@ export interface components {
             /** @description host_route: the interface the route is on */
             iface?: string;
             /**
-             * @description same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. common_range: a range many home networks and VPNs use. outside_pool: the subnet is in none of the pools
+             * @description same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. outside_pool: the subnet is in none of the pools
              * @enum {string}
              */
-            kind: "same_env" | "other_env" | "host_route" | "common_range" | "outside_pool";
+            kind: "same_env" | "other_env" | "host_route" | "outside_pool";
             /** @description same_env, other_env: the network the subnet overlaps */
             network?: string;
             /** @description The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network */
             node?: string;
             /** @description outside_pool: the pool the subnet should be in; several pools are joined with a comma */
             pool?: string;
-            /** @description common_range: the range the subnet falls inside */
-            range?: string;
             /** @description host_route: the route's destination in CIDR form */
             route?: string;
             /**

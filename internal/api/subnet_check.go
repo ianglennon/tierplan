@@ -85,7 +85,7 @@ type SubnetErrorBody struct {
 // SubnetFindingBody is one thing the checked subnet collides with. Only the fields its kind names
 // are set.
 type SubnetFindingBody struct {
-	Kind        string `json:"kind" enum:"same_env,other_env,host_route,common_range,outside_pool" doc:"same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. common_range: a range many home networks and VPNs use. outside_pool: the subnet is in none of the pools"`
+	Kind        string `json:"kind" enum:"same_env,other_env,host_route,outside_pool" doc:"same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. outside_pool: the subnet is in none of the pools"`
 	Severity    string `json:"severity" enum:"blocking,warning" doc:"blocking: creating the network is refused until createAnyway is true (same_env only). warning: shown, never stops anything"`
 	Network     string `json:"network,omitempty" doc:"same_env, other_env: the network the subnet overlaps"`
 	Subnet      string `json:"subnet,omitempty" doc:"same_env, other_env: the subnet of that network that overlaps"`
@@ -93,7 +93,6 @@ type SubnetFindingBody struct {
 	Environment string `json:"environment,omitempty" doc:"other_env: the name of the other environment"`
 	Route       string `json:"route,omitempty" doc:"host_route: the route's destination in CIDR form"`
 	Iface       string `json:"iface,omitempty" doc:"host_route: the interface the route is on"`
-	Range       string `json:"range,omitempty" doc:"common_range: the range the subnet falls inside"`
 	Pool        string `json:"pool,omitempty" doc:"outside_pool: the pool the subnet should be in; several pools are joined with a comma"`
 }
 
@@ -261,7 +260,7 @@ func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req Subn
 		}
 	}
 	if candidate.IsValid() {
-		out.Findings = subnetFindings(ctx, d, envID, candidate, space, agg, pools, routes, all, node)
+		out.Findings = subnetFindings(ctx, d, envID, candidate, agg, pools, routes, all, node)
 	}
 	return out, nil
 }
@@ -321,21 +320,20 @@ func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeI
 }
 
 // subnetFindings is what the typed subnet collides with.
-func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, space envs.AddressSpace, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string) []SubnetFindingBody {
+func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string) []SubnetFindingBody {
 	in := netspace.OverlapInput{
 		Swarm: all, Node: node,
 		Same:   envs.NetworkItems(agg.Networks),
 		Other:  otherEnvironments(ctx, d, envID),
 		Routes: routes,
 		Pools:  pools,
-		Ranges: netspace.CommonRanges(swarmPoolIsTenSlashEight(space)),
 	}
 	found := netspace.FindOverlaps(candidate, in)
 	out := make([]SubnetFindingBody, 0, len(found))
 	for _, f := range found {
 		out = append(out, SubnetFindingBody{
 			Kind: string(f.Kind), Severity: string(f.Severity), Network: f.Network, Subnet: f.Subnet, Node: f.Node,
-			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Range: f.Range, Pool: f.Pool,
+			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Pool: f.Pool,
 		})
 	}
 	return out
@@ -404,17 +402,6 @@ func scopedRoutes(routes []netspace.NodeRoute, all bool, node string) []netip.Pr
 		}
 	}
 	return out
-}
-
-// swarmPoolIsTenSlashEight reports whether a pool of the swarm is 10.0.0.0/8, which is when that
-// range is one of the common ranges a subnet is warned about (D-16 item 4).
-func swarmPoolIsTenSlashEight(space envs.AddressSpace) bool {
-	if !space.Swarm {
-		return false
-	}
-	return slices.ContainsFunc(space.Pools, func(p envs.PoolUsage) bool {
-		return p.Source == envs.PoolSourceSwarm && p.Pool.Base.Masked() == netspace.DefaultSwarmPool
-	})
 }
 
 // canReadNetworks reports whether the grants listed for each environment include reading its

@@ -315,7 +315,13 @@ describe("SubnetPicker", () => {
             subnet: "10.0.5.0/24",
             node: "node-1",
           },
-          { kind: "common_range", severity: "warning", range: "10.0.0.0/8" },
+          {
+            kind: "host_route",
+            severity: "warning",
+            node: "node-1",
+            route: "10.0.5.0/24",
+            iface: "eth0",
+          },
         ],
       });
     mount({ onBlocking });
@@ -334,11 +340,21 @@ describe("SubnetPicker", () => {
 
   it("does not set aria-invalid for a warning", async () => {
     answer = () =>
-      clean({ findings: [{ kind: "common_range", severity: "warning", range: "192.168.0.0/16" }] });
+      clean({
+        findings: [
+          {
+            kind: "host_route",
+            severity: "warning",
+            node: "node-1",
+            route: "192.168.4.0/24",
+            iface: "eth0",
+          },
+        ],
+      });
     const onBlocking = vi.fn();
     mount({ onBlocking });
     typeSubnet("192.168.4.0/24");
-    await screen.findByText(/Falls inside 192\.168\.0\.0\/16/);
+    await screen.findByText(/Overlaps a route on node-1: 192\.168\.4\.0\/24 on eth0/);
     expect(subnetInput().getAttribute("aria-invalid")).toBe("false");
     expect(onBlocking).toHaveBeenLastCalledWith(false);
     expect(screen.queryByRole("checkbox")).toBeNull();

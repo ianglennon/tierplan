@@ -556,7 +556,15 @@ describe("CreateNetworkDialog (subnet picker)", () => {
   it("does not block create for a warning", async () => {
     checkAnswer = () =>
       Response.json({
-        findings: [{ kind: "common_range", severity: "warning", range: "192.168.0.0/16" }],
+        findings: [
+          {
+            kind: "host_route",
+            severity: "warning",
+            node: "node-1",
+            route: "192.168.4.0/24",
+            iface: "eth0",
+          },
+        ],
         routeChecks: [],
         ipv6NotChecked: false,
         tooManyTasks: false,
@@ -565,7 +573,7 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     const dialog = await screen.findByRole("dialog");
     await typeName(dialog, "app-net");
     fireEvent.change(await openAdvanced(dialog), { target: { value: "192.168.4.0/24" } });
-    await within(dialog).findByText(/Falls inside 192\.168\.0\.0\/16/);
+    await within(dialog).findByText(/Overlaps a route on node-1: 192\.168\.4\.0\/24 on eth0/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
     await waitFor(() => expect(posts()).toHaveLength(1));
     expect(posts()[0]?.body).not.toHaveProperty("createAnyway");

@@ -27,34 +27,13 @@ func TestFindOverlapsKinds(t *testing.T) {
 	t.Parallel()
 	cand := netip.MustParsePrefix("192.168.5.0/24")
 
-	// Common range.
-	got := FindOverlaps(cand, OverlapInput{Swarm: true, Ranges: CommonRanges(false)})
-	if len(got) != 1 || got[0].Kind != KindCommonRange || got[0].Severity != SeverityWarning || got[0].Range != "192.168.0.0/16" {
-		t.Errorf("192.168.5.0/24 = %+v, want one common_range of 192.168.0.0/16", got)
-	}
-	got = FindOverlaps(netip.MustParsePrefix("172.17.3.0/24"), OverlapInput{Swarm: true, Ranges: CommonRanges(false)})
-	if len(got) != 1 || got[0].Range != "172.17.0.0/16" {
-		t.Errorf("172.17.3.0/24 = %+v, want one common_range of 172.17.0.0/16", got)
-	}
-	// 172.18/16 is in 172.16.0.0/12 but not one of the listed subsets.
-	if got := FindOverlaps(netip.MustParsePrefix("172.18.0.0/24"), OverlapInput{Swarm: true, Ranges: CommonRanges(false)}); len(got) != 0 {
-		t.Errorf("172.18.0.0/24 = %+v, want none", got)
-	}
-	ten := netip.MustParsePrefix("10.0.5.0/24")
-	if got := FindOverlaps(ten, OverlapInput{Swarm: true, Ranges: CommonRanges(false)}); len(got) != 0 {
-		t.Errorf("10.0.5.0/24 without 10/8 = %+v, want none", got)
-	}
-	if got := FindOverlaps(ten, OverlapInput{Swarm: true, Ranges: CommonRanges(true)}); len(got) != 1 || got[0].Range != "10.0.0.0/8" {
-		t.Errorf("10.0.5.0/24 with 10/8 = %+v, want one common_range of 10.0.0.0/8", got)
-	}
-
 	// Two networks of another environment.
 	other := OtherEnv{Name: "site-b", Networks: []MapItemNamed{
 		named("lan", swarmNet(t, "192.168.5.0/25")),
 		named("dmz", localNet(t, "n2", "192.168.5.128/25")),
 		named("far", swarmNet(t, "10.9.0.0/24")),
 	}}
-	got = FindOverlaps(cand, OverlapInput{Swarm: true, Other: []OtherEnv{other}})
+	got := FindOverlaps(cand, OverlapInput{Swarm: true, Other: []OtherEnv{other}})
 	if len(got) != 2 || got[0].Kind != KindOtherEnv || got[0].Environment != "site-b" || got[0].Network != "dmz" || got[0].Node != "n2" || got[1].Network != "lan" || got[1].Node != "" {
 		t.Errorf("other environment = %+v, want dmz on n2 then lan, both naming site-b", got)
 	}
@@ -120,8 +99,7 @@ func TestFindOverlapsAdjacent(t *testing.T) {
 		Routes: []NodeRoute{
 			{Node: "n", Iface: "eth0", Dst: netip.MustParsePrefix("10.0.0.0/24")},
 		},
-		Ranges: []netip.Prefix{netip.MustParsePrefix("192.168.0.0/16")},
-		Pools:  []Pool{{Base: netip.MustParsePrefix("10.0.0.0/8"), Size: 24}},
+		Pools: []Pool{{Base: netip.MustParsePrefix("10.0.0.0/8"), Size: 24}},
 	}
 	if got := FindOverlaps(netip.MustParsePrefix("10.0.2.0/24"), in); len(got) != 0 {
 		t.Errorf("a subnet between the others = %+v, want no finding of any kind", got)
@@ -146,8 +124,7 @@ func TestFindOverlapsOrder(t *testing.T) {
 			{Node: "n1", Iface: "eth0", Dst: netip.MustParsePrefix("10.0.8.0/24")},
 			{Node: "n1", Iface: "tun0", Dst: netip.MustParsePrefix("10.0.10.0/24")},
 		},
-		Ranges: []netip.Prefix{netip.MustParsePrefix("172.17.0.0/16"), netip.MustParsePrefix("10.0.0.0/8")},
-		Pools:  []Pool{{Base: netip.MustParsePrefix("192.168.0.0/16"), Size: 24}},
+		Pools: []Pool{{Base: netip.MustParsePrefix("192.168.0.0/16"), Size: 24}},
 	}
 	got := FindOverlaps(netip.MustParsePrefix("10.0.0.0/12"), in)
 	var order []string
@@ -157,8 +134,6 @@ func TestFindOverlapsOrder(t *testing.T) {
 			order = append(order, string(f.Kind)+":"+f.Environment+f.Network)
 		case KindHostRoute:
 			order = append(order, string(f.Kind)+":"+f.Route+f.Node+f.Iface)
-		case KindCommonRange:
-			order = append(order, string(f.Kind)+":"+f.Range)
 		default:
 			order = append(order, string(f.Kind))
 		}
@@ -167,7 +142,6 @@ func TestFindOverlapsOrder(t *testing.T) {
 		"same_env:alpha", "same_env:zeta",
 		"other_env:a-sitey", "other_env:b-sitex",
 		"host_route:10.0.8.0/24n1eth0", "host_route:10.0.8.0/24n1eth1", "host_route:10.0.9.0/24n2eth0", "host_route:10.0.10.0/24n1tun0",
-		"common_range:10.0.0.0/8",
 		"outside_pool",
 	}
 	if !slices.Equal(order, want) {
@@ -190,20 +164,21 @@ func TestFindOverlapsBounded(t *testing.T) {
 	}
 }
 
-func TestCommonRanges(t *testing.T) {
+// Private (RFC 1918) ranges are not a finding of their own: a real LAN or VPN clash shows as a
+// host route.
+func TestFindOverlapsPrivateRangesAreNotFindings(t *testing.T) {
 	t.Parallel()
-	text := func(ps []netip.Prefix) []string {
-		var out []string
-		for _, p := range ps {
-			out = append(out, p.String())
+	for _, c := range []struct {
+		subnet string
+		pool   Pool
+	}{
+		{"192.168.5.0/24", Pool{Base: netip.MustParsePrefix("192.168.0.0/16"), Size: 24}},
+		{"172.17.3.0/24", Pool{Base: netip.MustParsePrefix("172.17.0.0/16"), Size: 24}},
+		{"10.0.5.0/24", Pool{Base: DefaultSwarmPool, Size: 24}},
+	} {
+		got := FindOverlaps(netip.MustParsePrefix(c.subnet), OverlapInput{Swarm: true, Pools: []Pool{c.pool}})
+		if len(got) != 0 {
+			t.Errorf("%s = %+v, want no findings", c.subnet, got)
 		}
-		return out
-	}
-	base := []string{"192.168.0.0/16", "172.16.0.0/16", "172.17.0.0/16", "172.31.0.0/16"}
-	if got := text(CommonRanges(false)); !slices.Equal(got, base) {
-		t.Errorf("CommonRanges(false) = %v, want %v", got, base)
-	}
-	if got := text(CommonRanges(true)); !slices.Equal(got, append(slices.Clone(base), "10.0.0.0/8")) {
-		t.Errorf("CommonRanges(true) = %v, want 10.0.0.0/8 added", got)
 	}
 }

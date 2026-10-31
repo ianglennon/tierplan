@@ -18618,12 +18618,11 @@
             "type": "string"
           },
           "kind": {
-            "description": "same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. common_range: a range many home networks and VPNs use. outside_pool: the subnet is in none of the pools",
+            "description": "same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. outside_pool: the subnet is in none of the pools",
             "enum": [
               "same_env",
               "other_env",
               "host_route",
-              "common_range",
               "outside_pool"
             ],
             "type": "string"
@@ -18638,10 +18637,6 @@
           },
           "pool": {
             "description": "outside_pool: the pool the subnet should be in; several pools are joined with a comma",
-            "type": "string"
-          },
-          "range": {
-            "description": "common_range: the range the subnet falls inside",
             "type": "string"
           },
           "route": {

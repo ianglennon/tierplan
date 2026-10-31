@@ -59,7 +59,6 @@ type subnetFinding struct {
 	Environment string `json:"environment"`
 	Route       string `json:"route"`
 	Iface       string `json:"iface"`
-	Range       string `json:"range"`
 	Pool        string `json:"pool"`
 }
 
@@ -378,32 +377,28 @@ func TestSubnetCheckOutsidePool(t *testing.T) {
 	}
 }
 
-func TestSubnetCheckCommonRange(t *testing.T) {
+// Private (RFC 1918) ranges are not flagged: a real LAN or VPN clash shows as a host route.
+func TestSubnetCheckPrivateRangesNotFlagged(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
-	for _, tc := range []struct{ subnet, rng string }{
-		{"192.168.5.0/24", "192.168.0.0/16"},
-		{"172.17.3.0/24", "172.17.0.0/16"},
-		{"172.31.0.0/20", "172.31.0.0/16"},
-		{"10.9.0.0/24", ""},    // 10.0.0.0/8 is listed only when it is the swarm's pool
-		{"172.20.0.0/24", ""},  // inside 172.16.0.0/12 but not one of the listed subsets
-		{"192.169.0.0/24", ""}, // beside 192.168.0.0/16
-		{"192.168.0.0/15", "192.168.0.0/16"},
-	} {
-		got := checkOK(t, f.subnetCheck(t, e, `{"subnet":"`+tc.subnet+`"}`))
-		ranges := got.ofKind("common_range")
-		switch {
-		case tc.rng == "" && len(ranges) != 0:
-			t.Errorf("%s: %+v, want no common_range", tc.subnet, ranges)
-		case tc.rng != "" && (len(ranges) != 1 || ranges[0].Range != tc.rng || ranges[0].Severity != "warning"):
-			t.Errorf("%s: %+v, want one common_range warning of %s", tc.subnet, ranges, tc.rng)
+	for _, subnet := range []string{"192.168.5.0/24", "172.17.3.0/24", "172.31.0.0/20", "192.168.0.0/15", "10.9.0.0/24"} {
+		rec := f.subnetCheck(t, e, `{"subnet":"`+subnet+`"}`)
+		got := checkOK(t, rec)
+		for _, fd := range got.Findings {
+			switch fd.Kind {
+			case "same_env", "other_env", "host_route", "outside_pool":
+			default:
+				t.Errorf("%s: finding %+v has a kind outside the four", subnet, fd)
+			}
+		}
+		if strings.Contains(string(rec.body), "\"range\"") {
+			t.Errorf("%s: the response carries a range key: %s", subnet, rec.body)
 		}
 	}
-	// A swarm whose pool is 10.0.0.0/8 lists it, as D-16 words it.
+	// The subnet a default swarm suggests comes back clean.
 	s := subnetSwarm(t)
-	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.9.0.0/24"}`))
-	if r := got.ofKind("common_range"); len(r) != 1 || r[0].Range != "10.0.0.0/8" {
-		t.Errorf("10.9.0.0/24 on a swarm with the 10.0.0.0/8 pool: %+v, want common_range 10.0.0.0/8", got.Findings)
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.9.0.0/24"}`)); len(got.Findings) != 0 {
+		t.Errorf("10.9.0.0/24 on a default swarm = %+v, want no findings", got.Findings)
 	}
 }
 
@@ -483,9 +478,6 @@ func TestSubnetCheckHostRoute(t *testing.T) {
 	routes := got.ofKind("host_route")
 	if len(routes) != 1 || routes[0].Severity != "warning" || routes[0].Iface != "eth0" || routes[0].Route != "192.168.2.0/24" || routes[0].Node != "edge-1" {
 		t.Fatalf("findings = %+v, want one host_route warning on eth0", got.Findings)
-	}
-	if len(got.ofKind("common_range")) != 1 {
-		t.Errorf("findings = %+v, want the 192.168 common range too", got.Findings)
 	}
 	if len(got.RouteChecks) != 1 || got.RouteChecks[0].State != "ok" || got.RouteChecks[0].Node != "edge-1" || got.RouteChecks[0].Fix != "" {
 		t.Errorf("routeChecks = %+v, want edge-1 ok", got.RouteChecks)

@@ -54,7 +54,6 @@
       "sameEnvOnNode": "Overlaps {{network}} ({{subnet}}) on {{node}}. Docker can't tell the two networks apart.",
       "otherEnv": "Overlaps {{network}} ({{subnet}}) on {{environment}}. This only matters if the two sites are routed or joined by a VPN.",
       "hostRoute": "Overlaps a route on {{node}}: {{route}} on {{iface}}. Traffic to that range may go to the network instead of the container.",
-      "commonRange": "Falls inside {{range}}, which many home networks and VPNs use.",
       "outsidePool": "Outside the address pool {{pool}}. Docker allows it, but it won't count toward the pool's usage.",
       "more_one": "Show {{count}} more finding",
       "more_other": "Show {{count}} more findings"

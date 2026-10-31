@@ -8,9 +8,7 @@ import type { RouteCheck, SubnetFinding } from "@/api/address-space";
 import { CopyableCode } from "@/components/copyable-code";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { containsCidr } from "@/features/networks/cidr";
 import { useT } from "@/i18n/use-t";
-import { cn } from "@/lib/utils";
 
 // How many findings show before the rest sit behind a button (D-16).
 export const SHOWN_FINDINGS = 5;
@@ -42,8 +40,6 @@ function findingText(t: Translate, f: SubnetFinding): string {
         route: f.route ?? "",
         iface: f.iface ?? "",
       });
-    case "common_range":
-      return t("subnetPicker.findings.commonRange", { range: f.range ?? "" });
     case "outside_pool":
       return t("subnetPicker.findings.outsidePool", { pool: f.pool ?? "" });
   }
@@ -51,31 +47,23 @@ function findingText(t: Translate, f: SubnetFinding): string {
 
 interface FindingRowProps {
   finding: SubnetFinding;
-  // Whether this is only the range the environment's own pool lies in.
-  ownPool: boolean;
 }
 
-function FindingRow({ finding, ownPool }: FindingRowProps) {
+function FindingRow({ finding }: FindingRowProps) {
   const t = useT();
   const blocking = finding.severity === "blocking";
-  // The common-range warning of a pool that itself lies in a range many networks use (the swarm's
-  // default 10.0.0.0/8) is true of every subnet in that pool, including the one Coaming suggests,
-  // so it is shown at the weight of a note. The words and the hidden "Warning" are unchanged.
-  const quiet = ownPool && finding.kind === "common_range";
   const label = t(blocking ? "subnetPicker.findings.blocking" : "subnetPicker.findings.warning");
   return (
     <li className="flex items-start gap-2 text-sm" data-severity={finding.severity}>
       {blocking ? (
         <CircleX aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-offline-text" />
-      ) : quiet ? (
-        <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       ) : (
         <TriangleAlert
           aria-hidden="true"
           className="mt-0.5 size-4 shrink-0 text-status-warning-text"
         />
       )}
-      <span className={cn("min-w-0 break-words", quiet && "text-muted-foreground")}>
+      <span className="min-w-0 break-words">
         <span className="sr-only">{label}: </span>
         {findingText(t, finding)}
       </span>
@@ -94,23 +82,19 @@ interface FindingListProps {
 
 // FindingList is what the typed subnet collides with, blocking first as the server orders them: five
 // show and the rest sit behind "Show {n} more findings". Nothing in it is interpreted as markup.
-export function FindingList({ findings, pools = [], id }: FindingListProps) {
+export function FindingList({ findings, id }: FindingListProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   if (findings.length === 0) return null;
   const shown = findings.slice(0, SHOWN_FINDINGS);
   const rest = findings.slice(SHOWN_FINDINGS);
-  const ownPool = (f: SubnetFinding) =>
-    f.kind === "common_range" && f.range !== undefined
-      ? pools.some((p) => containsCidr(f.range as string, p))
-      : false;
   return (
     <div id={id} className="flex flex-col gap-2">
       <ul className="flex flex-col gap-2">
         {shown.map((f, i) => (
           // The server orders findings and a finding has no identity of its own.
           // biome-ignore lint/suspicious/noArrayIndexKey: a stable, server-ordered list
-          <FindingRow key={i} finding={f} ownPool={ownPool(f)} />
+          <FindingRow key={i} finding={f} />
         ))}
       </ul>
       {rest.length > 0 ? (
@@ -127,7 +111,7 @@ export function FindingList({ findings, pools = [], id }: FindingListProps) {
             <ul className="flex flex-col gap-2">
               {rest.map((f, i) => (
                 // biome-ignore lint/suspicious/noArrayIndexKey: a stable, server-ordered list
-                <FindingRow key={i} finding={f} ownPool={ownPool(f)} />
+                <FindingRow key={i} finding={f} />
               ))}
             </ul>
           </CollapsibleContent>

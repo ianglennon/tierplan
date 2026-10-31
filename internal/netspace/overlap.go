@@ -21,8 +21,6 @@ const (
 	KindOtherEnv FindingKind = "other_env"
 	// KindHostRoute is a route of a host (a LAN or VPN) the subnet would shadow.
 	KindHostRoute FindingKind = "host_route"
-	// KindCommonRange is one of the ranges many home networks and VPNs use.
-	KindCommonRange FindingKind = "common_range"
 	// KindOutsidePool is a subnet that lies in none of the address pools.
 	KindOutsidePool FindingKind = "outside_pool"
 )
@@ -54,8 +52,6 @@ type Finding struct {
 	Environment string
 	// Route and Iface name the host route (host_route); Node is the node it is on.
 	Route, Iface string
-	// Range is the common range (common_range).
-	Range string
 	// Pool is the pool (outside_pool); several pools are joined with ", ".
 	Pool string
 }
@@ -97,12 +93,10 @@ type OverlapInput struct {
 	// Pools are the pools the network is made from; none known means nothing is said about
 	// the subnet lying outside them.
 	Pools []Pool
-	// Ranges are the common ranges (CommonRanges).
-	Ranges []netip.Prefix
 }
 
 // FindOverlaps lists what the candidate subnet collides with, in the order same_env, other_env,
-// host_route, common_range, outside_pool, and within a kind by network name or address. Subnets
+// host_route, outside_pool, and within a kind by network name or address. Subnets
 // that only touch do not overlap. A candidate that is not IPv4 has no findings. At most
 // MaxFindingsPerKind are named per kind.
 func FindOverlaps(candidate netip.Prefix, in OverlapInput) []Finding {
@@ -113,7 +107,7 @@ func FindOverlaps(candidate netip.Prefix, in OverlapInput) []Finding {
 	cand := []netip.Prefix{candidate}
 	me := MapItem{Swarm: in.Swarm, Node: in.Node}
 
-	var same, other, routes, ranges []Finding
+	var same, other, routes []Finding
 	for _, n := range in.Same {
 		if !sameScope(me, n.MapItem) {
 			continue
@@ -137,11 +131,6 @@ func FindOverlaps(candidate netip.Prefix, in OverlapInput) []Finding {
 			routes = append(routes, Finding{Kind: KindHostRoute, Severity: SeverityWarning, Node: r.Node, Route: r.Dst.Masked().String(), Iface: r.Iface})
 		}
 	}
-	for _, r := range in.Ranges {
-		if _, ok := FirstOverlap(cand, []netip.Prefix{r}); ok {
-			ranges = append(ranges, Finding{Kind: KindCommonRange, Severity: SeverityWarning, Range: r.Masked().String()})
-		}
-	}
 
 	slices.SortStableFunc(same, func(a, b Finding) int {
 		return cmp.Or(strings.Compare(a.Network, b.Network), strings.Compare(a.Node, b.Node), strings.Compare(a.Subnet, b.Subnet))
@@ -152,10 +141,9 @@ func FindOverlaps(candidate netip.Prefix, in OverlapInput) []Finding {
 	slices.SortStableFunc(routes, func(a, b Finding) int {
 		return cmp.Or(comparePrefixText(a.Route, b.Route), strings.Compare(a.Node, b.Node), strings.Compare(a.Iface, b.Iface))
 	})
-	slices.SortStableFunc(ranges, func(a, b Finding) int { return comparePrefixText(a.Range, b.Range) })
 
 	var out []Finding
-	for _, list := range [][]Finding{same, other, routes, ranges} {
+	for _, list := range [][]Finding{same, other, routes} {
 		out = append(out, list[:min(len(list), MaxFindingsPerKind)]...)
 	}
 	if f, ok := outsidePool(candidate, in.Pools); ok {

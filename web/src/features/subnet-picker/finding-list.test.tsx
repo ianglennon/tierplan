@@ -35,7 +35,6 @@ describe("FindingList", () => {
             environment: "Lab",
           }),
           warn({ kind: "host_route", node: "node-1", route: "10.0.0.0/24", iface: "tun0" }),
-          warn({ kind: "common_range", range: "192.168.0.0/16" }),
           warn({ kind: "outside_pool", pool: "10.20.0.0/16" }),
         ]}
       />,
@@ -45,7 +44,6 @@ describe("FindingList", () => {
       "Blocking: Overlaps shop_default (10.0.2.0/24). Docker can't tell the two networks apart.",
       "Warning: Overlaps lab_net (10.0.2.0/25) on Lab. This only matters if the two sites are routed or joined by a VPN.",
       "Warning: Overlaps a route on node-1: 10.0.0.0/24 on tun0. Traffic to that range may go to the network instead of the container.",
-      "Warning: Falls inside 192.168.0.0/16, which many home networks and VPNs use.",
       "Warning: Outside the address pool 10.20.0.0/16. Docker allows it, but it won't count toward the pool's usage.",
     ]);
     // The prefix is for assistive technology only.
@@ -72,7 +70,7 @@ describe("FindingList", () => {
 
   it("shows exactly five findings with no button", () => {
     const five = Array.from({ length: 5 }, (_, i) =>
-      warn({ kind: "common_range", range: `r${i}` }),
+      warn({ kind: "host_route", node: "node-1", route: `10.0.${i}.0/24`, iface: "eth0" }),
     );
     render(<FindingList findings={five} />);
     expect(screen.getAllByRole("listitem")).toHaveLength(5);
@@ -88,20 +86,6 @@ describe("FindingList", () => {
     render(<FindingList findings={[same({ network: "<img src=x onerror=alert(1)>" })]} />);
     expect(document.querySelector("img")).toBeNull();
     expect(screen.getByRole("listitem").textContent).toContain("<img src=x onerror=alert(1)>");
-  });
-
-  it("shows the common range of the environment's own pool at the weight of a note, in the same words", () => {
-    const finding = warn({ kind: "common_range", range: "10.0.0.0/8" });
-    const { rerender } = render(<FindingList findings={[finding]} pools={["10.0.0.0/8"]} />);
-    const own = screen.getByRole("listitem");
-    expect(own.textContent).toBe(
-      "Warning: Falls inside 10.0.0.0/8, which many home networks and VPNs use.",
-    );
-    expect(own.innerHTML).toContain("text-muted-foreground");
-    expect(own.innerHTML).not.toContain("text-status-warning-text");
-
-    rerender(<FindingList findings={[finding]} pools={["172.20.0.0/16"]} />);
-    expect(screen.getByRole("listitem").innerHTML).toContain("text-status-warning-text");
   });
 });
 
