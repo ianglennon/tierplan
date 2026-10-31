@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -353,5 +354,215 @@ func TestAddressSpaceOverlayUsage(t *testing.T) {
 	}
 	if v.Overlays[0].ID != "busy-id" || v.Ingress != nil {
 		t.Errorf("first overlay %q, ingress %v; want busy-id and no ingress", v.Overlays[0].ID, v.Ingress)
+	}
+}
+
+func TestAddressSpaceIngressInsidePool(t *testing.T) {
+	t.Run("pool with the ingress as its first block", func(t *testing.T) {
+		s, as := addrSwarm(t, func(_ int, c *dockertest.FakeConfig) {
+			c.SwarmDefaultAddrPool, c.SwarmSubnetSize = []string{"10.60.0.0/16"}, 26
+			c.Networks = []dockertest.FakeNetwork{
+				{ID: "ingress-id", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.60.0.0/26"}},
+				{ID: "other-id", Name: "other", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.60.0.64/26"}},
+			}
+		})
+		setUsage(s, "ingress", dockertest.FakeSubnetUsage{Subnet: "10.60.0.0/26", InUse: 5, Available: 59})
+		v, err := as.Read(testsupport.Context(t), s.env.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Ingress == nil || v.Ingress.OutsidePool || !v.Ingress.Ingress || !v.Ingress.Measured || v.Ingress.Used != 5 || v.Ingress.Capacity != 64 {
+			t.Fatalf("ingress = %+v, want measured 5 of 64 and inside the pool", v.Ingress)
+		}
+		// The ingress is one of the pool's two blocks, counted once, and is also in the overlays.
+		if got := strings.Join(poolLines(v), "|"); got != "10.60.0.0/16/26 used=2 cap=1024 swarm est=false" {
+			t.Fatalf("pools = %s", got)
+		}
+		if len(v.Overlays) != 2 {
+			t.Fatalf("overlays = %v, want the ingress among them", overlayLines(v))
+		}
+	})
+	t.Run("default pool takes a wide ingress", func(t *testing.T) {
+		s, as := addrSwarm(t, overlayNets(
+			dockertest.FakeNetwork{ID: "ingress-id", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.255.0.0/16"}},
+		))
+		v, err := as.Read(testsupport.Context(t), s.env.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Ingress == nil || v.Ingress.OutsidePool {
+			t.Fatalf("ingress = %+v, want inside 10.0.0.0/8", v.Ingress)
+		}
+		if got := strings.Join(poolLines(v), "|"); got != "10.0.0.0/8/24 used=256 cap=65536 swarm est=false" {
+			t.Fatalf("pools = %s, want the /16 ingress as 256 blocks", got)
+		}
+	})
+}
+
+func TestAddressSpaceIngressOutsidePool(t *testing.T) {
+	s, as := addrSwarm(t, func(_ int, c *dockertest.FakeConfig) {
+		c.SwarmDefaultAddrPool, c.SwarmSubnetSize = []string{"10.60.0.0/16"}, 26
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "ingress-id", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.255.0.0/16"}},
+			{ID: "other-id", Name: "other", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.60.0.0/26"}},
+		}
+	})
+	setUsage(s, "ingress", dockertest.FakeSubnetUsage{Subnet: "10.255.0.0/16", InUse: 40, Available: 65496})
+	v, err := as.Read(testsupport.Context(t), s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Ingress == nil || !v.Ingress.OutsidePool || !v.Ingress.Measured || v.Ingress.Capacity != 65536 {
+		t.Fatalf("ingress = %+v, want measured and outside the pool", v.Ingress)
+	}
+	if got := strings.Join(poolLines(v), "|"); got != "10.60.0.0/16/26 used=1 cap=1024 swarm est=false" {
+		t.Fatalf("pools = %s, want the pool not to count the ingress", got)
+	}
+	for _, o := range v.Overlays {
+		if o.Name != "ingress" && o.OutsidePool {
+			t.Errorf("%s has outsidePool; only the ingress can", o.Name)
+		}
+	}
+}
+
+func TestAddressSpaceOverlayNotMeasured(t *testing.T) {
+	// An engine that reports no Status (Engine 24 to 28), a manager that cannot ask the leader
+	// (G-07-8: a full ID answers the node's own count and the partial ID none), and a healthy
+	// overlay beside them.
+	s, as := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "old-engine-id", Name: "old", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+		dockertest.FakeNetwork{ID: "no-count-id", Name: "nocount", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+		dockertest.FakeNetwork{ID: "fine-id", Name: "fine", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.3.0/24"}},
+	))
+	for _, m := range s.m {
+		m.fake.SetNetworkLocalUsage("nocount", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 4, Available: 252})
+		m.fake.SetNetworkNoSwarmStatus("nocount", true)
+	}
+	setUsage(s, "fine", dockertest.FakeSubnetUsage{Subnet: "10.0.3.0/24", InUse: 10, Available: 246})
+	v, err := as.Read(testsupport.Context(t), s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "fine used=10 cap=256 3% normal measured=true|nocount used=0 cap=0 0% unknown measured=false|old used=0 cap=0 0% unknown measured=false"
+	if got := strings.Join(overlayLines(v), "|"); got != want {
+		t.Fatalf("overlays = %s\nwant      %s", got, want)
+	}
+	// The pools are still computed from the subnets, whatever the engine reports.
+	if !v.Measured || len(v.Pools) != 1 || v.Pools[0].Used != 3 {
+		t.Fatalf("pools = %v, want the default pool with three blocks used", poolLines(v))
+	}
+}
+
+func TestAddressSpaceOverlayIPv6Skipped(t *testing.T) {
+	s, as := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "dual-id", Name: "dual", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24", "fd00:1::/64"}},
+		dockertest.FakeNetwork{ID: "six-id", Name: "six", Driver: "overlay", Scope: "swarm", Subnets: []string{"fd00:2::/64"}},
+		dockertest.FakeNetwork{ID: "bogus-id", Name: "bogus", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.4.0/24"}},
+	))
+	const maxU64 = ^uint64(0)
+	setUsage(s, "dual",
+		dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 8, Available: 248},
+		// An IPv6 subnet's counters saturate at 2^64-1.
+		dockertest.FakeSubnetUsage{Subnet: "fd00:1::/64", InUse: maxU64, Available: maxU64})
+	// A network with only an IPv6 subnet has nothing to meter.
+	setUsage(s, "six", dockertest.FakeSubnetUsage{Subnet: "fd00:2::/64", InUse: 3, Available: maxU64})
+	// An IPv4 subnet cannot hold more than 2^32 addresses; such a count is not trusted.
+	setUsage(s, "bogus", dockertest.FakeSubnetUsage{Subnet: "10.0.4.0/24", InUse: maxU64, Available: 1})
+	v, err := as.Read(testsupport.Context(t), s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "dual used=8 cap=256 3% normal measured=true|bogus used=0 cap=0 0% unknown measured=false|six used=0 cap=0 0% unknown measured=false"
+	if got := strings.Join(overlayLines(v), "|"); got != want {
+		t.Fatalf("overlays = %s\nwant      %s", got, want)
+	}
+	if got := strings.Join(v.Overlays[0].Subnets, ","); got != "10.0.1.0/24" {
+		t.Errorf("dual subnets = %s, want the IPv4 subnet only", got)
+	}
+}
+
+func TestAddressSpaceOverlayCap(t *testing.T) {
+	const total = 600
+	var nets []dockertest.FakeNetwork
+	for i := range total {
+		// The distinguishing part comes first: the reader asks again by the ID less its last
+		// character, which the fake resolves by prefix.
+		nets = append(nets, dockertest.FakeNetwork{
+			ID: fmt.Sprintf("%03d-overlay", i), Name: fmt.Sprintf("ovl-%03d", i), Driver: "overlay", Scope: "swarm",
+			Subnets: []string{fmt.Sprintf("10.%d.%d.0/24", i/256, i%256)},
+		})
+	}
+	s, as := addrSwarm(t, overlayNets(nets...))
+	for i := range total {
+		setUsage(s, fmt.Sprintf("ovl-%03d", i), dockertest.FakeSubnetUsage{Subnet: fmt.Sprintf("10.%d.%d.0/24", i/256, i%256), InUse: 5, Available: 251})
+	}
+	var inFlight, peak, started atomic.Int64
+	as.overlayReadHook = func() func() {
+		started.Add(1)
+		n := inFlight.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		return func() { inFlight.Add(-1) }
+	}
+	v, err := as.Read(testsupport.Context(t), s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Overlays) != total {
+		t.Fatalf("overlays = %d, want all %d listed", len(v.Overlays), total)
+	}
+	measured := 0
+	for _, o := range v.Overlays {
+		if o.Measured {
+			measured++
+			if o.Name > "ovl-511" {
+				t.Errorf("%s is measured; only the first 512 by name are", o.Name)
+			}
+		} else if o.Name <= "ovl-511" {
+			t.Errorf("%s is not measured, but is among the first 512 by name", o.Name)
+		}
+	}
+	if measured != maxMeasuredOverlays || started.Load() != maxMeasuredOverlays {
+		t.Errorf("measured %d with %d reads, want %d of each", measured, started.Load(), maxMeasuredOverlays)
+	}
+	if p := peak.Load(); p < 1 || p > overlayParallel {
+		t.Errorf("at most %d reads at once, saw %d", overlayParallel, p)
+	}
+}
+
+// A refetch within the TTL shares the first read: two browsers polling during a rolling update
+// never make two sets of inspects nor see two different numbers.
+func TestAddressSpaceOverlayReadIsSharedWithinTheTTL(t *testing.T) {
+	s, as := addrSwarm(t, overlayNets(
+		dockertest.FakeNetwork{ID: "calm-id", Name: "calm", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+	))
+	setUsage(s, "calm", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 8, Available: 248})
+	var reads atomic.Int64
+	as.overlayReadHook = func() func() { reads.Add(1); return func() {} }
+	ctx := testsupport.Context(t)
+	first, err := as.Read(ctx, s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setUsage(s, "calm", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 100, Available: 156})
+	s.clk.Advance(DefaultClusterTTL - time.Second)
+	second, err := as.Read(ctx, s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads.Load() != 1 || second.Overlays[0].Used != first.Overlays[0].Used {
+		t.Fatalf("reads = %d, used %d then %d; want one read and one number", reads.Load(), first.Overlays[0].Used, second.Overlays[0].Used)
+	}
+	s.clk.Advance(2 * time.Second)
+	third, err := as.Read(ctx, s.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads.Load() != 2 || third.Overlays[0].Used != 100 {
+		t.Fatalf("after the TTL: reads = %d, used %d; want a fresh read of 100", reads.Load(), third.Overlays[0].Used)
 	}
 }

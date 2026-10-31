@@ -43,6 +43,10 @@ const NotMeasuredNoManager = "no_manager"
 // manager, so a swarm with hundreds of overlays cannot fan out without bound (T-10-08).
 const overlayParallel = 8
 
+// maxMeasuredOverlays is the most overlays one read measures. The rest are listed with no
+// numbers (Measured false), so a huge swarm costs a bounded number of inspects (T-10-08).
+const maxMeasuredOverlays = 512
+
 // maxSubnetAddrs is the most addresses an IPv4 subnet can hold. A count above it is not an
 // IPv4 count (an engine bug, or the saturating counter of an IPv6 subnet) and is not trusted
 // (T-10-09).
@@ -138,6 +142,11 @@ type AddressSpaces struct {
 	now      func() time.Time
 	ttl      time.Duration
 	log      *slog.Logger
+
+	// overlayReadHook, when set, is called as the read of one overlay starts and the function it
+	// returns as that read ends. Tests count the reads in flight with it, never by timing;
+	// nothing sets it in production.
+	overlayReadHook func() (done func())
 
 	mu      sync.Mutex
 	entries map[string]*addressEntry
@@ -292,6 +301,7 @@ func (s *AddressSpaces) fetchSwarm(ctx context.Context, e *addressEntry, agg Agg
 	if err := s.measureOverlays(ctx, out.EnvID, list); err != nil {
 		return AddressSpace{}, err
 	}
+	markOutsidePool(list, out.Pools)
 	out.Overlays, out.Ingress = rankOverlays(list)
 	return out, nil
 }
@@ -327,7 +337,7 @@ func (s *AddressSpaces) measureOverlays(ctx context.Context, envID string, list 
 	err := s.clusters.ClusterRead(ctx, envID, func(c *dockerx.Client) error {
 		var g errgroup.Group
 		g.SetLimit(overlayParallel)
-		for i := range list {
+		for i := range min(len(list), maxMeasuredOverlays) {
 			g.Go(func() error {
 				s.measureOverlay(ctx, c, &list[i], envID)
 				return nil
@@ -354,6 +364,9 @@ func (s *AddressSpaces) measureOverlays(ctx context.Context, envID string, list 
 // or a manager that cannot ask the leader) or reports a count no IPv4 subnet could hold is left
 // unmeasured; it never fails the read of the others.
 func (s *AddressSpaces) measureOverlay(ctx context.Context, c *dockerx.Client, o *OverlayUsage, envID string) {
+	if s.overlayReadHook != nil {
+		defer s.overlayReadHook()()
+	}
 	d, err := c.NetworkSwarmUsage(ctx, o.ID)
 	if err != nil {
 		s.log.Debug("an overlay network could not be measured", "environment", envID, "network", o.Name, "error", err)
@@ -374,6 +387,30 @@ func (s *AddressSpaces) measureOverlay(ctx context.Context, c *dockerx.Client, o
 	if capacity := used + avail; capacity > 0 {
 		o.Used, o.Capacity, o.Measured = used, capacity, true
 		o.Percent, o.State = netspace.PercentOf(used, capacity), netspace.StateOf(used, capacity)
+	}
+}
+
+// markOutsidePool sets OutsidePool on the ingress network: true when none of its IPv4 subnets
+// lies inside the base of a pool, so no pool row counts it. Every other network keeps false.
+func markOutsidePool(list []OverlayUsage, pools []PoolUsage) {
+	for i := range list {
+		o := &list[i]
+		if !o.Ingress || len(o.Subnets) == 0 {
+			continue
+		}
+		inside := false
+		for _, raw := range o.Subnets {
+			sub, err := netip.ParsePrefix(raw)
+			if err != nil {
+				continue
+			}
+			for _, p := range pools {
+				if base := p.Pool.Base.Masked(); base.Contains(sub.Addr()) && sub.Bits() >= base.Bits() {
+					inside = true
+				}
+			}
+		}
+		o.OutsidePool = !inside
 	}
 }
 
