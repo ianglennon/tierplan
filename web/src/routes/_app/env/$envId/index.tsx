@@ -14,6 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { AddressSpaceCard } from "@/features/address-space/address-space-card";
 import { EngineCard } from "@/features/dashboard/engine-card";
 import { EventsFeed } from "@/features/dashboard/events-feed";
 import { NodesBanner } from "@/features/environments/nodes-banner";
@@ -22,7 +23,7 @@ import { useDocumentTitle, usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
 // Dashboard is the environment's home (D-55): header, the worker notice on a
-// swarm worker, the count tiles, the engine card and the events feed. It reads
+// swarm worker, the count tiles, the engine and address space cards and the events feed. It reads
 // the same ["env", envId, "summary"] query as the layout, so there is one request; the
 // layout has already turned offline, unsupported, missing and forbidden
 // environments into full-page states, so what reaches here is data, a load in
@@ -219,13 +220,21 @@ function Dashboard() {
       </section>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_2fr]">
-        <EngineCard
-          engine={data?.engine}
-          loading={loading}
-          isAgentEnvironment={listed?.kind === "agent"}
-          agents={listed?.agents}
-          agentVersion={listed?.agentVersion}
-        />
+        <div className="flex min-w-0 flex-col gap-6">
+          <EngineCard
+            engine={data?.engine}
+            loading={loading}
+            isAgentEnvironment={listed?.kind === "agent"}
+            agents={listed?.agents}
+            agentVersion={listed?.agentVersion}
+          />
+          <AddressSpaceCard
+            envId={envId}
+            summary={listed?.addressSpace}
+            loading={environments.isPending}
+            error={environments.isError}
+          />
+        </div>
         <EventsFeed envId={envId} showNode={swarm} />
       </div>
     </div>
