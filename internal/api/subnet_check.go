@@ -1,0 +1,330 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 The Coaming Authors
+
+package api
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/time/rate"
+
+	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/netspace"
+	"github.com/ianglennon/coaming/internal/rbac"
+)
+
+const (
+	// subnetChecksPerMinute is how many subnet checks one user may make in a minute: the picker
+	// asks every 400 ms while a person types, so ordinary use is far under it (T-10-34).
+	subnetChecksPerMinute = 120
+	// subnetCheckBurst is how many checks may come at once before the rate applies.
+	subnetCheckBurst = 20
+	// subnetCheckIdle is how long a user's limiter is kept after their last check.
+	subnetCheckIdle = 5 * time.Minute
+)
+
+// The codes of a subnet the check refuses.
+const (
+	subnetErrInvalid  = "subnet_invalid"
+	subnetErrHostBits = "host_bits"
+	subnetErrTooSmall = "too_small"
+)
+
+// smallestSubnetMask is the longest mask a network may have: a /29 is the smallest block with
+// room for a gateway and a container, and what the create dialog's check accepts.
+const smallestSubnetMask = 29
+
+// SubnetCheckRequest is what the subnet picker asks. Every field is optional; the answer holds
+// only the parts that were asked for.
+type SubnetCheckRequest struct {
+	Mask     *int   `json:"mask,omitempty" minimum:"16" maximum:"29" doc:"The size of the subnet to find a free block for. Left out, the recommended size is used when tasks is given, and else the mask of the first pool"`
+	Tasks    *int   `json:"tasks,omitempty" minimum:"1" maximum:"10000" doc:"How many tasks are expected on the network. With it the answer carries needed, recommendedMask and recommendedUsable, or tooManyTasks"`
+	Services *int   `json:"services,omitempty" minimum:"0" maximum:"1000" doc:"How many services are expected on the network; 1 when left out"`
+	Nodes    *int   `json:"nodes,omitempty" minimum:"0" maximum:"1000" doc:"How many nodes the network spans; the swarm's node count when left out, 0 on a standalone host"`
+	Subnet   string `json:"subnet,omitempty" maxLength:"64" doc:"A subnet a person typed, in CIDR form, to be checked as the create dialog does"`
+	NodeID   string `json:"nodeId,omitempty" maxLength:"128" doc:"The node a local network (bridge, macvlan, ipvlan) is made on. Needed on a swarm for a local driver, because its pools are the node's own"`
+	Driver   string `json:"driver,omitempty" enum:"bridge,overlay,macvlan,ipvlan" doc:"The driver of the network to be made: overlay (or none) on a swarm takes the swarm's pools, a local driver the pools of its node's daemon"`
+	Suggest  bool   `json:"suggest,omitempty" doc:"True to find the lowest free block of the mask"`
+}
+
+// SubnetCheckInput is the path and body of the subnet check.
+type SubnetCheckInput struct {
+	EnvironmentPathInput
+	Body SubnetCheckRequest
+}
+
+// SubnetSuggestionBody is a free block found.
+type SubnetSuggestionBody struct {
+	Subnet string `json:"subnet" doc:"The lowest free block of the size asked for, in CIDR form"`
+	Pool   string `json:"pool" doc:"The pool the block lies in"`
+}
+
+// SubnetNoFreeBody says no block of the size is free.
+type SubnetNoFreeBody struct {
+	Mask int    `json:"mask" doc:"The size that was asked for"`
+	Pool string `json:"pool" doc:"The pool that was searched; several pools are joined with a comma"`
+}
+
+// SubnetErrorBody is why a typed subnet is refused.
+type SubnetErrorBody struct {
+	Code      string `json:"code" enum:"subnet_invalid,host_bits,too_small" doc:"subnet_invalid: not in CIDR form. host_bits: host bits are set, so it is not a network address. too_small: smaller than a /29"`
+	Corrected string `json:"corrected,omitempty" doc:"With host_bits, the network address the subnet is meant to be, for example 10.0.0.0/24 for 10.0.0.5/24"`
+}
+
+// SubnetCheckBody is the answer of the subnet check.
+type SubnetCheckBody struct {
+	Suggestion        *SubnetSuggestionBody `json:"suggestion,omitempty" doc:"The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set"`
+	NoFreeBlock       *SubnetNoFreeBody     `json:"noFreeBlock,omitempty" doc:"Present when no block of the size is free in the pools; never an error"`
+	Needed            *int                  `json:"needed,omitempty" minimum:"0" doc:"Addresses the expected tasks need: ceil((2 x tasks + services + nodes) x 1.25) + 3. Present when tasks was given"`
+	RecommendedMask   *int                  `json:"recommendedMask,omitempty" minimum:"24" maximum:"28" doc:"The smallest of /28 to /24 whose usable addresses hold needed. Absent with tooManyTasks"`
+	RecommendedUsable *int                  `json:"recommendedUsable,omitempty" minimum:"0" doc:"The usable addresses of recommendedMask: the size less the network, broadcast and gateway addresses"`
+	TooManyTasks      bool                  `json:"tooManyTasks" doc:"True when not even a /24 holds needed"`
+	SubnetError       *SubnetErrorBody      `json:"subnetError,omitempty" doc:"Why the typed subnet is refused; absent when it is fine or none was sent"`
+	IPv6NotChecked    bool                  `json:"ipv6NotChecked" doc:"True when the typed subnet is IPv6, which is not checked"`
+}
+
+// SubnetCheckOutput wraps SubnetCheckBody for huma.
+type SubnetCheckOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         SubnetCheckBody
+}
+
+// subnetLimiter is the per-user limit on subnet checks. It forgets a user who has been idle.
+type subnetLimiter struct {
+	mu    sync.Mutex
+	by    map[string]*subnetLimit
+	swept time.Time
+}
+
+type subnetLimit struct {
+	lim  *rate.Limiter
+	seen time.Time
+}
+
+func (l *subnetLimiter) allow(user string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.by == nil {
+		l.by = map[string]*subnetLimit{}
+	}
+	if now.Sub(l.swept) > time.Minute {
+		for id, e := range l.by {
+			if now.Sub(e.seen) > subnetCheckIdle {
+				delete(l.by, id)
+			}
+		}
+		l.swept = now
+	}
+	e, ok := l.by[user]
+	if !ok {
+		e = &subnetLimit{lim: rate.NewLimiter(rate.Every(time.Minute/subnetChecksPerMinute), subnetCheckBurst)}
+		l.by[user] = e
+	}
+	e.seen = now
+	return e.lim.AllowN(now, 1)
+}
+
+// registerSubnetCheck registers the route the subnet picker asks for a size recommendation, a
+// free block and a check of a typed subnet.
+func registerSubnetCheck(r *httpx.Router, d AddressSpaceDeps) {
+	limiter := &subnetLimiter{}
+	httpx.Register(r, huma.Operation{
+		OperationID: "checkSubnet", Method: http.MethodPost, Path: "/api/env/{envId}/address-space/subnet-check",
+		Summary: "Suggest a free subnet, recommend a size and check a typed subnet",
+		Description: "With suggest true, answers suggestion: the lowest free block of mask (or of the recommended size) inside the pools of the network to be made, clear of every IPv4 subnet of every network on every node. " +
+			"An overlay (or no driver) on a swarm takes the swarm's pools; a local driver on a swarm takes the daemon pools of the node nodeId (or Docker's defaults when it sets none); a standalone host takes its pools as the address space reads them. " +
+			"When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. " +
+			"With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. " +
+			"With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. " +
+			"IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermNetworksRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *SubnetCheckInput) (*SubnetCheckOutput, error) {
+			p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
+			if p == nil || env == nil || d.AddressSpaces == nil || d.Aggregator == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			now := time.Now
+			if d.Now != nil {
+				now = d.Now
+			}
+			if !limiter.allow(p.ID, now()) {
+				return nil, httpx.Problem(http.StatusTooManyRequests, problemRateLimited, "Too many checks. Wait a minute and try again.")
+			}
+			body, err := checkSubnet(ctx, d, env.ID, in.Body)
+			if err != nil {
+				return nil, err
+			}
+			return &SubnetCheckOutput{CacheControl: "no-store", Body: body}, nil
+		})
+}
+
+// checkSubnet answers one subnet check. The size recommendation and the check of the typed
+// subnet need no read at all; only a suggestion reads the (cached) address space.
+func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest) (SubnetCheckBody, error) {
+	var out SubnetCheckBody
+	space, agg, err := readForSubnetCheck(ctx, d, envID, req)
+	if err != nil {
+		return out, err
+	}
+
+	if req.Tasks != nil {
+		services := 1
+		if req.Services != nil {
+			services = *req.Services
+		}
+		nodes := 0
+		switch {
+		case req.Nodes != nil:
+			nodes = *req.Nodes
+		case agg.Counts.Nodes != nil:
+			// Only a swarm manager reports a node count; a standalone host spans none.
+			nodes = *agg.Counts.Nodes
+		}
+		needed := netspace.Needed(*req.Tasks, services, nodes)
+		out.Needed = &needed
+		if mask, ok := netspace.RecommendMask(needed); ok {
+			usable := netspace.Usable(mask)
+			out.RecommendedMask, out.RecommendedUsable = &mask, &usable
+		} else {
+			out.TooManyTasks = true
+		}
+	}
+
+	if req.Subnet != "" {
+		out.SubnetError, out.IPv6NotChecked = validateTypedSubnet(req.Subnet)
+	}
+
+	if req.Suggest {
+		if err := suggestSubnet(ctx, d, envID, req, space, agg, &out); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// readForSubnetCheck reads the cached address space (for a suggestion) and the cached aggregate
+// (for a suggestion, or for the swarm's node count of a size recommendation), and nothing
+// otherwise.
+func readForSubnetCheck(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest) (envs.AddressSpace, envs.Aggregate, error) {
+	var space envs.AddressSpace
+	var agg envs.Aggregate
+	if req.Suggest {
+		var err error
+		if space, err = d.AddressSpaces.Read(ctx, envID); err != nil {
+			return space, agg, snapshotProblem(d.Log, envID, err)
+		}
+	}
+	if req.Suggest || (req.Tasks != nil && req.Nodes == nil) {
+		var err error
+		if agg, _, err = d.Aggregator.Snapshot(ctx, envID); err != nil {
+			return space, agg, snapshotProblem(d.Log, envID, err)
+		}
+	}
+	return space, agg, nil
+}
+
+// suggestSubnet fills the suggestion, or noFreeBlock, of out.
+func suggestSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, space envs.AddressSpace, agg envs.Aggregate, out *SubnetCheckBody) error {
+	pools, err := poolsForSubnet(ctx, d, envID, req, space)
+	if err != nil {
+		return err
+	}
+	if len(pools) == 0 {
+		return nil
+	}
+	mask := netspace.DefaultSwarmSubnetSize
+	switch {
+	case req.Mask != nil:
+		mask = *req.Mask
+	case out.RecommendedMask != nil:
+		mask = *out.RecommendedMask
+	case pools[0].Size > 0 && pools[0].Size <= smallestSubnetMask:
+		mask = pools[0].Size
+	}
+
+	var occupied []netip.Prefix
+	for _, n := range agg.Networks {
+		for _, raw := range n.Subnets {
+			if sp, err := netip.ParsePrefix(raw); err == nil && sp.Addr().Is4() {
+				occupied = append(occupied, sp.Masked())
+			}
+		}
+	}
+	block, pool, err := netspace.LowestFree(pools, occupied, nil, mask)
+	if errors.Is(err, netspace.ErrNoFreeBlock) {
+		names := make([]string, 0, len(pools))
+		for _, p := range pools {
+			names = append(names, p.Base.Masked().String())
+		}
+		out.NoFreeBlock = &SubnetNoFreeBody{Mask: mask, Pool: strings.Join(names, ", ")}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	out.Suggestion = &SubnetSuggestionBody{Subnet: block.String(), Pool: pool.Base.Masked().String()}
+	return nil
+}
+
+// poolsForSubnet is the pools a network of the request's driver is made from. An empty list
+// means no pool is known to search.
+func poolsForSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, space envs.AddressSpace) ([]netspace.Pool, error) {
+	local := req.Driver != "" && req.Driver != "overlay"
+	if !space.Swarm || !local {
+		pools := make([]netspace.Pool, 0, len(space.Pools))
+		for _, p := range space.Pools {
+			pools = append(pools, p.Pool)
+		}
+		return pools, nil
+	}
+	// A local network of a swarm is allocated by the daemon of its node.
+	if req.NodeID == "" {
+		return nil, nil
+	}
+	var reported dockerx.AddressPools
+	err := d.Aggregator.OnNode(ctx, envID, req.NodeID, func(c *dockerx.Client) (err error) {
+		reported, err = c.AddressPools(ctx)
+		return err
+	})
+	if err != nil {
+		_, problem := networkWriteProblem(d.Log, envID, err)
+		return nil, problem
+	}
+	var pools []netspace.Pool
+	for _, p := range reported.DaemonPools {
+		pools = append(pools, netspace.Pool{Base: p.Base, Size: p.Size})
+	}
+	if len(pools) == 0 {
+		pools = netspace.DockerDefaultPools
+	}
+	return pools, nil
+}
+
+// validateTypedSubnet judges a subnet a person typed as the create dialog's server check does.
+// An IPv6 subnet has no error and is reported unchecked.
+func validateTypedSubnet(text string) (*SubnetErrorBody, bool) {
+	sp, err := netip.ParsePrefix(text)
+	if err != nil {
+		return &SubnetErrorBody{Code: subnetErrInvalid}, false
+	}
+	if !sp.Addr().Is4() {
+		return nil, true
+	}
+	if sp.Bits() > smallestSubnetMask {
+		return &SubnetErrorBody{Code: subnetErrTooSmall}, false
+	}
+	if masked := sp.Masked(); masked != sp {
+		return &SubnetErrorBody{Code: subnetErrHostBits, Corrected: masked.String()}, false
+	}
+	return nil, false
+}

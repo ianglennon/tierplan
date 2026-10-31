@@ -492,6 +492,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space/subnet-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suggest a free subnet, recommend a size and check a typed subnet
+         * @description With suggest true, answers suggestion: the lowest free block of mask (or of the recommended size) inside the pools of the network to be made, clear of every IPv4 subnet of every network on every node. An overlay (or no driver) on a swarm takes the swarm's pools; a local driver on a swarm takes the daemon pools of the node nodeId (or Docker's defaults when it sets none); a standalone host takes its pools as the address space reads them. When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.
+         */
+        post: operations["checkSubnet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -12047,6 +12067,90 @@ export interface components {
              */
             unhealthy: number;
         };
+        SubnetCheckBody: {
+            /** @description True when the typed subnet is IPv6, which is not checked */
+            ipv6NotChecked: boolean;
+            /**
+             * Format: int64
+             * @description Addresses the expected tasks need: ceil((2 x tasks + services + nodes) x 1.25) + 3. Present when tasks was given
+             */
+            needed?: number;
+            /** @description Present when no block of the size is free in the pools; never an error */
+            noFreeBlock?: components["schemas"]["SubnetNoFreeBody"];
+            /**
+             * Format: int64
+             * @description The smallest of /28 to /24 whose usable addresses hold needed. Absent with tooManyTasks
+             */
+            recommendedMask?: number;
+            /**
+             * Format: int64
+             * @description The usable addresses of recommendedMask: the size less the network, broadcast and gateway addresses
+             */
+            recommendedUsable?: number;
+            /** @description Why the typed subnet is refused; absent when it is fine or none was sent */
+            subnetError?: components["schemas"]["SubnetErrorBody"];
+            /** @description The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set */
+            suggestion?: components["schemas"]["SubnetSuggestionBody"];
+            /** @description True when not even a /24 holds needed */
+            tooManyTasks: boolean;
+        };
+        SubnetCheckRequest: {
+            /**
+             * @description The driver of the network to be made: overlay (or none) on a swarm takes the swarm's pools, a local driver the pools of its node's daemon
+             * @enum {string}
+             */
+            driver?: "bridge" | "overlay" | "macvlan" | "ipvlan";
+            /**
+             * Format: int64
+             * @description The size of the subnet to find a free block for. Left out, the recommended size is used when tasks is given, and else the mask of the first pool
+             */
+            mask?: number;
+            /** @description The node a local network (bridge, macvlan, ipvlan) is made on. Needed on a swarm for a local driver, because its pools are the node's own */
+            nodeId?: string;
+            /**
+             * Format: int64
+             * @description How many nodes the network spans; the swarm's node count when left out, 0 on a standalone host
+             */
+            nodes?: number;
+            /**
+             * Format: int64
+             * @description How many services are expected on the network; 1 when left out
+             */
+            services?: number;
+            /** @description A subnet a person typed, in CIDR form, to be checked as the create dialog does */
+            subnet?: string;
+            /** @description True to find the lowest free block of the mask */
+            suggest?: boolean;
+            /**
+             * Format: int64
+             * @description How many tasks are expected on the network. With it the answer carries needed, recommendedMask and recommendedUsable, or tooManyTasks
+             */
+            tasks?: number;
+        };
+        SubnetErrorBody: {
+            /**
+             * @description subnet_invalid: not in CIDR form. host_bits: host bits are set, so it is not a network address. too_small: smaller than a /29
+             * @enum {string}
+             */
+            code: "subnet_invalid" | "host_bits" | "too_small";
+            /** @description With host_bits, the network address the subnet is meant to be, for example 10.0.0.0/24 for 10.0.0.5/24 */
+            corrected?: string;
+        };
+        SubnetNoFreeBody: {
+            /**
+             * Format: int64
+             * @description The size that was asked for
+             */
+            mask: number;
+            /** @description The pool that was searched; several pools are joined with a comma */
+            pool: string;
+        };
+        SubnetSuggestionBody: {
+            /** @description The pool the block lies in */
+            pool: string;
+            /** @description The lowest free block of the size asked for, in CIDR form */
+            subnet: string;
+        };
         SummaryCountsBody: {
             /**
              * Format: int64
@@ -13755,6 +13859,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrphanDeleteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkSubnet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubnetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubnetCheckBody"];
                 };
             };
             /** @description Error */
