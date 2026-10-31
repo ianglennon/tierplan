@@ -149,7 +149,7 @@ func (p *prepared) commit(ctx context.Context, deps Deps, c common, out *Outcome
 	}
 	if len(p.plan.create) > 0 {
 		var cerr error
-		created, cerr = createObjects(ctx, c.client, p.plan.create, deps.Record)
+		created, cerr = createObjects(ctx, c.client, p.plan.create, deps.Record, deps.AllocationWait)
 		out.Steps = out.markObjects(created, cerr)
 		if cerr != nil {
 			return fail(cerr)

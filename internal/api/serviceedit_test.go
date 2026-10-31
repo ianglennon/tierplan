@@ -1174,6 +1174,56 @@ func TestServiceApplyStagedNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
 	}
 }
 
+// unallocatedEnv is a swarm environment whose managers accept a create of each subnet and never
+// allocate it (G-10-8).
+func unallocatedEnv(t *testing.T, subnets ...string) (*envFix, envBody) {
+	t.Helper()
+	return actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.SwarmUnallocated = map[string]int{}
+		for _, s := range subnets {
+			cfg.SwarmUnallocated[s] = -1
+		}
+	}, editableService(nil))
+}
+
+// deletedNetworks lists the removals of networks the fake was sent, by path.
+func deletedNetworks(f *envFix) []string {
+	var out []string
+	for _, w := range f.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE /networks/") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// A staged network the swarm never allocates fails the apply: the stub is removed by its ID, no
+// service is updated, and the problem names the network (G-10-8, UAT test 8, T-10-80).
+func TestServiceApplyStagedNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.66.0.0/24", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	for _, want := range []string{"The swarm didn't give network front an address range", "Coaming removed it again", "network:front"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.Body)
+		}
+	}
+	if n := f.fake.NetworkCreates(); len(n) != 1 {
+		t.Fatalf("network creates = %+v, want one", n)
+	}
+	if del := deletedNetworks(f); len(del) != 1 {
+		t.Errorf("removals = %v, want the stub removed once, by ID", del)
+	}
+	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %+v, want none against a network the swarm did not allocate", ups)
+	}
+}
+
 func TestServiceApplyStagedNetworkCreateAnyway(t *testing.T) {
 	t.Parallel()
 	f, e := overlapEnv(t)

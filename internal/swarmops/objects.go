@@ -285,12 +285,12 @@ func kinds(objects []StagedObject) []string {
 // createObjects creates the objects in dependency order (networks, secrets, configs, each in the
 // order given), once each and never retried. It stops at the first that fails and returns what it
 // made so far beside an *ObjectCreateError. Each attempt is recorded. The values are not kept.
-func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObject, record Recorder) ([]CreatedObject, error) {
+func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObject, record Recorder, wait dockerx.AllocationWait) ([]CreatedObject, error) {
 	ordered := slices.Clone(objects)
 	slices.SortStableFunc(ordered, func(a, b StagedObject) int { return kindRank(a.Kind) - kindRank(b.Kind) })
 	created := make([]CreatedObject, 0, len(ordered))
 	for _, o := range ordered {
-		id, err := createOne(ctx, cli, o)
+		id, err := createOne(ctx, cli, o, wait)
 		if err != nil {
 			code := codeCreateFailed
 			if errors.Is(err, dockerx.ErrNameTaken) {
@@ -306,12 +306,14 @@ func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObj
 }
 
 // createOne makes one object. A name the environment has already is dockerx.ErrNameTaken.
-func createOne(ctx context.Context, cli *dockerx.Client, o StagedObject) (string, error) {
+// A staged network is read back after its create until the swarm has allocated it (wait); one the
+// swarm never allocates is removed again and comes back as a *dockerx.NotAllocatedError (G-10-8).
+func createOne(ctx context.Context, cli *dockerx.Client, o StagedObject, wait dockerx.AllocationWait) (string, error) {
 	switch o.Kind {
 	case KindNetwork:
-		id, _, err := cli.NetworkCreate(ctx, dockerx.NetworkCreateSpec{
+		id, _, err := cli.NetworkCreateAllocated(ctx, dockerx.NetworkCreateSpec{
 			Name: o.Name, Driver: dockerx.DriverOverlay, Scope: dockerx.ScopeSwarm, Attachable: true, Subnet: o.Subnet,
-		})
+		}, wait)
 		if err != nil && (cerrdefs.IsConflict(err) || cerrdefs.IsAlreadyExists(err) || strings.Contains(err.Error(), "already exists")) {
 			return "", fmt.Errorf("%w: %w", dockerx.ErrNameTaken, err)
 		}

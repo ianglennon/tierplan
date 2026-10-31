@@ -275,7 +275,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 
 // swarmopsDeps is what the orchestrator needs from the routes' dependencies.
 func swarmopsDeps(d ServicesDeps) swarmops.Deps {
-	sd := swarmops.Deps{Checker: d.Checker, StackOwner: namespaceOwner}
+	sd := swarmops.Deps{Checker: d.Checker, StackOwner: namespaceOwner, AllocationWait: d.AllocationWait}
 	if d.Resolver != nil {
 		sd.Resolver = d.Resolver
 	}
@@ -701,6 +701,21 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		}
 	case errors.As(err, &perm):
 		return problem(http.StatusForbidden, problemObjectPermission, "Needs Admin to create "+kindsSentence(perm.Kinds)+".")
+	case errors.As(err, &made) && errors.Is(err, dockerx.ErrNetworkNotAllocated):
+		var na *dockerx.NotAllocatedError
+		name := made.Name
+		if errors.As(err, &na) && na.Name != "" {
+			name = na.Name
+		}
+		detail := "The swarm didn't give network " + name + " an address range, so Coaming removed it again. " +
+			"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet."
+		if na != nil && !na.Removed {
+			detail = "The swarm didn't give network " + name + " an address range. " +
+				"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet. " +
+				"Coaming couldn't remove it, so delete " + name + " on the Networks page."
+		}
+		return problem(http.StatusUnprocessableEntity, problemNetworkNotAllocated, detail,
+			&huma.ErrorDetail{Location: "object", Message: "network:" + name})
 	case errors.As(err, &made) && errors.Is(err, dockerx.ErrNameTaken):
 		return problem(http.StatusConflict, problemNameTaken, "A "+made.Kind+" named "+made.Name+" already exists.",
 			&huma.ErrorDetail{Location: "object", Message: made.Kind + ":" + made.Name})

@@ -87,6 +87,9 @@ type ServicesDeps struct {
 	Checker       *rbac.Checker
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
+	// AllocationWait is how a staged network waits for the swarm to allocate it. The zero value is
+	// the real defaults (about 6 s); tests pass a clock that fires at once.
+	AllocationWait dockerx.AllocationWait
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

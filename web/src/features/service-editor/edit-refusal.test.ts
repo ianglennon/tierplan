@@ -68,3 +68,16 @@ describe("editRefusalOf an overlap the swarm refuses", () => {
     expect(r.message).toBe(detail);
   });
 });
+
+describe("editRefusalOf a network the swarm did not allocate", () => {
+  it("shows the server's sentence, which names the network and says it was removed", () => {
+    const detail =
+      "The swarm didn't give network front an address range, so Coaming removed it again. Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet.";
+    const r = editRefusalOf(
+      t,
+      new ServiceActionError(422, "network_not_allocated", new Map(), detail),
+      ctx,
+    );
+    expect(r.message).toBe(detail);
+  });
+});
