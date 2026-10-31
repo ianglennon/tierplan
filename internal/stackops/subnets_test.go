@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -498,6 +499,65 @@ func TestSmallSubnetEngineOverlapRecomputesOnce(t *testing.T) {
 			}
 			if !tc.wantOK && res.Code != stackops.CodeNetworkFailed {
 				t.Errorf("code = %q, want %s after the second refusal", res.Code, stackops.CodeNetworkFailed)
+			}
+		})
+	}
+}
+
+// TestSmallSubnetSwarmUnallocatedRecomputesOnce is the same for a block the swarm accepts and never allocates: the stub is
+// removed again, the block is chosen again once, and a second failure fails the deploy.
+func TestSmallSubnetSwarmUnallocatedRecomputesOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		refuse []string
+		wantOK bool
+		subnet string
+	}{
+		{"unallocated once", []string{"10.0.0.0/26"}, true, "10.0.0.64/26"},
+		{"unallocated twice", []string{"10.0.0.0/26", "10.0.0.64/26"}, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+				c.SwarmClusterID = "cluster-1"
+				c.SwarmDefaultAddrPool = []string{"10.0.0.0/16"}
+				c.SwarmSubnetSize = 24
+				c.SwarmUnallocated = map[string]int{}
+				for _, s := range tc.refuse {
+					c.SwarmUnallocated[s] = -1
+				}
+			})
+			rig.setSmallSubnets(t, true, 26)
+			d := storedStack(t, rig, "shop", backendCompose)
+			res, _ := rig.deploy(t, d.in)
+			if res.OK() != tc.wantOK {
+				t.Fatalf("result = %+v, want ok = %v", res, tc.wantOK)
+			}
+			attempts := countWrites(rig.fake.Writes(), "POST /networks/create")
+			if attempts > 2 {
+				t.Errorf("network create attempts = %d, want at most 2 (the choice and one recompute)", attempts)
+			}
+			if tc.wantOK {
+				if got := d.recorded(t); got["shop_backend"] != tc.subnet {
+					t.Errorf("recorded = %v, want shop_backend on %s, the block the second try was given", got, tc.subnet)
+				}
+				if n := rig.stackNetworks(t, "shop"); !slices.Equal(n, []string{"shop_backend"}) {
+					t.Errorf("networks = %v, want only the allocated one", n)
+				}
+				return
+			}
+			if attempts != 2 {
+				t.Errorf("network create attempts = %d, want 2", attempts)
+			}
+			if res.Code != stackops.CodeNetworkNotAllocated {
+				t.Errorf("code = %q, want %s after the second failure", res.Code, stackops.CodeNetworkNotAllocated)
+			}
+			if n := rig.stackNetworks(t, "shop"); len(n) != 0 {
+				t.Errorf("networks = %v, want none left", n)
+			}
+			if got := rig.fake.ServiceCreates(); len(got) != 0 {
+				t.Errorf("service creates = %d, want none", len(got))
 			}
 		})
 	}

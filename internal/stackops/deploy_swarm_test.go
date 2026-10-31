@@ -2247,3 +2247,36 @@ func TestDeploySwarmNetworkNotAllocated(t *testing.T) {
 		t.Errorf("message = %q", m)
 	}
 }
+
+func TestDeploySwarmNetworkStubLeftInPlace(t *testing.T) {
+	t.Parallel()
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID = "cluster-1"
+		c.SwarmUnallocated = map[string]int{"10.70.0.0/24": -1}
+		c.RemoveErrors = map[string]string{"shop_back": "network is busy"}
+	})
+	_, in := stackInput(t, "shop", unallocatedCompose, nil)
+	res, job := rig.deploy(t, in)
+
+	if res.OK() || res.Code != stackops.CodeNetworkNotAllocated || res.FailedService != "shop_back" {
+		t.Fatalf("result = %+v, want code %s naming shop_back", res, stackops.CodeNetworkNotAllocated)
+	}
+	if !slices.Equal(res.CreatedNetworks, []string{"shop_back"}) {
+		t.Errorf("CreatedNetworks = %v, want the stub handed to the cleanup as a created network", res.CreatedNetworks)
+	}
+	if !slices.Equal(res.LeftInPlace, []string{"shop_back"}) || len(res.CleanedUp) != 0 {
+		t.Errorf("LeftInPlace = %v, CleanedUp = %v, want the stub named as left in place", res.LeftInPlace, res.CleanedUp)
+	}
+	if n := countWrites(rig.fake.Writes(), "DELETE /networks/"); n != 2 {
+		t.Errorf("network removals = %d, want 2: the read-back's and the cleanup's second try", n)
+	}
+	if n := rig.stackNetworks(t, "shop"); !slices.Equal(n, []string{"shop_back"}) {
+		t.Errorf("networks = %v, want the stub still there", n)
+	}
+	if countWrites(rig.fake.Writes(), "POST /services/") != 0 || len(rig.fake.ServiceCreates()) != 0 {
+		t.Errorf("writes = %v, want no service write", rig.fake.Writes())
+	}
+	if got := itemStates(job)[stackops.ItemNetworks]; got != "failed:network_not_allocated" {
+		t.Errorf("networks item = %q, want failed:network_not_allocated", got)
+	}
+}
