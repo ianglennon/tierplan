@@ -39,6 +39,9 @@ export interface BulkReport {
   // results" over a Container column.
   title?: string;
   itemLabel?: string;
+  // The words of the Result column when a bulk's outcomes are not "Done", "Failed" and "Skipped":
+  // deleting orphaned networks says "Deleted", "Failed" and "Kept".
+  resultLabels?: Partial<Record<BulkReportRow["result"], string>>;
   // The ID the audit rows of this operation share (D-14), when the server made
   // one; it is what the link to the audit log filters by.
   bulkId?: string | undefined;
@@ -120,7 +123,7 @@ export function BulkResultDialog({ envId, report, labels, onClose }: BulkResultD
                       r.result === "failed" && "text-destructive",
                     )}
                   >
-                    {t(`actions.results.${r.result}`)}
+                    {report?.resultLabels?.[r.result] ?? t(`actions.results.${r.result}`)}
                   </td>
                   <td className="px-2 py-1 break-words">{r.reason || missing}</td>
                 </tr>

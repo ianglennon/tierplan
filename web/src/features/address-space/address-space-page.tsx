@@ -9,6 +9,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { KeptList } from "@/features/address-space/kept-list";
 import {
   estimateSource,
   MetersCard,
@@ -144,6 +145,8 @@ export function AddressSpacePage({
             total={data.networksTotal}
             truncated={data.networksTruncated}
             swarm={data.envType === "swarm"}
+            orphans={data.orphans ?? []}
+            kept={data.kept ?? []}
             search={search}
             onSearchChange={onSearchChange}
           />
@@ -152,6 +155,12 @@ export function AddressSpacePage({
             envName={envName}
             orphans={data.orphans ?? []}
             withheld={data.orphansWithheld}
+            swarm={data.envType === "swarm"}
+          />
+          <KeptList
+            envId={envId}
+            envName={envName}
+            kept={data.kept ?? []}
             swarm={data.envType === "swarm"}
           />
         </>

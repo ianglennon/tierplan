@@ -4,6 +4,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { KeptRow, OrphanRow } from "@/api/address-space";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   type AddressMapRow,
@@ -41,6 +42,8 @@ const row = (name: string, order: number, extra: Partial<AddressMapRow> = {}): A
 
 interface MountProps {
   rows?: AddressMapRow[] | undefined;
+  orphans?: OrphanRow[];
+  kept?: KeptRow[];
   swarm?: boolean;
   search?: MapSearch;
   onSearchChange?: (patch: Partial<MapSearch>) => void;
@@ -56,6 +59,8 @@ function mount(props: MountProps = {}) {
           total={p.rows?.length ?? 0}
           truncated={false}
           swarm={p.swarm ?? false}
+          orphans={p.orphans}
+          kept={p.kept}
           search={p.search ?? {}}
           onSearchChange={p.onSearchChange ?? (() => {})}
         />
@@ -399,5 +404,63 @@ describe("loading", () => {
     expect(within(table).getAllByRole("row")).toHaveLength(9);
     expect(screen.getByRole("searchbox", { name: "Search networks" })).toBeTruthy();
     expect(screen.getByRole("group", { name: "Show" })).toBeTruthy();
+  });
+});
+
+describe("the orphan badges", () => {
+  it("shows orphan badges on the map", () => {
+    const orphan = (id: string, cls: OrphanRow["class"], nodeId = "node-1-id"): OrphanRow => ({
+      class: cls,
+      formerOwner: "",
+      formerOwnerKind: "",
+      idleSince: "2026-10-01T10:00:00Z",
+      idleSinceSource: "seen",
+      name: "x",
+      networkId: id,
+      node: "node-1",
+      nodeId,
+      scope: "local",
+      subnets: [],
+    });
+    const keep = (name: string, nodeId: string): KeptRow => ({
+      keptBy: "user",
+      keptByName: "ian",
+      name,
+      node: "",
+      nodeId,
+      present: true,
+      subnets: [],
+    });
+    mount({
+      rows: [
+        row("gone", 1),
+        row("loose", 2),
+        row("maybe", 3),
+        row("kept", 4),
+        row("same-id-other-node", 5, { id: "id-gone", nodeId: "node-2-id" }),
+        row("active", 6),
+      ],
+      orphans: [
+        orphan("id-gone", "orphaned"),
+        orphan("id-loose", "unused"),
+        orphan("id-maybe", "cant_tell"),
+      ],
+      kept: [keep("kept", "node-1-id"), keep("active", "node-2-id")],
+    });
+    const cell = (name: string) => {
+      const table = screen.getByRole("table", { name: "Subnet map" });
+      const r = within(table)
+        .getAllByRole("row")
+        .find((x) => within(x).queryByRole("link", { name })) as HTMLElement;
+      return within(r).getAllByRole("cell")[0] as HTMLElement;
+    };
+    expect(within(cell("gone")).getByText("Orphaned")).toBeTruthy();
+    expect(within(cell("loose")).getByText("Unused")).toBeTruthy();
+    // A network the check cannot judge yet carries no badge.
+    expect(within(cell("maybe")).queryByText(/Orphaned|Unused/)).toBeNull();
+    expect(within(cell("kept")).getByText("Kept")).toBeTruthy();
+    // A local network is judged and kept on its own node.
+    expect(within(cell("same-id-other-node")).queryByText("Orphaned")).toBeNull();
+    expect(within(cell("active")).queryByText("Kept")).toBeNull();
   });
 });

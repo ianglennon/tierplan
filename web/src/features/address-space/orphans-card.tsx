@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-import { Ellipsis, Info, Trash2 } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Ellipsis, Info, Pin, Trash2 } from "lucide-react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 
-import type { OrphanRow, OrphansWithheld } from "@/api/address-space";
+import {
+  type KeepTarget,
+  OrphanRequestError,
+  type OrphanRow,
+  type OrphansWithheld,
+  useKeepNetworks,
+} from "@/api/address-space";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
 import { Button } from "@/components/ui/button";
@@ -20,9 +26,13 @@ import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/compon
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DeleteOrphansDialog } from "@/features/address-space/delete-orphans-dialog";
 import { SubnetCell } from "@/features/address-space/subnet-map";
-import { TruncatedText } from "@/features/resources/resource-table";
+import { type BulkReport, BulkResultDialog } from "@/features/containers/bulk-result-dialog";
+import { type BulkAction, BulkBar } from "@/features/resources/bulk-bar";
+import { SelectCheckbox, TruncatedText } from "@/features/resources/resource-table";
+import { useSelection } from "@/features/resources/selection";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
+import { toastError, toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 
 // Skeleton rows while the first read is out (UI-SPEC: 36px rows).
@@ -93,17 +103,64 @@ function IdleSinceCell({ row }: { row: OrphanRow }) {
   );
 }
 
+// keepFailure is the sentence for a keep the server refused or never answered.
+function keepFailure(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  name: string,
+  err: unknown,
+): string {
+  const e = err instanceof OrphanRequestError ? err : new OrphanRequestError(0);
+  switch (e.type) {
+    case "network_builtin":
+      return t("addressSpace.orphans.refused.keepBuiltin", { name });
+    case "network_not_found":
+      return t("addressSpace.orphans.refused.gone", { name });
+    case "node_required":
+      return t("addressSpace.orphans.refused.keepNode", { name });
+    default:
+      return e.status === 403 ? t("networks.errors.permission") : t("networks.errors.generic");
+  }
+}
+
+const keepTargetOf = (r: OrphanRow): KeepTarget => ({
+  name: r.name,
+  // A local network is kept on its node; a swarm-wide one is kept for the cluster.
+  ...(r.scope === "local" ? { nodeId: r.nodeId } : {}),
+});
+
 // OrphansCard is "Orphaned and unused networks": what the server found that nothing has used for 24
-// hours, in three groups, with Delete… per row (NET-04). It only renders: the server decided
-// every class, and decides again before it deletes.
+// hours, in three groups, with Keep and Delete… per row and in bulk (NET-04). It only renders: the
+// server decided every class, and decides again before it deletes.
 export function OrphansCard({ envId, envName, orphans, withheld, swarm }: OrphansCardProps) {
   const t = useT();
   const manage = useNeeds("networks.manage", envId);
-  const [deleting, setDeleting] = useState<OrphanRow | null>(null);
+  const keepNeeds = useNeeds("networks.keep", envId);
+  const keep = useKeepNetworks(envId);
+  // The rows a delete is about stay while the dialog closes, so its title never reads "Delete ?"
+  // on the way out.
+  const [deleting, setDeleting] = useState<{ rows: OrphanRow[]; open: boolean }>({
+    rows: [],
+    open: false,
+  });
+  // The results a person asked to see from a toast's Details.
+  const [report, setReport] = useState<BulkReport | null>(null);
   const loading = orphans === undefined;
-  const groups = groupOrphans(orphans ?? []);
+  const groups = useMemo(() => groupOrphans(orphans ?? []), [orphans]);
   const waiting = waitingFor(withheld);
-  const columnCount = swarm ? 6 : 5;
+  // The columns: select, Network, Node (swarm), Subnet, Former stack, Idle since, actions.
+  const columnCount = swarm ? 7 : 6;
+
+  // Only Orphaned and Unused rows can be chosen: Coaming never acts on a network it cannot be
+  // sure of.
+  const selectable = useMemo(() => [...groups.orphaned, ...groups.unused].map(orphanKey), [groups]);
+  const isEligible = useCallback((key: string) => selectable.includes(key), [selectable]);
+  const selection = useSelection<string>({ orderedKeys: selectable, isEligible });
+  const byKey = useMemo(() => new Map((orphans ?? []).map((r) => [orphanKey(r), r])), [orphans]);
+  // In the order the table shows them, whatever order they were chosen in.
+  const chosen = selectable
+    .filter((k) => selection.selected.has(k))
+    .map((k) => byKey.get(k))
+    .filter((r): r is OrphanRow => r !== undefined);
 
   const needsOn = (reason: string | undefined) =>
     t("addressSpace.orphans.needsOn", {
@@ -114,10 +171,24 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
     waiting.length > 0
       ? t("addressSpace.orphans.waiting", { nodes: waiting.join(", ") })
       : t("addressSpace.orphans.waitingUnknown");
-  const deleteReason = (row: OrphanRow): string | undefined => {
+  const keepReason = keepNeeds.allowed ? undefined : needsOn(keepNeeds.reason);
+  const deleteReason = (row?: OrphanRow): string | undefined => {
     if (!manage.allowed) return needsOn(manage.reason);
-    return row.class === "cant_tell" ? waitingReason : undefined;
+    return row?.class === "cant_tell" ? waitingReason : undefined;
   };
+
+  async function keepRows(rows: OrphanRow[]) {
+    if (rows.length === 0 || keep.isPending) return;
+    try {
+      await keep.mutateAsync(rows.map(keepTargetOf));
+      toastSuccess(
+        t("addressSpace.orphans.keepDone", { count: rows.length, name: rows[0]?.name ?? "" }),
+      );
+      selection.clear();
+    } catch (e) {
+      toastError(keepFailure(t, rows[0]?.name ?? "", e));
+    }
+  }
 
   const cantTellCaption =
     waiting.length > 0
@@ -131,11 +202,43 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
     ? t("addressSpace.orphans.columns.formerStack")
     : t("addressSpace.orphans.columns.formerProject");
 
+  const bulkDeleteReason = deleteReason();
+  const bulkActions: BulkAction[] = [
+    {
+      id: "keep",
+      label: t("addressSpace.orphans.actions.keep"),
+      onClick: () => {
+        if (!keepReason) void keepRows(chosen);
+      },
+      ...(keepReason ? { reason: keepReason } : {}),
+    },
+    {
+      id: "delete",
+      label: t("addressSpace.orphans.actions.delete"),
+      destructive: true,
+      onClick: () => {
+        if (!bulkDeleteReason) setDeleting({ rows: chosen, open: true });
+      },
+      ...(bulkDeleteReason ? { reason: bulkDeleteReason } : {}),
+    },
+  ];
+
+  const headerCell =
+    "sticky top-0 z-10 h-9 bg-muted px-3 text-xs font-semibold text-muted-foreground max-md:h-11";
+
   return (
     <Card id="orphans" className="scroll-mt-4" aria-busy={loading || undefined}>
       <CardHeader>
         <CardTitle>{t("addressSpace.orphans.title")}</CardTitle>
-        <CardDescription>{t("addressSpace.orphans.caption")}</CardDescription>
+        {selection.selected.size > 0 ? (
+          <BulkBar
+            count={selection.selected.size}
+            actions={bulkActions}
+            onClear={selection.clear}
+          />
+        ) : (
+          <CardDescription>{t("addressSpace.orphans.caption")}</CardDescription>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {empty ? (
@@ -149,6 +252,9 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
               <caption className="sr-only">{t("addressSpace.orphans.tableLabel")}</caption>
               <TableHeader>
                 <TableRow className={cn(ROW, "hover:bg-transparent")}>
+                  <TableHead scope="col" className={cn(headerCell, "w-12 min-w-12 ps-3 pe-0")}>
+                    <span className="sr-only">{t("addressSpace.orphans.columns.select")}</span>
+                  </TableHead>
                   {[
                     t("addressSpace.orphans.columns.network"),
                     ...(swarm ? [t("addressSpace.orphans.columns.node")] : []),
@@ -156,18 +262,11 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                     formerHeader,
                     t("addressSpace.orphans.columns.idleSince"),
                   ].map((header) => (
-                    <TableHead
-                      key={header}
-                      scope="col"
-                      className="sticky top-0 z-10 h-9 bg-muted px-3 text-xs font-semibold text-muted-foreground max-md:h-11"
-                    >
+                    <TableHead key={header} scope="col" className={headerCell}>
                       {header}
                     </TableHead>
                   ))}
-                  <TableHead
-                    scope="col"
-                    className="sticky top-0 z-10 h-9 w-12 bg-muted px-3 text-xs font-semibold text-muted-foreground max-md:h-11"
-                  >
+                  <TableHead scope="col" className={cn(headerCell, "w-12")}>
                     <span className="sr-only">{t("addressSpace.orphans.columns.actions")}</span>
                   </TableHead>
                 </TableRow>
@@ -176,7 +275,7 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                 <TableBody>
                   {Array.from({ length: SKELETON_ROWS }, (_, i) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton rows
-                    <TableRow key={i} className={ROW}>
+                    <TableRow key={i} className={ROW} data-slot="skeleton-row">
                       {Array.from({ length: columnCount }, (_, c) => (
                         // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton cells
                         <TableCell key={c} className={CELL}>
@@ -191,6 +290,9 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                   const rows = groups[cls];
                   if (rows.length === 0) return null;
                   const key = cls === "cant_tell" ? "cantTell" : cls;
+                  const groupLabel = t(`addressSpace.orphans.groups.${key}.label`);
+                  const keys = rows.map(orphanKey);
+                  const state = selection.groupState(keys);
                   return (
                     <Fragment key={cls}>
                       <TableBody>
@@ -200,16 +302,33 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                             colSpan={columnCount}
                             className="px-3 py-1 text-start whitespace-normal"
                           >
-                            <span className="flex flex-col gap-0.5">
-                              <span className="text-sm font-semibold">
-                                {t(`addressSpace.orphans.groups.${key}.name`, {
-                                  count: rows.length,
-                                })}
-                              </span>
-                              <span className="text-xs font-normal text-muted-foreground">
-                                {cls === "cant_tell"
-                                  ? cantTellCaption
-                                  : t(`addressSpace.orphans.groups.${key}.caption`)}
+                            <span className="flex items-center gap-3">
+                              {cls === "cant_tell" ? null : (
+                                <SelectCheckbox
+                                  checked={
+                                    state === "checked"
+                                      ? true
+                                      : state === "mixed"
+                                        ? "indeterminate"
+                                        : false
+                                  }
+                                  label={t("addressSpace.orphans.select.group", {
+                                    group: groupLabel,
+                                  })}
+                                  onToggle={() => selection.selectGroup(keys)}
+                                />
+                              )}
+                              <span className="flex flex-col gap-0.5">
+                                <span className="text-sm font-semibold">
+                                  {t(`addressSpace.orphans.groups.${key}.name`, {
+                                    count: rows.length,
+                                  })}
+                                </span>
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  {cls === "cant_tell"
+                                    ? cantTellCaption
+                                    : t(`addressSpace.orphans.groups.${key}.caption`)}
+                                </span>
                               </span>
                             </span>
                           </TableHead>
@@ -221,8 +340,13 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
                             key={orphanKey(row)}
                             row={row}
                             swarm={swarm}
+                            checked={selection.isSelected(orphanKey(row))}
+                            onToggle={(shift) => selection.toggle(orphanKey(row), { shift })}
+                            waitingReason={waitingReason}
+                            keepReason={keepReason}
                             deleteReason={deleteReason(row)}
-                            onDelete={() => setDeleting(row)}
+                            onKeep={() => void keepRows([row])}
+                            onDelete={() => setDeleting({ rows: [row], open: true })}
                           />
                         ))}
                       </TableBody>
@@ -237,9 +361,19 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
       </CardContent>
       <DeleteOrphansDialog
         envId={envId}
-        row={deleting}
+        rows={deleting.rows}
+        open={deleting.open}
+        swarm={swarm}
         notReporting={waiting}
-        onClose={() => setDeleting(null)}
+        onClose={() => setDeleting((d) => ({ ...d, open: false }))}
+        onDone={selection.clear}
+        onDetails={setReport}
+      />
+      <BulkResultDialog
+        envId={envId}
+        report={report}
+        labels={swarm ? undefined : { node: null }}
+        onClose={() => setReport(null)}
       />
     </Card>
   );
@@ -248,20 +382,45 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
 interface OrphanTableRowProps {
   row: OrphanRow;
   swarm: boolean;
-  // Why Delete… is unavailable, or undefined when it is available.
+  checked: boolean;
+  onToggle: (shift: boolean) => void;
+  // Why a Can't tell yet row cannot be chosen.
+  waitingReason: string;
+  // Why Keep or Delete… is unavailable, or undefined when it is available.
+  keepReason: string | undefined;
   deleteReason: string | undefined;
+  onKeep: () => void;
   onDelete: () => void;
 }
 
-function OrphanTableRow({ row, swarm, deleteReason, onDelete }: OrphanTableRowProps) {
+function OrphanTableRow({
+  row,
+  swarm,
+  checked,
+  onToggle,
+  waitingReason,
+  keepReason,
+  deleteReason,
+  onKeep,
+  onDelete,
+}: OrphanTableRowProps) {
   const t = useT();
+  const cantTell = row.class === "cant_tell";
   const former = row.formerOwner ? (
     <TruncatedText mono>{row.formerOwner}</TruncatedText>
   ) : (
     <span className="text-muted-foreground">{t("addressSpace.states.missing")}</span>
   );
   return (
-    <TableRow className={cn(ROW)}>
+    <TableRow className={cn(ROW)} data-state={checked ? "selected" : undefined}>
+      <TableCell className={cn(CELL, "w-12 min-w-12 ps-3 pe-0")}>
+        <SelectCheckbox
+          checked={checked}
+          label={t("addressSpace.orphans.select.row", { name: row.name })}
+          onToggle={onToggle}
+          {...(cantTell ? { reason: waitingReason } : {})}
+        />
+      </TableCell>
       <TableCell className={cn(CELL, "min-w-44")}>
         <span className="flex min-w-0 flex-col">
           <TruncatedText>{row.name}</TruncatedText>
@@ -298,6 +457,17 @@ function OrphanTableRow({ row, swarm, deleteReason, onDelete }: OrphanTableRowPr
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <NeedsTooltip reason={keepReason}>
+              <DropdownMenuItem
+                className="max-md:min-h-11"
+                onSelect={() => {
+                  if (!keepReason) onKeep();
+                }}
+              >
+                <Pin aria-hidden="true" />
+                {t("addressSpace.orphans.actions.keep")}
+              </DropdownMenuItem>
+            </NeedsTooltip>
             <NeedsTooltip reason={deleteReason}>
               <DropdownMenuItem
                 variant="destructive"

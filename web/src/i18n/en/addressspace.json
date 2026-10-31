@@ -163,7 +163,8 @@
         "formerStack": "Former stack",
         "formerProject": "Former project",
         "idleSince": "Idle since",
-        "actions": "Actions"
+        "actions": "Actions",
+        "select": "Select"
       },
       "onNode": "on {{node}}",
       "idle": {

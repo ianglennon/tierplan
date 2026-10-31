@@ -5,7 +5,7 @@ import { Link } from "@tanstack/react-router";
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 
-import type { AddressSpace } from "@/api/address-space";
+import type { AddressSpace, KeptRow, OrphanRow } from "@/api/address-space";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -316,9 +316,45 @@ export function SubnetCell({
   );
 }
 
+// What the orphans check says about a network, from the same answer as the orphans card: Orphaned
+// and Unused for a network it listed (a Can't tell yet network has no badge: nothing is said until it
+// can be), and Kept for one a person or its label keeps off the list.
+export type OrphanBadge = "orphaned" | "unused";
+
+export function orphanBadgeOf(
+  row: Pick<AddressMapRow, "id" | "nodeId" | "scope">,
+  orphans: readonly OrphanRow[],
+): OrphanBadge | undefined {
+  const found = orphans.find(
+    (o) => o.networkId === row.id && (row.scope === "swarm" || o.nodeId === row.nodeId),
+  );
+  return found && found.class !== "cant_tell" ? found.class : undefined;
+}
+
+// A keep follows the name, and for a local network its node: nodeId is empty for a swarm-wide one.
+export function isKept(
+  row: Pick<AddressMapRow, "name" | "nodeId" | "scope">,
+  kept: readonly KeptRow[],
+): boolean {
+  return kept.some(
+    (k) =>
+      k.name === row.name && (k.nodeId === "" ? row.scope === "swarm" : k.nodeId === row.nodeId),
+  );
+}
+
 // NetworkCell is the network's name, the one link of its row to the network's page, with the
-// Ingress badge on the swarm's routing-mesh network.
-function NetworkCell({ envId, row }: { envId: string; row: AddressMapRow }) {
+// Ingress badge on the swarm's routing-mesh network and the Orphaned, Unused and Kept badges.
+function NetworkCell({
+  envId,
+  row,
+  orphan,
+  kept,
+}: {
+  envId: string;
+  row: AddressMapRow;
+  orphan: OrphanBadge | undefined;
+  kept: boolean;
+}) {
   const t = useT();
   return (
     <span className="flex min-w-0 items-center gap-2">
@@ -331,6 +367,8 @@ function NetworkCell({ envId, row }: { envId: string; row: AddressMapRow }) {
         <TruncatedText>{row.name}</TruncatedText>
       </Link>
       {row.ingress ? <Badge variant="outline">{t("addressSpace.map.ingress")}</Badge> : null}
+      {orphan ? <Badge variant="outline">{t(`addressSpace.map.badge.${orphan}`)}</Badge> : null}
+      {kept ? <Badge variant="outline">{t("addressSpace.map.badge.kept")}</Badge> : null}
     </span>
   );
 }
@@ -343,6 +381,9 @@ interface SubnetMapProps {
   total: number;
   truncated: boolean;
   swarm: boolean;
+  // What the orphans check found and what is kept, for the badges in the Network cell.
+  orphans?: readonly OrphanRow[] | undefined;
+  kept?: readonly KeptRow[] | undefined;
   search: MapSearch;
   // Writes the given keys to the URL; a key set to undefined is removed from it.
   onSearchChange: (patch: Partial<MapSearch>) => void;
@@ -396,6 +437,8 @@ export function SubnetMap({
   total,
   truncated,
   swarm,
+  orphans,
+  kept,
   search,
   onSearchChange,
 }: SubnetMapProps) {
@@ -437,7 +480,14 @@ export function SubnetMap({
       header: t("addressSpace.map.columns.name"),
       className: "min-w-48",
       sortKey: "name",
-      cell: (row) => <NetworkCell envId={envId} row={row} />,
+      cell: (row) => (
+        <NetworkCell
+          envId={envId}
+          row={row}
+          orphan={orphanBadgeOf(row, orphans ?? [])}
+          kept={isKept(row, kept ?? [])}
+        />
+      ),
     },
     {
       id: "subnet",

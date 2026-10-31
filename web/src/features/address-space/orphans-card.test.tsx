@@ -262,3 +262,159 @@ describe("OrphansCard", () => {
     expect(deletes()).toHaveLength(1);
   });
 });
+
+// A checkbox of the table by its name, once who the person is has arrived.
+const box = (name: string) => screen.getByRole("checkbox", { name });
+
+async function ready(label: string) {
+  await waitFor(() => {
+    const el = screen.getByRole("button", { name: label });
+    expect(el.getAttribute("aria-disabled")).not.toBe("true");
+  });
+}
+
+describe("OrphansCard (several)", () => {
+  it("bulk deletes each target once and summarises", async () => {
+    answer = (req) => {
+      if (req.path.endsWith("/id-a")) return deleted();
+      if (req.path.endsWith("/id-b")) return kept("in_use_again")();
+      return problem(500, "internal")();
+    };
+    mount({
+      orphans: [orphan("a"), orphan("b", { class: "unused", formerOwner: "" }), orphan("c")],
+    });
+    fireEvent.click(box("Select all in Orphaned"));
+    fireEvent.click(box("Select b"));
+    expect(screen.getByRole("status").textContent).toContain("3 selected");
+    await ready("Delete…");
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete 3 networks?")).toBeTruthy();
+    expect(
+      within(dialog).getByText(
+        /Coaming checks each one again just before it deletes it, and keeps any that something started using\./,
+      ),
+    ).toBeTruthy();
+    // The targets are listed, and Cancel has focus.
+    expect(within(dialog).getByRole("cell", { name: "b" })).toBeTruthy();
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 3 networks" }));
+
+    expect(await screen.findByText("Deleted 1, kept 1, 1 failed")).toBeTruthy();
+    // Each network went out once, in order, and none was retried.
+    expect(deletes().map((d) => d.path.split("/").pop())).toEqual(["id-a", "id-c", "id-b"]);
+    // A failure is an error toast; Details shows each network's outcome.
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog");
+    const rows = within(results).getAllByRole("row").slice(1);
+    expect(
+      rows.map((r) =>
+        within(r)
+          .getAllByRole("cell")
+          .map((c) => c.textContent),
+      ),
+    ).toEqual([
+      ["a", "Cluster", "Deleted", "—"],
+      [
+        "c",
+        "Cluster",
+        "Failed",
+        "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+      ],
+      ["b", "Cluster", "Kept", "b is in use again, so Coaming kept it."],
+    ]);
+    // The selection is cleared.
+    expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("counts a too-large refusal as failed with its own line in Details", async () => {
+    answer = (req) =>
+      req.path.endsWith("/id-a") ? problem(409, "inspect_too_large")() : deleted();
+    mount({ orphans: [orphan("a"), orphan("b")] });
+    fireEvent.click(box("Select all in Orphaned"));
+    await ready("Delete…");
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 networks" }));
+    expect(await screen.findByText("Deleted 1, kept 0, 1 failed")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const results = await screen.findByRole("dialog");
+    expect(
+      within(results).getByText(
+        "Coaming didn't delete a: its details are over 64 KB, too large to save in the audit log first.",
+      ),
+    ).toBeTruthy();
+    expect(deletes()).toHaveLength(2);
+  });
+
+  it("says Deleted n networks when every one went", async () => {
+    mount({ orphans: [orphan("a"), orphan("b")] });
+    fireEvent.click(box("Select all in Orphaned"));
+    await ready("Delete…");
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete 2 networks" }));
+    expect(await screen.findByText("Deleted 2 networks.")).toBeTruthy();
+  });
+
+  it("keeps selected networks", async () => {
+    answer = () => Response.json({ kept: 2 });
+    mount({
+      orphans: [
+        orphan("a"),
+        orphan("b", { class: "unused", scope: "local", node: "worker-1", nodeId: "w1" }),
+      ],
+    });
+    fireEvent.click(box("Select a"));
+    fireEvent.click(box("Select b"));
+    await ready("Keep");
+    fireEvent.click(screen.getByRole("button", { name: "Keep" }));
+    expect(await screen.findByText("Keeping 2 networks.")).toBeTruthy();
+    const put = sent.find((s) => s.method === "PUT");
+    expect(put?.path).toBe(`/api/env/${ENV}/address-space/keeps`);
+    // A local network is kept on its node; a swarm-wide one for the cluster.
+    expect(put?.body).toEqual({ targets: [{ name: "a" }, { name: "b", nodeId: "w1" }] });
+    expect(screen.queryByRole("toolbar")).toBeNull();
+  });
+
+  it("keeps one network from its row", async () => {
+    answer = () => Response.json({ kept: 1 });
+    mount({ orphans: [orphan("a")] });
+    openMenu("a");
+    await screen.findByRole("menuitem", { name: "Keep" });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: "Keep" }).getAttribute("aria-disabled")).not.toBe(
+        "true",
+      ),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Keep" }));
+    expect(await screen.findByText("Keeping a. Coaming won't list it again.")).toBeTruthy();
+  });
+
+  it("disables cant-tell rows with the reason", async () => {
+    mount({
+      orphans: [orphan("a"), orphan("maybe", { class: "cant_tell" })],
+      withheld: { managerMissing: false, nodes: ["worker-2"], stacks: [] },
+    });
+    const reason =
+      "Waiting for worker-2 to report. Coaming won't remove a network until every node has answered.";
+    // The row cannot be chosen, and the reason is its description.
+    const maybe = box("Select maybe");
+    expect(maybe.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(maybe);
+    expect(maybe.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByRole("checkbox", { name: "Select all in Can't tell yet" })).toBeNull();
+    openMenu("maybe");
+    const del = await screen.findByRole("menuitem", { name: /Delete…/ });
+    await waitFor(() =>
+      expect(screen.getByRole("menuitem", { name: /Delete…/ }).getAttribute("aria-disabled")).toBe(
+        "true",
+      ),
+    );
+    expect(del).toBeTruthy();
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Delete…/ }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(deletes()).toHaveLength(0);
+  });
+});
