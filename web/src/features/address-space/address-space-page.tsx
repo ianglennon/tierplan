@@ -138,6 +138,8 @@ export function AddressSpacePage({
           <SubnetMap
             envId={envId}
             rows={data.networks ?? []}
+            total={data.networksTotal}
+            truncated={data.networksTruncated}
             swarm={data.envType === "swarm"}
             search={search}
             onSearchChange={onSearchChange}
@@ -149,6 +151,8 @@ export function AddressSpacePage({
           <SubnetMap
             envId={envId}
             rows={undefined}
+            total={0}
+            truncated={false}
             swarm={false}
             search={search}
             onSearchChange={onSearchChange}
