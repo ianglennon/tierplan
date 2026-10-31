@@ -11,8 +11,15 @@ import { NoPermission } from "@/components/full-page-state";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FreeSpaceTips } from "@/features/pool-guide/free-space-tips";
 import { DEFAULT_SWARM_INPUTS, type SwarmInputs } from "@/features/pool-guide/generate";
+import { MigrationRunbook } from "@/features/pool-guide/migration-runbook";
 import { NewSwarmForm } from "@/features/pool-guide/new-swarm-form";
+import {
+  INITIAL_POOLS,
+  type PoolDraft,
+  StandaloneForm,
+} from "@/features/pool-guide/standalone-form";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
 
@@ -64,6 +71,8 @@ export function PoolGuidePage({ envId, part }: PoolGuidePageProps) {
   const allowed = usePermission("networks.read", envId);
   const environments = useQuery({ ...environmentsQuery, enabled: allowed });
   const [inputs, setInputs] = useState<SwarmInputs>(DEFAULT_SWARM_INPUTS);
+  // The Standalone host rows are held here too, so a visit to another tab does not lose them.
+  const [pools, setPools] = useState<PoolDraft[]>(INITIAL_POOLS);
   if (!allowed) return <NoPermission />;
 
   const envType = environments.data?.items?.find((e) => e.id === envId)?.envType;
@@ -122,7 +131,24 @@ export function PoolGuidePage({ envId, part }: PoolGuidePageProps) {
           <h2 id="pool-guide-heading" className="text-lg font-semibold">
             {t(TAB_KEYS[active])}
           </h2>
+          {active === "free-space" ? <FreeSpaceTips envId={envId} /> : null}
           {active === "new-swarm" ? <NewSwarmForm inputs={inputs} onChange={change} /> : null}
+          {active === "rebuild" ? (
+            <MigrationRunbook
+              envId={envId}
+              inputs={inputs}
+              onChange={change}
+              swarm={envType !== "standalone"}
+            />
+          ) : null}
+          {active === "standalone" ? (
+            <StandaloneForm
+              envId={envId}
+              rows={pools}
+              onChange={setPools}
+              standalone={envType === "standalone"}
+            />
+          ) : null}
         </section>
       )}
     </div>
