@@ -6,6 +6,7 @@ package envs
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"math/bits"
@@ -850,4 +851,45 @@ func (s *AddressSpaces) setOrphaned(envID string, n int) {
 	e.mu.Lock()
 	e.sum.Orphaned, e.haveSum = n, true
 	e.mu.Unlock()
+}
+
+// enteredPool is the stored form of a pool a person entered.
+type enteredPool struct {
+	Base string `json:"base"`
+	Size int    `json:"size"`
+}
+
+// EncodeEnteredPools is the text stored for the pools a person entered (environments.address_pools),
+// a JSON list in the order given. No pools is "[]".
+func EncodeEnteredPools(pools []netspace.Pool) string {
+	list := make([]enteredPool, 0, len(pools))
+	for _, p := range pools {
+		list = append(list, enteredPool{Base: p.Base.String(), Size: p.Size})
+	}
+	raw, err := json.Marshal(list)
+	if err != nil { // a list of strings and numbers cannot fail to marshal
+		return "[]"
+	}
+	return string(raw)
+}
+
+// DecodeEnteredPools reads what EncodeEnteredPools stored. A pool that cannot be counted is
+// dropped rather than failing the read: the text is Coaming's own, but a damaged row must not
+// take the page down.
+func DecodeEnteredPools(raw string) []netspace.Pool {
+	var list []enteredPool
+	if json.Unmarshal([]byte(raw), &list) != nil {
+		return nil
+	}
+	out := make([]netspace.Pool, 0, len(list))
+	for _, e := range list {
+		base, err := netip.ParsePrefix(e.Base)
+		if err != nil {
+			continue
+		}
+		if p := (netspace.Pool{Base: base, Size: e.Size}); p.Valid() {
+			out = append(out, p)
+		}
+	}
+	return out
 }

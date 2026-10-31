@@ -91,7 +91,9 @@
         "cluster_adopted": "Adopted a new cluster",
         "local_folded": "Folded the local host",
         "auto_update_changed": "Changed agent auto-update",
-        "restart_loop_settings_changed": "Changed restart-loop settings"
+        "restart_loop_settings_changed": "Changed restart-loop settings",
+        "small_subnets_changed": "Changed small stack subnets",
+        "address_pools_saved": "Saved address pools"
       },
       "agent": {
         "enrolled": "Agent enrolled",

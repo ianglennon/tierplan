@@ -193,6 +193,10 @@ var phase6DetailKeys = map[string][]string{
 	audit.ActionRestartLoopMuted:                      {"name", "kind", "node"},
 	audit.ActionRestartLoopUnmuted:                    {"name", "kind", "node"},
 	audit.ActionEnvironmentRestartLoopSettingsChanged: {"failures", "window_minutes", "previous_failures", "previous_window_minutes"},
+	// A change of the small-subnet opt-in records the new setting and the one it replaced; a save
+	// of entered pools the new and the previous list, each as compact "base/size" text (plan 10-21).
+	audit.ActionEnvironmentSmallSubnetsChanged: {"enabled", "mask", "previous_enabled", "previous_mask"},
+	audit.ActionEnvironmentAddressPoolsSaved:   {"pools", "previous_pools"},
 	// An availability or role change records the node's name, the value it had and the one asked for,
 	// whether its name was typed to confirm, the warnings the change carried (comma separated) and the
 	// code (plan 06-15, RES-05).
@@ -252,6 +256,8 @@ func TestEveryPhase6ActionIsDefinedAndItsDetailKeysAreRecordable(t *testing.T) {
 		"restart_loop.unmuted": audit.ActionRestartLoopUnmuted,
 
 		"environment.restart_loop_settings_changed": audit.ActionEnvironmentRestartLoopSettingsChanged,
+		"environment.small_subnets_changed":         audit.ActionEnvironmentSmallSubnetsChanged,
+		"environment.address_pools_saved":           audit.ActionEnvironmentAddressPoolsSaved,
 
 		"node.availability_changed": audit.ActionNodeAvailabilityChanged,
 		"node.role_changed":         audit.ActionNodeRoleChanged,

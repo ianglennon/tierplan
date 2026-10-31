@@ -46,6 +46,7 @@ const (
 	PermContainersRemove      Perm = "containers.remove"
 	PermNetworksManage        Perm = "networks.manage"
 	PermNetworksKeep          Perm = "networks.keep"
+	PermNetworksAddressing    Perm = "networks.addressing"
 	PermNetworksConnect       Perm = "networks.connect"
 	PermVolumesCreate         Perm = "volumes.create"
 	PermAuditRead             Perm = "audit.read"
@@ -110,6 +111,7 @@ var defaultRegistry = Registry{
 	{Name: PermImagesDelete, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Remove and untag images"},
 	{Name: PermNetworksManage, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create and delete networks"},
 	{Name: PermNetworksKeep, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Keep or stop keeping networks out of the orphan list"},
+	{Name: PermNetworksAddressing, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Change the address space settings: small stack subnets and entered address pools"},
 	{Name: PermNetworksConnect, Scope: ScopeEnvironment, MinRole: RoleOperator, Description: "Connect and disconnect containers and networks"},
 	{Name: PermVolumesCreate, Scope: ScopeEnvironment, MinRole: RoleAdmin, Description: "Create volumes"},
 	{Name: PermAuditRead, Scope: ScopeGlobal, Description: "Read the audit log"},

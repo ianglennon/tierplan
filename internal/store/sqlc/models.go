@@ -129,6 +129,11 @@ type Environment struct {
 	LocalSocketPath          sql.NullString
 	RestartLoopFailures      int64
 	RestartLoopWindowMinutes int64
+	SmallSubnets             int64
+	SmallSubnetMask          int64
+	AddressPools             string
+	AddressSettingsVersion   int64
+	AddressSettingsBy        string
 }
 
 type GitCredential struct {

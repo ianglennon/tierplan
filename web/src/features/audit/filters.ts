@@ -50,6 +50,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "environment.local_folded",
   "environment.auto_update_changed",
   "environment.restart_loop_settings_changed",
+  "environment.small_subnets_changed",
+  "environment.address_pools_saved",
   "warning.acknowledged",
   "audit.pruned",
   "audit.reanchored",

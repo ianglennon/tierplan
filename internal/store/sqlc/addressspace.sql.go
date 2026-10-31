@@ -45,6 +45,33 @@ func (q *Queries) DeleteNetworkSeen(ctx context.Context, arg DeleteNetworkSeenPa
 	return result.RowsAffected()
 }
 
+const getAddressSettings = `-- name: GetAddressSettings :one
+SELECT small_subnets, small_subnet_mask, address_pools, address_settings_version, address_settings_by
+FROM environments WHERE id = ?
+`
+
+type GetAddressSettingsRow struct {
+	SmallSubnets           int64
+	SmallSubnetMask        int64
+	AddressPools           string
+	AddressSettingsVersion int64
+	AddressSettingsBy      string
+}
+
+// The small-subnet opt-in, the entered pools and the version of the two for one environment.
+func (q *Queries) GetAddressSettings(ctx context.Context, id string) (GetAddressSettingsRow, error) {
+	row := q.db.QueryRowContext(ctx, getAddressSettings, id)
+	var i GetAddressSettingsRow
+	err := row.Scan(
+		&i.SmallSubnets,
+		&i.SmallSubnetMask,
+		&i.AddressPools,
+		&i.AddressSettingsVersion,
+		&i.AddressSettingsBy,
+	)
+	return i, err
+}
+
 const insertNetworkKeep = `-- name: InsertNetworkKeep :exec
 INSERT INTO network_keeps (env_id, node_id, name, kept_by, kept_at)
 VALUES (?, ?, ?, ?, ?)
@@ -172,6 +199,69 @@ func (q *Queries) ListNetworkSeen(ctx context.Context, envID string) ([]NetworkS
 		return nil, err
 	}
 	return items, nil
+}
+
+const setAddressPools = `-- name: SetAddressPools :execrows
+UPDATE environments
+SET address_pools = ?, address_settings_version = address_settings_version + 1,
+    address_settings_by = ?, updated_at = ?
+WHERE id = ? AND address_settings_version = ?
+`
+
+type SetAddressPoolsParams struct {
+	AddressPools           string
+	AddressSettingsBy      string
+	UpdatedAt              int64
+	ID                     string
+	AddressSettingsVersion int64
+}
+
+// Saves the entered pools only when the version is the one the caller read; zero rows means it was not.
+func (q *Queries) SetAddressPools(ctx context.Context, arg SetAddressPoolsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setAddressPools,
+		arg.AddressPools,
+		arg.AddressSettingsBy,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.AddressSettingsVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSmallSubnets = `-- name: SetSmallSubnets :execrows
+UPDATE environments
+SET small_subnets = ?, small_subnet_mask = ?, address_settings_version = address_settings_version + 1,
+    address_settings_by = ?, updated_at = ?
+WHERE id = ? AND address_settings_version = ?
+`
+
+type SetSmallSubnetsParams struct {
+	SmallSubnets           int64
+	SmallSubnetMask        int64
+	AddressSettingsBy      string
+	UpdatedAt              int64
+	ID                     string
+	AddressSettingsVersion int64
+}
+
+// Saves the opt-in only when the version is the one the caller read, so a save made in between is
+// never overwritten; zero rows means it was not.
+func (q *Queries) SetSmallSubnets(ctx context.Context, arg SetSmallSubnetsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSmallSubnets,
+		arg.SmallSubnets,
+		arg.SmallSubnetMask,
+		arg.AddressSettingsBy,
+		arg.UpdatedAt,
+		arg.ID,
+		arg.AddressSettingsVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const upsertNetworkSeen = `-- name: UpsertNetworkSeen :exec

@@ -449,6 +449,41 @@
         ],
         "type": "object"
       },
+      "AddressSettingsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "changedBy": {
+            "description": "The display name of whoever saved either setting last; empty when none was saved or that person is not known",
+            "type": "string"
+          },
+          "pools": {
+            "description": "The pools entered for a standalone host, in the order entered. Empty means the host's own (default-address-pools) or Docker's default pools are used",
+            "items": {
+              "$ref": "#/components/schemas/PoolEntryBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "smallSubnets": {
+            "$ref": "#/components/schemas/SmallSubnetsBody"
+          },
+          "version": {
+            "description": "How many times either setting was saved. Send it back with a save: a save made against any other version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "smallSubnets",
+          "pools",
+          "version",
+          "changedBy"
+        ],
+        "type": "object"
+      },
       "AddressSpaceBody": {
         "additionalProperties": false,
         "properties": {
@@ -9759,6 +9794,28 @@
         ],
         "type": "object"
       },
+      "PoolEntryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "base": {
+            "description": "The pool's range as an IPv4 CIDR with no host bits set, for example 10.20.0.0/16. Anything else is 422 pool_base_invalid",
+            "maxLength": 43,
+            "type": "string"
+          },
+          "size": {
+            "description": "The mask of each network allocated from the pool: from the base's own mask to 30, else 422 pool_size_invalid",
+            "format": "int64",
+            "maximum": 128,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "base",
+          "size"
+        ],
+        "type": "object"
+      },
       "PreviewTeamImpactInputBody": {
         "additionalProperties": false,
         "properties": {
@@ -13950,6 +14007,55 @@
         "required": [
           "idleMinutes",
           "maxPerUser"
+        ],
+        "type": "object"
+      },
+      "SmallSubnetsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "True when a stack deployed here gets a small subnet of its own for its networks",
+            "type": "boolean"
+          },
+          "mask": {
+            "description": "The size of each small subnet: 25 to 28 (a /26 holds 59 usable addresses, a /28 holds 11). Kept while the setting is off",
+            "format": "int64",
+            "maximum": 28,
+            "minimum": 25,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "mask"
+        ],
+        "type": "object"
+      },
+      "SmallSubnetsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "description": "Whether small stack subnets are on",
+            "type": "boolean"
+          },
+          "mask": {
+            "description": "The size of each small subnet, 25 to 28",
+            "format": "int64",
+            "maximum": 28,
+            "minimum": 25,
+            "type": "integer"
+          },
+          "version": {
+            "description": "The version read with the settings; a save against another version is 409 settings_changed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "mask",
+          "version"
         ],
         "type": "object"
       },
@@ -21989,6 +22095,118 @@
           }
         },
         "summary": "Delete an orphaned or unused network",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space/settings": {
+      "get": {
+        "description": "Whether small stack subnets are on and their size (off at /26 by default), the pools entered for a standalone host (none by default), the version of the two and the display name of whoever saved them last. Needs networks.read (Viewer) on the environment.",
+        "operationId": "getAddressSettings",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The address-space settings of an environment",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/address-space/small-subnets": {
+      "put": {
+        "description": "mask is 25 to 28. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.small_subnets_changed, with the new and the previous values.",
+        "operationId": "setSmallSubnets",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmallSubnetsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressSettingsBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Turn small stack subnets on or off, and choose their size",
         "tags": [
           "environments"
         ]

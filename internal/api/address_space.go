@@ -220,6 +220,7 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 		})
 	registerAddressOrphans(r, d)
 	registerSubnetCheck(r, d)
+	registerAddressSettings(r, d)
 }
 
 // orphanBody is the orphan part of the page. A check that fails leaves the list empty and says

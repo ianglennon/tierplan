@@ -96,6 +96,12 @@ const (
 	// ActionEnvironmentRestartLoopSettingsChanged is a change of the failures and the window
 	// that make a restart loop in one environment (plan 06-35, RES-13).
 	ActionEnvironmentRestartLoopSettingsChanged = "environment.restart_loop_settings_changed"
+	// ActionEnvironmentSmallSubnetsChanged is a change of the opt-in to small stack subnets, or
+	// of their size, in one environment (plan 10-21, D-21).
+	ActionEnvironmentSmallSubnetsChanged = "environment.small_subnets_changed"
+	// ActionEnvironmentAddressPoolsSaved is a save of the address pools a person entered for a
+	// standalone host (plan 10-21, D-07 as amended).
+	ActionEnvironmentAddressPoolsSaved = "environment.address_pools_saved"
 
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"

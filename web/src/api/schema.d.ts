@@ -492,6 +492,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The address-space settings of an environment
+         * @description Whether small stack subnets are on and their size (off at /26 by default), the pools entered for a standalone host (none by default), the version of the two and the display name of whoever saved them last. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getAddressSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/small-subnets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn small stack subnets on or off, and choose their size
+         * @description mask is 25 to 28. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.small_subnets_changed, with the new and the previous values.
+         */
+        put: operations["setSmallSubnets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/address-space/subnet-check": {
         parameters: {
             query?: never;
@@ -4971,6 +5011,18 @@ export interface components {
              */
             used: number;
         };
+        AddressSettingsBody: {
+            /** @description The display name of whoever saved either setting last; empty when none was saved or that person is not known */
+            changedBy: string;
+            /** @description The pools entered for a standalone host, in the order entered. Empty means the host's own (default-address-pools) or Docker's default pools are used */
+            pools: components["schemas"]["PoolEntryBody"][] | null;
+            smallSubnets: components["schemas"]["SmallSubnetsBody"];
+            /**
+             * Format: int64
+             * @description How many times either setting was saved. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
         AddressSpaceBody: {
             /**
              * @description What the environment is
@@ -8659,6 +8711,15 @@ export interface components {
             /** @description The architecture variant, like v7; empty when there is none */
             variant: string;
         };
+        PoolEntryBody: {
+            /** @description The pool's range as an IPv4 CIDR with no host bits set, for example 10.20.0.0/16. Anything else is 422 pool_base_invalid */
+            base: string;
+            /**
+             * Format: int64
+             * @description The mask of each network allocated from the pool: from the base's own mask to 30, else 422 pool_size_invalid
+             */
+            size: number;
+        };
         PreviewTeamImpactInputBody: {
             /**
              * @description The change to preview
@@ -10342,6 +10403,29 @@ export interface components {
              * @description The most open shells one person may hold across all environments
              */
             maxPerUser: number;
+        };
+        SmallSubnetsBody: {
+            /** @description True when a stack deployed here gets a small subnet of its own for its networks */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description The size of each small subnet: 25 to 28 (a /26 holds 59 usable addresses, a /28 holds 11). Kept while the setting is off
+             */
+            mask: number;
+        };
+        SmallSubnetsRequest: {
+            /** @description Whether small stack subnets are on */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description The size of each small subnet, 25 to 28
+             */
+            mask: number;
+            /**
+             * Format: int64
+             * @description The version read with the settings; a save against another version is 409 settings_changed
+             */
+            version: number;
         };
         SourceBody: {
             /**
@@ -13962,6 +14046,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OrphanDeleteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getAddressSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setSmallSubnets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmallSubnetsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
                 };
             };
             /** @description Error */
