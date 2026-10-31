@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/stacks/stackstest"
@@ -100,6 +101,9 @@ func TestCheckIsPureAndPositioned(t *testing.T) {
 
 	draftBefore := readDraft(t, viewer, st.ID)
 	auditBefore := len(f.stackAudits(t))
+	// The first check fills the environment's cached network listing and pool read, which the explicit-subnet
+	// hints compare with (plan 10-08); the checks that follow in the cache's lifetime send the engine nothing.
+	viewer.check(st.ID, checkBody("services:\n  web:\n    image: nginx:1.27\n"))
 	readsBefore := engineStateReads(f.fake.Requests())
 
 	// A tab as the indentation of line 2: the problem is the file, the line and the sentence.
@@ -424,5 +428,44 @@ func TestStackCheckAnswerNeverHoldsARunOfASecret(t *testing.T) {
 			}
 			stackstest.NoSecretRun(t, tc.secret, messages...)
 		})
+	}
+}
+
+// netCheckEnv is a swarm manager with an address pool and the given networks, with the address reader a real
+// server hands the editor's check (plan 10-08, D-19).
+func netCheckEnv(t *testing.T, pool string, nets ...dockertest.FakeNetwork) (*envFix, envBody) {
+	t.Helper()
+	return stackEnv(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID, c.SwarmSubnetSize = "cluster-1", 24
+		if pool != "" {
+			c.SwarmDefaultAddrPool = []string{pool}
+		}
+		c.Networks = nets
+	})
+}
+
+// subnetCompose is a one-service compose file with the network backend at the given explicit subnet.
+func subnetCompose(subnet string) string {
+	return "services:\n  web:\n    image: nginx:1.27\n    networks: [backend]\nnetworks:\n  backend:\n    ipam:\n      config:\n        - subnet: " + subnet + "\n"
+}
+
+func TestStackCheckWarnsSubnetOverlap(t *testing.T) {
+	t.Parallel()
+	f, e := netCheckEnv(t, "10.0.0.0/16",
+		dockertest.FakeNetwork{ID: "o1", Name: "other_net", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+
+	answer, code, raw := admin.check(st.ID, checkBody(subnetCompose("10.0.1.0/24")))
+	if code != http.StatusOK {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	if len(answer.Problems) != 1 {
+		t.Fatalf("problems = %+v, want the one overlap warning", answer.Problems)
+	}
+	p := answer.Problems[0]
+	if p.Severity != "warning" || p.Code != "network_subnet_overlap" || p.Line != 9 ||
+		p.Message != "network “backend” uses subnet 10.0.1.0/24, which overlaps “other_net” (10.0.1.0/24) in this environment." {
+		t.Errorf("problem = %+v", p)
 	}
 }

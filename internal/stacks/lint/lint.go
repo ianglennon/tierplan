@@ -60,6 +60,10 @@ const (
 	CodeUseAPISocket = "use_api_socket_unsupported"
 	// CodeStandaloneUnsupported is a key a standalone deploy never runs: a provider, a model, a lifecycle hook.
 	CodeStandaloneUnsupported = "standalone_unsupported"
+	// What an explicit network subnet runs into in the environment (D-19): a subnet that overlaps a network the
+	// environment already has, and one outside the environment's address pools. Both are warnings.
+	CodeNetworkSubnetOverlap     = "network_subnet_overlap"
+	CodeNetworkSubnetOutsidePool = "network_subnet_outside_pool"
 )
 
 // Pos is a range in a stack file: 1-based line and column of its start, and the end.
@@ -90,6 +94,10 @@ type Input struct {
 	Target  Target
 	Project *types.Project
 	Index   Index
+	// Env is the environment's networks and address pools, for the two subnet rules. Only the editor's check
+	// sets it; nil, which is every other caller, skips them, so a review, a deploy, a git sync, a rebuild and an
+	// adoption judge the file exactly as before.
+	Env *NetEnv
 }
 
 // Finding is one thing lint found, at a position of compose.yaml.
@@ -126,6 +134,10 @@ var messages = map[string]string{
 	CodeStandaloneUnsupported: "`%s` can't be used on a standalone host. %s",
 	// key
 	CodeNetworkOptionUnsupported: "`%s` isn't supported on a stack network. Coaming creates networks without it. Remove it, or create the network yourself and use it as an external network.",
+	// name, subnet, the other network, its subnet
+	CodeNetworkSubnetOverlap: "network “%s” uses subnet %s, which overlaps “%s” (%s) in this environment.",
+	// name, subnet, the pools, comma-separated
+	CodeNetworkSubnetOutsidePool: "network “%s” uses subnet %s, which is outside the address pool %s.",
 	// A build key that is ignored because the image is set (A5); the swarm table words it for Swarm.
 	"build_with_image": "`build` is ignored. Coaming doesn't build images; it deploys the image named in `image`.",
 }
@@ -157,6 +169,7 @@ func Lint(in Input) []Finding {
 	}
 	out = append(out, imageFindings(in)...)
 	out = append(out, networkFindings(in)...)
+	out = append(out, networkSubnetRules(in)...)
 	return out
 }
 

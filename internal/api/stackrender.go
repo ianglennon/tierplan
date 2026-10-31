@@ -57,7 +57,7 @@ func registerStackRender(r *httpx.Router, d StacksDeps, checkLimiter *streamLimi
 // the working copy's masker. The check and the render are pure: the only reads are the stack, its
 // saved draft (to fill a secret the browser never held) and the pins of its last good revision.
 func renderStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackRenderInput) (*StackRenderOutput, error) {
-	c, release, err := runStackCheck(ctx, d, lim, in.StackID, in.Body)
+	c, release, err := runStackCheck(ctx, d, lim, in.StackID, in.Body, false)
 	if err != nil {
 		return nil, err
 	}

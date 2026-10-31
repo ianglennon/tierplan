@@ -23,13 +23,17 @@ import (
 )
 
 // CheckInput is what Check needs: the stack's name and target, and the working copy to check. It
-// has the fields of LoadInput, in the same order, because a check starts with a load.
+// has the fields of LoadInput (and Env, which only a check uses), because a check starts with a load.
 type CheckInput struct {
 	Name   string
 	Target Target
 	Copy   WorkingCopy
 	// Deadline bounds the check. Zero is five seconds.
 	Deadline time.Duration
+	// Env is the environment's networks and address pools, for the two explicit-subnet hints. Only the editor's
+	// check route sets it; nil, which is every other caller, leaves those hints out so a review or a deploy
+	// decides exactly what it did before.
+	Env *lint.NetEnv
 }
 
 // CheckResult is what a check found. Loaded is set when the compose file loaded, and is what the
@@ -138,7 +142,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 		res.Problems = res.Problems.Sorted()
 		return res
 	}
-	loaded, err := Load(ctx, LoadInput(in))
+	loaded, err := Load(ctx, LoadInput{Name: in.Name, Target: in.Target, Copy: in.Copy, Deadline: in.Deadline})
 	if err != nil {
 		// compose-go says where a syntax error is better than the parser used for positions does
 		// (it names the line the parser stopped at, not the line the block started on), so its
@@ -180,7 +184,7 @@ func checkCore(ctx context.Context, in CheckInput) CheckResult {
 	}
 	// What the target will ignore or refuse is judged on the project as loaded, with build still
 	// in it: that is how a build key is seen.
-	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx})
+	found := lint.Lint(lint.Input{Target: lint.Target(in.Target), Project: loaded.Project, Index: idx, Env: in.Env})
 	// Coaming deploys images and never builds one (A5): build leaves the project here, before any
 	// engine or any later step can see it. A service with a build and no image is a blocking error
 	// above, so what is left to deploy always names an image.
