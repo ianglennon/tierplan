@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { addressSettingsQuery } from "@/api/address-space";
 import { setCsrfToken } from "@/api/client";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -25,6 +26,7 @@ let sent: Sent[];
 let settings: Record<string, unknown>;
 let putAnswer: () => Response;
 let pools: Record<string, unknown>[];
+let client: QueryClient;
 
 const pool = (extra: Record<string, unknown> = {}) => ({
   cidr: "10.0.0.0/8",
@@ -84,7 +86,7 @@ afterEach(() => {
 });
 
 async function mount(canEdit = true) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -117,6 +119,14 @@ describe("roomFor", () => {
     expect(roomFor([pool({ mask: 27 }) as never], 26)).toBeUndefined();
   });
 });
+
+const conflictAnswer =
+  (by = "Sam") =>
+  () =>
+    Response.json(
+      { status: 409, type: "settings_changed", errors: [{ location: "changedBy", message: by }] },
+      { status: 409 },
+    );
 
 describe("SmallSubnetsCard", () => {
   it("shows its title, description, and off by default at /26 with the size disabled", async () => {
@@ -206,5 +216,93 @@ describe("SmallSubnetsCard", () => {
     expect(document.body.textContent).toContain("Needs Admin on prod");
     fireEvent.click(save());
     expect(puts()).toEqual([]);
+  });
+
+  it("sends the newer version when only the pools were saved since the edit began", async () => {
+    await mount();
+    fireEvent.click(toggle());
+    // The Address pools card saved: the shared settings read moves on, the subnet setting does not.
+    await act(async () => {
+      client.setQueryData(addressSettingsQuery("e1").queryKey, {
+        smallSubnets: { enabled: false, mask: 26 },
+        pools: [{ base: "10.200.0.0/16", size: 24 }],
+        version: 5,
+        changedBy: "Ian",
+      });
+      // The observers are told on the next tick.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.click(save());
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]?.body).toEqual({ enabled: true, mask: 26, version: 5 });
+    expect(await screen.findByText("Saved the subnet settings.")).toBeTruthy();
+    expect(screen.queryByText(/changed these settings/)).toBeNull();
+  });
+
+  it("re-sends once after a 409 when its own setting is unchanged", async () => {
+    let calls = 0;
+    putAnswer = () => {
+      calls++;
+      if (calls === 1) {
+        // The other card saved between the read and the Save: the next read is one version on.
+        settings = { ...settings, version: 5, changedBy: "Ian" };
+        return conflictAnswer("Ian")();
+      }
+      return Response.json({ ...settings, smallSubnets: { enabled: true, mask: 26 }, version: 6 });
+    };
+    await mount();
+    fireEvent.click(toggle());
+    fireEvent.click(save());
+    expect(await screen.findByText("Saved the subnet settings.")).toBeTruthy();
+    expect(puts().map((p) => p.body)).toEqual([
+      { enabled: true, mask: 26, version: 4 },
+      { enabled: true, mask: 26, version: 5 },
+    ]);
+    expect(screen.queryByText(/changed these settings/)).toBeNull();
+  });
+
+  it("still conflicts when someone else changed the subnet setting", async () => {
+    putAnswer = () => {
+      settings = {
+        ...settings,
+        smallSubnets: { enabled: true, mask: 28 },
+        version: 5,
+        changedBy: "Alice",
+      };
+      return conflictAnswer("Sam")();
+    };
+    await mount();
+    fireEvent.click(toggle());
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "Alice changed these settings while you were editing. Reload to see them.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+    expect(puts()).toHaveLength(1);
+    // The pending edit is still shown, not the other person's value.
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    expect(size().textContent).toContain("/26 · 61 addresses");
+  });
+
+  it("never re-sends twice in one Save", async () => {
+    let calls = 0;
+    putAnswer = () => {
+      calls++;
+      settings = { ...settings, version: 4 + calls, changedBy: "Ian" };
+      return conflictAnswer("Ian")();
+    };
+    await mount();
+    fireEvent.click(toggle());
+    fireEvent.click(save());
+    expect(
+      await screen.findByText(
+        "Ian changed these settings while you were editing. Reload to see them.",
+      ),
+    ).toBeTruthy();
+    expect(puts()).toHaveLength(2);
+    await act(async () => {});
+    expect(puts()).toHaveLength(2);
   });
 });

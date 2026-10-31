@@ -6,6 +6,8 @@ import { type FormEvent, useId, useState } from "react";
 
 import {
   type AddressPool,
+  type AddressSettings,
+  type AddressSettingsError,
   addressSettingsQuery,
   addressSpaceQuery,
   conflictBy,
@@ -25,6 +27,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import {
+  type SmallSubnets,
+  sameSmallSubnets,
+  versionToSend,
+} from "@/features/address-space/settings-version";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { usableOf } from "@/features/subnet-picker/subnet-picker";
 import { useT } from "@/i18n/use-t";
@@ -88,6 +95,8 @@ interface Edit {
   mask: number;
   // The version of the settings the person started editing, which is the one a save sends.
   version: number;
+  // The subnet setting as saved when the editing began; a save is re-based only while it holds.
+  base: SmallSubnets;
 }
 
 type Failure = { kind: "conflict"; by: string } | { kind: "failed" };
@@ -117,6 +126,7 @@ export function SmallSubnetsCard({ envId, envName, canEdit }: SmallSubnetsCardPr
       enabled: saved.enabled,
       mask: saved.mask,
       version: settings.data.version,
+      base: saved,
       ...prev,
       ...patch,
     }));
@@ -129,26 +139,56 @@ export function SmallSubnetsCard({ envId, envName, canEdit }: SmallSubnetsCardPr
     void settings.refetch();
   }
 
-  function submit(event: FormEvent) {
+  function saveDone() {
+    setEdit(null);
+    setFailure(null);
+    toastSuccess(t("envsettings.smallSubnets.saved"));
+  }
+
+  // submit sends the newest version this card may (see versionToSend). A 409 settings_changed reads
+  // the settings once more: if this card's own setting is unchanged the other card's save moved the
+  // version, and the save is sent again, once, with the fresh version. Otherwise it is a conflict.
+  async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canEdit || save.isPending || !settings.data) return;
-    save.mutate(
-      { enabled, mask, version: edit?.version ?? settings.data.version },
-      {
-        onSuccess: () => {
-          setEdit(null);
-          setFailure(null);
-          toastSuccess(t("envsettings.smallSubnets.saved"));
-        },
-        onError: (error) => {
-          setFailure(
-            error.type === "settings_changed"
-              ? { kind: "conflict", by: conflictBy(error) }
-              : { kind: "failed" },
-          );
-        },
-      },
+    const current = settings.data;
+    const base = edit?.base ?? current.smallSubnets;
+    const sent = versionToSend(
+      { version: edit?.version ?? current.version, base },
+      { version: current.version, slice: current.smallSubnets },
+      sameSmallSubnets,
     );
+    try {
+      await save.mutateAsync({ enabled, mask, version: sent });
+      saveDone();
+    } catch (e) {
+      const error = e as AddressSettingsError;
+      if (error.type !== "settings_changed") {
+        setFailure({ kind: "failed" });
+        return;
+      }
+      const read = await settings.refetch();
+      const fresh: AddressSettings | undefined = read.isError ? undefined : read.data;
+      if (!fresh || fresh.version === sent) {
+        setFailure({ kind: "conflict", by: conflictBy(error) });
+        return;
+      }
+      if (!sameSmallSubnets(fresh.smallSubnets, base)) {
+        setFailure({ kind: "conflict", by: fresh.changedBy || conflictBy(error) });
+        return;
+      }
+      try {
+        await save.mutateAsync({ enabled, mask, version: fresh.version });
+        saveDone();
+      } catch (again) {
+        const second = again as AddressSettingsError;
+        setFailure(
+          second.type === "settings_changed"
+            ? { kind: "conflict", by: conflictBy(second) }
+            : { kind: "failed" },
+        );
+      }
+    }
   }
 
   const saveButton = (
