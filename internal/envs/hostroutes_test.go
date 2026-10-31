@@ -5,13 +5,17 @@ package envs
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/tunnel"
 	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
 	"github.com/ianglennon/coaming/proto/testsupport"
@@ -380,5 +384,81 @@ func TestHostRoutesOneNodeFails(t *testing.T) {
 	}
 	if n := byNode(t, got, "n-good"); n.State != RouteCheckOK || len(n.Routes) != 1 {
 		t.Errorf("n-good = %+v, want ok with its route", n)
+	}
+}
+
+// Coaming's own host has no agent: its routes come from the route file mounted into
+// Coaming's own container, and the answer says so (Local) so the fix is worded for it.
+func TestHostRoutesLocalSocket(t *testing.T) {
+	if binary.NativeEndian.Uint16([]byte{1, 0}) != 1 {
+		t.Skip("the fixture is a little-endian host's route table")
+	}
+	local := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "this-host"})
+	r := newTunRig(t, local)
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitProbed(t, r.mon, e.ID)
+	fixture := filepath.Join("..", "..", "proto", "hostroute", "testdata", "route-host.txt")
+	src := newFakeHostNet()
+
+	cases := map[string]struct {
+		file  string
+		state string
+	}{
+		"a route file that reads":     {fixture, RouteCheckOK},
+		"a route file that is absent": {filepath.Join(t.TempDir(), "no-such-route"), RouteCheckUnmounted},
+		"a directory":                 {t.TempDir(), RouteCheckUnmounted},
+		"no route file configured":    {"", RouteCheckUnmounted},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := NewHostRoutes(r.svc, src, HostRoutesOptions{Now: r.clk.Now, LocalRouteFile: tc.file}).Get(testsupport.Context(t), e.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].State != tc.state || !got[0].Local || got[0].Node != "this-host" {
+				t.Fatalf("got %+v, want one local node this-host in state %q", got, tc.state)
+			}
+			if tc.state != RouteCheckOK {
+				if len(got[0].Routes) != 0 {
+					t.Errorf("routes %+v for a file that did not read", got[0].Routes)
+				}
+				return
+			}
+			want := []string{"10.8.0.0/24", "172.17.0.0/16", "192.168.2.0/24"}
+			if len(got[0].Routes) != len(want) {
+				t.Fatalf("routes = %+v, want %v", got[0].Routes, want)
+			}
+			for i, w := range want {
+				if got[0].Routes[i].Dst != netip.MustParsePrefix(w) {
+					t.Errorf("route %d = %v, want %s (sorted by address, default and host routes dropped)", i, got[0].Routes[i].Dst, w)
+				}
+			}
+		})
+	}
+	// The local host is read from a file, never through the tunnel.
+	if n := len(src.calls); n != 0 {
+		t.Errorf("the agent source was asked %d times for the local host", n)
+	}
+}
+
+func TestHostRoutesLocalFileOverTheLimitsIsUnmounted(t *testing.T) {
+	local := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "this-host"})
+	r := newTunRig(t, local)
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awaitProbed(t, r.mon, e.ID)
+	big := filepath.Join(t.TempDir(), "route")
+	// One line over the 512-byte limit: the table is not a route table, so nothing is used.
+	if err := os.WriteFile(big, []byte("Iface\tDestination\n"+string(make([]byte, 600))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewHostRoutes(r.svc, newFakeHostNet(), HostRoutesOptions{Now: r.clk.Now, LocalRouteFile: big}).Get(testsupport.Context(t), e.ID)
+	if err != nil || len(got) != 1 || got[0].State != RouteCheckUnmounted || len(got[0].Routes) != 0 {
+		t.Fatalf("got %+v, %v; want unmounted with no routes", got, err)
 	}
 }

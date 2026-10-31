@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
 	"slices"
 	"sort"
 	"sync"
@@ -310,14 +311,37 @@ func validate(doc wire.HostNetDoc) ([]hostroute.Route, bool) {
 		}
 		routes = append(routes, rt)
 	}
-	slices.SortStableFunc(routes, func(a, b hostroute.Route) int {
-		return cmp.Or(a.Dst.Addr().Compare(b.Dst.Addr()), cmp.Compare(a.Dst.Bits(), b.Dst.Bits()), cmp.Compare(a.Iface, b.Iface))
-	})
+	sortRoutes(routes)
 	return routes, true
 }
 
+// sortRoutes orders routes by address, then prefix length, then interface.
+func sortRoutes(routes []hostroute.Route) {
+	slices.SortStableFunc(routes, func(a, b hostroute.Route) int {
+		return cmp.Or(a.Dst.Addr().Compare(b.Dst.Addr()), cmp.Compare(a.Dst.Bits(), b.Dst.Bits()), cmp.Compare(a.Iface, b.Iface))
+	})
+}
+
 // readLocal answers for the host Coaming itself runs on from the route file mounted
-// into Coaming's own container. Anything but a readable table is "unmounted".
+// read-only into Coaming's own container, parsed with the same limits as an agent's.
+// A file that is missing, unreadable or over the limits is "unmounted": there is
+// nothing to check against, and the fix is to mount the file into Coaming's container.
 func (h *HostRoutes) readLocal(node, nodeID string) NodeRoutes {
-	return NodeRoutes{Node: node, NodeID: nodeID, Local: true, State: RouteCheckUnmounted}
+	n := NodeRoutes{Node: node, NodeID: nodeID, Local: true, State: RouteCheckUnmounted}
+	if h.local == "" {
+		return n
+	}
+	f, err := os.Open(h.local) //nolint:gosec // the path is the operator's setting (COAMING_HOST_ROUTE_FILE), never a request's
+	if err != nil {
+		return n
+	}
+	defer func() { _ = f.Close() }()
+	routes, truncated, err := hostroute.Parse(f)
+	if err != nil {
+		h.log.Debug("could not read the route file of this host", "error", err)
+		return n
+	}
+	sortRoutes(routes)
+	n.State, n.Routes, n.Truncated = RouteCheckOK, routes, truncated
+	return n
 }

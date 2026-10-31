@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +74,10 @@ type Config struct {
 	// BackupDir is the folder scheduled backups are written into; empty means
 	// the backups folder inside the data directory.
 	BackupDir string
+	// HostRouteFile is the host's /proc/1/net/route as bind-mounted read-only into
+	// Coaming's own container, which the subnet picker's route check reads for
+	// Coaming's own host. Optional: when it is not there the check says so.
+	HostRouteFile string
 
 	TLSCertFile   string
 	TLSKeyFile    string
@@ -232,6 +237,14 @@ var settings = []setting{
 				return err
 			}
 			c.DockerGID = &n
+			return nil
+		}},
+	{env: "COAMING_HOST_ROUTE_FILE", flag: "host-route-file", def: "/host/route", desc: "the host's /proc/1/net/route bind-mounted read-only into Coaming's container, used for the subnet picker's route check on Coaming's own host; an absolute, clean path; optional, the check says when it is not mounted",
+		apply: func(c *Config, raw string) error {
+			if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+				return fmt.Errorf("%q must be an absolute, clean path", raw)
+			}
+			c.HostRouteFile = raw
 			return nil
 		}},
 	{env: envAgentHeartbeatInterval, flag: "agent-heartbeat-interval", def: "10s", desc: "how often agents send a heartbeat; sent to each agent when it connects",
