@@ -12,7 +12,9 @@ import (
 
 // The subnet map's overlap flags and address order (plan 10-06, NET-01, D-01, T-10-15).
 
-func swarmNet(t *testing.T, ss ...string) MapItem { return MapItem{Swarm: true, Prefixes: pfx(t, ss...)} }
+func swarmNet(t *testing.T, ss ...string) MapItem {
+	return MapItem{Swarm: true, Prefixes: pfx(t, ss...)}
+}
 
 func localNet(t *testing.T, node string, ss ...string) MapItem {
 	return MapItem{Node: node, Prefixes: pfx(t, ss...)}
@@ -62,7 +64,7 @@ func TestMapOverlapsAdjacentNotFlagged(t *testing.T) {
 	t.Parallel()
 	items := []MapItem{
 		swarmNet(t, "10.0.1.0/24"), swarmNet(t, "10.0.2.0/24"), swarmNet(t, "10.0.0.0/24"),
-		swarmNet(t, "0.0.0.0/1"), swarmNet(t, "128.0.0.0/1"),
+		swarmNet(t, "128.0.0.0/2"), swarmNet(t, "192.0.0.0/2"),
 	}
 	for i, got := range MapOverlaps(items) {
 		if len(got) != 0 {
