@@ -98,6 +98,37 @@ func (c FakeConfig) withServices(state map[string]fakeServiceState) FakeConfig {
 	return c
 }
 
+// virtualIPs gives the listed service s its endpoint's virtual IPs: the networks ServiceVIPNetworks
+// names for it, else the ones the row set itself (FakeService.VirtualIPs), else one per network its
+// current spec names, as a manager does for a service in virtual-IP mode. The ID of a network a
+// spec names by name is the daemon's.
+func (c FakeConfig) virtualIPs(fs FakeService, s *swarm.Service) {
+	ids, ok := c.ServiceVIPNetworks[fs.Name]
+	if !ok {
+		ids, ok = c.ServiceVIPNetworks[fs.ID]
+	}
+	if ok {
+		s.Endpoint.VirtualIPs = nil
+	} else if len(fs.VirtualIPs) > 0 {
+		return
+	} else {
+		for _, a := range s.Spec.TaskTemplate.Networks {
+			id := a.Target
+			if n, found := c.resolveNetwork(id); found {
+				id = n.ID
+			}
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, id := range ids {
+		if !slices.ContainsFunc(s.Endpoint.VirtualIPs, func(v swarm.EndpointVirtualIP) bool { return v.NetworkID == id }) {
+			s.Endpoint.VirtualIPs = append(s.Endpoint.VirtualIPs, swarm.EndpointVirtualIP{NetworkID: id})
+		}
+	}
+}
+
 // resolveService finds a service by its ID or its name.
 func (c FakeConfig) resolveService(ref string) (FakeService, bool) {
 	for _, fs := range c.ServiceRows {

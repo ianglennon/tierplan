@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/swarm"
 
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
@@ -233,9 +234,9 @@ func TestServiceRefsListsEachServicesNetworksAndVolumeMountsByIDWhateverItsTasks
 		t.Fatalf("ServiceRefs: %v", err)
 	}
 	want := []dockerx.ServiceRef{
-		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
-		{ID: "s3", Name: "plain", Networks: []string{}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
-		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, Volumes: []string{"data"},
+		{ID: "s1", Name: "idle", Networks: []string{"ovl-id-2"}, PreviousNetworks: []string{}, VIPNetworks: []string{"ovl-id-2"}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
+		{ID: "s3", Name: "plain", Networks: []string{}, PreviousNetworks: []string{}, VIPNetworks: []string{}, Volumes: []string{}, VolumeMounts: []dockerx.ServiceVolumeMount{}, Secrets: []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
+		{ID: "s2", Name: "web", Networks: []string{"ovl-id-1"}, PreviousNetworks: []string{}, VIPNetworks: []string{"ovl-id-1"}, Volumes: []string{"data"},
 			VolumeMounts: []dockerx.ServiceVolumeMount{{Source: "data", Target: "/var/lib/data", ReadOnly: true}},
 			Secrets:      []dockerx.ServiceObjectRef{}, Configs: []dockerx.ServiceObjectRef{}},
 	}
@@ -244,6 +245,39 @@ func TestServiceRefsListsEachServicesNetworksAndVolumeMountsByIDWhateverItsTasks
 	}
 	if w := fake.Writes(); len(w) != 0 {
 		t.Fatalf("a read wrote: %v", w)
+	}
+}
+
+// TestServiceRefsPreviousAndVIP: the networks a service's previous spec names (a rollback
+// returns to them) and the ones its endpoint holds a virtual IP on are references too, even
+// when the current spec names neither, each as an ID and once.
+func TestServiceRefsPreviousAndVIP(t *testing.T) {
+	cfg := refsManager()
+	cfg.Networks = append(cfg.Networks,
+		dockertest.FakeNetwork{ID: "old-id", Name: "old", Driver: "overlay", Scope: "swarm"},
+		dockertest.FakeNetwork{ID: "vip-id", Name: "vip", Driver: "overlay", Scope: "swarm"})
+	cfg.ServiceRows = []dockertest.FakeService{
+		// Updated away from "old" (named by name in the previous spec, twice) and onto "ovl".
+		{ID: "s1", Name: "rolled", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"},
+			PreviousSpec: &swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Networks: []swarm.NetworkAttachmentConfig{{Target: "old"}, {Target: "old"}, {Target: "ovl-id-1"}}}}},
+		// The spec names nothing; only the endpoint still has a virtual IP.
+		{ID: "s2", Name: "vipped", Mode: "replicated", Running: 1, Desired: 1},
+	}
+	cfg.ServiceVIPNetworks = map[string][]string{"vipped": {"vip-id", "vip-id"}}
+	got, err := newClient(t, dockertest.NewFake(t, cfg)).ServiceRefs(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceRefs: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ServiceRefs = %+v, want two", got)
+	}
+	rolled, vipped := got[0], got[1]
+	if rolled.Name != "rolled" || !slices.Equal(rolled.Networks, []string{"ovl-id-1"}) ||
+		!slices.Equal(rolled.PreviousNetworks, []string{"old-id", "ovl-id-1"}) || !slices.Equal(rolled.VIPNetworks, []string{"ovl-id-1"}) {
+		t.Errorf("rolled = %+v, want current ovl, previous old+ovl as IDs once each, a VIP on the current network", rolled)
+	}
+	if vipped.Name != "vipped" || len(vipped.Networks) != 0 || len(vipped.PreviousNetworks) != 0 || !slices.Equal(vipped.VIPNetworks, []string{"vip-id"}) {
+		t.Errorf("vipped = %+v, want only the virtual IP network, once", vipped)
 	}
 }
 

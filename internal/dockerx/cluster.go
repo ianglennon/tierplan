@@ -155,6 +155,13 @@ type ServiceRef struct {
 	// Networks are network IDs. A spec that names a swarm network by name is resolved
 	// to its ID; a target that is neither is kept as the spec wrote it. Never nil.
 	Networks []string
+	// PreviousNetworks are the networks the service's previous spec (its rollback target)
+	// names, resolved as Networks are. Never nil.
+	PreviousNetworks []string
+	// VIPNetworks are the IDs of the networks the service's endpoint has a virtual IP on,
+	// once each. A spec updated away from a network can still hold its virtual IP for a
+	// while. Never nil.
+	VIPNetworks []string
 	// Volumes are the sources of the service's volume mounts. Bind, tmpfs and other
 	// mounts are not volumes. Never nil.
 	Volumes []string
@@ -425,6 +432,42 @@ func (c *Client) RestartPolicies(ctx context.Context, ids []string) (map[string]
 	return out, nil
 }
 
+// swarmNetworkIDs lists the swarm-scoped networks by name to turn the names a spec may
+// use into IDs. It lists nothing, and answers an empty map, when need is false.
+func (c *Client) swarmNetworkIDs(ctx context.Context, cli *client.Client, need bool) (map[string]string, error) {
+	idOf := map[string]string{}
+	if !need {
+		return idOf, nil
+	}
+	ns, err := cli.NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
+	}
+	for _, n := range ns.Items {
+		if n.Scope == ScopeSwarm {
+			idOf[n.Name] = n.ID
+		}
+	}
+	return idOf, nil
+}
+
+// networkTargets turns the network attachments of a spec or a task into network IDs, once
+// each: a target that names a swarm network is resolved to its ID, and one that is neither
+// is kept as written. Never nil.
+func networkTargets(attachments []swarm.NetworkAttachmentConfig, idOf map[string]string) []string {
+	out := []string{}
+	for _, a := range attachments {
+		target := a.Target
+		if id, ok := idOf[target]; ok {
+			target = id
+		}
+		if target != "" && !slices.Contains(out, target) {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
 // ServiceRefs reads, from a swarm manager, the networks and volumes each service's spec
 // mentions. It is read-only, and it is what a delete re-reads live just before it acts,
 // so a service created a moment ago counts.
@@ -442,36 +485,29 @@ func (c *Client) ServiceRefs(ctx context.Context) ([]ServiceRef, error) {
 func (c *Client) serviceRefsOf(ctx context.Context, cli *client.Client, services []swarm.Service) ([]ServiceRef, error) {
 	targets := false
 	for _, s := range services {
-		if len(s.Spec.TaskTemplate.Networks) > 0 {
+		if len(s.Spec.TaskTemplate.Networks) > 0 || s.PreviousSpec != nil && len(s.PreviousSpec.TaskTemplate.Networks) > 0 {
 			targets = true
 			break
 		}
 	}
-	idOf := map[string]string{}
-	if targets {
-		ns, err := cli.NetworkList(ctx, client.NetworkListOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("list networks on %s: %w", c.t.Describe(), err)
-		}
-		for _, n := range ns.Items {
-			if n.Scope == ScopeSwarm {
-				idOf[n.Name] = n.ID
-			}
-		}
+	idOf, err := c.swarmNetworkIDs(ctx, cli, targets)
+	if err != nil {
+		return nil, err
 	}
 	refs := make([]ServiceRef, 0, len(services))
 	for _, s := range services {
 		ref := ServiceRef{
-			ID: s.ID, Name: s.Spec.Name, Networks: []string{}, Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{},
+			ID: s.ID, Name: s.Spec.Name, Networks: []string{}, PreviousNetworks: []string{}, VIPNetworks: []string{},
+			Volumes: []string{}, VolumeMounts: []ServiceVolumeMount{},
 			Secrets: []ServiceObjectRef{}, Configs: []ServiceObjectRef{},
 		}
-		for _, a := range s.Spec.TaskTemplate.Networks {
-			target := a.Target
-			if id, ok := idOf[target]; ok {
-				target = id
-			}
-			if target != "" && !slices.Contains(ref.Networks, target) {
-				ref.Networks = append(ref.Networks, target)
+		ref.Networks = networkTargets(s.Spec.TaskTemplate.Networks, idOf)
+		if s.PreviousSpec != nil {
+			ref.PreviousNetworks = networkTargets(s.PreviousSpec.TaskTemplate.Networks, idOf)
+		}
+		for _, v := range s.Endpoint.VirtualIPs {
+			if v.NetworkID != "" && !slices.Contains(ref.VIPNetworks, v.NetworkID) {
+				ref.VIPNetworks = append(ref.VIPNetworks, v.NetworkID)
 			}
 		}
 		if cs := s.Spec.TaskTemplate.ContainerSpec; cs != nil {

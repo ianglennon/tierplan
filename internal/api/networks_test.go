@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/coaming/internal/audit"
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/proto/wire"
@@ -883,6 +885,36 @@ func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWit
 		if !strings.Contains(string(rec.body), name) {
 			t.Errorf("the detail does not name service %s: %s", name, rec.body)
 		}
+	}
+	s.noDeletes(t)
+}
+
+// swarmWith is a swarm fixture whose managers also have the swarm-scoped overlay `extra` and the
+// services svcs, as a manager lists them.
+func swarmWith(t *testing.T, extra dockertest.FakeNetwork, svcs ...dockertest.FakeService) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if strings.HasPrefix(host, "mgr-") {
+			cfg.Networks = append(cfg.Networks, extra)
+			cfg.ServiceRows = append(cfg.ServiceRows, svcs...)
+			cfg.Services = len(cfg.ServiceRows)
+		}
+	})
+}
+
+// A service updated away from a network still names it in its previous spec, which a rollback
+// returns to: the network is in use (RESEARCH F6, Pitfall 7).
+func TestNetworkDeleteRefusesPreviousSpecUser(t *testing.T) {
+	t.Parallel()
+	s := swarmWith(t, dockertest.FakeNetwork{ID: "old-id", Name: "old", Driver: "overlay", Scope: "swarm"},
+		dockertest.FakeService{ID: "svc-roll", Name: "rolled", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"},
+			PreviousSpec: &swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Networks: []swarm.NetworkAttachmentConfig{{Target: "old"}}}}})
+	rec := s.del(t, "old-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "service rolled (previous spec)") {
+		t.Errorf("the detail does not name the previous spec user: %s", rec.body)
 	}
 	s.noDeletes(t)
 }

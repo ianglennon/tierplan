@@ -712,9 +712,10 @@ func (u networkUsage) of(n envs.NetworkRow) (containers, services int) {
 const maxNamedUsers = 5
 
 // usedBy decides whether a network may be deleted now, from what is true now and not from
-// the list the caller saw: every node's containers are read again, and on a swarm the
-// service specs are read from a manager. It returns an empty code when nothing uses the
-// network. Otherwise it returns the problem code, its status and its words:
+// the list the caller saw: envs.ResolveUsage reads every node's containers again and, on a
+// swarm, the services (their current and previous specs and virtual IPs) and tasks from a
+// manager. It returns an empty code when nothing uses the network. Otherwise it returns the
+// problem code, its status and its words:
 //
 //   - node_unreachable when a node that could hold an attachment did not answer, or the
 //     manager could not be asked for the services, so the picture is incomplete;
@@ -725,16 +726,16 @@ const maxNamedUsers = 5
 // a local network only on its own node, which must answer. A service spec counts even
 // when it has no running task (Pitfall 7).
 func (d NetworksDeps) usedBy(ctx context.Context, envID string, row envs.NetworkRow) (code string, status int, detail string, err error) {
-	fresh, _, err := d.Aggregator.FreshSnapshot(ctx, envID)
+	usage, fresh, err := envs.ResolveUsage(ctx, d.Aggregator, d.Clusters, envID)
 	if err != nil {
 		return "", 0, "", err
 	}
 	swarmScoped := row.Scope == dockerx.ScopeSwarm
 	switch {
-	case swarmScoped && len(fresh.NotReporting) > 0:
+	case swarmScoped && len(usage.Missing) > 0:
 		return problemNodeUnreachable, http.StatusConflict,
-			"Can't tell whether " + row.Name + " is in use: " + joinMore(fresh.NotReporting, 3) + " didn't answer. Try again when it's back.", nil
-	case !swarmScoped && !slices.ContainsFunc(fresh.Nodes, func(n envs.NodeRef) bool { return n.ID == row.NodeID }):
+			"Can't tell whether " + row.Name + " is in use: " + joinMore(usage.Missing, 3) + " didn't answer. Try again when it's back.", nil
+	case !swarmScoped && !usage.Known(row):
 		return problemNodeUnreachable, http.StatusConflict,
 			"Can't tell whether " + row.Name + " is in use: " + row.Node + " didn't answer. Try again when it's back.", nil
 	}
@@ -743,37 +744,10 @@ func (d NetworksDeps) usedBy(ctx context.Context, envID string, row envs.Network
 	}) {
 		return problemNetworkNotFound, http.StatusNotFound, row.Name + " is already gone.", nil
 	}
-
-	var users []string
-	for _, c := range fresh.Containers {
-		if !swarmScoped && c.NodeID != row.NodeID {
-			continue
-		}
-		if slices.ContainsFunc(c.Networks, func(cn dockerx.ContainerNet) bool { return cn.NetworkID == row.ID }) {
-			users = append(users, "container "+c.Name)
-		}
+	if !usage.Known(row) {
+		return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
 	}
-	if swarmScoped && (fresh.Target.Probe.Type == dockerx.TypeSwarmManager || fresh.Target.Probe.Type == dockerx.TypeSwarmWorker) {
-		var refs []dockerx.ServiceRef
-		if d.Clusters == nil {
-			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
-		}
-		readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-		defer cancel()
-		if err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
-			var e error
-			refs, e = c.ServiceRefs(readCtx)
-			return e
-		}); err != nil {
-			d.Log.Warn("could not read the services before a network delete", "environment", envID, "error", err)
-			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
-		}
-		for _, ref := range refs {
-			if slices.Contains(ref.Networks, row.ID) {
-				users = append(users, "service "+ref.Name)
-			}
-		}
-	}
+	users := usage.UsersOf(row)
 	if len(users) == 0 {
 		return "", 0, "", nil
 	}

@@ -206,6 +206,12 @@ type FakeConfig struct {
 	// request as it was sent. It is off by default, so a test that reads back the names it wrote
 	// keeps them (fake_networks.go).
 	NetworkTargetsByID bool
+	// ServiceVIPNetworks sets, by service name or ID, the networks (by ID) the service's endpoint
+	// has a virtual IP on, in place of the ones the fake works out. Without it (and without the
+	// service's own VirtualIPs) every service has one virtual IP per network its current spec
+	// names, as a manager gives a service in virtual-IP mode, so a test that needs a virtual IP
+	// the spec no longer names sets it here (fake_services.go).
+	ServiceVIPNetworks map[string][]string
 	// taskStates are the states SetTaskState gave those tasks, by service name.
 	taskStates map[string]fakeTaskState
 	// OnWrite, when set, is called with each write as Writes lists it ("METHOD path?query") the
@@ -1522,6 +1528,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 				s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 			}
 			fs.decorate(&s)
+			c.virtualIPs(fs, &s)
 			out = append(out, s)
 			continue
 		}
@@ -1578,6 +1585,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 			s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 		}
 		fs.decorate(&s)
+		c.virtualIPs(fs, &s)
 		out = append(out, s)
 	}
 	return out
