@@ -379,6 +379,13 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
   ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
   }
+  // Small stack subnets read as turned on, with their size, or turned off.
+  if (key === "environment.small_subnets_changed" && details?.enabled === "true" && details.mask) {
+    return t("audit.actions.environment.small_subnets_on", { mask: details.mask });
+  }
+  if (key === "environment.small_subnets_changed" && details?.enabled === "false") {
+    return t("audit.actions.environment.small_subnets_off");
+  }
   // Keeping a network off the orphan list, and the details saved before a delete, name the network.
   if (
     (key === "network.kept" || key === "network.unkept" || key === "network.inspect_saved") &&

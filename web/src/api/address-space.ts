@@ -4,7 +4,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/api/client";
-import { readProblem } from "@/api/problem";
+import { type ProblemField, readProblem } from "@/api/problem";
 import { LIST_REFETCH_MS } from "@/api/resources";
 import type { components } from "@/api/schema";
 
@@ -20,6 +20,8 @@ export type SubnetCheckRequest = components["schemas"]["SubnetCheckRequest"];
 export type SubnetCheck = components["schemas"]["SubnetCheckBody"];
 export type SubnetFinding = components["schemas"]["SubnetFindingBody"];
 export type RouteCheck = components["schemas"]["RouteCheckBody"];
+export type AddressSettings = components["schemas"]["AddressSettingsBody"];
+export type PoolEntry = components["schemas"]["PoolEntryBody"];
 
 // The key of the environment's address space, so the events feed can make it stale.
 export function addressSpaceKey(envId: string) {
@@ -171,4 +173,131 @@ export async function checkSubnet(
     if (e instanceof DOMException && e.name === "AbortError") throw e;
     throw e instanceof SubnetCheckError ? e : new SubnetCheckError(0);
   }
+}
+
+// AddressSettingsError is a read or save of the environment's address settings the server refused
+// or never answered. The status is 0 when the server could not be reached; the type is the problem
+// type it named (settings_changed, not_standalone, pool_base_invalid, pool_size_invalid,
+// pool_overlap ...) and the fields say which row of the pools a 422 is about.
+export class AddressSettingsError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  readonly fields: ProblemField[];
+  constructor(status: number, type?: string, fields: ProblemField[] = []) {
+    super(`address settings request failed (${status})`);
+    this.name = "AddressSettingsError";
+    this.status = status;
+    this.type = type;
+    this.fields = fields;
+  }
+}
+
+// conflictBy is who saved the settings last, as a 409 settings_changed names them. Empty when the
+// server did not know the person.
+export function conflictBy(error: AddressSettingsError): string {
+  return error.fields.find((f) => f.location === "changedBy")?.message ?? "";
+}
+
+// poolRowError is the pool row a 422 names ("body.pools[1].base" is row 1, counted from 0) and the
+// problem type, so the row can show the line.
+export function poolRowError(error: AddressSettingsError): { row: number; type: string } | null {
+  if (!error.type) return null;
+  for (const f of error.fields) {
+    const m = /^body\.pools\[(\d+)\]/.exec(f.location);
+    if (m) return { row: Number(m[1]), type: error.type };
+  }
+  return null;
+}
+
+export function addressSettingsKey(envId: string) {
+  return ["env", envId, "address-settings"] as const;
+}
+
+async function settingsFailure(error: unknown, response: { status: number }): Promise<never> {
+  const problem = readProblem(error, response);
+  throw new AddressSettingsError(problem.status, problem.type, problem.fields);
+}
+
+// The environment's small-subnet opt-in and entered pools, with the version a save must send back.
+// Docker is not asked: these are Coaming's own settings.
+export function addressSettingsQuery(envId: string) {
+  return queryOptions({
+    queryKey: addressSettingsKey(envId),
+    queryFn: async (): Promise<AddressSettings> => {
+      try {
+        const res = await api.GET("/api/env/{envId}/address-space/settings", {
+          params: { path: { envId } },
+        });
+        if (!res.data) return await settingsFailure(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof AddressSettingsError ? e : new AddressSettingsError(0);
+      }
+    },
+  });
+}
+
+export interface SmallSubnetsSave {
+  enabled: boolean;
+  mask: number;
+  // The version the person read the settings at.
+  version: number;
+}
+
+// useSaveSmallSubnets is the mutation behind Save subnet settings. It sends the version read, so a
+// save made after someone else's is refused (409 settings_changed). It does not retry. A saved
+// answer replaces the settings; the address space is read again because the pools' meaning does not
+// change but the review of a stack does.
+export function useSaveSmallSubnets(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<AddressSettings, AddressSettingsError, SmallSubnetsSave>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/address-space/small-subnets", {
+          params: { path: { envId } },
+          body,
+        });
+        if (!res.data) return await settingsFailure(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof AddressSettingsError ? e : new AddressSettingsError(0);
+      }
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(addressSettingsKey(envId), saved);
+      void queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) });
+    },
+  });
+}
+
+export interface AddressPoolsSave {
+  pools: PoolEntry[];
+  version: number;
+}
+
+// useSaveAddressPools is the mutation behind Save address pools. Like the subnet settings it sends
+// the version read and does not retry. The address space is read again, because its pools now come
+// from what was entered.
+export function useSaveAddressPools(envId: string) {
+  const queryClient = useQueryClient();
+  return useMutation<AddressSettings, AddressSettingsError, AddressPoolsSave>({
+    retry: false,
+    mutationFn: async (body) => {
+      try {
+        const res = await api.PUT("/api/env/{envId}/address-space/pools", {
+          params: { path: { envId } },
+          body,
+        });
+        if (!res.data) return await settingsFailure(res.error, res.response);
+        return res.data;
+      } catch (e) {
+        throw e instanceof AddressSettingsError ? e : new AddressSettingsError(0);
+      }
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(addressSettingsKey(envId), saved);
+      void queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) });
+    },
+  });
 }

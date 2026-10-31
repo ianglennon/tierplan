@@ -93,6 +93,8 @@
         "auto_update_changed": "Changed agent auto-update",
         "restart_loop_settings_changed": "Changed restart-loop settings",
         "small_subnets_changed": "Changed small stack subnets",
+        "small_subnets_on": "Turned on small stack subnets (/{{mask}})",
+        "small_subnets_off": "Turned off small stack subnets",
         "address_pools_saved": "Saved address pools"
       },
       "agent": {

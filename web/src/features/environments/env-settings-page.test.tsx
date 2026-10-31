@@ -143,6 +143,17 @@ beforeEach(() => {
           disabled: false,
         });
       }
+      if (path.endsWith("/address-space/settings")) {
+        return Response.json({
+          smallSubnets: { enabled: false, mask: 26 },
+          pools: [],
+          version: 1,
+          changedBy: "",
+        });
+      }
+      if (path.endsWith("/address-space")) {
+        return Response.json({ envType: "swarm", measured: true, pools: [], overlays: [] });
+      }
       if (path.endsWith("/restart-loop-settings")) {
         return Response.json({ failures: 3, windowMinutes: 10, historyLimit: 5 });
       }
@@ -240,6 +251,21 @@ describe("/settings/environments/$envId", () => {
     ]);
   });
 
+  it("puts Default stack subnets after Restart-loop detection for someone who holds networks.read", async () => {
+    current = me([...ALL, "networks.read", "networks.addressing"]);
+    renderAt("/settings/environments/e2");
+    await screen.findByRole("heading", { level: 3, name: "Default stack subnets" });
+    const list = headings();
+    expect(list.indexOf("Default stack subnets")).toBe(list.indexOf("Restart-loop detection") + 1);
+    expect(list.indexOf("Remove environment")).toBe(list.indexOf("Default stack subnets") + 1);
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Default stack subnets" }).closest("section")
+        ?.id,
+    ).toBe("default-subnets");
+    // A swarm has pools of its own: no Address pools card.
+    expect(list).not.toContain("Address pools");
+  });
+
   it("makes Remove environment the last card, with the anchor remove, and scrolls to it for #remove", async () => {
     const scroll = vi.fn();
     const original = Element.prototype.scrollIntoView;
@@ -297,6 +323,7 @@ describe("/settings/environments/$envId", () => {
       "Nodes and agents",
       "Agent updates",
       "Restart-loop detection",
+      "Default stack subnets",
     ]);
     // The token is never read, the settings page's URL is left out, and the node table acts.
     expect(seen).not.toContain("GET /api/environments/e2/token");

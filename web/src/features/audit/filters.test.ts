@@ -136,6 +136,26 @@ describe("actionLabel (networks)", () => {
   });
 });
 
+describe("actionLabel for small stack subnets", () => {
+  it("words turning them on with the size, and turning them off", () => {
+    const key = "environment.small_subnets_changed";
+    expect(actionLabel(key, echo, { enabled: "true", mask: "26" })).toBe(
+      "t:audit.actions.environment.small_subnets_on",
+    );
+    expect(actionLabel(key, echo, { enabled: "false", mask: "26" })).toBe(
+      "t:audit.actions.environment.small_subnets_off",
+    );
+    expect(actionLabel(key, echo)).toBe("t:audit.actions.environment.small_subnets_changed");
+    expect(audit.audit.actions.environment.small_subnets_on).toBe(
+      "Turned on small stack subnets (/{{mask}})",
+    );
+    expect(audit.audit.actions.environment.small_subnets_off).toBe(
+      "Turned off small stack subnets",
+    );
+    expect(audit.audit.actions.environment.address_pools_saved).toBe("Saved address pools");
+  });
+});
+
 describe("actionLabel", () => {
   it("looks up the human label of a known action", () => {
     expect(actionLabel("auth.login", echo)).toBe("t:audit.actions.auth.login");

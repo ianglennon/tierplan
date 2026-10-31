@@ -11,6 +11,7 @@ import { NoPermission } from "@/components/full-page-state";
 import { StatusDot, useHealthLabel } from "@/components/status-dot";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SmallSubnetsCard } from "@/features/address-space/small-subnets-card";
 import { AdoptClusterDialog } from "@/features/environments/adopt-cluster-dialog";
 import { AgentUpdatesCard } from "@/features/environments/agent-updates-card";
 import { ENV_TITLE_ID } from "@/features/environments/env-settings-layout";
@@ -221,6 +222,8 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
   const canConfigure = hasPermission(me, "environments.configure", envId);
   const canRevoke = hasPermission(me, "environments.revoke", envId);
   const canRead = hasPermission(me, "environments.read", envId);
+  // The address-space cards are read with networks.read and saved with networks.addressing.
+  const canNetworks = hasPermission(me, "networks.read", envId);
   // The rest is installation-wide: the join token, the local-host fold, removal and
   // the settings that hold the address agents dial.
   const canToken = hasPermission(me, "environments.token");
@@ -249,6 +252,13 @@ export function EnvSettingsPage({ envId }: EnvSettingsPageProps) {
       {canToken && env.kind === "agent" ? <JoinTokenCard envId={env.id} /> : null}
       {canConfigure && canRead && env.kind === "agent" ? <AgentUpdatesCard env={env} /> : null}
       {canConfigure ? <RestartLoopCard envId={env.id} /> : null}
+      {canNetworks ? (
+        <SmallSubnetsCard
+          envId={env.id}
+          envName={env.name}
+          canEdit={hasPermission(me, "networks.addressing", env.id)}
+        />
+      ) : null}
       {canToken && env.kind === "agent" ? (
         <InstallDialog
           open={rotating}
