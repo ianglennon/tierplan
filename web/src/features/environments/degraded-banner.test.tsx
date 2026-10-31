@@ -37,6 +37,7 @@ function degraded(issues: Issue[] | null, extra: Partial<EnvironmentItem["status
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,

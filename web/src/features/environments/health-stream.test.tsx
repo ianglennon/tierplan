@@ -29,6 +29,7 @@ function env(id: string, state: EnvironmentItem["status"]["state"], name = id): 
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,

@@ -24,6 +24,17 @@
       "AddEnvironmentBody": {
         "additionalProperties": false,
         "properties": {
+          "addressSpace": {
+            "description": "The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAddressSpaceBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "agentVersion": {
             "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
             "type": [
@@ -170,7 +181,8 @@
           "agentVersion",
           "updateAvailable",
           "engineVersion",
-          "lastSeen"
+          "lastSeen",
+          "addressSpace"
         ],
         "type": "object"
       },
@@ -4175,6 +4187,78 @@
         ],
         "type": "object"
       },
+      "EnvironmentAddressSpaceBody": {
+        "additionalProperties": false,
+        "properties": {
+          "capacity": {
+            "description": "What there is of it, in the unit",
+            "format": "int64",
+            "type": "integer"
+          },
+          "estimated": {
+            "description": "True when the number is an estimate: a standalone host's pool, which the daemon fills in its own way. An estimate never makes an environment degraded",
+            "type": "boolean"
+          },
+          "orphaned": {
+            "description": "How many networks the last orphan check found orphaned",
+            "format": "int64",
+            "type": "integer"
+          },
+          "percent": {
+            "description": "Used over capacity, in whole percent, rounded down",
+            "format": "int64",
+            "type": "integer"
+          },
+          "state": {
+            "description": "normal below 70%, getting_full from 70%, almost_full from 90%",
+            "enum": [
+              "normal",
+              "getting_full",
+              "almost_full",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "unit": {
+            "description": "subnets for a pool, which hands out subnets of its mask; addresses for a network",
+            "enum": [
+              "subnets",
+              "addresses"
+            ],
+            "type": "string"
+          },
+          "used": {
+            "description": "What is in use of it, in the unit",
+            "format": "int64",
+            "type": "integer"
+          },
+          "worstKind": {
+            "description": "What the fullest one is: an address pool, the swarm's ingress network or an overlay network",
+            "enum": [
+              "pool",
+              "ingress",
+              "overlay"
+            ],
+            "type": "string"
+          },
+          "worstName": {
+            "description": "The pool (its CIDR) or the network (its name) that is fullest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "worstName",
+          "worstKind",
+          "used",
+          "capacity",
+          "percent",
+          "state",
+          "unit",
+          "estimated",
+          "orphaned"
+        ],
+        "type": "object"
+      },
       "EnvironmentAgentsBody": {
         "additionalProperties": false,
         "properties": {
@@ -4198,6 +4282,17 @@
       "EnvironmentBody": {
         "additionalProperties": false,
         "properties": {
+          "addressSpace": {
+            "description": "The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EnvironmentAddressSpaceBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "agentVersion": {
             "description": "The oldest agent version in the environment; null when it has no agent, and for the local socket",
             "type": [
@@ -4340,7 +4435,8 @@
           "agentVersion",
           "updateAvailable",
           "engineVersion",
-          "lastSeen"
+          "lastSeen",
+          "addressSpace"
         ],
         "type": "object"
       },

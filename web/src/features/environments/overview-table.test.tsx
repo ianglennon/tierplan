@@ -33,6 +33,7 @@ function env(id: string, name: string, state: HealthState, extra: Partial<Enviro
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,

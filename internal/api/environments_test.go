@@ -988,6 +988,17 @@ type agentEnvBody struct {
 	Engine struct {
 		Version string `json:"version"`
 	} `json:"engine"`
+	AddressSpace *struct {
+		WorstName string `json:"worstName"`
+		WorstKind string `json:"worstKind"`
+		Used      int64  `json:"used"`
+		Capacity  int64  `json:"capacity"`
+		Percent   int    `json:"percent"`
+		State     string `json:"state"`
+		Unit      string `json:"unit"`
+		Estimated bool   `json:"estimated"`
+		Orphaned  int    `json:"orphaned"`
+	} `json:"addressSpace"`
 }
 
 // environment reads one environment from GET /api/environments.
@@ -1464,5 +1475,62 @@ func TestEnvironmentsDegradedAddressSpaceFull(t *testing.T) {
 	}
 	if is := e.Status.Issues[0]; is.Code != "address_space_full" || is.Subject != "hot" || is.Percent != 90 || is.Node != "" || is.Since == "" {
 		t.Fatalf("issue = %+v, want address_space_full on hot at 90%% with no node", is)
+	}
+}
+
+// The fullest pool or network of each environment is in its body (plan 10-17, D-06 items 1 and 2).
+func TestEnvironmentsAddressSpaceColumn(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFix(t)
+	// A standalone host whose one pool, 10.50.0.0/16 in /24 blocks, has 185 of its 256 blocks taken (72%).
+	edge := s.srv.NewEnvironment(t, "Edge")
+	s.connect(t, edge, dockertest.FakeConfig{
+		Hostname:            "edge-1",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 24}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "n1", Name: "n1", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.0.0/17"}},
+			{ID: "n2", Name: "n2", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.128.0/19"}},
+			{ID: "n3", Name: "n3", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.160.0/20"}},
+			{ID: "n4", Name: "n4", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.176.0/21"}},
+			{ID: "n5", Name: "n5", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.184.0/24"}},
+		},
+	}, nil)
+	s.whenState(t, edge.ID, "online")
+
+	// Nothing has been read: null, present and not absent.
+	raw := s.req(t, http.MethodGet, "/api/environments", "")
+	var list struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("%d environments listed, want the swarm and the host", len(list.Items))
+	}
+	for _, it := range list.Items {
+		if string(it["addressSpace"]) != "null" {
+			t.Errorf("before any read addressSpace = %s, want null", it["addressSpace"])
+		}
+	}
+
+	if _, err := s.addressSpaces.Read(testsupport.Context(t), edge.ID); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	e := s.environment(t, edge.ID)
+	a := e.AddressSpace
+	if a == nil {
+		t.Fatalf("addressSpace is null after a read: %+v", e)
+	}
+	if a.WorstName != "10.50.0.0/16" || a.WorstKind != "pool" || a.Used != 185 || a.Capacity != 256 || a.Percent != 72 || a.State != "getting_full" || a.Unit != "subnets" || !a.Estimated || a.Orphaned != 0 {
+		t.Fatalf("addressSpace = %+v, want the estimated pool at 72%% getting_full", *a)
+	}
+	// An estimate never degrades the host.
+	if e.Status.State != "online" || len(e.Status.Issues) != 0 {
+		t.Errorf("status = %+v, want online", e.Status)
+	}
+	// The swarm was never read.
+	if sw := s.environment(t, s.env.ID); sw.AddressSpace != nil {
+		t.Errorf("the swarm that was never read answers %+v, want null", *sw.AddressSpace)
 	}
 }

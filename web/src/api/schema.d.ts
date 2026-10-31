@@ -4799,6 +4799,8 @@ export interface components {
             token: string;
         };
         AddEnvironmentBody: {
+            /** @description The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline */
+            addressSpace: components["schemas"]["EnvironmentAddressSpaceBody"] | null;
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
@@ -6424,6 +6426,47 @@ export interface components {
             /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
             items: components["schemas"]["EnvWarningBody"][] | null;
         };
+        EnvironmentAddressSpaceBody: {
+            /**
+             * Format: int64
+             * @description What there is of it, in the unit
+             */
+            capacity: number;
+            /** @description True when the number is an estimate: a standalone host's pool, which the daemon fills in its own way. An estimate never makes an environment degraded */
+            estimated: boolean;
+            /**
+             * Format: int64
+             * @description How many networks the last orphan check found orphaned
+             */
+            orphaned: number;
+            /**
+             * Format: int64
+             * @description Used over capacity, in whole percent, rounded down
+             */
+            percent: number;
+            /**
+             * @description normal below 70%, getting_full from 70%, almost_full from 90%
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /**
+             * @description subnets for a pool, which hands out subnets of its mask; addresses for a network
+             * @enum {string}
+             */
+            unit: "subnets" | "addresses";
+            /**
+             * Format: int64
+             * @description What is in use of it, in the unit
+             */
+            used: number;
+            /**
+             * @description What the fullest one is: an address pool, the swarm's ingress network or an overlay network
+             * @enum {string}
+             */
+            worstKind: "pool" | "ingress" | "overlay";
+            /** @description The pool (its CIDR) or the network (its name) that is fullest */
+            worstName: string;
+        };
         EnvironmentAgentsBody: {
             /**
              * Format: int64
@@ -6437,6 +6480,8 @@ export interface components {
             expected: number;
         };
         EnvironmentBody: {
+            /** @description The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline */
+            addressSpace: components["schemas"]["EnvironmentAddressSpaceBody"] | null;
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
