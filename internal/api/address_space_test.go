@@ -4,11 +4,15 @@
 package api_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/coaming/proto/testsupport"
 )
 
 // The address-space route (plan 10-01, NET-02, D-02, D-03, D-07 as amended, T-10-02). Docker is a
@@ -91,5 +95,75 @@ func TestAddressSpaceRouteAViewerMayReadAndAUserWithoutTheEnvironmentGets404(t *
 	unknown := f.req(t, http.MethodGet, "/api/env/nope/address-space", "")
 	if unknown.code != http.StatusNotFound || unknown.ptyp != "environment_not_found" {
 		t.Fatalf("an unknown environment: %d %q, want 404 environment_not_found", unknown.code, unknown.ptyp)
+	}
+}
+
+func TestAddressSpaceRouteAStandaloneHostIsEstimatedWithItsSource(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 26}},
+		Networks:            []dockertest.FakeNetwork{{ID: "app", Name: "app", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.0.64/26"}}},
+	})
+	awaitOnline(t, f.mon, e.ID)
+	raw := f.get(t, e, "address-space")
+	if raw.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", raw.code, raw.body)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw.body, &generic); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := generic["notMeasured"]; has {
+		t.Errorf("a standalone host is estimated, not unmeasured: %s", raw.body)
+	}
+	got := decode[addressSpace](t, raw)
+	want := addressPool{
+		CIDR: "10.50.0.0/16", Mask: 26, Used: 1, Capacity: 1024, Percent: 0, State: "normal",
+		LargestFree: "10.50.128.0/17", LargestFreeSubnets: 512, Source: "daemon", Estimated: true,
+	}
+	if got.EnvType != "standalone" || got.Measured || len(got.Pools) != 1 || got.Pools[0] != want {
+		t.Fatalf("answer = %+v\nwant one daemon pool %+v, estimated, not measured", got, want)
+	}
+
+	// Without a setting of its own the daemon's pools are Docker's built-in ones, still estimated.
+	f2, e2 := dashEnv(t, dockertest.FakeConfig{Hostname: "node-2", Version: "29.1.0"})
+	awaitOnline(t, f2.mon, e2.ID)
+	defaults := decode[addressSpace](t, f2.get(t, e2, "address-space"))
+	if len(defaults.Pools) != 7 || defaults.Measured {
+		t.Fatalf("defaults = %+v, want Docker's seven built-in pools", defaults)
+	}
+	for _, p := range defaults.Pools {
+		if p.Source != "defaults" || !p.Estimated {
+			t.Errorf("pool %+v, want source defaults and estimated", p)
+		}
+	}
+}
+
+func TestAddressSpaceRouteASwarmWithoutAManagerSaysNoManager(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if strings.HasPrefix(host, "mgr-") {
+			cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		}
+	})
+	s.srv.Hub.Kick(s.m1.id, tunnel.DisconnectClosed)
+	s.srv.Hub.Kick(s.m2.id, tunnel.DisconnectClosed)
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		if _, err := s.srv.Hub.AwaitSession(testsupport.Context(t), m.id, func(sess *tunnel.Session) bool { return sess == nil }); err != nil {
+			t.Fatalf("the session of %s never went: %v", m.id, err)
+		}
+	}
+
+	rec := s.get(t, s.env.ID, "address-space")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	got := decode[addressSpace](t, rec)
+	if got.EnvType != "swarm" || got.Measured || got.NotMeasured != "no_manager" || got.Pools == nil || len(got.Pools) != 0 {
+		t.Fatalf("answer = %+v, want a swarm that says no_manager with no pool ever read", got)
+	}
+	if !slices.Equal(got.NotReporting, []string{"mgr-1", "mgr-2"}) {
+		t.Errorf("notReporting = %v, want the two managers that stopped answering", got.NotReporting)
 	}
 }

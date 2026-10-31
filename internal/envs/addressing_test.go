@@ -15,6 +15,7 @@ import (
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The address pools of an environment (plan 10-01, NET-02, D-02, D-03, D-05, D-07 as amended).
@@ -145,5 +146,164 @@ func TestAddressSpaceTTL(t *testing.T) {
 	}
 	if got := infoRequests(); got <= first {
 		t.Fatalf("a read after the TTL made no engine request")
+	}
+}
+
+func TestAddressSpaceStandaloneDaemonPools(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Edge")
+	r.connect(t, env, dockertest.FakeConfig{
+		Hostname:            "edge-1",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 26}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "app", Name: "app", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.0.0/26", "10.50.0.64/26"}},
+			// An overlay is the swarm's, and never takes a pool of a standalone host.
+			{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.50.0.128/26"}},
+		},
+	}, nil)
+	r.whenOnline(t, env.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+
+	v, err := as.Read(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if v.Swarm || v.Measured || v.NotMeasured != "" {
+		t.Fatalf("space = %+v, want a standalone host that is estimated and not a failed measurement", v)
+	}
+	if got := strings.Join(poolLines(v), "|"); got != "10.50.0.0/16/26 used=2 cap=1024 daemon est=true" {
+		t.Fatalf("pools = %s, want the daemon's pool with the two bridge blocks and not the overlay", got)
+	}
+}
+
+func TestAddressSpaceStandaloneDefaults(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Edge")
+	r.connect(t, env, dockertest.FakeConfig{
+		Hostname: "edge-1",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "lan", Name: "lan", Driver: "bridge", Scope: "local", Subnets: []string{"192.168.16.0/20"}},
+		},
+	}, nil)
+	r.whenOnline(t, env.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+
+	v, err := as.Read(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	want := []string{
+		"172.17.0.0/16/16 used=1 cap=1 defaults est=true",
+		"172.18.0.0/16/16 used=0 cap=1 defaults est=true",
+		"172.19.0.0/16/16 used=0 cap=1 defaults est=true",
+		"172.20.0.0/14/16 used=0 cap=4 defaults est=true",
+		"172.24.0.0/14/16 used=0 cap=4 defaults est=true",
+		"172.28.0.0/14/16 used=0 cap=4 defaults est=true",
+		"192.168.0.0/16/20 used=1 cap=16 defaults est=true",
+	}
+	if got := poolLines(v); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("pools = %v\nwant    %v", got, want)
+	}
+	if v.Pools[1].State != netspace.StateNormal || v.Pools[0].State != netspace.StateAlmostFull {
+		t.Errorf("states = %s / %s, want the full /16 almost_full and the empty one normal", v.Pools[0].State, v.Pools[1].State)
+	}
+}
+
+func TestAddressSpaceStandaloneLocalSocket(t *testing.T) {
+	local := dockertest.NewFake(t, dockertest.FakeConfig{
+		Hostname:            "this-host",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.70.0.0/16", Size: 24}},
+		Networks:            []dockertest.FakeNetwork{{ID: "app", Name: "app", Driver: "bridge", Scope: "local", Subnets: []string{"10.70.3.0/24"}}},
+	})
+	r := newTunRig(t, local)
+	e, err := r.svc.AddLocal(context.Background(), admin, "", false, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the local engine is is not known before its first probe.
+	awaitProbed(t, r.mon, e.ID)
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now})
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+	v, err := as.Read(testsupport.Context(t), e.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := strings.Join(poolLines(v), "|"); got != "10.70.0.0/16/24 used=1 cap=256 daemon est=true" {
+		t.Fatalf("pools = %s, want the local engine's pool read from its one node", got)
+	}
+}
+
+func TestAddressSpaceNoManager(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Workers")
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs})
+	r.svc.WithClusters(c)
+	for i := 1; i <= 2; i++ {
+		r.connect(t, env, dockertest.FakeConfig{
+			Hostname: fmt.Sprintf("w-%d", i), SwarmState: "active",
+			Networks: []dockertest.FakeNetwork{{ID: fmt.Sprintf("br%d", i), Name: "bridge", Driver: "bridge", Scope: "local"}},
+		}, &wire.Facts{
+			EngineID: fmt.Sprintf("ENG:w%d", i), Hostname: fmt.Sprintf("w-%d", i), EngineReachable: true,
+			Swarm: &wire.SwarmFacts{State: "active", NodeID: fmt.Sprintf("node-w%d", i), Control: false},
+		})
+	}
+	r.awaitHealth(t, env.ID, "the workers to be probed", func(e Environment) bool { return e.Status.State == StateOnline })
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+
+	v, err := as.Read(testsupport.Context(t), env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !v.Swarm || v.Measured || v.NotMeasured != NotMeasuredNoManager || len(v.Pools) != 0 {
+		t.Fatalf("space = %+v, want a swarm that says no_manager and has no pool to show", v)
+	}
+}
+
+func TestAddressSpaceNoManagerAfterAGoodReadKeepsThePoolsWithUnknownState(t *testing.T) {
+	r := newTunRig(t, nil)
+	r.pastGrace()
+	env := r.srv.NewEnvironment(t, "Swarm")
+	c := NewClusters(r.svc, r.snaps, ClusterOptions{Now: r.clk.Now, Publisher: r.brk, Events: r.evs})
+	r.svc.WithClusters(c)
+	nodes := managerNodes()[:1]
+	mc := managerConfig(1, nodes, nil)
+	mc.SwarmClusterID, mc.SwarmSubnetSize = "cluster-1", 24
+	mc.Networks = []dockertest.FakeNetwork{{ID: "o1", Name: "o1", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}}}
+	mgr := r.connect(t, env, mc, managerFacts(1))
+	r.connect(t, env, dockertest.FakeConfig{Hostname: "wrk-1", SwarmState: "active"}, workerFacts("wrk-1"))
+	r.whenOnline(t, env.ID)
+	if err := c.Refresh(context.Background(), env.ID); err != nil {
+		t.Fatal(err)
+	}
+	as := NewAddressSpaces(r.svc, r.agg, c, AddressSpaceOptions{Now: r.clk.Now})
+	ctx := testsupport.Context(t)
+
+	good, err := as.Read(ctx, env.ID)
+	if err != nil || !good.Measured || len(good.Pools) != 1 || good.Pools[0].Used != 1 {
+		t.Fatalf("first read = %+v, %v; want the pool measured with one block used", good, err)
+	}
+
+	r.kick(t, mgr)
+	r.clk.Advance(DefaultClusterTTL + time.Second)
+	v, err := as.Read(ctx, env.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if v.Measured || v.NotMeasured != NotMeasuredNoManager || len(v.Pools) != 1 {
+		t.Fatalf("space = %+v, want no_manager with the remembered pool", v)
+	}
+	p := v.Pools[0]
+	if p.State != netspace.StateUnknown || p.Used != 0 || p.Percent != 0 || p.LargestFree.IsValid() || p.Capacity != 65536 || p.Source != PoolSourceSwarm {
+		t.Errorf("remembered pool = %+v, want the same pool with state unknown and nothing counted", p)
+	}
+	if len(v.NotReporting) != 1 || v.NotReporting[0] != "mgr-1" {
+		t.Errorf("not reporting = %v, want the manager that stopped answering", v.NotReporting)
 	}
 }
