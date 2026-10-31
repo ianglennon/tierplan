@@ -676,6 +676,20 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     );
   });
 
+  it("says Docker refused the subnet", async () => {
+    answer = () => problem(422, "subnet_refused");
+    mount();
+    const dialog = await screen.findByRole("dialog");
+    await typeName(dialog, "app-net");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toContain(
+      "Docker refused this subnet because it overlaps another network on that host.",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Advanced" }).getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   it("opens advanced at 70 percent, with the line that says why", async () => {
     addressSpace = {
       envType: "swarm",

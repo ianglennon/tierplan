@@ -170,6 +170,7 @@
       "nodeUnreachable": "That node isn't reachable right now. Try again when it's back.",
       "hostReadOnly": "This host is read-only. Changes are turned off on the host itself, so Coaming can only read from it.",
       "nodeRequired": "Choose a node.",
+      "subnetRefused": "Docker refused this subnet because it overlaps another network on that host. Choose another subnet.",
       "notAllocated": "The swarm didn't give this network an address range, so Coaming removed it again. Its subnet may overlap another swarm network, or the swarm's address pools may be full. If it's still in the list, delete it.",
       "subnetInvalid": "Enter a subnet like 10.20.0.0/24.",
       "gatewayOutside": "The gateway must be inside the subnet.",

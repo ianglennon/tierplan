@@ -2073,3 +2073,25 @@ func TestCreateNetworkAllocatedOverlayIsKept(t *testing.T) {
 		t.Errorf("audit rows = %+v", rows)
 	}
 }
+
+// The engine refuses a subnet at once (the bridge driver's or the default IPAM's overlap
+// refusal, which 10-28's override rule leaves to it): 422 subnet_refused, never the unreachable
+// problem, and the engine's own sentence stays out of the answer (T-10-71).
+func TestCreateNetworkEngineOverlapRefusal(t *testing.T) {
+	t.Parallel()
+	cfg := networkEngine()
+	cfg.OverlapSubnets = []string{"10.99.0.0/24"}
+	f, e := dashEnv(t, cfg)
+	rec := f.createNet(t, e, `{"name":"lan","driver":"bridge","subnet":"10.99.0.0/24","createAnyway":true}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_refused" {
+		t.Fatalf("status = %d %q, want 422 subnet_refused: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "Docker refused 10.99.0.0/24: it overlaps another network on that host. Choose another subnet.") ||
+		strings.Contains(string(rec.body), "Pool overlaps") {
+		t.Errorf("the problem is not the fixed wording: %s", rec.body)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionNetworkCreated || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "subnet_refused" || rows[0].Details["code"] != "subnet_refused" {
+		t.Fatalf("audit rows = %+v, want one failed create named subnet_refused", rows)
+	}
+}
