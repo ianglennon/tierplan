@@ -80,8 +80,11 @@ type ServicesDeps struct {
 	Clusters *envs.Clusters
 	// Resolver chooses the registry credential a service update is sent with.
 	Resolver *registry.Resolver
-	Audit    *audit.Writer
-	Checker  *rbac.Checker
+	// AddressSpaces holds the per-environment allocation lock, so the check of a staged network's
+	// subnet and its creation are one step (NET-05). Nil takes no lock.
+	AddressSpaces *envs.AddressSpaces
+	Audit         *audit.Writer
+	Checker       *rbac.Checker
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
 	// Log receives server-side failures. Nil means slog.Default().

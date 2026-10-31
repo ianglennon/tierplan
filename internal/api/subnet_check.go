@@ -301,6 +301,25 @@ func subnetScope(space envs.AddressSpace, req SubnetCheckRequest, agg envs.Aggre
 	return true, ""
 }
 
+// sameEnvOverlaps are the networks of this environment whose subnets overlap the subnet of a
+// create, by the scope rule of the subnet map: a cluster network or a host's only network is
+// compared with every network, a local network of a node with that node's local networks and
+// every swarm network. An IPv6 subnet is not checked. The network dialog's create and the
+// networks a service apply or create makes (stagedOverlapGate) hold to this one rule.
+func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeID string) []netspace.Finding {
+	candidate, err := netip.ParsePrefix(subnet)
+	if err != nil {
+		return nil
+	}
+	in := netspace.OverlapInput{Swarm: true, Same: envs.NetworkItems(agg.Networks)}
+	if localOnSwarm {
+		if name, ok := nodeName(agg, nodeID); ok {
+			in.Swarm, in.Node = false, name
+		}
+	}
+	return netspace.FindOverlaps(candidate, in)
+}
+
 // subnetFindings is what the typed subnet collides with.
 func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, space envs.AddressSpace, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string) []SubnetFindingBody {
 	in := netspace.OverlapInput{

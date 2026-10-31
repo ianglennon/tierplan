@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -67,12 +68,13 @@ const (
 
 // ServiceStagedObject is an object the editor made that does not exist yet.
 type ServiceStagedObject struct {
-	Kind       string            `json:"kind" enum:"network,secret,config" doc:"What to create. A network is made as an attachable overlay"`
-	Name       string            `json:"name" doc:"The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)"`
-	Data       string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
-	Templating string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
-	Labels     map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
-	Subnet     string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid)"`
+	Kind         string            `json:"kind" enum:"network,secret,config" doc:"What to create. A network is made as an attachable overlay"`
+	Name         string            `json:"name" doc:"The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)"`
+	Data         string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
+	Templating   string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
+	Labels       map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
+	Subnet       string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true"`
+	CreateAnyway bool              `json:"createAnyway,omitempty" doc:"A network only: create it even though its subnet overlaps a network of this environment; recorded in the audit log"`
 }
 
 // ServiceApplyRequest is the body of the apply route: the review's body and the objects the spec
@@ -386,7 +388,7 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 		switch o.Kind {
 		case swarmops.KindNetwork:
 			if err = validateAddressing(o.Subnet, "", ""); err == nil {
-				so.Subnet = o.Subnet
+				so.Subnet, so.CreateAnyway = o.Subnet, o.CreateAnyway
 			}
 		case swarmops.KindSecret:
 			if so.Data, err = decodeSecretValue(o.Data); err == nil {
@@ -409,6 +411,50 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 		}
 	}
 	return out, nil
+}
+
+// stagedOverlapGate refuses, before anything is created, a staged network whose subnet overlaps a
+// network of this environment, unless the person ticked "create it anyway" for it (D-18, T-10-48). A
+// staged network is an attachable overlay, so the cluster-wide rule of the subnet map applies: it is
+// compared with every network. The refusal is the network dialog's: 422 subnet_overlap naming the
+// first network it overlaps. Like the dialog's override, createAnyway is kept only on a network that
+// does overlap one (it is cleared in objects on the others), so the audit row's overlap_override is
+// true only for an override that was needed.
+func stagedOverlapGate(ctx context.Context, d ServicesDeps, envID string, objects []swarmops.StagedObject) error {
+	if !slices.ContainsFunc(objects, func(o swarmops.StagedObject) bool { return o.Kind == swarmops.KindNetwork && o.Subnet != "" }) {
+		return nil
+	}
+	if d.Aggregator == nil {
+		d.Log.Error("the service routes have no aggregator to check a staged subnet against")
+		return huma.Error500InternalServerError("internal error")
+	}
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	for i, o := range objects {
+		if o.Kind != swarmops.KindNetwork || o.Subnet == "" {
+			continue
+		}
+		overlaps := sameEnvOverlaps(o.Subnet, agg, false, "")
+		if len(overlaps) > 0 && !o.CreateAnyway {
+			return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(o.Subnet, overlaps[0]))
+		}
+		objects[i].CreateAnyway = len(overlaps) > 0
+	}
+	return nil
+}
+
+// lockStagedSubnets holds the environment's allocation lock while the staged networks that have a
+// subnet are checked and made, so two creates through Coaming cannot both pass the check with one
+// subnet (NET-05). The returned function releases it; it does nothing when no lock applies.
+func lockStagedSubnets(d ServicesDeps, envID string, objects []swarmops.StagedObject) func() {
+	if d.AddressSpaces != nil && slices.ContainsFunc(objects, func(o swarmops.StagedObject) bool {
+		return o.Kind == swarmops.KindNetwork && o.Subnet != ""
+	}) {
+		return d.AddressSpaces.LockAllocation(envID)
+	}
+	return func() {}
 }
 
 // applyDeps are swarmopsDeps with the two hooks that need the caller: whether they may create a
@@ -445,6 +491,10 @@ func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 		}
 	}()
 	if err := requireSwarm(ctx, d, envID); err != nil {
+		return ServiceApplyBody{}, err
+	}
+	defer lockStagedSubnets(d, envID, objects)()
+	if err := stagedOverlapGate(ctx, d, envID, objects); err != nil {
 		return ServiceApplyBody{}, err
 	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}

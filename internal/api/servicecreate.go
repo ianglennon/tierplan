@@ -159,6 +159,10 @@ func createService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 	if err := requireSwarm(ctx, d, envID); err != nil {
 		return ServiceCreateBody{}, err
 	}
+	defer lockStagedSubnets(d, envID, objects)()
+	if err := stagedOverlapGate(ctx, d, envID, objects); err != nil {
+		return ServiceCreateBody{}, err
+	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()

@@ -304,3 +304,35 @@ func TestCreateServiceRefusesTooLargeABodyAndTooManyObjects(t *testing.T) {
 		t.Errorf("writes = %v", w)
 	}
 }
+
+func TestServiceCreateStagedNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.77.0.0/25", false))
+	rec := admin.create(body)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap" {
+		t.Fatalf("create: %d %s, want 422 subnet_overlap", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "10.77.0.0/25 overlaps existing (10.77.0.0/24)") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	// Ticked, the same body creates the network and the service, and says so in the audit log.
+	body = chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.77.0.0/25", true))
+	if rec := admin.create(body); rec.Code != http.StatusCreated {
+		t.Fatalf("create anyway: %d %s", rec.Code, rec.Body)
+	}
+	rows := f.auditLike(t, "network.created")
+	if len(rows) != 1 || rows[0].Details["overlap_override"] != "true" {
+		t.Errorf("network rows = %+v, want one with overlap_override", rows)
+	}
+}

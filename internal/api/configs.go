@@ -67,7 +67,7 @@ type ConfigsDeps struct {
 
 // services is the part of the dependencies the shared swarm problem mapping and a rotate read.
 func (d ConfigsDeps) services() ServicesDeps {
-	return ServicesDeps(d)
+	return ServicesDeps{Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Audit: d.Audit, Checker: d.Checker, Store: d.Store, Log: d.Log}
 }
 
 // ConfigItem is one swarm config as the list shows it. There is no content: the manager sends

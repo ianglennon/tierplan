@@ -13359,6 +13359,10 @@
       "ServiceStagedObject": {
         "additionalProperties": false,
         "properties": {
+          "createAnyway": {
+            "description": "A network only: create it even though its subnet overlaps a network of this environment; recorded in the audit log",
+            "type": "boolean"
+          },
           "data": {
             "description": "A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network",
             "type": "string"
@@ -13385,7 +13389,7 @@
             "type": "string"
           },
           "subnet": {
-            "description": "A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid)",
+            "description": "A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true",
             "type": "string"
           },
           "templating": {

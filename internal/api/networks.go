@@ -452,24 +452,6 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 // maxOverlapNamesAudited is the most bytes of network names the audit row of an override holds.
 const maxOverlapNamesAudited = 512
 
-// sameEnvOverlaps are the networks of this environment whose subnets overlap the subnet of a
-// create, by the scope rule of the subnet map: a cluster network or a host's only network is
-// compared with every network, a local network of a node with that node's local networks and
-// every swarm network. An IPv6 subnet is not checked.
-func sameEnvOverlaps(subnet string, agg envs.Aggregate, localOnSwarm bool, nodeID string) []netspace.Finding {
-	candidate, err := netip.ParsePrefix(subnet)
-	if err != nil {
-		return nil
-	}
-	in := netspace.OverlapInput{Swarm: true, Same: envs.NetworkItems(agg.Networks)}
-	if localOnSwarm {
-		if name, ok := nodeName(agg, nodeID); ok {
-			in.Swarm, in.Node = false, name
-		}
-	}
-	return netspace.FindOverlaps(candidate, in)
-}
-
 // nodeName is the name of the node of the aggregate with this ID.
 func nodeName(agg envs.Aggregate, nodeID string) (string, bool) {
 	for _, n := range agg.Nodes {

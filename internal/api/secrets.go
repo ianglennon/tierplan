@@ -79,7 +79,7 @@ type SecretsDeps struct {
 
 // services is the part of the dependencies the shared swarm problem mapping and a rotate read.
 func (d SecretsDeps) services() ServicesDeps {
-	return ServicesDeps(d)
+	return ServicesDeps{Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Audit: d.Audit, Checker: d.Checker, Store: d.Store, Log: d.Log}
 }
 
 // SecretItem is one swarm secret as the list shows it. There is no value: the swarm never

@@ -1098,3 +1098,80 @@ func TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName
 		}
 	})
 }
+
+// A staged network whose subnet overlaps a network of the environment (plan 10-19, D-18, T-10-48).
+
+// overlapEnv is an environment that has the overlay "existing" on 10.77.0.0/24.
+func overlapEnv(t *testing.T) (*envFix, envBody) {
+	t.Helper()
+	return actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, overlayNet("existing", "10.77.0.0/24"))
+	}, editableService(nil))
+}
+
+// refsFront makes the masked spec name only the network "front".
+func refsFront(spec map[string]any) {
+	tt, _ := spec["TaskTemplate"].(map[string]any)
+	tt["Networks"] = []any{map[string]any{"Target": "front"}}
+}
+
+func stagedFront(subnet string, anyway bool) []map[string]any {
+	o := map[string]any{"kind": "network", "name": "front", "subnet": subnet}
+	if anyway {
+		o["createAnyway"] = true
+	}
+	return []map[string]any{o}
+}
+
+func TestServiceApplyStagedNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap" {
+		t.Fatalf("apply: %d %s, want 422 subnet_overlap", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "10.77.0.0/25 overlaps existing (10.77.0.0/24)") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	if rows := f.auditLike(t, "network.created"); len(rows) != 0 {
+		t.Errorf("network rows = %+v, a refusal made nothing", rows)
+	}
+	// A subnet beside it goes through.
+	if rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.78.0.0/24", false))); rec.Code != http.StatusAccepted {
+		t.Fatalf("a free subnet: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestServiceApplyStagedNetworkCreateAnyway(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", true)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	if n := f.fake.NetworkCreates(); len(n) != 1 {
+		t.Fatalf("network creates = %+v, want one", n)
+	}
+	rows := f.auditLike(t, "network.created")
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultSuccess) ||
+		rows[0].Details["source"] != "service_apply" || rows[0].Details["overlap_override"] != "true" {
+		t.Fatalf("network rows = %+v, want one success with source service_apply and overlap_override", rows)
+	}
+	// A ticked box on a network that overlaps nothing is no override: the row does not say so.
+	f2, e2 := overlapEnv(t)
+	admin2 := f2.caller(t, e2, "envadmin-1", "admin")
+	_, body2 := admin2.maskedSpec("svc-api", refsFront)
+	if rec := admin2.apply("svc-api", withObjects(t, body2, stagedFront("10.78.0.0/24", true))); rec.Code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	if rows := f2.auditLike(t, "network.created"); len(rows) != 1 || rows[0].Details["source"] != "service_apply" || rows[0].Details["overlap_override"] != "" {
+		t.Errorf("network rows = %+v", rows)
+	}
+}

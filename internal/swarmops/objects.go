@@ -91,7 +91,10 @@ type StagedObject struct {
 	Templating string
 	// Subnet is the optional addressing of a network, in CIDR form.
 	Subnet string
-	Labels map[string]string
+	// CreateAnyway records that the person chose to make the network although its subnet overlaps
+	// another of the environment (the caller has already gated on it); the audit row says so.
+	CreateAnyway bool
+	Labels       map[string]string
 }
 
 // CreatedObject is an object an apply made.
@@ -341,6 +344,9 @@ func createdRowFrom(o StagedObject, targetID, code, source string) audit.Entry {
 		d["internal"], d["attachable"] = "false", "true"
 		if o.Subnet != "" {
 			d["subnet"] = o.Subnet
+		}
+		if o.CreateAnyway {
+			d["overlap_override"] = "true"
 		}
 	case KindSecret:
 		e.Action = audit.ActionSecretCreated
