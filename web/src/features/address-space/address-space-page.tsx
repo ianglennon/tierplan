@@ -14,6 +14,7 @@ import {
   MetersCard,
   MetersCardLoading,
 } from "@/features/address-space/meters-card";
+import { type MapSearch, SubnetMap } from "@/features/address-space/subnet-map";
 import type { MeterState } from "@/features/address-space/usage-meter";
 import { NodesBanner } from "@/features/environments/nodes-banner";
 import { usePermission } from "@/hooks/use-me";
@@ -52,7 +53,16 @@ export function worstMeter(data: AddressSpace): Worst | undefined {
 // is used (NET-02, NET-03): the pools, the ingress network and the overlays that are filling up.
 // Nothing on it is labelled live or cached: Docker is the source of truth and the page reads it
 // again on an event and every 30 s.
-export function AddressSpacePage({ envId }: { envId: string }) {
+export function AddressSpacePage({
+  envId,
+  search,
+  onSearchChange,
+}: {
+  envId: string;
+  // The map's search, filter and sort, from the URL.
+  search: MapSearch;
+  onSearchChange: (patch: Partial<MapSearch>) => void;
+}) {
   const t = useT();
   const allowed = usePermission("networks.read", envId);
   const query = useQuery({ ...addressSpaceQuery(envId), enabled: allowed });
@@ -123,9 +133,27 @@ export function AddressSpacePage({ envId }: { envId: string }) {
           </AlertDescription>
         </Alert>
       ) : data ? (
-        <MetersCard envId={envId} data={data} />
+        <>
+          <MetersCard envId={envId} data={data} />
+          <SubnetMap
+            envId={envId}
+            rows={data.networks ?? []}
+            swarm={data.envType === "swarm"}
+            search={search}
+            onSearchChange={onSearchChange}
+          />
+        </>
       ) : (
-        <MetersCardLoading />
+        <>
+          <MetersCardLoading />
+          <SubnetMap
+            envId={envId}
+            rows={undefined}
+            swarm={false}
+            search={search}
+            onSearchChange={onSearchChange}
+          />
+        </>
       )}
     </div>
   );

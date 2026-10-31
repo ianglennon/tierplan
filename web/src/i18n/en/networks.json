@@ -25,7 +25,10 @@
         "both": "{{containers}}, {{services}}"
       },
       "inUseBy": "In use by {{what}}. Open it to see what uses it.",
-      "inUseAnd": "{{first}} and {{second}}"
+      "inUseAnd": "{{first}} and {{second}}",
+      "columns": {
+        "addressesUsed": "Addresses used"
+      }
     },
     "create": {
       "button": "Create network",

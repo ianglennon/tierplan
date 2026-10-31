@@ -295,7 +295,7 @@ export function SelectCheckbox({
 
 // SortHeader is a column header that sorts: a button in the th, with aria-sort
 // on the th, as the environments overview does.
-function SortHeader({ label, active, dir, onClick }: SortHeaderProps) {
+export function SortHeader({ label, active, dir, onClick }: SortHeaderProps) {
   const Icon = !active ? ChevronsUpDown : dir === "asc" ? ArrowUp : ArrowDown;
   return (
     <button
@@ -309,7 +309,7 @@ function SortHeader({ label, active, dir, onClick }: SortHeaderProps) {
   );
 }
 
-interface SortHeaderProps {
+export interface SortHeaderProps {
   label: ReactNode;
   active: boolean;
   dir: "asc" | "desc";

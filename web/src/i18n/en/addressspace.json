@@ -70,6 +70,58 @@
         "subnets": "subnets",
         "addresses": "addresses"
       }
+    },
+    "map": {
+      "title": "Subnet map",
+      "caption": "Every network, sorted by address, so overlaps sit next to each other.",
+      "tableLabel": "Subnet map",
+      "loading": "Loading networks",
+      "none": "No networks to show.",
+      "search": {
+        "label": "Search networks",
+        "placeholder": "Search by name, subnet or owner",
+        "clear": "Clear search"
+      },
+      "show": {
+        "label": "Show",
+        "all": "All",
+        "overlay": "Overlays",
+        "local": "Local",
+        "filling": "Filling up",
+        "overlap": "Overlapping"
+      },
+      "columns": {
+        "name": "Network",
+        "subnet": "Subnet",
+        "scope": "Scope",
+        "driver": "Driver",
+        "owner": "Owner",
+        "attached": "Attached",
+        "age": "Age",
+        "used": "Addresses used"
+      },
+      "owner": {
+        "service": "Service {{name}}"
+      },
+      "ingress": "Ingress",
+      "overlap": {
+        "hidden": "Overlaps {{name}}",
+        "tip": "Overlaps {{name}} ({{subnet}}).",
+        "tipNode": "Overlaps {{name}} ({{subnet}}) on {{node}}.",
+        "more": "and {{count, number}} more"
+      },
+      "used": {
+        "value": "{{used, number}} / {{capacity, number}}"
+      },
+      "count_one": "{{count, number}} network",
+      "count_other": "{{count, number}} networks",
+      "cap": "Showing the first {{cap, number}} of {{total, number}}. Search to find the rest.",
+      "truncated": "The map holds the first {{rows, number}} of {{total, number}} networks.",
+      "empty": {
+        "query": "No networks match “{{q}}”.",
+        "filter": "No networks match this filter.",
+        "clear": "Clear filters"
+      }
     }
   }
 }

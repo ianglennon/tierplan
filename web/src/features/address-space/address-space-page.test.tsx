@@ -98,7 +98,7 @@ function mount() {
     <QueryClientProvider client={client}>
       <TestRouter>
         <TooltipProvider>
-          <AddressSpacePage envId={ENV} />
+          <AddressSpacePage envId={ENV} search={{}} onSearchChange={() => {}} />
         </TooltipProvider>
       </TestRouter>
     </QueryClientProvider>,
