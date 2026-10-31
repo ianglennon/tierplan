@@ -130,6 +130,14 @@ type addressEntry struct {
 	// pools are the pools of the last read that measured them, for the answer given when
 	// the next cannot.
 	pools []PoolUsage
+
+	// orphans is the report of the orphan check. oread makes one check of the environment at a
+	// time, so a burst of callers shares one, and omu guards the report.
+	oread       sync.Mutex
+	omu         sync.Mutex
+	orphans     OrphanReport
+	orphansAt   time.Time
+	haveOrphans bool
 }
 
 // AddressSpaces reads how full the address pools of an environment are. Docker is the source of
@@ -147,6 +155,9 @@ type AddressSpaces struct {
 	// returns as that read ends. Tests count the reads in flight with it, never by timing;
 	// nothing sets it in production.
 	overlayReadHook func() (done func())
+
+	// facts are what Coaming's own stacks say about a network (WithStackFacts); nil until set.
+	facts StackFacts
 
 	mu      sync.Mutex
 	entries map[string]*addressEntry

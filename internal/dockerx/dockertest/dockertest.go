@@ -529,6 +529,10 @@ type FakeNetwork struct {
 	Internal   bool
 	Attachable bool
 	Ingress    bool
+	// ConfigOnly and ConfigFrom are what /networks reports of a config-only network and of the
+	// config-only network another takes its configuration from (by name).
+	ConfigOnly bool
+	ConfigFrom string
 	// IPv6 is EnableIPv6, Options the driver options, and Gateways the gateway of
 	// each subnet of Subnets by position (a shorter list leaves the rest without
 	// one). They are what an inspect of the network reports.
@@ -1184,7 +1188,7 @@ func (c FakeConfig) networkList() []network.Summary {
 		n := network.Summary{Network: network.Network{
 			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
 			Labels: fn.Labels, Internal: fn.Internal, Attachable: fn.Attachable, Ingress: fn.Ingress,
-			EnableIPv6: fn.IPv6,
+			EnableIPv6: fn.IPv6, ConfigOnly: fn.ConfigOnly, ConfigFrom: network.ConfigReference{Network: fn.ConfigFrom},
 		}}
 		for _, sub := range fn.Subnets {
 			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})

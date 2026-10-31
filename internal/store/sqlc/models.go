@@ -168,6 +168,23 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type NetworkKeep struct {
+	EnvID  string
+	NodeID string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
+type NetworkSeen struct {
+	EnvID       string
+	NodeID      string
+	NetworkID   string
+	Name        string
+	FirstSeenAt int64
+	LastInUseAt int64
+}
+
 type OwnedResource struct {
 	Kind          string
 	ResourceID    string

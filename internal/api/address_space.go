@@ -63,6 +63,31 @@ type AddressSpaceBody struct {
 	Networks          []AddressMapRowBody `json:"networks" doc:"The subnet map: every network of every reporting node, one row for a swarm-wide network and one per node for a local one, ordered by the numeric start address of the first IPv4 subnet, then its mask, name and node; a network with no IPv4 subnet is last. At most 5000 rows (the page shows 500 and searches the rest); networksTotal is the full count. The overlaps are decided on the server over every row, before the cap"`
 	NetworksTotal     int                 `json:"networksTotal" minimum:"0" doc:"How many networks the map holds, whatever the cap"`
 	NetworksTruncated bool                `json:"networksTruncated" doc:"True when networksTotal is more than the rows returned"`
+
+	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
+	OrphansWithheld *OrphansWithheldBody `json:"orphansWithheld,omitempty" doc:"Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld"`
+}
+
+// OrphanRowBody is one network the orphan check lists.
+type OrphanRowBody struct {
+	NetworkID       string   `json:"networkId" doc:"The network's full ID"`
+	Name            string   `json:"name"`
+	Node            string   `json:"node" doc:"The node a local network is on, or Cluster for a swarm-wide network"`
+	NodeID          string   `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
+	Scope           string   `json:"scope" enum:"swarm,local"`
+	Subnets         []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when there is none"`
+	Class           string   `json:"class" enum:"orphaned,unused,cant_tell" doc:"orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load"`
+	FormerOwner     string   `json:"formerOwner" doc:"The stack or compose project the network's labels name; empty for a network with no owner label"`
+	FormerOwnerKind string   `json:"formerOwnerKind" enum:"stack,project," doc:"What formerOwner is, or empty when the network has no owner label"`
+	IdleSince       string   `json:"idleSince" format:"date-time" doc:"When the network's idle time started: the later of its creation and the last time Coaming saw it in use"`
+	IdleSinceSource string   `json:"idleSinceSource" enum:"seen,created" doc:"seen when idleSince is the last time Coaming saw the network in use, created when it is the network's creation"`
+}
+
+// OrphansWithheldBody says what the orphan check could not see.
+type OrphansWithheldBody struct {
+	Nodes          []string `json:"nodes" doc:"The nodes that did not report, because of which a network was not judged"`
+	Stacks         []string `json:"stacks" doc:"The Coaming stacks that did not load, whose external networks are therefore not known"`
+	ManagerMissing bool     `json:"managerMissing" doc:"True when a swarm's managers did not answer, so its services and tasks were not read"`
 }
 
 // maxMapRows is the most rows of the subnet map one answer carries (T-10-15). The page renders
@@ -185,8 +210,45 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			known := loadStackIDs(ctx, d.Store, env.ID, d.Log)
 			body.Networks, body.NetworksTotal, body.NetworksTruncated = mapRows(agg.Networks, use, known, space.Overlays)
 			body.NotReporting = unionNames(body.NotReporting, agg.NotReporting)
+			body.Orphans, body.OrphansWithheld = orphanBody(ctx, d, env.ID)
 			return &AddressSpaceOutput{CacheControl: "no-store", Body: body}, nil
 		})
+}
+
+// orphanBody is the orphan part of the page. A check that fails leaves the list empty and says
+// no manager answered, and never fails the page: the pools and the map are worth showing without it.
+func orphanBody(ctx context.Context, d AddressSpaceDeps, envID string) ([]OrphanRowBody, *OrphansWithheldBody) {
+	rep, err := d.AddressSpaces.Orphans(ctx, envID)
+	if err != nil {
+		d.Log.Warn("could not check for orphaned networks", "environment", envID, "error", err)
+		return []OrphanRowBody{}, &OrphansWithheldBody{Nodes: []string{}, Stacks: []string{}, ManagerMissing: true}
+	}
+	rows := make([]OrphanRowBody, 0, len(rep.Rows))
+	for _, r := range rep.Rows {
+		src := "created"
+		if r.IdleFromSeen {
+			src = "seen"
+		}
+		rows = append(rows, OrphanRowBody{
+			NetworkID: r.NetworkID, Name: r.Name, Node: r.Node, NodeID: r.NodeID, Scope: scopeName(r.Scope),
+			Subnets: append([]string{}, r.Subnets...), Class: string(r.Class), FormerOwner: r.FormerOwner,
+			FormerOwnerKind: r.FormerOwnerKind, IdleSince: r.IdleSince.UTC().Format(time.RFC3339), IdleSinceSource: src,
+		})
+	}
+	if len(rep.WithheldNodes) == 0 && len(rep.WithheldStacks) == 0 && !rep.ManagerMissing {
+		return rows, nil
+	}
+	return rows, &OrphansWithheldBody{
+		Nodes: append([]string{}, rep.WithheldNodes...), Stacks: append([]string{}, rep.WithheldStacks...), ManagerMissing: rep.ManagerMissing,
+	}
+}
+
+// scopeName is the wire name of a network scope: swarm for a cluster-wide network, local for every other.
+func scopeName(scope string) string {
+	if scope == dockerx.ScopeSwarm {
+		return "swarm"
+	}
+	return "local"
 }
 
 // addressSpaceBody is the wire form of an environment's address space.

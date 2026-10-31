@@ -226,6 +226,7 @@ func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p str
 			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
 			Labels: fn.Labels, Options: fn.Options, Internal: fn.Internal, Attachable: fn.Attachable,
 			Ingress: fn.Ingress, EnableIPv6: fn.IPv6, EnableIPv4: true,
+			ConfigOnly: fn.ConfigOnly, ConfigFrom: network.ConfigReference{Network: fn.ConfigFrom},
 		},
 		Containers: map[string]network.EndpointResource{},
 	}

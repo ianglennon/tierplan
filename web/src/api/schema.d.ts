@@ -4915,6 +4915,10 @@ export interface components {
             notMeasured?: "no_manager";
             /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
             notReporting: string[] | null;
+            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
+            orphans: components["schemas"]["OrphanRowBody"][] | null;
+            /** @description Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld */
+            orphansWithheld?: components["schemas"]["OrphansWithheldBody"];
             /** @description Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero */
             overlays: components["schemas"]["OverlayUsageBody"][] | null;
             /** @description One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured */
@@ -8249,6 +8253,49 @@ export interface components {
             name: string;
             /** @description The option's value; absent while masked */
             value?: string;
+        };
+        OrphanRowBody: {
+            /**
+             * @description orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load
+             * @enum {string}
+             */
+            class: "orphaned" | "unused" | "cant_tell";
+            /** @description The stack or compose project the network's labels name; empty for a network with no owner label */
+            formerOwner: string;
+            /**
+             * @description What formerOwner is, or empty when the network has no owner label
+             * @enum {string}
+             */
+            formerOwnerKind: "stack" | "project" | "";
+            /**
+             * Format: date-time
+             * @description When the network's idle time started: the later of its creation and the last time Coaming saw it in use
+             */
+            idleSince: string;
+            /**
+             * @description seen when idleSince is the last time Coaming saw the network in use, created when it is the network's creation
+             * @enum {string}
+             */
+            idleSinceSource: "seen" | "created";
+            name: string;
+            /** @description The network's full ID */
+            networkId: string;
+            /** @description The node a local network is on, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /** @enum {string} */
+            scope: "swarm" | "local";
+            /** @description The IPAM subnets in CIDR notation; empty when there is none */
+            subnets: string[] | null;
+        };
+        OrphansWithheldBody: {
+            /** @description True when a swarm's managers did not answer, so its services and tasks were not read */
+            managerMissing: boolean;
+            /** @description The nodes that did not report, because of which a network was not judged */
+            nodes: string[] | null;
+            /** @description The Coaming stacks that did not load, whose external networks are therefore not known */
+            stacks: string[] | null;
         };
         OverlayUsageBody: {
             /**

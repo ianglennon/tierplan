@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/stacks"
@@ -82,7 +83,29 @@ type mapUsage struct {
 	State    string `json:"state"`
 }
 
+type orphanRow struct {
+	NetworkID       string   `json:"networkId"`
+	Name            string   `json:"name"`
+	Node            string   `json:"node"`
+	NodeID          string   `json:"nodeId"`
+	Scope           string   `json:"scope"`
+	Subnets         []string `json:"subnets"`
+	Class           string   `json:"class"`
+	FormerOwner     string   `json:"formerOwner"`
+	FormerOwnerKind string   `json:"formerOwnerKind"`
+	IdleSince       string   `json:"idleSince"`
+	IdleSinceSource string   `json:"idleSinceSource"`
+}
+
+type orphansWithheld struct {
+	Nodes          []string `json:"nodes"`
+	Stacks         []string `json:"stacks"`
+	ManagerMissing bool     `json:"managerMissing"`
+}
+
 type addressSpace struct {
+	Orphans           []orphanRow      `json:"orphans"`
+	OrphansWithheld   *orphansWithheld `json:"orphansWithheld"`
 	Networks          []mapRow         `json:"networks"`
 	NetworksTotal     int              `json:"networksTotal"`
 	NetworksTruncated bool             `json:"networksTruncated"`
@@ -553,5 +576,38 @@ func TestAddressSpaceMapNotReporting(t *testing.T) {
 		if !reflect.DeepEqual(after.Networks[i], want[i]) {
 			t.Errorf("row %d = %+v\nwant     %+v", i, after.Networks[i], want[i])
 		}
+	}
+}
+
+func TestAddressSpaceOrphansRoute(t *testing.T) {
+	t.Parallel()
+	long := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	f, e := dashEnv(t, dockertest.FakeConfig{
+		Hostname: "node-1", Version: "29.1.0",
+		Networks: []dockertest.FakeNetwork{
+			{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local", Created: long},
+			{ID: "idle", Name: "idle", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}, Created: long},
+			{ID: "fresh", Name: "fresh", Driver: "bridge", Scope: "local", Created: time.Now()},
+		},
+	})
+	awaitOnline(t, f.mon, e.ID)
+	raw := f.get(t, e, "address-space")
+	if raw.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", raw.code, raw.body)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(raw.body, &generic); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := generic["orphansWithheld"]; has {
+		t.Errorf("nothing was withheld, so orphansWithheld is absent: %s", raw.body)
+	}
+	got := decode[addressSpace](t, raw)
+	if got.Orphans == nil || len(got.Orphans) != 1 {
+		t.Fatalf("orphans = %+v, want only the unlabelled idle network: not bridge, not the one made just now", got.Orphans)
+	}
+	u := got.Orphans[0]
+	if u.Name != "idle" || u.Class != "unused" || u.FormerOwner != "" || u.FormerOwnerKind != "" || u.IdleSince != "2020-01-01T00:00:00Z" || !slices.Equal(u.Subnets, []string{"172.30.0.0/24"}) {
+		t.Errorf("unused row = %+v", u)
 	}
 }

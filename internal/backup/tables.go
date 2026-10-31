@@ -91,6 +91,12 @@ var Tables = map[string]Class{
 	"stack_git":       Included, // webhook_secret_sealed is re-wrapped by RewrapAll
 	"stack_git_state": Excluded, // derived state, re-checked after a restore
 
+	// Networks and address pools (Phase 10): when Coaming first saw each network and last saw it in use
+	// (the orphan check's 24-hour grace clock, which the Phase 11 janitor reads too) and the networks a
+	// person asked never to be listed. Both belong to their environment and hold no secret.
+	"network_seen":  Included,
+	"network_keeps": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.
