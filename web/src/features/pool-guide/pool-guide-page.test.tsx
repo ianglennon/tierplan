@@ -146,6 +146,17 @@ describe("the Pool guidance page", () => {
     );
   });
 
+  it("scrolls the tab bar sideways inside a padded wrapper, not on the tab list", async () => {
+    mount("new-swarm");
+    const list = await screen.findByRole("tablist", { name: "Parts of the pool guidance" });
+    // The tab list has a fixed height and its 2px underline hangs below it: an overflow class on
+    // the list itself would show a 1px vertical scroll bar (G-10-9b).
+    expect(list.className).not.toMatch(/overflow/);
+    const wrapper = list.parentElement;
+    expect(wrapper?.className).toContain("overflow-x-auto");
+    expect(wrapper?.className).toContain("pb-2");
+  });
+
   it("generates the swarm init command", async () => {
     mount("new-swarm");
     expect(await screen.findByText(INIT_DEFAULT)).toBeTruthy();

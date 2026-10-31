@@ -98,31 +98,36 @@ export function PoolGuidePage({ envId, part }: PoolGuidePageProps) {
         <AlertDescription>{t("poolGuide.note")}</AlertDescription>
       </Alert>
       <Tabs value="" className="gap-4">
-        <TabsList
-          variant="line"
-          aria-label={t("poolGuide.tabs.label")}
-          className="h-9 max-w-full overflow-x-auto max-md:h-11"
-        >
-          {GUIDE_PARTS.map((p) => (
-            <TabsTrigger
-              key={p}
-              value={p}
-              asChild
-              className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
-            >
-              <Link
-                to="/env/$envId/address-space/guide"
-                params={{ envId }}
-                search={{ part: p }}
-                replace
-                data-active={!waiting && p === active ? true : undefined}
-                aria-current={!waiting && p === active ? "page" : undefined}
+        {/* On a narrow screen the four tabs scroll sideways inside this wrapper. Its bottom
+            padding keeps the 2px active underline, which hangs below the tabs, inside the
+            scrolling box, so neither axis shows a 1px scroll. */}
+        <div className="-mb-2 max-w-full overflow-x-auto pb-2">
+          <TabsList
+            variant="line"
+            aria-label={t("poolGuide.tabs.label")}
+            className="h-9 max-md:h-11"
+          >
+            {GUIDE_PARTS.map((p) => (
+              <TabsTrigger
+                key={p}
+                value={p}
+                asChild
+                className="data-active:text-accent-ink after:bg-accent-ink max-md:h-11"
               >
-                {t(TAB_KEYS[p])}
-              </Link>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+                <Link
+                  to="/env/$envId/address-space/guide"
+                  params={{ envId }}
+                  search={{ part: p }}
+                  replace
+                  data-active={!waiting && p === active ? true : undefined}
+                  aria-current={!waiting && p === active ? "page" : undefined}
+                >
+                  {t(TAB_KEYS[p])}
+                </Link>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
       </Tabs>
       {waiting ? (
         <Skeleton className="h-40 w-full" aria-busy="true" />
