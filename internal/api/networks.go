@@ -673,13 +673,16 @@ type networkUsage struct {
 	local    map[[2]string]int
 	wide     map[string]int
 	services map[string]int
+	// firstService is, per network ID, the name of the first service by name whose spec
+	// names the network: the owner the subnet map shows for a network with no label.
+	firstService map[string]string
 }
 
 // networkUsageOf counts the attachments in an aggregate. Services come from the cached
 // cluster read of a swarm, whatever age it has: a delete reads them live and never
 // trusts this.
 func networkUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, agg envs.Aggregate) networkUsage {
-	u := networkUsage{local: map[[2]string]int{}, wide: map[string]int{}, services: map[string]int{}}
+	u := networkUsage{local: map[[2]string]int{}, wide: map[string]int{}, services: map[string]int{}, firstService: map[string]string{}}
 	for _, c := range agg.Containers {
 		for _, cn := range c.Networks {
 			u.local[[2]string{c.NodeID, cn.NetworkID}]++
@@ -692,6 +695,9 @@ func networkUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, 
 		for _, ref := range st.ServiceRefs {
 			for _, id := range ref.Networks {
 				u.services[id]++
+				if first, ok := u.firstService[id]; !ok || ref.Name < first {
+					u.firstService[id] = ref.Name
+				}
 			}
 		}
 	}

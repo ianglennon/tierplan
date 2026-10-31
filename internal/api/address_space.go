@@ -8,14 +8,17 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
 	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/store"
 )
 
@@ -53,7 +56,44 @@ type AddressSpaceBody struct {
 	Pools        []AddressPoolBody  `json:"pools" doc:"One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured"`
 	Overlays     []OverlayUsageBody `json:"overlays" doc:"Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero"`
 	Ingress      *OverlayUsageBody  `json:"ingress,omitempty" doc:"The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none"`
-	NotReporting []string           `json:"notReporting" doc:"The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered"`
+	NotReporting []string           `json:"notReporting" doc:"The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered"`
+
+	Networks          []AddressMapRowBody `json:"networks" doc:"The subnet map: every network of every reporting node, one row for a swarm-wide network and one per node for a local one, ordered by the numeric start address of the first IPv4 subnet, then its mask, name and node; a network with no IPv4 subnet is last. At most 5000 rows (the page shows 500 and searches the rest); networksTotal is the full count. The overlaps are decided on the server over every row, before the cap"`
+	NetworksTotal     int                 `json:"networksTotal" minimum:"0" doc:"How many networks the map holds, whatever the cap"`
+	NetworksTruncated bool                `json:"networksTruncated" doc:"True when networksTotal is more than the rows returned"`
+}
+
+// maxMapRows is the most rows of the subnet map one answer carries (T-10-15). The page renders
+// the first 500 and searches the rest.
+const maxMapRows = 5000
+
+// AddressMapRowBody is one network on the subnet map.
+type AddressMapRowBody struct {
+	ID                 string            `json:"id" doc:"The network's full ID"`
+	Name               string            `json:"name"`
+	Node               string            `json:"node" doc:"The node a local network is on, or Cluster for a swarm-wide network"`
+	NodeID             string            `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
+	Scope              string            `json:"scope" enum:"swarm,local" doc:"swarm for a cluster-wide network, local for every other"`
+	Driver             string            `json:"driver"`
+	Subnets            []string          `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty for host and none and any network without one"`
+	Owner              string            `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; for a swarm network with neither, the first service by name whose spec names it; empty otherwise"`
+	OwnerKind          string            `json:"ownerKind" enum:"stack,project,service,none" doc:"What owner is: a stack, a compose project, a service, or none"`
+	OwnerStackID       string            `json:"ownerStackId" doc:"The ID of the Coaming stack of this environment the network belongs to, so the page can link to it. Empty when no Coaming stack of the environment owns it"`
+	AttachedContainers int               `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
+	AttachedServices   int               `json:"attachedServices" doc:"Swarm services whose spec names the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network"`
+	Created            string            `json:"created,omitempty" format:"date-time"`
+	BuiltIn            bool              `json:"builtIn" doc:"True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own"`
+	Ingress            bool              `json:"ingress" doc:"True for the swarm's ingress (routing mesh) network"`
+	Usage              *NetworkUsageBody `json:"usage,omitempty" doc:"Overlay networks only: addresses used against what the subnet can still hand out. Absent for every other network and when the count could not be read, never a zero"`
+	Overlaps           []MapOverlapBody  `json:"overlaps" doc:"The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none"`
+	Order              int               `json:"order" minimum:"0" doc:"This row's position in the address order (its index in networks)"`
+}
+
+// MapOverlapBody names the other network of an overlap.
+type MapOverlapBody struct {
+	Name   string `json:"name" doc:"The other network's name"`
+	Subnet string `json:"subnet" doc:"The first subnet of the other network that overlaps this row's"`
+	Node   string `json:"node" doc:"The node of the other network when it is local; empty for a swarm-wide network"`
 }
 
 // OverlayUsageBody is one swarm overlay network and how full its subnet is.
@@ -115,6 +155,7 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 			"A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. " +
 			"used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. " +
 			"largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. " +
+			"networks is the subnet map: every network of every reporting node (a swarm-wide network once, a local network once per node) with its subnets, owner, attachments, age and, for an overlay, its usage, at most 5000 rows with networksTotal and networksTruncated. " +
 			"overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. " +
 			"ingress repeats the ingress network with outsidePool (absent when the swarm lists none). " +
 			"When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. " +
@@ -124,14 +165,25 @@ func RegisterAddressSpace(r *httpx.Router, d AddressSpaceDeps) {
 	}, rbac.Requirement{Perm: rbac.PermNetworksRead, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *EnvironmentPathInput) (*AddressSpaceOutput, error) {
 			env := httpx.EnvFrom(ctx)
-			if env == nil || d.AddressSpaces == nil {
+			if env == nil || d.AddressSpaces == nil || d.Aggregator == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
 			space, err := d.AddressSpaces.Read(ctx, env.ID)
 			if err != nil {
 				return nil, snapshotProblem(d.Log, env.ID, err)
 			}
-			return &AddressSpaceOutput{CacheControl: "no-store", Body: addressSpaceBody(space)}, nil
+			body := addressSpaceBody(space)
+			// Every row of the map comes from this one aggregate, so a network made during the
+			// read is in the next answer whole.
+			agg, _, err := d.Aggregator.Snapshot(ctx, env.ID)
+			if err != nil {
+				return nil, snapshotProblem(d.Log, env.ID, err)
+			}
+			use := networkUsageOf(ctx, d.Clusters, env.ID, agg)
+			known := loadStackIDs(ctx, d.Store, env.ID, d.Log)
+			body.Networks, body.NetworksTotal, body.NetworksTruncated = mapRows(agg.Networks, use, known, space.Overlays)
+			body.NotReporting = unionNames(body.NotReporting, agg.NotReporting)
+			return &AddressSpaceOutput{CacheControl: "no-store", Body: body}, nil
 		})
 }
 
@@ -175,3 +227,63 @@ const maxBlocks = 1 << 30
 
 // blocks is a count of blocks as the wire number, held to maxBlocks.
 func blocks(n uint64) int64 { return int64(min(n, maxBlocks)) } //nolint:gosec // G115: held to 2^30 on this line
+
+// mapRows is the rows of the subnet map for the networks of one aggregate, with the total.
+func mapRows(nets []envs.NetworkRow, use networkUsage, known stackIDs, overlays []envs.OverlayUsage) (rows []AddressMapRowBody, total int, truncated bool) {
+	usage := make(map[string]*NetworkUsageBody, len(overlays))
+	for _, o := range overlays {
+		if !o.Measured || o.Capacity == 0 {
+			continue
+		}
+		usage[o.ID] = &NetworkUsageBody{Used: addresses(o.Used), Capacity: addresses(o.Capacity), Percent: o.Percent, State: string(o.State)}
+	}
+	all := make([]AddressMapRowBody, 0, len(nets))
+	for _, n := range nets {
+		all = append(all, mapRow(n, use, known, usage))
+	}
+	for i := range all {
+		all[i].Order = i
+	}
+	total = len(all)
+	rows = all[:min(total, maxMapRows)]
+	return rows, total, total > len(rows)
+}
+
+// mapRow is one network as the subnet map shows it. Only the owner label values and the ID of a
+// Coaming stack that owns the network leave the server; no other label does (T-10-16).
+func mapRow(n envs.NetworkRow, use networkUsage, known stackIDs, usage map[string]*NetworkUsageBody) AddressMapRowBody {
+	scope := "local"
+	if n.Scope == dockerx.ScopeSwarm {
+		scope = "swarm"
+	}
+	containers, services := use.of(n)
+	owner, kind := networkOwner(n.Labels)
+	ownerStack := ""
+	switch {
+	case kind != "":
+		ownerStack = known.confirm(owner, n.Labels[stacks.LabelStackID])
+	case scope == "swarm" && use.firstService[n.ID] != "":
+		owner, kind = use.firstService[n.ID], "service"
+	default:
+		kind = "none"
+	}
+	return AddressMapRowBody{
+		ID: n.ID, Name: n.Name, Node: n.Node, NodeID: n.NodeID, Scope: scope, Driver: n.Driver,
+		Subnets: append([]string{}, n.Subnets...), Owner: owner, OwnerKind: kind, OwnerStackID: ownerStack,
+		AttachedContainers: containers, AttachedServices: services, Created: rfc3339(n.Created),
+		BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), Ingress: n.Ingress,
+		Usage: usage[n.ID], Overlaps: []MapOverlapBody{},
+	}
+}
+
+// unionNames is a followed by the names of b that a lacks. The map and the pools are read
+// moments apart, so a node that stopped answering in between must still be named.
+func unionNames(a, b []string) []string {
+	out := append([]string{}, a...)
+	for _, n := range b {
+		if !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/tunnel"
 	"github.com/ianglennon/coaming/proto/testsupport"
 )
@@ -46,14 +47,51 @@ type addressOverlay struct {
 	OutsidePool bool     `json:"outsidePool"`
 }
 
+type mapOverlap struct {
+	Name   string `json:"name"`
+	Subnet string `json:"subnet"`
+	Node   string `json:"node"`
+}
+
+type mapRow struct {
+	ID                 string       `json:"id"`
+	Name               string       `json:"name"`
+	Node               string       `json:"node"`
+	NodeID             string       `json:"nodeId"`
+	Scope              string       `json:"scope"`
+	Driver             string       `json:"driver"`
+	Subnets            []string     `json:"subnets"`
+	Owner              string       `json:"owner"`
+	OwnerKind          string       `json:"ownerKind"`
+	OwnerStackID       string       `json:"ownerStackId"`
+	AttachedContainers int          `json:"attachedContainers"`
+	AttachedServices   int          `json:"attachedServices"`
+	Created            string       `json:"created"`
+	BuiltIn            bool         `json:"builtIn"`
+	Ingress            bool         `json:"ingress"`
+	Usage              *mapUsage    `json:"usage"`
+	Overlaps           []mapOverlap `json:"overlaps"`
+	Order              int          `json:"order"`
+}
+
+type mapUsage struct {
+	Used     int64  `json:"used"`
+	Capacity int64  `json:"capacity"`
+	Percent  int    `json:"percent"`
+	State    string `json:"state"`
+}
+
 type addressSpace struct {
-	Overlays     []addressOverlay `json:"overlays"`
-	Ingress      *addressOverlay  `json:"ingress"`
-	EnvType      string           `json:"envType"`
-	Measured     bool             `json:"measured"`
-	NotMeasured  string           `json:"notMeasured"`
-	Pools        []addressPool    `json:"pools"`
-	NotReporting []string         `json:"notReporting"`
+	Networks          []mapRow         `json:"networks"`
+	NetworksTotal     int              `json:"networksTotal"`
+	NetworksTruncated bool             `json:"networksTruncated"`
+	Overlays          []addressOverlay `json:"overlays"`
+	Ingress           *addressOverlay  `json:"ingress"`
+	EnvType           string           `json:"envType"`
+	Measured          bool             `json:"measured"`
+	NotMeasured       string           `json:"notMeasured"`
+	Pools             []addressPool    `json:"pools"`
+	NotReporting      []string         `json:"notReporting"`
 }
 
 func TestAddressSpaceRoute(t *testing.T) {
@@ -231,5 +269,143 @@ func TestAddressSpaceRouteASwarmWithoutAManagerSaysNoManager(t *testing.T) {
 	}
 	if !slices.Equal(got.NotReporting, []string{"mgr-1", "mgr-2"}) {
 		t.Errorf("notReporting = %v, want the two managers that stopped answering", got.NotReporting)
+	}
+}
+
+// mapRowNamed is the row of the map for a network name on a node ("" for a swarm-wide network).
+func mapRowNamed(t *testing.T, got addressSpace, name, node string) mapRow {
+	t.Helper()
+	for _, r := range got.Networks {
+		if r.Name == name && (node == "" || r.Node == node) {
+			return r
+		}
+	}
+	t.Fatalf("no row %q on %q in %+v", name, node, got.Networks)
+	return mapRow{}
+}
+
+// mapSwarm is a swarm whose managers share these networks: an ingress, a stack overlay
+// (alpha_default, linked to a Coaming stack), a forged one that only claims the stack's name, a
+// service-only overlay, and per node a host network; mgr-2 also has a compose project's bridge.
+// tune runs on the networks before the agents connect. The returned function gives the stack's
+// networks their label once the stack exists (its ID is only known then) and refreshes the reads.
+func mapSwarm(t *testing.T, extra func(host string, nets []dockertest.FakeNetwork) []dockertest.FakeNetwork) (*swarmFix, func() string) {
+	t.Helper()
+	cfgs := map[string]*dockertest.FakeConfig{}
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfgs[host] = cfg
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.ServiceRows = []dockertest.FakeService{
+			{ID: "svc-z", Name: "zeta", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"svc-only"}},
+			{ID: "svc-a", Name: "alpha-svc", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"svc-only"}},
+		}
+		nets := []dockertest.FakeNetwork{
+			{ID: "ing", Name: "ingress", Driver: "overlay", Scope: "swarm", Ingress: true, Subnets: []string{"10.0.0.0/24"}},
+			{ID: "alpha-net", Name: "alpha_default", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+			{ID: "forged-net", Name: "forged", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.3.0/24"},
+				Labels: map[string]string{"com.docker.stack.namespace": "alpha"}},
+			{ID: "svc-only", Name: "svc_only", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+			{ID: "host-" + host, Name: "host", Driver: "host", Scope: "local"},
+		}
+		if host == "mgr-2" {
+			nets = append(nets, dockertest.FakeNetwork{ID: "blog-net", Name: "blog_default", Driver: "bridge", Scope: "local",
+				Subnets: []string{"172.20.0.0/16"}, Labels: map[string]string{"com.docker.compose.project": "blog"}})
+		}
+		if extra != nil {
+			nets = extra(host, nets)
+		}
+		cfg.Networks = nets
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("alpha_default", dockertest.FakeSubnetUsage{Subnet: "10.0.1.0/24", InUse: 8, Available: 248})
+	}
+	link := func() string {
+		id := s.seedStack(t, s.env.ID, "alpha", stacks.TargetSwarm)
+		for host, m := range map[string]*agentConn{"mgr-1": s.m1, "mgr-2": s.m2} {
+			cfg := *cfgs[host]
+			cfg.Networks = slices.Clone(cfg.Networks)
+			for i, n := range cfg.Networks {
+				if n.Name == "alpha_default" {
+					cfg.Networks[i].Labels = map[string]string{"com.docker.stack.namespace": "alpha", "coaming.stack.id": id}
+				}
+			}
+			m.fake.Reconfigure(cfg)
+		}
+		if _, _, err := s.agg.FreshSnapshot(testsupport.Context(t), s.env.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.clusters.Refresh(testsupport.Context(t), s.env.ID); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	return s, link
+}
+
+func TestAddressSpaceMapRows(t *testing.T) {
+	t.Parallel()
+	s, link := mapSwarm(t, nil)
+	stackID := link()
+
+	raw := s.get(t, s.env.ID, "address-space")
+	if raw.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", raw.code, raw.body)
+	}
+	got := decode[addressSpace](t, raw)
+
+	// A swarm network once; a host network on every node (two managers and a worker); the bridge of the
+	// worker (the fixture's own) and mgr-2's compose bridge as local rows.
+	counts := map[string]int{}
+	for _, r := range got.Networks {
+		counts[r.Name]++
+	}
+	if counts["alpha_default"] != 1 || counts["ingress"] != 1 || counts["host"] != 2 || counts["blog_default"] != 1 {
+		t.Errorf("rows per name = %v, want swarm networks once and local ones per node", counts)
+	}
+	if got.NetworksTotal != len(got.Networks) || got.NetworksTruncated {
+		t.Errorf("total/truncated = %d/%v with %d rows", got.NetworksTotal, got.NetworksTruncated, len(got.Networks))
+	}
+
+	alpha := mapRowNamed(t, got, "alpha_default", "")
+	if alpha.Scope != "swarm" || alpha.Node != "Cluster" || alpha.Owner != "alpha" || alpha.OwnerKind != "stack" || alpha.OwnerStackID != stackID {
+		t.Errorf("alpha_default = %+v, want a swarm network owned by the Coaming stack %s", alpha, stackID)
+	}
+	if alpha.Usage == nil || alpha.Usage.Used != 8 || alpha.Usage.Capacity != 256 || alpha.Usage.State != "normal" {
+		t.Errorf("alpha_default usage = %+v, want 8 of 256", alpha.Usage)
+	}
+	// Only a stack ID the environment's stack states is a link: the forged label names the stack and has no ID.
+	forged := mapRowNamed(t, got, "forged", "")
+	if forged.OwnerKind != "stack" || forged.Owner != "alpha" || forged.OwnerStackID != "" {
+		t.Errorf("forged = %+v, want the stack named and no link", forged)
+	}
+
+	blog := mapRowNamed(t, got, "blog_default", "")
+	if blog.Scope != "local" || blog.Node != "mgr-2" || blog.OwnerKind != "project" || blog.Owner != "blog" || blog.OwnerStackID != "" || blog.Usage != nil {
+		t.Errorf("blog_default = %+v, want a local bridge of mgr-2 owned by project blog", blog)
+	}
+
+	svc := mapRowNamed(t, got, "svc_only", "")
+	if svc.OwnerKind != "service" || svc.Owner != "alpha-svc" || svc.AttachedServices != 2 {
+		t.Errorf("svc_only = %+v, want the first service by name as owner and 2 services", svc)
+	}
+
+	host := mapRowNamed(t, got, "host", "mgr-1")
+	if host.OwnerKind != "none" || host.Owner != "" || !host.BuiltIn || len(host.Subnets) != 0 || host.Subnets == nil {
+		t.Errorf("host = %+v, want a built-in row with an empty (not null) subnets list", host)
+	}
+	if ing := mapRowNamed(t, got, "ingress", ""); !ing.Ingress || !ing.BuiltIn {
+		t.Errorf("ingress = %+v, want ingress and built-in", ing)
+	}
+	for _, r := range got.Networks {
+		if r.Overlaps == nil {
+			t.Errorf("%s: overlaps is null, want a list", r.Name)
+		}
+	}
+	// Nothing but the owner values leaves: the label sets stay on the server.
+	if strings.Contains(string(raw.body), "coaming.stack.id") || strings.Contains(string(raw.body), "com.docker.compose.project") {
+		t.Errorf("a label key leaked into the answer: %s", raw.body)
 	}
 }

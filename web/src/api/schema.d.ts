@@ -421,7 +421,7 @@ export interface paths {
         };
         /**
          * The address pools of an environment and how full each is
-         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. ingress repeats the ingress network with outsidePool (absent when the swarm lists none). When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
+         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. networks is the subnet map: every network of every reporting node (a swarm-wide network once, a local network once per node) with its subnets, owner, attachments, age and, for an overlay, its usage, at most 5000 rows with networksTotal and networksTruncated. overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. ingress repeats the ingress network with outsidePool (absent when the swarm lists none). When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
          */
         get: operations["getAddressSpace"];
         put?: never;
@@ -4795,6 +4795,57 @@ export interface components {
              */
             added: number;
         };
+        AddressMapRowBody: {
+            /**
+             * Format: int64
+             * @description Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec names the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network
+             */
+            attachedServices: number;
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own */
+            builtIn: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            /** @description The network's full ID */
+            id: string;
+            /** @description True for the swarm's ingress (routing mesh) network */
+            ingress: boolean;
+            name: string;
+            /** @description The node a local network is on, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description This row's position in the address order (its index in networks)
+             */
+            order: number;
+            /** @description The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none */
+            overlaps: components["schemas"]["MapOverlapBody"][] | null;
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; for a swarm network with neither, the first service by name whose spec names it; empty otherwise */
+            owner: string;
+            /**
+             * @description What owner is: a stack, a compose project, a service, or none
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "service" | "none";
+            /** @description The ID of the Coaming stack of this environment the network belongs to, so the page can link to it. Empty when no Coaming stack of the environment owns it */
+            ownerStackId: string;
+            /**
+             * @description swarm for a cluster-wide network, local for every other
+             * @enum {string}
+             */
+            scope: "swarm" | "local";
+            /** @description The IPAM subnets in CIDR notation; empty for host and none and any network without one */
+            subnets: string[] | null;
+            /** @description Overlay networks only: addresses used against what the subnet can still hand out. Absent for every other network and when the count could not be read, never a zero */
+            usage?: components["schemas"]["NetworkUsageBody"];
+        };
         AddressPoolBody: {
             /**
              * Format: int64
@@ -4848,12 +4899,21 @@ export interface components {
             ingress?: components["schemas"]["OverlayUsageBody"];
             /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
             measured: boolean;
+            /** @description The subnet map: every network of every reporting node, one row for a swarm-wide network and one per node for a local one, ordered by the numeric start address of the first IPv4 subnet, then its mask, name and node; a network with no IPv4 subnet is last. At most 5000 rows (the page shows 500 and searches the rest); networksTotal is the full count. The overlaps are decided on the server over every row, before the cap */
+            networks: components["schemas"]["AddressMapRowBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many networks the map holds, whatever the cap
+             */
+            networksTotal: number;
+            /** @description True when networksTotal is more than the rows returned */
+            networksTruncated: boolean;
             /**
              * @description Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone
              * @enum {string}
              */
             notMeasured?: "no_manager";
-            /** @description The nodes that did not answer, whose networks are left out of the counts. Empty when every node answered */
+            /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
             notReporting: string[] | null;
             /** @description Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero */
             overlays: components["schemas"]["OverlayUsageBody"][] | null;
@@ -7498,6 +7558,14 @@ export interface components {
         LookupInviteInputBody: {
             /** @description The token from the part of the link after #token= */
             token: string;
+        };
+        MapOverlapBody: {
+            /** @description The other network's name */
+            name: string;
+            /** @description The node of the other network when it is local; empty for a swarm-wide network */
+            node: string;
+            /** @description The first subnet of the other network that overlaps this row's */
+            subnet: string;
         };
         MeBody: {
             /** @description The user's access by environment ID, and the key * for access that applies to every environment */
