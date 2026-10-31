@@ -18,6 +18,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - coaming-agent:/var/lib/coaming-agent
+      - type: bind
+        source: /proc/1/net/route
+        target: /host/route
+        read_only: true
     secrets:
       - source: coaming-agent-token-g1
         target: coaming-agent-token

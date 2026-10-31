@@ -31,6 +31,7 @@ var sharedSwarmCases = []struct {
 }{
 	{"ConstraintsMatchPlacement", sharedConstraintsMatchPlacement},
 	{"Enrol", sharedEnrol},
+	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
