@@ -16,6 +16,10 @@ export type OrphansWithheld = components["schemas"]["OrphansWithheldBody"];
 export type KeptRow = components["schemas"]["KeptRowBody"];
 export type OrphanDelete = components["schemas"]["OrphanDeleteBody"];
 export type KeepTarget = components["schemas"]["KeepTarget"];
+export type SubnetCheckRequest = components["schemas"]["SubnetCheckRequest"];
+export type SubnetCheck = components["schemas"]["SubnetCheckBody"];
+export type SubnetFinding = components["schemas"]["SubnetFindingBody"];
+export type RouteCheck = components["schemas"]["RouteCheckBody"];
 
 // The key of the environment's address space, so the events feed can make it stale.
 export function addressSpaceKey(envId: string) {
@@ -128,4 +132,43 @@ export function useUnkeepNetwork(envId: string) {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: addressSpaceKey(envId) }),
   });
+}
+
+// SubnetCheckError is a subnet check the server refused or never answered. The status is 0 when
+// the server could not be reached; 429 is the per-user limit (rate_limited).
+export class SubnetCheckError extends Error {
+  readonly status: number;
+  readonly type?: string;
+  constructor(status: number, type?: string) {
+    super(`POST subnet-check failed (${status})`);
+    this.name = "SubnetCheckError";
+    this.status = status;
+    this.type = type;
+  }
+}
+
+// checkSubnet asks the server what a typed subnet collides with and, when asked, for the lowest
+// free block of a size and the size a number of tasks needs. It only reads and reserves nothing, so
+// it may be repeated; the signal lets a newer question cancel a stale one.
+export async function checkSubnet(
+  envId: string,
+  body: SubnetCheckRequest,
+  signal?: AbortSignal,
+): Promise<SubnetCheck> {
+  try {
+    const res = await api.POST("/api/env/{envId}/address-space/subnet-check", {
+      params: { path: { envId } },
+      body,
+      signal,
+    });
+    if (!res.data) {
+      const problem = readProblem(res.error, res.response);
+      throw new SubnetCheckError(problem.status, problem.type);
+    }
+    return res.data;
+  } catch (e) {
+    // A network failure has no status. A cancelled request is the caller's to ignore.
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw e instanceof SubnetCheckError ? e : new SubnetCheckError(0);
+  }
 }
