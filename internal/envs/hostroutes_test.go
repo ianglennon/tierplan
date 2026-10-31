@@ -23,16 +23,19 @@ import (
 // agents are real sessions of the real hub; only what they answer on a host-net
 // stream is staged.
 
+func hostNetFacts(name string) *wire.Facts {
+	return &wire.Facts{
+		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
+		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
+	}
+}
+
 // hostNetNode enrols one agent of a swarm environment with the hostNet fact it
 // reports and the routes it answers with. Its Docker streams are not served: the
 // route check does not use them.
 func hostNetNode(t *testing.T, r *tunRig, env tunneltest.Environment, name, hostNet string, routes []wire.HostRoute) *agentConn {
 	t.Helper()
-	facts := &wire.Facts{
-		EngineID: "ENG:" + name, Hostname: name, EngineReachable: true,
-		Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-" + name, ClusterID: "cluster-1", Control: true},
-	}
-	c := r.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: facts, HostNet: hostNet, HostRoutes: routes})
+	c := r.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: hostNetFacts(name), HostNet: hostNet, HostRoutes: routes})
 	if c.Welcome == nil {
 		t.Fatalf("enrolment of %s refused: %+v", name, c.Refuse)
 	}
@@ -305,7 +308,8 @@ func TestHostRoutesCache(t *testing.T) {
 	// A new session is a new agent process, possibly on a changed host: it is asked
 	// again at once, however recently the old one was.
 	r.clk.Advance(time.Minute) // no session is open, so the watchdog has nothing to close
-	c := r.srv.Hello(t, a.conn.Identity)
+	id := a.conn.Identity
+	c := r.srv.Dial(t, tunneltest.Agent{Identity: &id, Facts: hostNetFacts("n-1"), HostNet: wire.HostNetOK})
 	if c.Welcome == nil {
 		t.Fatalf("hello was refused: %+v (%v)", c.Refuse, c.Err)
 	}
