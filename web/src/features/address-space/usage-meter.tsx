@@ -3,6 +3,7 @@
 
 import { CircleX, TriangleAlert } from "lucide-react";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,8 @@ interface UsageMeterProps {
   // The server's state and percent, used when given so the whole page agrees with it.
   state?: MeterState;
   percent?: number;
+  // Why an unknown meter could not be measured, shown in a tooltip on "Not measured".
+  notMeasuredHint?: string;
 }
 
 const FILL: Record<MeterState, string> = {
@@ -57,9 +60,39 @@ export function UsageMeter({
   estimated,
   state: givenState,
   percent: givenPercent,
+  notMeasuredHint,
 }: UsageMeterProps) {
   const t = useT();
   const state = givenState ?? meterState(used, capacity);
+  const track = variant === "full" ? "h-2 flex-1" : "h-1.5 w-24 shrink-0";
+  if (state === "unknown") {
+    return (
+      <div className="flex min-w-0 items-center gap-3">
+        <div aria-hidden="true" className={cn("rounded-full bg-muted", track)} />
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {t("addressSpace.states.missing")}
+        </span>
+        {notMeasuredHint ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: the tooltip must open on keyboard focus
+                tabIndex={0}
+                className="shrink-0 rounded-sm text-xs font-semibold text-muted-foreground outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {t("addressSpace.states.notMeasured")}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-80">{notMeasuredHint}</TooltipContent>
+          </Tooltip>
+        ) : (
+          <span className="shrink-0 text-xs font-semibold text-muted-foreground">
+            {t("addressSpace.states.notMeasured")}
+          </span>
+        )}
+      </div>
+    );
+  }
   const percent = givenPercent ?? meterPercent(used, capacity);
   const number = new Intl.NumberFormat();
   const stateWord =
@@ -91,10 +124,7 @@ export function UsageMeter({
         aria-valuemax={capacity}
         aria-valuenow={used}
         aria-valuetext={valueText}
-        className={cn(
-          "relative overflow-hidden rounded-full bg-muted",
-          variant === "full" ? "h-2 flex-1" : "h-1.5 w-24 shrink-0",
-        )}
+        className={cn("relative overflow-hidden rounded-full bg-muted", track)}
       >
         <div className={cn("h-full", FILL[state])} style={{ width: `${width}%` }} />
         <span
