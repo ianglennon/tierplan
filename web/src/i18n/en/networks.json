@@ -67,11 +67,6 @@
       "advanced": {
         "trigger": "Advanced"
       },
-      "subnet": {
-        "label": "Subnet",
-        "placeholder": "10.20.0.0/24",
-        "helper": "In CIDR form. Coaming warns if it overlaps another network but doesn't pick one for you."
-      },
       "gateway": {
         "label": "Gateway"
       },
@@ -88,11 +83,6 @@
         "value": "Option value",
         "remove": "Remove option {{name}}",
         "removeEmpty": "Remove option"
-      },
-      "overlap": {
-        "one": "This overlaps {{name}} ({{cidr}}). Containers on both networks may not reach each other. You can still create it.",
-        "two": "This overlaps {{count}} networks: {{first}} and {{second}}. Containers on both networks may not reach each other. You can still create it.",
-        "many": "This overlaps {{count}} networks: {{first}}, {{second}} and {{more}} more. Containers on both networks may not reach each other. You can still create it."
       }
     },
     "delete": {

@@ -2,16 +2,18 @@
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronRight, TriangleAlert } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ChevronRight } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
+import { addressSpaceQuery } from "@/api/address-space";
 import { type NetworkRequestError, useCreateNetwork } from "@/api/networks";
 import type { NetworkRow } from "@/api/resources";
 import { AgentUpdateNotice } from "@/components/agent-update-notice";
 import { entriesOf, KeyValueEditor, type KeyValueRow } from "@/components/key-value-editor";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -31,13 +33,9 @@ import {
 } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import {
-  containsAddress,
-  containsCidr,
-  type OverlapReport,
-  overlapsWith,
-  parseCidr,
-} from "@/features/networks/cidr";
+import { containsAddress, containsCidr, parseCidr } from "@/features/networks/cidr";
+import { SubnetPicker } from "@/features/subnet-picker/subnet-picker";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastSuccess } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -108,8 +106,7 @@ interface CreateNetworkDialogProps {
   // Whether the environment is a swarm: overlay is then the default driver,
   // attachable is available and a local driver asks for a node.
   swarm: boolean;
-  // The networks the list has loaded: the overlap warning checks the subnet
-  // against all of them, and the nodes to create on are the ones they came from.
+  // The networks the list has loaded: the nodes to create on are the ones they came from.
   networks: readonly NetworkRow[];
 }
 
@@ -126,7 +123,7 @@ export function CreateNetworkDialog({
   const t = useT();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-140">
         <DialogHeader>
           <DialogTitle>{t("networks.create.title")}</DialogTitle>
           <DialogDescription>{t("networks.create.body")}</DialogDescription>
@@ -179,7 +176,11 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
   const [options, setOptions] = useState<KeyValueRow[]>([]);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [advanced, setAdvanced] = useState(false);
-  const [overlap, setOverlap] = useState<OverlapReport | null>(null);
+  // Whether a finding blocks the create, and whether the person ticked Create it anyway for it.
+  const [blocking, setBlocking] = useState(false);
+  const [createAnyway, setCreateAnyway] = useState(false);
+  const manage = useNeeds("networks.manage", envId);
+  const space = useQuery(addressSpaceQuery(envId));
   const nodes = useMemo(() => nodesOf(networks), [networks]);
 
   // A local driver on a swarm is made on one node; an overlay is made by a manager.
@@ -241,6 +242,9 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
         return field("ipRange", "networks.errors.rangeOutside", true);
       case "node_required":
         return field("nodeId", "networks.errors.nodeRequired");
+      case "subnet_overlap":
+        setAdvanced(true);
+        return { message: t("subnetPicker.errors.overlapRefused"), agentPolicy: false };
       case "agent_policy_denied":
         return { message: "", agentPolicy: true };
       case "host_read_only":
@@ -257,7 +261,7 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
   }
 
   function submit(values: Values) {
-    if (create.isPending) return;
+    if (create.isPending || (blocking && !createAnyway)) return;
     setRefusal(null);
     const labelMap = entriesOf(labels);
     const optionMap = entriesOf(options);
@@ -270,6 +274,7 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
         ...(values.internal ? { internal: true } : {}),
         ...(values.ipv6 ? { ipv6: true } : {}),
         ...(values.subnet ? { subnet: values.subnet } : {}),
+        ...(values.subnet && blocking && createAnyway ? { createAnyway: true } : {}),
         ...(values.gateway ? { gateway: values.gateway } : {}),
         ...(values.ipRange ? { ipRange: values.ipRange } : {}),
         ...(Object.keys(labelMap).length > 0 ? { labels: labelMap } : {}),
@@ -290,11 +295,32 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
     if (ADVANCED_FIELDS.some((f: AdvancedField) => found[f])) setAdvanced(true);
   }
 
-  // The overlap check runs when the person leaves the Subnet field, against the
-  // networks the list has loaded. It only warns; Create is never held back.
-  function checkOverlap(subnet: string) {
-    setOverlap(overlapsWith(subnet.trim(), networks));
-  }
+  // The picker reports whether a finding blocks; a tick belongs to the overlap it was given for,
+  // so it goes when the overlap does. A finding opens Advanced, where it can be read.
+  const onBlockingChange = useCallback((now: boolean) => {
+    setBlocking(now);
+    if (!now) setCreateAnyway(false);
+  }, []);
+  const onFindingsChange = useCallback((count: number) => {
+    if (count > 0) setAdvanced(true);
+  }, []);
+
+  // A pool at 70% or more opens Advanced by itself, with the reason, because a smaller subnet is
+  // the person's way to keep room (UI-SPEC default 6).
+  const pools = space.data?.pools ?? [];
+  const crowded = pools.filter((p) => p.state === "getting_full" || p.state === "almost_full");
+  const worstPercent = crowded.length > 0 ? Math.max(...crowded.map((p) => p.percent)) : null;
+  const isCrowded = worstPercent !== null;
+  useEffect(() => {
+    if (isCrowded) setAdvanced(true);
+  }, [isCrowded]);
+  // The mask of the swarm's own pool is the size an overlay network gets by default.
+  const defaultMask =
+    swarm && driver === "overlay"
+      ? (pools.find((p) => p.source === "swarm") ?? pools[0])?.mask
+      : undefined;
+  const nodeMissing = askNode && form.watch("nodeId") === "";
+  const blocked = blocking && !createAnyway;
 
   const pending = create.isPending;
   const nameTaken = errors.name?.type === "server";
@@ -444,52 +470,59 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
             />
           </Field>
 
-          <Collapsible open={advanced} onOpenChange={setAdvanced} className="flex flex-col gap-4">
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="group/advanced w-fit max-md:h-11"
-              >
-                <ChevronRight
-                  aria-hidden="true"
-                  className="transition-transform group-aria-expanded/advanced:rotate-90"
-                />
-                {t("networks.create.advanced.trigger")}
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="flex flex-col gap-4">
-              <Field data-invalid={errorOf("subnet") ? true : undefined}>
-                <FieldLabel htmlFor={`${ids}-subnet`}>
-                  {t("networks.create.subnet.label")}
-                </FieldLabel>
-                <Input
-                  id={`${ids}-subnet`}
-                  placeholder={t("networks.create.subnet.placeholder")}
-                  inputMode="text"
-                  autoComplete="off"
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  aria-invalid={Boolean(errorOf("subnet"))}
-                  aria-describedby={`${ids}-subnet-helper`}
-                  className={cn("font-mono", TOUCH_HEIGHT)}
-                  {...form.register("subnet", { onBlur: (e) => checkOverlap(e.target.value) })}
-                />
-                <FieldDescription id={`${ids}-subnet-helper`}>
-                  {t("networks.create.subnet.helper")}
-                </FieldDescription>
-                {errorOf("subnet") ? <FieldError>{errorOf("subnet")}</FieldError> : null}
-                {overlap ? (
-                  <Alert variant="warning" role="status">
-                    <TriangleAlert aria-hidden="true" />
-                    <AlertDescription className="break-words text-foreground">
-                      {overlapText(t, overlap)}
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-              </Field>
+          <div className="flex flex-col gap-4">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="group/advanced w-fit max-md:h-11"
+              aria-expanded={advanced}
+              aria-controls={`${ids}-advanced`}
+              onClick={() => setAdvanced((open) => !open)}
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className="transition-transform group-aria-expanded/advanced:rotate-90"
+              />
+              {t("networks.create.advanced.trigger")}
+            </Button>
+            {/* Kept mounted while closed, so a check and a blocking overlap are not lost. */}
+            <div
+              id={`${ids}-advanced`}
+              hidden={!advanced}
+              className={cn("flex-col gap-4", advanced ? "flex" : "hidden")}
+            >
+              {worstPercent !== null ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("subnetPicker.poolUsed", { percent: worstPercent })}
+                </p>
+              ) : null}
+              <Controller
+                control={form.control}
+                name="subnet"
+                render={({ field }) => (
+                  <SubnetPicker
+                    envId={envId}
+                    envType={swarm ? "swarm" : "standalone"}
+                    value={field.value}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    inputRef={field.ref}
+                    inputId={`${ids}-subnet`}
+                    driver={driver}
+                    nodeId={askNode && form.watch("nodeId") ? form.watch("nodeId") : undefined}
+                    nodeMissing={nodeMissing}
+                    defaultMask={defaultMask}
+                    pools={pools.map((p) => p.cidr)}
+                    canCreateAnyway={manage.allowed}
+                    createAnyway={createAnyway}
+                    onCreateAnywayChange={setCreateAnyway}
+                    onBlockingChange={onBlockingChange}
+                    onFindingsChange={onFindingsChange}
+                    error={errorOf("subnet")}
+                  />
+                )}
+              />
 
               <Field data-invalid={errorOf("gateway") ? true : undefined}>
                 <FieldLabel htmlFor={`${ids}-gateway`}>
@@ -556,8 +589,8 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
                   }}
                 />
               </Field>
-            </CollapsibleContent>
-          </Collapsible>
+            </div>
+          </div>
         </FieldGroup>
       </fieldset>
       <DialogFooter>
@@ -570,42 +603,19 @@ function CreateNetworkForm({ envId, swarm, networks, onClose }: FormProps) {
         >
           {t("networks.create.cancel")}
         </Button>
-        <Button type="submit" className={TOUCH_HEIGHT} disabled={pending}>
-          {pending ? (
-            <>
-              <Spinner aria-hidden="true" />
-              {t("networks.create.pending")}
-            </>
-          ) : (
-            t("networks.create.submit")
-          )}
-        </Button>
+        <NeedsTooltip reason={blocked ? t("subnetPicker.createAnyway.blocked") : undefined}>
+          <Button type="submit" className={TOUCH_HEIGHT} disabled={pending}>
+            {pending ? (
+              <>
+                <Spinner aria-hidden="true" />
+                {t("networks.create.pending")}
+              </>
+            ) : (
+              t("networks.create.submit")
+            )}
+          </Button>
+        </NeedsTooltip>
       </DialogFooter>
     </form>
   );
-}
-
-// overlapText is the warning under Subnet: the one network it overlaps, both when
-// there are two, or the first two and how many more (UI-SPEC "Networks").
-function overlapText(
-  t: (key: string, options?: Record<string, unknown>) => string,
-  o: OverlapReport,
-) {
-  const [first, second] = o.shown;
-  if (o.total === 1 && first) {
-    return t("networks.create.overlap.one", { name: first.name, cidr: first.cidr });
-  }
-  if (o.more === 0 && first && second) {
-    return t("networks.create.overlap.two", {
-      count: o.total,
-      first: first.name,
-      second: second.name,
-    });
-  }
-  return t("networks.create.overlap.many", {
-    count: o.total,
-    first: first?.name ?? "",
-    second: second?.name ?? "",
-    more: o.more,
-  });
 }
