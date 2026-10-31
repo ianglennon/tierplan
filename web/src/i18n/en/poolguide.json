@@ -1,0 +1,43 @@
+{
+  "poolGuide": {
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "addressSpace": "Address space",
+      "guide": "Pool guidance"
+    },
+    "title": "Pool guidance",
+    "caption": "Plan address pools without touching your hosts. Coaming explains the steps and gives you commands to copy. It never runs them.",
+    "note": "Coaming never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
+    "tabs": {
+      "label": "Parts of the pool guidance",
+      "freeSpace": "Free up space",
+      "newSwarm": "New swarm",
+      "rebuild": "Rebuild a swarm",
+      "standalone": "Standalone host"
+    },
+    "command": {
+      "label": "command: {{caption}}"
+    },
+    "newSwarm": {
+      "heading": "New swarm",
+      "intro": "The address pool is fixed when a swarm is created, so decide it now.",
+      "networks": "Networks you expect",
+      "nodes": "Nodes you expect",
+      "mask": "Subnet size",
+      "maskItem": "/{{mask}} · {{usable}} addresses",
+      "avoid": "Ranges to avoid",
+      "avoidPlaceholder": "192.168.0.0/16",
+      "avoidHelper": "Your LAN, VPN and other sites' ranges.",
+      "networksInvalid": "Enter a whole number from 1 to {{max}}.",
+      "nodesInvalid": "Enter a whole number from 1 to {{max}}.",
+      "avoidInvalid": "Enter a CIDR like 192.168.0.0/16 on each line.",
+      "avoidLines_one": "Check line {{lines}}.",
+      "avoidLines_other": "Check lines {{lines}}.",
+      "noFit": "No range outside the ones you listed is big enough. Remove a range to avoid, or use a smaller subnet size.",
+      "summary": "This pool holds {{capacity}} networks of /{{mask}}, so {{expected}} networks leave {{spare}} spare.",
+      "tooSmall": "A /{{mask}} holds {{usable}} addresses, fewer than the {{nodes}} nodes each overlay gives an address to. Choose a bigger subnet size.",
+      "commandCaption": "Run this on the first manager",
+      "fixed": "The pool is fixed at init. Changing it later means rebuilding the swarm."
+    }
+  }
+}
