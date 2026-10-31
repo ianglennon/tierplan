@@ -31,6 +31,9 @@ const (
 const (
 	SourceApply        = "service_apply"
 	SourceApplyCleanup = "service_apply_cleanup"
+	// SourceAllocationCheck is the source of the row of a staged network the swarm never allocated
+	// and that was removed again by the read-back after its create (G-10-8).
+	SourceAllocationCheck = "allocation_check"
 	// SourceRotate is the source of the rows of the new object and of the old one a rotate removes.
 	SourceRotate = "rotate"
 )
@@ -50,6 +53,7 @@ const (
 	codeNameTaken    = "name_taken"
 	codeCreateFailed = "create_failed"
 	codeRemoveFailed = "remove_failed"
+	codeNotAllocated = "not_allocated"
 	codeInUse        = "object_in_use"
 	codeUpdateFailed = "update_failed"
 	codeNameTakenSvc = "service_name_taken"
@@ -293,8 +297,21 @@ func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObj
 		id, err := createOne(ctx, cli, o, wait)
 		if err != nil {
 			code := codeCreateFailed
-			if errors.Is(err, dockerx.ErrNameTaken) {
+			var na *dockerx.NotAllocatedError
+			switch {
+			case errors.Is(err, dockerx.ErrNameTaken):
 				code = codeNameTaken
+			case errors.As(err, &na):
+				// The swarm accepted the create and never allocated the network. The read-back has
+				// removed the stub (or tried to): two rows, the failed create and that removal. The
+				// stub is not in created, so the cleanup does not remove it a second time.
+				record.record(createdRow(o, na.ID, codeNotAllocated))
+				rm := codeRemoved
+				if !na.Removed {
+					rm = codeRemoveFailed
+				}
+				record.record(removedRowFrom(CreatedObject{Kind: o.Kind, Name: o.Name, ID: na.ID}, rm, SourceAllocationCheck))
+				return created, &ObjectCreateError{Kind: o.Kind, Name: o.Name, Err: err}
 			}
 			record.record(createdRow(o, o.Name, code))
 			return created, &ObjectCreateError{Kind: o.Kind, Name: o.Name, Err: err}
@@ -430,6 +447,8 @@ func stepCode(err error) string {
 	switch {
 	case errors.Is(err, dockerx.ErrNameTaken):
 		return codeNameTaken
+	case errors.Is(err, dockerx.ErrNetworkNotAllocated):
+		return codeNotAllocated
 	case errors.Is(err, dockerx.ErrServiceNameTaken):
 		return codeNameTakenSvc
 	case errors.Is(err, dockerx.ErrServiceChanged):

@@ -1222,6 +1222,69 @@ func TestServiceApplyStagedNetworkNotAllocated(t *testing.T) {
 	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
 		t.Errorf("service updates = %+v, want none against a network the swarm did not allocate", ups)
 	}
+	created, removed := f.auditLike(t, "network.created"), f.auditLike(t, "network.removed")
+	if len(created) != 1 || created[0].Result != string(audit.ResultFailure) || created[0].Details["code"] != "not_allocated" || created[0].Details["source"] != "service_apply" {
+		t.Errorf("network.created rows = %+v, want one failure with code not_allocated from service_apply", created)
+	}
+	if len(removed) != 1 || removed[0].Result != string(audit.ResultSuccess) || removed[0].Details["source"] != "allocation_check" || removed[0].Details["code"] != "removed" {
+		t.Errorf("network.removed rows = %+v, want one success from allocation_check", removed)
+	}
+}
+
+// With two staged networks, the first allocated and the second never: the problem names the second,
+// the first is removed again by the apply's cleanup and the stub by the read-back, so no staged
+// network is left, and the cleanup entries name the first (G-10-8).
+func TestServiceApplyStagedNetworkNotAllocatedAfterAnother(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "first"}, map[string]any{"Target": "front"}}
+	})
+	objs := []map[string]any{
+		{"kind": "network", "name": "first", "subnet": "10.65.0.0/24"},
+		{"kind": "network", "name": "front", "subnet": "10.66.0.0/24"},
+	}
+	rec := admin.apply("svc-api", withObjects(t, body, objs))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	for _, want := range []string{"network front an address range", `"removed"`, "network:first"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.Body)
+		}
+	}
+	if n, del := len(f.fake.NetworkCreates()), len(deletedNetworks(f)); n != 2 || del != 2 {
+		t.Errorf("network creates = %d, removals = %d, want every staged network made and removed again", n, del)
+	}
+	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %+v, want none", ups)
+	}
+}
+
+// A stub the engine will not remove is said so, and left for the person to delete.
+func TestServiceApplyStagedNetworkNotAllocatedAndNotRemovable(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.SwarmUnallocated = map[string]int{"10.66.0.0/24": -1}
+		cfg.RemoveErrors = map[string]string{"front": "network is busy"}
+	}, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.66.0.0/24", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "Coaming couldn't remove it, so delete front on the Networks page.") || strings.Contains(rec.Body.String(), "removed it again") {
+		t.Errorf("the problem does not say the stub is left: %s", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "network is busy") {
+		t.Errorf("the engine's own sentence reached the browser: %s", rec.Body)
+	}
+	if removed := f.auditLike(t, "network.removed"); len(removed) != 1 || removed[0].Details["code"] != "remove_failed" || removed[0].Details["source"] != "allocation_check" {
+		t.Errorf("network.removed rows = %+v, want one remove_failed from allocation_check", removed)
+	}
 }
 
 func TestServiceApplyStagedNetworkCreateAnyway(t *testing.T) {

@@ -337,6 +337,31 @@ func TestServiceCreateStagedNetworkOverlapRefused(t *testing.T) {
 	}
 }
 
+// A staged network the swarm never allocates fails the create: the stub is removed and no service
+// is created (G-10-8, T-10-80).
+func TestServiceCreateStagedNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.66.0.0/24", false))
+	rec := admin.create(body)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("create: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "The swarm didn't give network front an address range") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if c := f.fake.ServiceCreates(); len(c) != 0 {
+		t.Errorf("service creates = %+v, want none", c)
+	}
+	if del := deletedNetworks(f); len(del) != 1 {
+		t.Errorf("removals = %v, want the stub removed once", del)
+	}
+}
+
 // A staged network that overlaps a swarm network is refused with or without the tick, and nothing
 // is created (G-10-8, T-10-69).
 func TestServiceCreateStagedNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
