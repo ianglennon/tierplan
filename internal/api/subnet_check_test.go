@@ -5,10 +5,15 @@ package api_test
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ianglennon/coaming/internal/agents"
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
+	"github.com/ianglennon/coaming/proto/wire"
 )
 
 // The subnet check (plan 10-13, NET-05, D-14, D-15, T-10-34, T-10-35). Docker is a fake daemon
@@ -34,6 +39,15 @@ type subnetCheckAnswer struct {
 	} `json:"subnetError"`
 	IPv6NotChecked bool            `json:"ipv6NotChecked"`
 	Findings       []subnetFinding `json:"findings"`
+	RouteChecks    []routeCheck    `json:"routeChecks"`
+}
+
+type routeCheck struct {
+	Node   string `json:"node"`
+	NodeID string `json:"nodeId"`
+	State  string `json:"state"`
+	Local  bool   `json:"local"`
+	Fix    string `json:"fix"`
 }
 
 type subnetFinding struct {
@@ -444,5 +458,150 @@ func TestSubnetCheckOtherEnvFiltered(t *testing.T) {
 	cookie, csrf = f.signIn(t, "both", false)
 	if got := check(cookie, csrf); len(got.ofKind("other_env")) != 1 {
 		t.Errorf("a caller with both: %+v, want the Site B warning", got.Findings)
+	}
+}
+
+// The host routes (plan 10-16, NET-05, D-16, D-17 as amended, T-10-41).
+
+func TestSubnetCheckHostRoute(t *testing.T) {
+	t.Parallel()
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Edge")
+	f.connectAs(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "29.1.0", Networks: []dockertest.FakeNetwork{
+		{ID: "b19", Name: "mynet", Driver: "bridge", Scope: "local", Subnets: []string{"172.19.0.0/16"}},
+	}}, nil, tunneltest.Agent{HostNet: wire.HostNetOK, HostRoutes: []wire.HostRoute{
+		{Iface: "eth0", Dst: "192.168.2.0/24"},
+		{Iface: "docker0", Dst: "172.17.0.0/16"},
+		{Iface: "docker_gwbridge", Dst: "172.18.0.0/16"},
+		{Iface: "br-0123456789ab", Dst: "172.20.0.0/16"},
+		// A Docker network's own subnet, whatever interface carries it.
+		{Iface: "eth1", Dst: "172.19.0.0/16"},
+	}})
+	f.whenState(t, env.ID, "online")
+
+	got := checkOK(t, f.subnetCheck(t, env.ID, `{"subnet":"192.168.2.0/25"}`))
+	routes := got.ofKind("host_route")
+	if len(routes) != 1 || routes[0].Severity != "warning" || routes[0].Iface != "eth0" || routes[0].Route != "192.168.2.0/24" || routes[0].Node != "edge-1" {
+		t.Fatalf("findings = %+v, want one host_route warning on eth0", got.Findings)
+	}
+	if len(got.ofKind("common_range")) != 1 {
+		t.Errorf("findings = %+v, want the 192.168 common range too", got.Findings)
+	}
+	if len(got.RouteChecks) != 1 || got.RouteChecks[0].State != "ok" || got.RouteChecks[0].Node != "edge-1" || got.RouteChecks[0].Fix != "" {
+		t.Errorf("routeChecks = %+v, want edge-1 ok", got.RouteChecks)
+	}
+	// Docker's own bridges and the networks Docker made are not the host's LAN or VPN.
+	for _, subnet := range []string{"172.17.0.0/24", "172.18.0.0/24", "172.20.0.0/24", "172.19.0.0/24"} {
+		got := checkOK(t, f.subnetCheck(t, env.ID, `{"subnet":"`+subnet+`"}`))
+		if r := got.ofKind("host_route"); len(r) != 0 {
+			t.Errorf("%s: %+v, want no host_route", subnet, r)
+		}
+	}
+	// A suggestion keeps clear of a route of the host.
+	got = checkOK(t, f.subnetCheck(t, env.ID, `{"suggest":true,"mask":24}`))
+	if got.Suggestion == nil {
+		t.Fatalf("no suggestion: %+v", got)
+	}
+	if strings.HasPrefix(got.Suggestion.Subnet, "192.168.2.") {
+		t.Errorf("the suggestion %s lies inside a route of the host", got.Suggestion.Subnet)
+	}
+}
+
+func TestSubnetCheckHostRouteIsAvoidedBySuggestion(t *testing.T) {
+	t.Parallel()
+	f := newAgentFix(t)
+	env := f.srv.NewEnvironment(t, "Edge")
+	f.connectAs(t, env, dockertest.FakeConfig{Hostname: "edge-1", Version: "29.1.0", DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "192.168.0.0/16", Size: 24}}},
+		nil, tunneltest.Agent{HostNet: wire.HostNetOK, HostRoutes: []wire.HostRoute{{Iface: "eth0", Dst: "192.168.0.0/23"}}})
+	f.whenState(t, env.ID, "online")
+	got := checkOK(t, f.subnetCheck(t, env.ID, `{"suggest":true,"mask":24}`))
+	if got.Suggestion == nil || got.Suggestion.Subnet != "192.168.2.0/24" {
+		t.Errorf("suggestion = %+v, want 192.168.2.0/24, the first block clear of the host's /23", got.Suggestion)
+	}
+}
+
+func TestSubnetCheckRouteStates(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixHostNet(t, nil, func(host string) (string, []wire.HostRoute) {
+		switch host {
+		case "mgr-1":
+			return wire.HostNetOK, []wire.HostRoute{{Iface: "eth0", Dst: "192.168.9.0/24"}}
+		case "wrk-1":
+			return wire.HostNetUnmounted, nil
+		}
+		return "", nil // mgr-2 is an agent older than this check
+	})
+	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.9.0.0/24"}`))
+	want := []routeCheck{
+		{Node: "mgr-1", State: "ok"},
+		{Node: "mgr-2", State: "old_agent"},
+		{Node: "wrk-1", State: "unmounted", Fix: agents.HostRouteMountCommand("swarm", agents.InstallParams{})},
+	}
+	if len(got.RouteChecks) != len(want) {
+		t.Fatalf("routeChecks = %+v, want %+v", got.RouteChecks, want)
+	}
+	for i, w := range want {
+		g := got.RouteChecks[i]
+		if g.Node != w.Node || g.State != w.State || g.Fix != w.Fix || g.Local {
+			t.Errorf("routeChecks[%d] = %+v, want %+v", i, g, w)
+		}
+	}
+	if !strings.Contains(want[2].Fix, "--mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro") {
+		t.Errorf("the fix = %q", want[2].Fix)
+	}
+	// Only the agent that said it can was asked for its routes.
+	if n := s.m1.conn.HostNetStreams.Load(); n != 1 {
+		t.Errorf("mgr-1 was asked %d times, want once", n)
+	}
+	if n := s.m2.conn.HostNetStreams.Load() + s.w.conn.HostNetStreams.Load(); n != 0 {
+		t.Errorf("an agent that cannot report routes was asked %d times, want 0", n)
+	}
+	// The routes of mgr-1 concern an overlay, and a bridge on mgr-1 only.
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"192.168.9.0/25","driver":"overlay"}`)); len(got.ofKind("host_route")) != 1 {
+		t.Errorf("an overlay: %+v, want the route of mgr-1", got.Findings)
+	}
+	body := `{"subnet":"192.168.9.0/25","driver":"bridge","nodeId":"` + s.m1.id + `"}`
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, body)); len(got.ofKind("host_route")) != 1 {
+		t.Errorf("a bridge on mgr-1: %+v, want the route of mgr-1", got.Findings)
+	}
+	body = `{"subnet":"192.168.9.0/25","driver":"bridge","nodeId":"` + s.m2.id + `"}`
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, body)); len(got.ofKind("host_route")) != 0 {
+		t.Errorf("a bridge on mgr-2: %+v, want no route of another node", got.Findings)
+	}
+	// A question that is not about a subnet reads no routes at all.
+	if got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"tasks":4}`)); len(got.RouteChecks) != 0 {
+		t.Errorf("a size question: routeChecks = %+v, want none", got.RouteChecks)
+	}
+	if n := s.m1.conn.HostNetStreams.Load(); n != 1 {
+		t.Errorf("mgr-1 was asked %d times in all, want once (its answer is kept)", n)
+	}
+}
+
+func TestSubnetCheckRouteStatesOfTheLocalHost(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
+	got := checkOK(t, f.subnetCheck(t, e, `{"subnet":"10.9.0.0/24"}`))
+	if len(got.RouteChecks) != 1 || got.RouteChecks[0].State != "unmounted" || !got.RouteChecks[0].Local || got.RouteChecks[0].Fix != "" {
+		t.Fatalf("routeChecks = %+v, want the local host unmounted, local, with no fix of the server's", got.RouteChecks)
+	}
+
+	// With the route file mounted the host's routes are read from it.
+	file := filepath.Join(t.TempDir(), "route")
+	content := "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n" +
+		"eth0\t0007A8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n" +
+		"docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n"
+	if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.hostRouteFile = file
+	f.h = f.build(t)
+	cookie, csrf := f.signIn(t, "admin", false)
+	f.cookie, f.csrf = cookie, csrf
+	got = checkOK(t, f.subnetCheck(t, e, `{"subnet":"192.168.7.0/25"}`))
+	if len(got.RouteChecks) != 1 || got.RouteChecks[0].State != "ok" || !got.RouteChecks[0].Local {
+		t.Fatalf("routeChecks = %+v, want the local host ok", got.RouteChecks)
+	}
+	if r := got.ofKind("host_route"); len(r) != 1 || r[0].Iface != "eth0" || r[0].Route != "192.168.7.0/24" {
+		t.Errorf("findings = %+v, want the route of eth0", got.Findings)
 	}
 }

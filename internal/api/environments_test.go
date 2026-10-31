@@ -927,11 +927,20 @@ func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockert
 // It still returns only once the server has read the agent's first heartbeat.
 func (f *agentFix) connectNoProbe(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
 	t.Helper()
+	return f.connectAs(t, env, cfg, facts, tunneltest.Agent{})
+}
+
+// connectAs is connectNoProbe for an agent with more to say than the token and facts: ag carries
+// what a test sets beyond them (HostNet and HostRoutes, to be an agent that reports its host's
+// routes). Its Token and Facts are the environment's and the facts given.
+func (f *agentFix) connectAs(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts, ag tunneltest.Agent) *agentConn {
+	t.Helper()
 	fake := dockertest.NewFake(t, cfg)
 	if facts == nil {
 		facts = &wire.Facts{EngineID: "ENG:" + cfg.Hostname, Hostname: cfg.Hostname, EngineReachable: true}
 	}
-	c := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: facts})
+	ag.Token, ag.Facts = env.Token, facts
+	c := f.srv.Dial(t, ag)
 	if c.Welcome == nil {
 		t.Fatalf("enrolment refused: %+v", c.Refuse)
 	}

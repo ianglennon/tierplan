@@ -320,6 +320,8 @@ docker pull ghcr.io/ianglennon/coaming-agent:<version> && docker rm -f coaming-a
 
 A swarm update rolls through the nodes one at a time, with the ten-second pause the install set (`--update-parallelism 1 --update-delay 10s`), so the agents reconnect one by one. The standalone agent keeps its identity in its state volume, so it needs no join token and reconnects as the same agent.
 
+**Coaming's own host has no agent.** It reads the same file from its own container: add `-v /proc/1/net/route:/host/route:ro` to the `docker run` (or the same bind in a compose file) of Coaming. Set `COAMING_HOST_ROUTE_FILE` to read it from another path. Without the mount the subnet picker says it can't read this host's routes and skips that one check.
+
 **Hosts that may refuse the mount.** Rootless Docker, a user-namespace remap (`userns-remap`), some SELinux or AppArmor profiles and Docker Desktop can refuse to bind-mount a `/proc` file, or show the agent an empty or different table. The agent then reports the file as unmounted. That is not an error: nothing else about the agent changes, and the picker says "the agent can't read the host's routes" and skips that one check.
 
 ## Settings on the host: read-only, self-update and privileged services

@@ -866,6 +866,14 @@ func newSwarmFix(t *testing.T) *swarmFix { return newSwarmFixWith(t, nil) }
 // node's hostname, before it connects.
 func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig)) *swarmFix {
 	t.Helper()
+	return newSwarmFixHostNet(t, tune, nil)
+}
+
+// newSwarmFixHostNet is newSwarmFixWith where each node's agent can report its host's routes:
+// hostNet gives, by the node's hostname, the hostNet fact the agent reports ("", wire.HostNetOK or
+// wire.HostNetUnmounted) and the routes it answers a host-net stream with.
+func newSwarmFixHostNet(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig), hostNet func(host string) (string, []wire.HostRoute)) *swarmFix {
+	t.Helper()
 	if tune == nil {
 		tune = func(string, *dockertest.FakeConfig) {}
 	}
@@ -902,10 +910,19 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 		}
 	}
 	s := &swarmFix{agentFix: f, env: env}
+	connect := func(cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+		var ag tunneltest.Agent
+		if hostNet != nil {
+			ag.HostNet, ag.HostRoutes = hostNet(cfg.Hostname)
+		}
+		a := f.connectAs(t, env, cfg, facts, ag)
+		awaitFirstProbe(t, f.mon, envs.AgentTarget(a.id))
+		return a
+	}
 	cfg, facts := mgr(1)
-	s.m1 = f.connect(t, env, cfg, facts)
+	s.m1 = connect(cfg, facts)
 	cfg, facts = mgr(2)
-	s.m2 = f.connect(t, env, cfg, facts)
+	s.m2 = connect(cfg, facts)
 	var many []dockertest.FakeContainer
 	for i := range 501 {
 		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
@@ -915,7 +932,7 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
 	}
 	tune("wrk-1", &wcfg)
-	s.w = f.connect(t, env, wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	s.w = connect(wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
 	f.whenState(t, env.ID, "online")
 	return s
 }

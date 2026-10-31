@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/time/rate"
 
+	"github.com/ianglennon/coaming/internal/agents"
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
@@ -96,6 +97,15 @@ type SubnetFindingBody struct {
 	Pool        string `json:"pool,omitempty" doc:"outside_pool: the pool the subnet should be in; several pools are joined with a comma"`
 }
 
+// RouteCheckBody says, for one node, whether its host's routes were read for the check, or why not.
+type RouteCheckBody struct {
+	Node   string `json:"node" doc:"The node's name"`
+	NodeID string `json:"nodeId,omitempty" doc:"The node's ID; absent for a standalone host"`
+	State  string `json:"state" enum:"ok,old_agent,unmounted,offline,failed" doc:"ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or Coaming itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes"`
+	Local  bool   `json:"local" doc:"True for the host Coaming itself runs on, read from the route file mounted into Coaming's own container"`
+	Fix    string `json:"fix,omitempty" doc:"With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's"`
+}
+
 // SubnetCheckBody is the answer of the subnet check.
 type SubnetCheckBody struct {
 	Suggestion        *SubnetSuggestionBody `json:"suggestion,omitempty" doc:"The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set"`
@@ -106,6 +116,7 @@ type SubnetCheckBody struct {
 	TooManyTasks      bool                  `json:"tooManyTasks" doc:"True when not even a /24 holds needed"`
 	SubnetError       *SubnetErrorBody      `json:"subnetError,omitempty" doc:"Why the typed subnet is refused; absent when it is fine or none was sent"`
 	IPv6NotChecked    bool                  `json:"ipv6NotChecked" doc:"True when the typed subnet is IPv6, which is not checked"`
+	RouteChecks       []RouteCheckBody      `json:"routeChecks" doc:"With a valid IPv4 subnet or suggest, one entry per node of the environment saying whether its host's routes were read for the check. Never null; empty when neither was asked for"`
 	Findings          []SubnetFindingBody   `json:"findings" doc:"What the typed subnet collides with, never null: this environment's networks on every node (blocking), other environments' networks the caller may read, host routes, common home and VPN ranges, and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6"`
 }
 
@@ -190,7 +201,7 @@ func registerSubnetCheck(r *httpx.Router, d AddressSpaceDeps) {
 // subnet's form need no read at all; a suggestion or the findings of a valid subnet read the
 // (cached) address space.
 func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest) (SubnetCheckBody, error) {
-	out := SubnetCheckBody{Findings: []SubnetFindingBody{}}
+	out := SubnetCheckBody{Findings: []SubnetFindingBody{}, RouteChecks: []RouteCheckBody{}}
 	if req.Subnet != "" {
 		out.SubnetError, out.IPv6NotChecked = validateTypedSubnet(req.Subnet)
 	}
@@ -239,13 +250,18 @@ func checkSubnet(ctx context.Context, d AddressSpaceDeps, envID string, req Subn
 			pools = nil
 		}
 	}
+	var routes []netspace.NodeRoute
+	if req.Suggest || candidate.IsValid() {
+		out.RouteChecks, routes = readHostRoutes(ctx, d, envID, space, agg)
+	}
+	all, node := subnetScope(space, req, agg)
 	if req.Suggest {
-		if err := suggestSubnet(pools, req, agg, &out); err != nil {
+		if err := suggestSubnet(pools, scopedRoutes(routes, all, node), req, agg, &out); err != nil {
 			return out, err
 		}
 	}
 	if candidate.IsValid() {
-		out.Findings = subnetFindings(ctx, d, envID, req, candidate, space, agg, pools)
+		out.Findings = subnetFindings(ctx, d, envID, candidate, space, agg, pools, routes, all, node)
 	}
 	return out, nil
 }
@@ -286,12 +302,12 @@ func subnetScope(space envs.AddressSpace, req SubnetCheckRequest, agg envs.Aggre
 }
 
 // subnetFindings is what the typed subnet collides with.
-func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, req SubnetCheckRequest, candidate netip.Prefix, space envs.AddressSpace, agg envs.Aggregate, pools []netspace.Pool) []SubnetFindingBody {
-	all, node := subnetScope(space, req, agg)
+func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, candidate netip.Prefix, space envs.AddressSpace, agg envs.Aggregate, pools []netspace.Pool, routes []netspace.NodeRoute, all bool, node string) []SubnetFindingBody {
 	in := netspace.OverlapInput{
 		Swarm: all, Node: node,
 		Same:   envs.NetworkItems(agg.Networks),
 		Other:  otherEnvironments(ctx, d, envID),
+		Routes: routes,
 		Pools:  pools,
 		Ranges: netspace.CommonRanges(swarmPoolIsTenSlashEight(space)),
 	}
@@ -302,6 +318,71 @@ func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, req S
 			Kind: string(f.Kind), Severity: string(f.Severity), Network: f.Network, Subnet: f.Subnet, Node: f.Node,
 			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Range: f.Range, Pool: f.Pool,
 		})
+	}
+	return out
+}
+
+// dockerIface reports whether name is one of Docker's own bridges, whose routes are the networks
+// Docker made and are not a LAN or VPN of the host.
+func dockerIface(name string) bool {
+	return name == "docker0" || name == "docker_gwbridge" || strings.HasPrefix(name, "br-")
+}
+
+// readHostRoutes reads the routes of every node's host (cached by the route reader) and answers a
+// route check per node and the usable routes of the nodes that were read: not a route that is the
+// subnet of a Docker network of the environment, and not one on a Docker bridge. With no route
+// reader every node is reported as failed and no stream is opened.
+func readHostRoutes(ctx context.Context, d AddressSpaceDeps, envID string, space envs.AddressSpace, agg envs.Aggregate) ([]RouteCheckBody, []netspace.NodeRoute) {
+	var nodes []envs.NodeRoutes
+	if d.HostRoutes != nil {
+		var err error
+		if nodes, err = d.HostRoutes.Get(ctx, envID); err != nil {
+			d.Log.Debug("the host routes of an environment could not be read", "environment", envID, "error", err)
+			nodes = nil
+		}
+	}
+	if nodes == nil {
+		for _, n := range agg.Nodes {
+			nodes = append(nodes, envs.NodeRoutes{Node: n.Name, NodeID: n.ID, State: envs.RouteCheckFailed})
+		}
+	}
+	docker := map[netip.Prefix]bool{}
+	for _, n := range agg.Networks {
+		for _, raw := range n.Subnets {
+			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is4() {
+				docker[p.Masked()] = true
+			}
+		}
+	}
+	checks := make([]RouteCheckBody, 0, len(nodes))
+	var routes []netspace.NodeRoute
+	for _, n := range nodes {
+		c := RouteCheckBody{Node: n.Node, NodeID: n.NodeID, State: n.State, Local: n.Local}
+		if n.State == envs.RouteCheckUnmounted && !n.Local && space.Swarm {
+			c.Fix = agents.HostRouteMountCommand("swarm", agents.InstallParams{})
+		}
+		checks = append(checks, c)
+		if n.State != envs.RouteCheckOK {
+			continue
+		}
+		for _, r := range n.Routes {
+			if dockerIface(r.Iface) || docker[r.Dst.Masked()] {
+				continue
+			}
+			routes = append(routes, netspace.NodeRoute{Node: n.Node, Iface: r.Iface, Dst: r.Dst})
+		}
+	}
+	return checks, routes
+}
+
+// scopedRoutes are the destinations of the routes that concern a network of the scope: every
+// node's for a swarm-wide network, one node's for a local one.
+func scopedRoutes(routes []netspace.NodeRoute, all bool, node string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, r := range routes {
+		if all || r.Node == node {
+			out = append(out, r.Dst)
+		}
 	}
 	return out
 }
@@ -363,8 +444,9 @@ func otherEnvironments(ctx context.Context, d AddressSpaceDeps, envID string) []
 	return out
 }
 
-// suggestSubnet fills the suggestion, or noFreeBlock, of out from the pools to search.
-func suggestSubnet(pools []netspace.Pool, req SubnetCheckRequest, agg envs.Aggregate, out *SubnetCheckBody) error {
+// suggestSubnet fills the suggestion, or noFreeBlock, of out from the pools to search, clear of
+// every subnet of the environment and of avoid, the host routes in scope.
+func suggestSubnet(pools []netspace.Pool, avoid []netip.Prefix, req SubnetCheckRequest, agg envs.Aggregate, out *SubnetCheckBody) error {
 	if len(pools) == 0 {
 		return nil
 	}
@@ -386,7 +468,7 @@ func suggestSubnet(pools []netspace.Pool, req SubnetCheckRequest, agg envs.Aggre
 			}
 		}
 	}
-	block, pool, err := netspace.LowestFree(pools, occupied, nil, mask)
+	block, pool, err := netspace.LowestFree(pools, occupied, avoid, mask)
 	if errors.Is(err, netspace.ErrNoFreeBlock) {
 		names := make([]string, 0, len(pools))
 		for _, p := range pools {

@@ -719,6 +719,9 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The address reader tells how full the address pools of an environment are. The networks,
 	// stacks and dashboard routes read it as well as its own route, so it is built once.
 	addressSpaces := envs.NewAddressSpaces(envSvc, aggregator, clusters, envs.AddressSpaceOptions{Now: bo.addressClock, Log: log})
+	// The subnet check reads the routes of each node's host: through the agents' tunnels, and for
+	// Coaming's own host from the route file mounted into its container (COAMING_HOST_ROUTE_FILE).
+	hostRoutes := envs.NewHostRoutes(envSvc, tunnelHub, envs.HostRoutesOptions{LocalRouteFile: cfg.HostRouteFile, Log: log})
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	// The wizard restore routes share the setup routes' gate, limiter and audit.
@@ -861,7 +864,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
-		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Now: time.Now, Log: log},
+		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},

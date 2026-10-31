@@ -9254,6 +9254,21 @@ export interface components {
             /** @description The owner of the file; kept */
             uid: string;
         };
+        RouteCheckBody: {
+            /** @description With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's */
+            fix?: string;
+            /** @description True for the host Coaming itself runs on, read from the route file mounted into Coaming's own container */
+            local: boolean;
+            /** @description The node's name */
+            node: string;
+            /** @description The node's ID; absent for a standalone host */
+            nodeId?: string;
+            /**
+             * @description ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or Coaming itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes
+             * @enum {string}
+             */
+            state: "ok" | "old_agent" | "unmounted" | "offline" | "failed";
+        };
         RunningContainerBody: {
             /** @description The container's ID */
             id: string;
@@ -12091,6 +12106,8 @@ export interface components {
              * @description The usable addresses of recommendedMask: the size less the network, broadcast and gateway addresses
              */
             recommendedUsable?: number;
+            /** @description With a valid IPv4 subnet or suggest, one entry per node of the environment saying whether its host's routes were read for the check. Never null; empty when neither was asked for */
+            routeChecks: components["schemas"]["RouteCheckBody"][] | null;
             /** @description Why the typed subnet is refused; absent when it is fine or none was sent */
             subnetError?: components["schemas"]["SubnetErrorBody"];
             /** @description The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set */

@@ -238,6 +238,9 @@ type authFixture struct {
 	liveAgents api.AgentSessions
 	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
 	clusters *envs.Clusters
+	// hostRouteFile is the route file mounted into Coaming's own container, as the subnet check
+	// reads it for the local host; empty means none is mounted.
+	hostRouteFile string
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
 	// updater and serverVersion are what the agent update routes use, when set.
@@ -381,9 +384,15 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			addrClusters = envs.NewClusters(f.envSvc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
 		}
 		addressSpaces := envs.NewAddressSpaces(f.envSvc, f.agg, addrClusters, envs.AddressSpaceOptions{Now: f.clk.now, Log: log})
+		// The route reader of a real server: through the tunnel hub when the fixture has one.
+		var routeSrc envs.HostNetSource
+		if src, ok := f.liveAgents.(envs.HostNetSource); ok {
+			routeSrc = src
+		}
+		hostRoutes := envs.NewHostRoutes(f.envSvc, routeSrc, envs.HostRoutesOptions{Now: f.clk.now, LocalRouteFile: f.hostRouteFile, Log: log})
 		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Log: log})
 		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
-			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log,
+			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
 		})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{

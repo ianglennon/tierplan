@@ -38,6 +38,9 @@ type AddressSpaceDeps struct {
 	Audit *audit.Writer
 	// Checker says what the caller may do beyond the permission of a route.
 	Checker *rbac.Checker
+	// HostRoutes reads the routes of each node's host, for the subnet check. Nil means no
+	// route is read: every node's check is reported as failed and no stream is opened.
+	HostRoutes *envs.HostRoutes
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().

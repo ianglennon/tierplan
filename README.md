@@ -120,6 +120,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `COAMING_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `COAMING_TLS_CERT_FILE`. |
 | `COAMING_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |
 | `COAMING_DOCKER_GID` | detected | no | Group ID of the Docker socket, overriding detection. |
+| `COAMING_HOST_ROUTE_FILE` | `/host/route` | no | The host's `/proc/1/net/route` bind-mounted read-only into Coaming's own container (`-v /proc/1/net/route:/host/route:ro`), so the subnet picker can warn about a subnet that collides with a LAN or VPN route of the host Coaming runs on. An absolute path. Optional: without the mount the check says it cannot read this host's routes and nothing else changes. See [docs/agent.md](docs/agent.md#host-routes). |
 | `COAMING_AGENT_HEARTBEAT_INTERVAL` | `10s` | no | How often each agent sends a heartbeat; the value is sent to the agent when it connects. |
 | `COAMING_AGENT_OFFLINE_AFTER` | `30s` | no | Silence after which an agent connection is closed and the agent counts as offline. At least twice the heartbeat interval. |
 | `COAMING_AGENT_RECONNECT_GRACE` | `60s` | no | After Coaming starts, how long an environment shows "Reconnecting" instead of offline while its agents come back. |

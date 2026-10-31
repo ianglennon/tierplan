@@ -410,6 +410,8 @@ type Conn struct {
 
 	ctx        context.Context
 	hostRoutes []wire.HostRoute
+	// hostNetOK is true when the agent said it can read its host's routes.
+	hostNetOK bool
 }
 
 // Dial runs the agent side of the handshake. It returns after the welcome or the
@@ -484,7 +486,7 @@ func (p *Pending) AwaitServerClose() error {
 func (p *Pending) Finish() *Conn {
 	s, t, a, ws, resp, ch, ctx := p.s, p.t, p.a, p.ws, p.resp, p.ch, p.ctx
 	t.Helper()
-	c := &Conn{WS: ws, ctx: ctx, hostRoutes: a.HostRoutes}
+	c := &Conn{WS: ws, ctx: ctx, hostRoutes: a.HostRoutes, hostNetOK: a.HostNet == wire.HostNetOK || (a.Facts != nil && a.Facts.HostNet == wire.HostNetOK)}
 	var data []byte
 	var err error
 
@@ -731,17 +733,38 @@ func (c *Conn) ProxyDocker(t testing.TB, socketPath string) {
 			if err != nil {
 				return
 			}
-			go pipeDocker(st, socketPath)
+			go c.serveProxied(st, socketPath)
 		}
 	}()
 }
 
-// pipeDocker copies one Docker stream to and from the daemon until either side
-// ends.
-func pipeDocker(st net.Conn, socketPath string) {
-	defer func() { _ = st.Close() }()
+// serveProxied answers one stream of ProxyDocker: a Docker stream is piped to the daemon, and
+// when the agent was dialed with HostNet ok a host-net stream is answered with its HostRoutes
+// as AnswerHostNet does. Anything else is closed with nothing written.
+func (c *Conn) serveProxied(st net.Conn, socketPath string) {
 	var kind [1]byte
-	if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != wire.StreamKindDockerHTTP {
+	if _, err := io.ReadFull(st, kind[:]); err != nil {
+		_ = st.Close()
+		return
+	}
+	if kind[0] == wire.StreamKindHostNet && c.hostNetOK {
+		defer func() { _ = st.Close() }()
+		c.HostNetStreams.Add(1)
+		doc := wire.HostNetDoc{V: 1, Routes: c.hostRoutes}
+		if doc.Routes == nil {
+			doc.Routes = []wire.HostRoute{}
+		}
+		_ = json.NewEncoder(st).Encode(doc)
+		return
+	}
+	pipeDocker(st, kind[0], socketPath)
+}
+
+// pipeDocker copies one Docker stream, whose kind byte has been read, to and from the daemon
+// until either side ends.
+func pipeDocker(st net.Conn, kind byte, socketPath string) {
+	defer func() { _ = st.Close() }()
+	if kind != wire.StreamKindDockerHTTP {
 		return
 	}
 	up, err := net.Dial("unix", socketPath)
