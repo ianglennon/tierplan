@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -289,8 +290,10 @@ func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, req S
 	all, node := subnetScope(space, req, agg)
 	in := netspace.OverlapInput{
 		Swarm: all, Node: node,
-		Same:  envs.NetworkItems(agg.Networks),
-		Pools: pools,
+		Same:   envs.NetworkItems(agg.Networks),
+		Other:  otherEnvironments(ctx, d, envID),
+		Pools:  pools,
+		Ranges: netspace.CommonRanges(swarmPoolIsTenSlashEight(space)),
 	}
 	found := netspace.FindOverlaps(candidate, in)
 	out := make([]SubnetFindingBody, 0, len(found))
@@ -299,6 +302,63 @@ func subnetFindings(ctx context.Context, d AddressSpaceDeps, envID string, req S
 			Kind: string(f.Kind), Severity: string(f.Severity), Network: f.Network, Subnet: f.Subnet, Node: f.Node,
 			Environment: f.Environment, Route: f.Route, Iface: f.Iface, Range: f.Range, Pool: f.Pool,
 		})
+	}
+	return out
+}
+
+// swarmPoolIsTenSlashEight reports whether a pool of the swarm is 10.0.0.0/8, which is when that
+// range is one of the common ranges a subnet is warned about (D-16 item 4).
+func swarmPoolIsTenSlashEight(space envs.AddressSpace) bool {
+	if !space.Swarm {
+		return false
+	}
+	return slices.ContainsFunc(space.Pools, func(p envs.PoolUsage) bool {
+		return p.Source == envs.PoolSourceSwarm && p.Pool.Base.Masked() == netspace.DefaultSwarmPool
+	})
+}
+
+// canReadNetworks reports whether the grants listed for each environment include reading its
+// networks.
+func canReadNetworks(perEnv map[string][]rbac.Perm, id string) bool {
+	return slices.Contains(perEnv[id], rbac.PermNetworksRead) ||
+		slices.Contains(perEnv[rbac.AllEnvironments], rbac.PermNetworksRead)
+}
+
+// otherEnvironments are the networks of the other environments the caller may read networks of,
+// from the last read of each: nothing is read from an engine, and an environment never read
+// contributes nothing (T-10-39).
+func otherEnvironments(ctx context.Context, d AddressSpaceDeps, envID string) []netspace.OtherEnv {
+	p := httpx.PrincipalFrom(ctx)
+	if p == nil || d.Checker == nil || d.Store == nil {
+		return nil
+	}
+	cached := d.AddressSpaces.Environments()
+	if !slices.ContainsFunc(cached, func(id string) bool { return id != envID }) {
+		return nil
+	}
+	_, perEnv, err := d.Checker.EffectivePermissions(ctx, p)
+	if err != nil {
+		d.Log.Warn("the permissions of a caller could not be read for a subnet check", "error", err)
+		return nil
+	}
+	rows, err := d.Store.RQ.ListEnvironments(ctx)
+	if err != nil {
+		d.Log.Warn("the environments could not be listed for a subnet check", "error", err)
+		return nil
+	}
+	names := make(map[string]string, len(rows))
+	for _, r := range rows {
+		names[r.ID] = r.Name
+	}
+	var out []netspace.OtherEnv
+	for _, id := range cached {
+		name, known := names[id]
+		if id == envID || !known || !canReadNetworks(perEnv, id) {
+			continue
+		}
+		if nets, _, ok := d.AddressSpaces.CachedNetworks(id); ok {
+			out = append(out, netspace.OtherEnv{Name: name, Networks: nets})
+		}
 	}
 	return out
 }

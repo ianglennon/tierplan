@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -564,5 +566,63 @@ func TestAddressSpaceOverlayReadIsSharedWithinTheTTL(t *testing.T) {
 	}
 	if reads.Load() != 2 || third.Overlays[0].Used != 100 {
 		t.Fatalf("after the TTL: reads = %d, used %d; want a fresh read of 100", reads.Load(), third.Overlays[0].Used)
+	}
+}
+
+// The cached networks and the allocation lock (plan 10-16, NET-05, T-10-39, T-10-40).
+
+func TestCachedNetworks(t *testing.T) {
+	s, as := addrSwarm(t, func(_ int, c *dockertest.FakeConfig) {
+		c.Networks = []dockertest.FakeNetwork{
+			{ID: "o1", Name: "o1", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}},
+			{ID: "br", Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+			{ID: "none", Name: "none", Driver: "null", Scope: "local"},
+		}
+	})
+	if nets, _, ok := as.CachedNetworks(s.env.ID); ok || nets != nil || len(as.Environments()) != 0 {
+		t.Fatalf("before any read: %v %v, want nothing cached", nets, ok)
+	}
+	if _, ok := func() (int, bool) { _, _, ok := as.CachedNetworks("nope"); return 0, ok }(); ok {
+		t.Error("an unknown environment has cached networks")
+	}
+	if _, err := as.Read(testsupport.Context(t), s.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	nets, at, ok := as.CachedNetworks(s.env.ID)
+	if !ok || at.IsZero() {
+		t.Fatalf("after a read: ok=%v at=%v, want cached networks", ok, at)
+	}
+	var got []string
+	for _, n := range nets {
+		got = append(got, fmt.Sprintf("%s swarm=%v %v", n.Name, n.Swarm, n.Prefixes))
+	}
+	// The overlay once however many managers listed it, a bridge per node, no network with no subnet.
+	if len(nets) != 4 || !slices.Contains(got, "o1 swarm=true [10.0.1.0/24]") {
+		t.Errorf("networks = %v, want o1 once and the three nodes' bridges", got)
+	}
+	if ids := as.Environments(); len(ids) != 1 || ids[0] != s.env.ID {
+		t.Errorf("Environments = %v, want the one read", ids)
+	}
+	// What is handed out is a copy.
+	first := nets[0].Name
+	nets[0].Name = "changed"
+	if again, _, _ := as.CachedNetworks(s.env.ID); again[0].Name != first {
+		t.Error("CachedNetworks hands out its own slice")
+	}
+}
+
+func TestLockAllocationIsPerEnvironment(t *testing.T) {
+	as := NewAddressSpaces(nil, nil, nil, AddressSpaceOptions{Log: slog.New(slog.DiscardHandler)})
+	unlock := as.LockAllocation("env-a")
+	// The lock is held: it cannot be taken again, while another environment's can.
+	if as.entry("env-a").alloc.TryLock() {
+		t.Fatal("the lock of an environment was granted twice")
+	}
+	if !as.entry("env-b").alloc.TryLock() {
+		t.Fatal("the lock of another environment was held up")
+	}
+	unlock()
+	if !as.entry("env-a").alloc.TryLock() {
+		t.Fatal("the lock was not given back by the unlock")
 	}
 }

@@ -363,3 +363,86 @@ func TestSubnetCheckOutsidePool(t *testing.T) {
 		t.Errorf("a subnet inside the pool = %+v, want no outside_pool", got.Findings)
 	}
 }
+
+func TestSubnetCheckCommonRange(t *testing.T) {
+	t.Parallel()
+	f, e := dashEnv(t, dockertest.FakeConfig{Hostname: "node-1", Version: "29.1.0"})
+	for _, tc := range []struct{ subnet, rng string }{
+		{"192.168.5.0/24", "192.168.0.0/16"},
+		{"172.17.3.0/24", "172.17.0.0/16"},
+		{"172.31.0.0/20", "172.31.0.0/16"},
+		{"10.9.0.0/24", ""},    // 10.0.0.0/8 is listed only when it is the swarm's pool
+		{"172.20.0.0/24", ""},  // inside 172.16.0.0/12 but not one of the listed subsets
+		{"192.169.0.0/24", ""}, // beside 192.168.0.0/16
+		{"192.168.0.0/15", "192.168.0.0/16"},
+	} {
+		got := checkOK(t, f.subnetCheck(t, e, `{"subnet":"`+tc.subnet+`"}`))
+		ranges := got.ofKind("common_range")
+		switch {
+		case tc.rng == "" && len(ranges) != 0:
+			t.Errorf("%s: %+v, want no common_range", tc.subnet, ranges)
+		case tc.rng != "" && (len(ranges) != 1 || ranges[0].Range != tc.rng || ranges[0].Severity != "warning"):
+			t.Errorf("%s: %+v, want one common_range warning of %s", tc.subnet, ranges, tc.rng)
+		}
+	}
+	// A swarm whose pool is 10.0.0.0/8 lists it, as D-16 words it.
+	s := subnetSwarm(t)
+	got := checkOK(t, s.subnetCheck(t, s.env.ID, `{"subnet":"10.9.0.0/24"}`))
+	if r := got.ofKind("common_range"); len(r) != 1 || r[0].Range != "10.0.0.0/8" {
+		t.Errorf("10.9.0.0/24 on a swarm with the 10.0.0.0/8 pool: %+v, want common_range 10.0.0.0/8", got.Findings)
+	}
+}
+
+// The networks of another environment are named only to a caller who may read them, and only from
+// their last read (T-10-39).
+func TestSubnetCheckOtherEnvFiltered(t *testing.T) {
+	t.Parallel()
+	f := newAgentFix(t)
+	a := f.srv.NewEnvironment(t, "Site A")
+	b := f.srv.NewEnvironment(t, "Site B")
+	f.connect(t, a, dockertest.FakeConfig{Hostname: "a-node", Version: "29.1.0"}, nil)
+	f.connect(t, b, dockertest.FakeConfig{Hostname: "b-node", Version: "29.1.0", Networks: []dockertest.FakeNetwork{
+		{ID: "bl", Name: "b-lan", Driver: "bridge", Scope: "local", Subnets: []string{"10.77.0.0/24"}},
+	}}, nil)
+	f.whenState(t, a.ID, "online")
+	f.whenState(t, b.ID, "online")
+	f.addUser(t, "a-only", false)
+	f.addEnvRole(t, "a-only", a.ID, "viewer")
+	f.addUser(t, "both", false)
+	f.addEnvRole(t, "both", a.ID, "viewer")
+	f.addEnvRole(t, "both", b.ID, "viewer")
+
+	const body = `{"subnet":"10.77.0.0/25"}`
+	check := func(cookie, csrf string) subnetCheckAnswer {
+		t.Helper()
+		rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + a.ID + "/address-space/subnet-check", body: body, cookie: cookie, csrf: csrf})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", rec.Code, rec.Body)
+		}
+		return decode[subnetCheckAnswer](t, &envRec{rec.Code, rec.Body.Bytes(), ""})
+	}
+	admin := func() subnetCheckAnswer { return check(f.cookie, f.csrf) }
+
+	// Site B has never been read: it contributes nothing, even to an admin.
+	if got := admin(); len(got.ofKind("other_env")) != 0 {
+		t.Fatalf("an environment never read: %+v, want nothing", got.Findings)
+	}
+	if rec := f.get(t, b.ID, "address-space"); rec.code != http.StatusOK {
+		t.Fatalf("reading site B: %d %s", rec.code, rec.body)
+	}
+	got := admin()
+	other := got.ofKind("other_env")
+	if len(other) != 1 || other[0].Environment != "Site B" || other[0].Network != "b-lan" || other[0].Subnet != "10.77.0.0/24" || other[0].Node != "b-node" || other[0].Severity != "warning" {
+		t.Fatalf("an admin: %+v, want a warning naming Site B and b-lan", got.Findings)
+	}
+	// A caller with no grant on Site B learns nothing of it.
+	cookie, csrf := f.signIn(t, "a-only", false)
+	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/env/" + a.ID + "/address-space/subnet-check", body: body, cookie: cookie, csrf: csrf})
+	if strings.Contains(rec.Body.String(), "Site B") || strings.Contains(rec.Body.String(), "b-lan") || strings.Contains(rec.Body.String(), "other_env") {
+		t.Errorf("a caller without access to Site B: %s", rec.Body)
+	}
+	cookie, csrf = f.signIn(t, "both", false)
+	if got := check(cookie, csrf); len(got.ofKind("other_env")) != 1 {
+		t.Errorf("a caller with both: %+v, want the Site B warning", got.Findings)
+	}
+}
