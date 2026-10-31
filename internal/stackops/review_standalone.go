@@ -102,6 +102,18 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 		}
 	}
 
+	// The subnets small stack subnets will give the networks the deploy creates, and the ones a revision recorded for
+	// the networks the host holds, which the deploy sends again so the SDK keeps them (D-20, D-22).
+	var recorded map[string]string
+	if in.Subnets != nil {
+		var serr error
+		if recorded, serr = in.Subnets.GoodSubnets(ctx, in.Stack.ID); serr != nil {
+			d.log().Warn("could not read the subnets of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+		}
+	}
+	subnets := d.reviewStandaloneSubnets(ctx, in.EnvID, in.Stack, project, live, recorded)
+	rv.Problems = append(rv.Problems, standaloneSubnetProblems(project, subnets)...)
+
 	if err := stacks.PrepareStandalone(project, in.Stack.ID, standalonePins(items, pinned), objs); err != nil {
 		if p := prepareProblem(err); !slices.ContainsFunc(rv.Problems, func(have stacks.Problem) bool { return have.Code == p.Code }) {
 			rv.Problems = append(rv.Problems, p)
@@ -140,8 +152,8 @@ func (d Deps) reviewStandalone(ctx context.Context, in ReviewInput, res stacks.C
 			rv.Summary.Services.Removed++
 		}
 	}
-	for _, name := range missingNetworks(project, live.Networks) {
-		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: name})
+	for _, row := range standaloneNetworkRows(project, live.Networks, subnets) {
+		rv.Objects = append(rv.Objects, row)
 		rv.Summary.Networks.Added++
 	}
 	for _, name := range missingVolumes(project, live.Volumes) {
