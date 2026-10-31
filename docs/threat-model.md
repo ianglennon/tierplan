@@ -1,8 +1,8 @@
-# Coaming threat model (Phases 1 to 9)
+# Coaming threat model (Phases 1 to 10)
 
 This describes what Coaming protects against in its first four builds (install, sign-in and a read-only view of the local Docker host in Phase 1; remote hosts and swarms through agents in Phase 2; users, teams, roles, encrypted backups, restore and key rotation in Phase 3; changes to containers, networks and volumes, logs and shells in Phase 4; registries and image pulls in Phase 5; swarm services in Phase 6, compose stacks in Phase 7, stack history, adoption and drift in Phase 8, git-backed stacks in Phase 9), what it does not, and the risks that remain. Threat IDs (T-01-nn to T-09-nn) refer to the plans in which each mitigation was designed and tested.
 
-This revision covers all nine phases. Phase 4 is described in "What Phase 4 adds": Coaming's own Docker writes, the agent's route table and read-only flag, the browser shell, masking, stream limits, logs, the Events page, the proxy smoke test and the end-to-end proof. Its accepted risks are residual risks 10 and 25 to 29, and its boundaries are in the trust-boundary table.
+This revision covers all ten phases. Phase 4 is described in "What Phase 4 adds": Coaming's own Docker writes, the agent's route table and read-only flag, the browser shell, masking, stream limits, logs, the Events page, the proxy smoke test and the end-to-end proof. Its accepted risks are residual risks 10 and 25 to 29, and its boundaries are in the trust-boundary table.
 
 Phase 6 is described in its own section, below the Phase 5 one: the agent's routes for services, nodes, secrets, configs, service and task logs and container stats, the host-policy check on a service spec and the opt-in that lifts it, how the server edits, creates and removes services, and restart-loop detection. It changes the headline below and residual risk 10, and adds residual risks 31 to 36.
 
@@ -11,6 +11,8 @@ Phase 7 is described in the last section before the residual risks: compose stac
 Phase 8 is described in "What Phase 8 adds", after the Phase 7 section: stack history and roll back to any revision, the discovery and adoption of stacks that Coaming did not make (Portainer, `docker stack deploy`, `docker compose up`), and drift. It adds no agent route and no permission. It extends residual risk 41 (an adopted stack's draft holds environment values as literals) and adds residual risks 45 to 48.
 
 Phase 9 is described in "What Phase 9 adds", after the Phase 8 section: stacks that follow a folder of a git repository, repositories and credentials, the webhook receiver, polling, auto-deploy and the mirrors on disk. It adds one unauthenticated route, a new way for the server to dial out, and residual risks 49 to 55.
+
+Phase 10 is described in "What Phase 10 adds", after the Phase 9 section: the Address space page, the orphan check and its delete, the subnet picker, the small stack subnets and the pool guidance. It adds one agent stream kind (a read of the host's routes through one mounted file), two permissions (`networks.keep` and `networks.addressing`) and residual risks 56 to 62. It adds no unauthenticated route and no Docker API route to the agent's allowlist.
 
 ## The headline
 
@@ -396,9 +398,86 @@ fetches before it reads and a roll back is made from stored revisions. (`TestMir
 included, with their sealed values re-wrapped under the backup's key on restore; `stack_git_state` is derived, so every
 git stack starts *unknown* on a restored instance and is checked again. (`TestBackupRestoreGitState`)
 
+## What Phase 10 adds: networks and address pools
+
+Phase 10 shows where an environment's address space has gone, finds networks that nothing uses, suggests subnets and
+gives pool guidance. It reads more of the host than before (its routes), it can delete a network on a rule rather than
+on a click, and it writes a new kind of large entry to the audit log. This section says how each is fenced and where the
+mitigation is tested. The risks that remain are residual risks 56 to 62.
+
+**The host-route mount is one read-only file, and a tri-state fact says whether it is there.** To warn
+about a subnet that collides with a LAN or VPN route, the agent reads the host's IPv4 route table. Every install command
+mounts exactly one file, `/proc/1/net/route`, read-only at `/host/route`; mounting `/proc/1/net` fails and mounting `/proc`
+would show the agent every process on the host, so the single file is the smallest thing that answers. The install text
+is built from two constants, and a test fails if any other procfs path appears in any form (the swarm command, the stack
+file, the standalone command, the compose file, the manual update). (`TestInstallCommandMountsOnlyTheRouteFile`) The agent
+keeps `--read-only`, its two capabilities and no host network. Its handshake reports `hostNet` as `ok` or `unmounted`,
+or says nothing when it is older than the feature, and **the server opens the new stream (kind `0x03`) only to an agent
+that reported `ok`**, so an older agent logs no unknown-kind warning and no denied row is written. The stream is not a
+Docker API route: it carries one document the agent builds from the file and closes. The parser reads at most 256 KiB,
+512-byte lines and 512 routes, keeps only up routes with contiguous masks, drops the default and host routes, and
+refuses the whole file when it is too large instead of returning a prefix, so "no route collides" is never confused
+with "the table was not read". (the `proto/hostroute` tests and its fuzz target, and the `agent/internal/hostnet` tests) **The server
+re-validates every byte all-or-nothing with `net/netip`**: one bad entry refuses the whole document, so a compromised
+agent cannot slip a crafted prefix into a suggestion. (`TestHostRoutesValidation`) The answer is cached for 5
+minutes per session (30 seconds if the read failed) with a single flight, so a picker opened many times costs one stream
+per agent. Coaming's own host is read from its own mounted file, `COAMING_HOST_ROUTE_FILE`, which the host's owner sets.
+
+**The orphan delete re-checks, audits first, and treats Docker's refusal as success.** An orphan
+list built a minute ago is not a reason to delete today. `DELETE /api/env/{envId}/address-space/orphans/{networkId}`
+(permission `networks.manage`, Env Admin) reads everything again and judges that one network again, with the same rules
+as the list, before it acts. A network that is in use now, is no longer orphaned, is built in, or whose nodes did not all
+report is **kept**, and the report says why. Use is read from every node's containers, every service's current spec
+**and previous spec** and virtual IPs, and every task not yet finished with the network, so a network a rolling update still
+holds is not removable. Before the remove the network's **full inspect is written to the audit log** (`network.inspect_saved`)
+with secret-like values in its labels and options masked, and a label, option or IPAM-option block of an unexpected shape
+withheld whole. **If that entry cannot be written, the delete is refused and nothing is sent**: a network whose masked
+inspect is over 64 KiB is refused (`inspect_too_large`) and is not deleted from the page. The audit writer gives that one
+action an allowance of 64 KiB for one named value, stores it whole or refuses it and never cuts it, and keeps its 512-byte
+cap on every other detail. (`TestEvidenceRefusedNotCut`, `TestDeleteOrphanSavedInspectIsMaskedAndExact`,
+`TestInspectRecordFullAndMasked`) One delete is sent. If the engine answers that the network is in use, that is a safe
+result and a refusal Coaming keeps: it does not retry and does not force the removal. (`TestDeleteOrphanEngineRefusalIsKept`)
+The built-in networks are never removable. The classifier is a pure function with a fixed rule order, tested as a table:
+the exclusions come before any judgement, a missing node, manager or stack makes the answer *can't tell* rather than *orphaned*,
+and the 24-hour grace period starts at the later of creation and the last time Coaming saw the network in use.
+(`TestClassifyOrder`, `TestClassifyGraceBoundary` and the `internal/envs` orphan tests) Keeping a network is a label (`coaming.keep=true`) or a row in
+Coaming's database, by name; both are honoured and keeping and un-keeping are audited (`networks.keep`, Env Admin).
+
+**Cross-environment findings are filtered by permission and come from a cache.** The subnet picker notes when
+a subnet collides with a network of another environment. It names an environment only if the caller holds `networks.read`
+on it, in one permission lookup for the request, and it reads those networks from the cache the address-space reader
+already holds, never from an engine, so it cannot be used to make Coaming probe another environment or to learn a
+network's name you may not see. The check and the create run under a per-environment **allocation lock**, so two people
+creating networks at once cannot take the same block, and the picker's endpoint is rate limited (120 a minute per user,
+a burst of 20). (`TestCreateNetworkOverlapRefused`, `TestSubnetCheckSuggest`)
+
+**The generated commands use canonical values only, and nothing is run (T-10-66, T-10-67).** The Pool guidance page builds
+`docker swarm init`, `docker stack rm`, `daemon.json` and the mount commands for you to copy. The page only reads: it
+sends no request that changes anything, a value that is not a plain CIDR, number or stack name produces an error line and not a
+command, and the tests feed it shell and JSON injection attempts. The mount command comes from the same two constants as
+the install text. **Coaming never runs `docker swarm init` or `docker swarm leave` and never edits `daemon.json`**: the
+server packages that handle networks, environments and stacks (`internal/api`, `internal/envs`, `internal/stackops`,
+`internal/netspace`) call neither, and the phase gate greps for it. A pool cannot be edited from Coaming.
+
+**New permissions.** `networks.keep` (keep and stop keeping a network; Env Admin) and `networks.addressing` (turn small stack
+subnets on and off, and enter a standalone host's address pools; Env Admin), both per environment and listed in
+[permissions.md](permissions.md). Saving the settings is optimistic-locked on a version, so two admins cannot silently
+overwrite each other (a 409 names who saved last), and each save is audited with the old and new values. Entered pools are
+validated on the server (IPv4, no host bits, a size between the base's mask and 30, no overlap among them, at most 16).
+
+**Small stack subnets change what a deploy sends to the engine, and nothing else.** The subnet is added
+when the deploy is sent and recorded with the revision; the compose file is never rewritten, and only a new network with no
+`ipam` block of its own that is not `external` is touched. The plan is made inside the allocation lock and held until the
+networks exist, and when no block is free the check fails before anything is written. On a standalone host the recorded
+subnet is sent on every later deploy so the engine's own configuration hash for the network never moves and a deploy never
+recreates a network (a real-engine test, `TestSmallSubnetHashStableOnARealEngine`).
+
+Backups include `network_seen` and `network_keeps` (the grace clock and the keep rows) and the new columns of the
+environments and revisions tables; nothing in them is secret.
+
 ## Residual risks
 
-These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 from Phase 2 and 18 to 24 from Phase 3. Residual risk 10 was rewritten in Phase 4 for logs and shells, and 25 to 29 are new in Phase 4, 30 is new in Phase 5, 31 to 36 are new in Phase 6, 37 to 44 are new in Phase 7, and 45 to 48 are new in Phase 8, and 49 to 55 are new in Phase 9 (risk 41 is extended).
+These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 from Phase 2 and 18 to 24 from Phase 3. Residual risk 10 was rewritten in Phase 4 for logs and shells, and 25 to 29 are new in Phase 4, 30 is new in Phase 5, 31 to 36 are new in Phase 6, 37 to 44 are new in Phase 7, and 45 to 48 are new in Phase 8, 49 to 55 are new in Phase 9, and 56 to 62 are new in Phase 10 (risk 41 is extended).
 
 1. **Audit tail truncation is undetectable without an external anchor (T-01-26).** The HMAC chain proves that entries were not edited or removed from the middle. Someone who can write to the database can delete only the newest entries, which leaves a valid, shorter chain, and `coaming audit verify` will still pass. Detecting that needs the head of the chain recorded somewhere an attacker with the volume cannot reach, such as a SIEM; streaming the log out is deferred.
 2. **The setup token is visible to anyone who can read the container log or `/data` until setup completes (T-01-37).** It is printed and written to `/data/setup-token` (mode 0600, deleted at completion) by design, so that you can claim the instance without a prior secret. Anyone who has log or volume access already has host admin, but a shared log pipeline can widen that audience. Claim the instance as soon as it starts.
@@ -455,6 +534,13 @@ These are known, accepted, and not hidden. 1 to 9 date from Phase 1, 10 to 17 fr
 53. **A secret committed to the repository stays in the repository (accepted).** Coaming warns when a key of the committed `.env` looks like a secret and a secret variable overrides it, but the value is already in the git history and on the git host, and it is kept as an ordinary file in each revision of the stack. Rotate a value that was committed. Secret file contents belong in overlay files, which are sealed.
 54. **The mirrors hold the fetched repository unencrypted on the data volume (accepted).** Under `/data/git` (mode `0700`) sit the git objects of every ref a stack follows, including those of private repositories, in the clear. Anyone who can read the volume reads what the credentials could read; guard the volume as risk 4 says. A mirror is removed with its repository, after 14 days unused or over 2 GiB, and is not in a backup.
 55. **A restored instance trusts its git state again only after it checks (accepted).** A backup holds the repositories, credentials and git stacks with their sealed secrets re-wrapped, but not the state of the last check or the mirrors, so each git stack reads *unknown* until its first check, and the host keys a person trusted come back with the repository. The webhook addresses keep working only if the instance's public URL is the same.
+56. **The route file reads as unmounted on some hosts (accepted).** On a host with a Linux security module that denies the bind mount, on a rootless Docker host, and on Docker Desktop (where `/proc/1/net/route` is a virtual machine's, not the machine's), the mount fails or shows the wrong table, and the agent reports `unmounted` or routes that are not the user's LAN. The picker then says it can't read that host's routes, or checks against the wrong ones. It is a warning check, not a gate, and the other three overlap sources still apply.
+57. **A label can keep a network off the orphan list (accepted).** Anyone who can create a network can give it `coaming.keep=true`, or the label of a stack that exists, and Coaming will not list it. That is the point of the label, but it also means a forgotten network can be hidden on purpose or by copying a label. The page lists what is kept and why, so it can be seen.
+58. **Standalone pools stay estimates (accepted).** The Docker API does not tell Coaming a host's `default-address-pools`, so a standalone host's meter is Docker's documented defaults or the pools you entered, and says Estimated. If the daemon is set differently from what you entered, the figure is wrong, and a pool that is truly full is never reported as degraded.
+59. **A network kept by name stays kept if it is created again (accepted).** The keep row is the network's name (and the node, for a local network), because a label cannot be added to a network that exists. A new network with the same name is kept without anyone deciding so, until someone stops keeping it.
+60. **A swarm node's local pool is not metered in 0.1 (accepted, a limit of this version).** On a swarm, `docker_gwbridge` and the bridges of standalone containers take their subnets from that node's own daemon pools, not from the swarm pool. Coaming shows their networks in the subnet map and counts them in the picker's overlap checks, but does not measure those pools, so a node can run out of them without any warning or degraded state.
+61. **An audit-log page of `network.inspect_saved` entries can be large (accepted).** The audit writer stores one saved inspect of up to 64 KiB whole, so a page of 50 such entries can carry about 3 MB of detail. They are written only by an Env Admin's orphan delete, but each export and each page load of a log full of them is heavy. Retention bounds the total.
+62. **The small-subnet setting is not applied by Start on a stopped swarm stack (accepted, a known gap).** The start path that has to make a missing network again does not use the small-subnet plan, so that network takes the swarm's default size and is not recorded. A normal deploy is unaffected. It costs address space, not safety.
 
 ## Reporting a problem
 
