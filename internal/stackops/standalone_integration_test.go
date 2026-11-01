@@ -896,7 +896,8 @@ func TestVolumeConfigEditKeepsTheVolume(t *testing.T) {
 		return "services:\n  app:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n    stop_grace_period: 1s\n" +
 			"    volumes:\n      - data:/data\nvolumes:\n  data:" + volumeLabels + "\n"
 	}
-	ctx := testsupport.Context(t)
+	// The test's own context: a 30 s one would run out during the deploys on a slow runner.
+	ctx := t.Context()
 	revision := 0
 	deploy := func(text string) {
 		t.Helper()
@@ -1026,7 +1027,8 @@ func TestStandaloneRollbackOnARealEngine(t *testing.T) {
 	pins := &memPins{}
 	const name = "itest"
 	compose := "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n"
-	ctx := testsupport.Context(t)
+	// The test's own context: a 30 s one would run out during the deploys on a slow runner.
+	ctx := t.Context()
 	web := func() dockerx.ContainerRow {
 		t.Helper()
 		rows, err := cli.ContainersWithLabel(ctx, stacks.LabelComposeProject, name)
@@ -1141,7 +1143,8 @@ func TestSmallSubnetHashStableOnARealEngine(t *testing.T) {
 	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
 	rig.deps.ConvergeTimeout = 3 * time.Minute
 	repo := subnetRepo(t, rig)
-	ctx := testsupport.Context(t)
+	// The test's own context: a 30 s one would run out during the deploys on a slow runner.
+	ctx := t.Context()
 	compose := func(extra string) string {
 		return "services:\n  web:\n    image: " + image + "\n    command: [\"sleep\", \"3600\"]\n" + extra +
 			"    networks: [backend]\nnetworks:\n  backend: {}\n"
