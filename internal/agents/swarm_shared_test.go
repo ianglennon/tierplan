@@ -62,6 +62,7 @@ var sharedSwarmCases = []struct {
 	{"StackReviewEmptyAfterDeploy", sharedStackReviewEmptyAfterDeploy},
 	{"StackUpdateImages", sharedStackUpdateImages},
 	{"StatsFromWorker", sharedStatsFromWorker},
+	{"SubnetOverlap", sharedSubnetOverlap},
 	{"UninstallOnRemove", sharedUninstallOnRemove},
 	{"Volumes", sharedVolumes},
 	{"WorkerShellAndLogs", sharedWorkerShellAndLogs},
