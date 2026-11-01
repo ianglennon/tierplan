@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 
@@ -424,5 +425,119 @@ func TestApplyPutsTheNewNetworkIDInTheSpecAndKeepsAliases(t *testing.T) {
 	}
 	if creates := o.fake.NetworkCreates(); len(creates) != 1 || len(creates[0].IPAM.Config) != 1 || creates[0].IPAM.Config[0].Subnet.String() != "10.77.0.0/24" {
 		t.Errorf("network creates = %+v, want the subnet sent", creates)
+	}
+}
+
+// atOnceWait is a read-back wait whose clock fires at once, so no test waits on the wall clock.
+func atOnceWait() dockerx.AllocationWait {
+	return dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}}
+}
+
+// refFront makes the spec name only the network front.
+func refFront(s *swarm.ServiceSpec) {
+	s.TaskTemplate.Networks = append(s.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{Target: "front"})
+}
+
+// A staged network the swarm never allocates is removed again by the read-back, audited as a failed
+// create and a removal from the allocation check, and the objects made before it are handed back for
+// the cleanup (G-10-8, T-10-80, T-10-84).
+func TestCreateObjectsNetworkNotAllocated(t *testing.T) {
+	o := newObjectRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmUnallocated = map[string]int{"10.66.0.0/24": -1}
+	})
+	o.deps.AllocationWait = atOnceWait()
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, withRefs), []swarmops.StagedObject{
+		{Kind: swarmops.KindNetwork, Name: "front", Subnet: "10.66.0.0/24"},
+		{Kind: swarmops.KindSecret, Name: "db-pass", Data: []byte(secretValue)},
+		{Kind: swarmops.KindConfig, Name: "app.conf", Data: []byte("level=debug")},
+	})
+	var ce *swarmops.ObjectCreateError
+	var na *dockerx.NotAllocatedError
+	if !errors.Is(err, dockerx.ErrNetworkNotAllocated) || !errors.As(err, &ce) || ce.Kind != "network" || ce.Name != "front" || !errors.As(err, &na) || !na.Removed {
+		t.Fatalf("err = %v, want a create error for network front matching ErrNetworkNotAllocated, stub removed", err)
+	}
+	if len(o.fake.ServiceUpdates()) != 0 {
+		t.Error("the service was updated")
+	}
+	if left := o.leftovers(); len(left) != 0 {
+		t.Errorf("left behind = %v, want nothing", left)
+	}
+	for _, s := range res.Steps {
+		if s.Kind == "network" && (s.State != "failed" || s.Code != "not_allocated") {
+			t.Errorf("network step = %+v, want failed with not_allocated", s)
+		}
+		if s.Kind == "secret" && s.State != "skipped" {
+			t.Errorf("secret step = %+v, want skipped", s)
+		}
+	}
+	if len(o.rows) != 2 {
+		t.Fatalf("audit rows = %+v, want network.created then network.removed", o.rows)
+	}
+	c, r := o.rows[0], o.rows[1]
+	if c.Action != audit.ActionNetworkCreated || c.Result != audit.ResultFailure || c.Reason != "not_allocated" ||
+		c.Details["code"] != "not_allocated" || c.Details["source"] != swarmops.SourceApply || c.TargetID != na.ID || c.Details["subnet"] != "10.66.0.0/24" {
+		t.Errorf("created row = %+v", c)
+	}
+	if r.Action != audit.ActionNetworkRemoved || r.Result != audit.ResultSuccess || r.Details["source"] != swarmops.SourceAllocationCheck ||
+		r.Details["code"] != "removed" || r.TargetID != na.ID {
+		t.Errorf("removed row = %+v", r)
+	}
+	neverHolds(t, "the audit rows", o.rows)
+}
+
+// Objects made before the network are removed by the apply's cleanup, and the stub only by the
+// read-back (it is not removed twice).
+func TestCreateObjectsNetworkNotAllocatedCleansEarlierObjects(t *testing.T) {
+	o := newObjectRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmUnallocated = map[string]int{"10.66.0.0/24": -1}
+	})
+	o.deps.AllocationWait = atOnceWait()
+	res, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, func(s *swarm.ServiceSpec) {
+		s.TaskTemplate.Networks = append(s.TaskTemplate.Networks,
+			swarm.NetworkAttachmentConfig{Target: "first"}, swarm.NetworkAttachmentConfig{Target: "front"})
+	}), []swarmops.StagedObject{
+		{Kind: swarmops.KindNetwork, Name: "first", Subnet: "10.65.0.0/24"},
+		{Kind: swarmops.KindNetwork, Name: "front", Subnet: "10.66.0.0/24"},
+	})
+	if !errors.Is(err, dockerx.ErrNetworkNotAllocated) {
+		t.Fatalf("err = %v, want ErrNetworkNotAllocated", err)
+	}
+	if len(res.Cleanup.Removed) != 1 || res.Cleanup.Removed[0].Name != "first" || len(res.Cleanup.NotRemoved) != 0 {
+		t.Errorf("cleanup = %+v, want only the first network removed", res.Cleanup)
+	}
+	if left := o.leftovers(); len(left) != 0 {
+		t.Errorf("left behind = %v, want nothing", left)
+	}
+	var del int
+	for _, w := range o.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE /networks/") {
+			del++
+		}
+	}
+	if del != 2 {
+		t.Errorf("network removals = %d, want two: the stub once and the first network once", del)
+	}
+}
+
+// A stub the engine will not remove is audited as remove_failed.
+func TestCreateObjectsNetworkNotAllocatedAndNotRemovable(t *testing.T) {
+	o := newObjectRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmUnallocated = map[string]int{"10.66.0.0/24": -1}
+		c.RemoveErrors = map[string]string{"front": "network is busy"}
+	})
+	o.deps.AllocationWait = atOnceWait()
+	_, err := o.applyStaged(o.adminReveal, editFor(t, o.adminReveal, refFront),
+		[]swarmops.StagedObject{{Kind: swarmops.KindNetwork, Name: "front", Subnet: "10.66.0.0/24"}})
+	var na *dockerx.NotAllocatedError
+	if !errors.As(err, &na) || na.Removed {
+		t.Fatalf("err = %v, want a NotAllocatedError that was not removed", err)
+	}
+	if len(o.rows) != 2 || o.rows[1].Action != audit.ActionNetworkRemoved || o.rows[1].Result != audit.ResultFailure ||
+		o.rows[1].Details["code"] != "remove_failed" || o.rows[1].Details["source"] != swarmops.SourceAllocationCheck {
+		t.Errorf("audit rows = %+v, want created (not_allocated) then removed (remove_failed)", o.rows)
 	}
 }

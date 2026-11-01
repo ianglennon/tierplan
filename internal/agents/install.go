@@ -32,6 +32,14 @@ const (
 	secretTarget  = "coaming-agent-token"
 	tokenFilePath = "/run/secrets/" + secretTarget
 	labelPair     = "coaming.agent=true"
+
+	// hostRouteSrc and hostRouteDst are the one host file every install mounts, read-only: the
+	// host's IPv4 route table, which the agent reads for the subnet picker's host-route check
+	// (D-17). It is one file because mounting /proc/1/net fails (a bind mount of a directory
+	// under /proc is refused) and mounting /proc would show the agent every process of the host
+	// (RESEARCH F7). hostRouteDst is agent/internal/hostnet.DefaultRouteFile.
+	hostRouteSrc = "/proc/1/net/route"
+	hostRouteDst = "/host/route"
 )
 
 // InstallParams are the values an install is built from.
@@ -163,6 +171,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 		" --secret " + secretFlag +
 		" --mount type=bind,src=" + dockerSock + ",dst=" + dockerSock +
 		" --mount type=volume,src=" + VolumeName + ",dst=" + stateDir +
+		" --mount type=bind,src=" + hostRouteSrc + ",dst=" + hostRouteDst + ",ro" +
 		" --read-only --cap-drop ALL --cap-add SETUID --cap-add SETGID" +
 		" --update-parallelism 1 --update-delay 10s" +
 		" --label " + labelPair + " --container-label " + labelPair +
@@ -175,6 +184,7 @@ func BuildInstall(p InstallParams) (Install, error) {
 	in.StandaloneCommand = " docker run -d --name " + ServiceName + " --restart unless-stopped" +
 		hardening() +
 		" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
+		" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 		" --label " + labelPair +
 		envFlag("-e", "COAMING_AGENT_URL", p.Endpoint) +
 		insecureFlag("-e", p) +
@@ -236,11 +246,28 @@ func ManualUpdateCommand(envType, image string, p InstallParams) string {
 			" && docker run -d --name " + ServiceName + " --restart unless-stopped" +
 			hardening() +
 			" -v " + dockerSock + ":" + dockerSock + " -v " + VolumeName + ":" + stateDir +
+			" -v " + hostRouteSrc + ":" + hostRouteDst + ":ro" +
 			" --label " + labelPair +
 			envFlag("-e", "COAMING_AGENT_URL", p.Endpoint) +
 			insecureFlag("-e", p) +
 			optionalEnvFlag("-e", "COAMING_AGENT_PIN", p.Pin) +
 			" " + image
+	}
+	return ""
+}
+
+// HostRouteMountCommand is the command that gives an agent installed before the host-route check
+// the one mount it needs (hostRouteSrc read-only), for the picker to show (D-17). An agent
+// cannot get a mount by self-update (RESEARCH F7), so an admin runs this: a swarm adds the mount
+// to the service, which rolls through the nodes one at a time with the install's update delay;
+// a standalone host recreates the container, which is the manual update command and carries the
+// mount. An unknown type, or a standalone host whose command cannot be built, answers "".
+func HostRouteMountCommand(envType string, p InstallParams) string {
+	switch envType {
+	case "swarm":
+		return " docker service update --mount-add type=bind,src=" + hostRouteSrc + ",dst=" + hostRouteDst + ",ro " + ServiceName
+	case "standalone":
+		return ManualUpdateCommand("standalone", AgentImage(p.ServerVersion), p)
 	}
 	return ""
 }
@@ -343,6 +370,7 @@ func swarmStack(p InstallParams, image, secret string) string {
 	b.WriteString("    volumes:\n")
 	b.WriteString("      - " + dockerSock + ":" + dockerSock + "\n")
 	b.WriteString("      - " + VolumeName + ":" + stateDir + "\n")
+	b.WriteString("      - type: bind\n        source: " + hostRouteSrc + "\n        target: " + hostRouteDst + "\n        read_only: true\n")
 	b.WriteString("    secrets:\n")
 	b.WriteString("      - source: " + secret + "\n        target: " + secretTarget + "\n        mode: 0400\n")
 	b.WriteString("    deploy:\n")
@@ -378,6 +406,7 @@ func standaloneCompose(p InstallParams, image string) string {
 	b.WriteString("    volumes:\n")
 	b.WriteString("      - " + dockerSock + ":" + dockerSock + "\n")
 	b.WriteString("      - " + VolumeName + ":" + stateDir + "\n")
+	b.WriteString("      - " + hostRouteSrc + ":" + hostRouteDst + ":ro\n")
 	b.WriteString("volumes:\n  " + VolumeName + ":\n    name: " + VolumeName + "\n")
 	return b.String()
 }

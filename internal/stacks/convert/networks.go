@@ -125,6 +125,9 @@ func convertNetwork(key string, p *composetypes.Project, o Options) NetworkPlan 
 	if np.External {
 		return np
 	}
+	if subnet := o.Subnets[key]; subnet != "" && len(np.Pools) == 0 {
+		np.Pools = []Pool{{Subnet: subnet}}
+	}
 	np.Labels = map[string]string{}
 	if declared {
 		maps.Copy(np.Labels, decl.Labels)

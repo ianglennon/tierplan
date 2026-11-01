@@ -65,6 +65,10 @@ type DashboardDeps struct {
 	SelfContainerID string
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
+	// AddressSpaces reads how full the address pools of an environment are, for the pool
+	// column of the networks list and the dashboard's address tile. Nil means the feature is
+	// off: nothing is read and no pool is shown.
+	AddressSpaces *envs.AddressSpaces
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -215,6 +219,16 @@ type NetworkItem struct {
 	Internal           bool   `json:"internal" doc:"No access to outside networks"`
 	Attachable         bool   `json:"attachable" doc:"Standalone containers can join it"`
 	IPv6               bool   `json:"ipv6" doc:"IPv6 is enabled"`
+	// AddressesUsed is read from the same cached address-space read as the address-space route.
+	AddressesUsed *NetworkUsageBody `json:"addressesUsed,omitempty" doc:"Overlay networks only: addresses used against what the subnet can still hand out, from the manager (Engine 29 and later). Absent (null in the table) for every other network and when the count could not be read, never a zero"`
+}
+
+// NetworkUsageBody is how many of an overlay network's addresses are handed out.
+type NetworkUsageBody struct {
+	Used     int64  `json:"used" minimum:"0" doc:"Addresses the swarm has handed out on the network's IPv4 subnets"`
+	Capacity int64  `json:"capacity" minimum:"1" doc:"Addresses handed out plus those it can still hand out"`
+	Percent  int    `json:"percent" minimum:"0" maximum:"100" doc:"used over capacity as a whole percent, rounded down"`
+	State    string `json:"state" enum:"normal,getting_full,almost_full" doc:"normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio"`
 }
 
 // ContainerListBody and its siblings are a capped list with the full total.
@@ -542,11 +556,13 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 			onNode := filterNode(agg.Networks, in.Node, func(n envs.NetworkRow) string { return n.Node })
 			rows := filterNetworks(onNode, in.Q)
 			use := networkUsageOf(ctx, d.Clusters, in.EnvID, agg)
+			fullness := overlayFullness(ctx, d, in.EnvID, rows)
 			items, total, truncated := capRows(rows, func(n envs.NetworkRow) NetworkItem {
 				owner, kind := networkOwner(n.Labels)
 				containers, services := use.of(n)
 				return NetworkItem{
-					Node: n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
+					AddressesUsed: fullness[n.ID],
+					Node:          n.Node, NodeID: n.NodeID, ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: n.Subnets, Created: rfc3339(n.Created),
 					BuiltIn: dockerx.IsBuiltinNetwork(n.Name, n.Ingress), AttachedContainers: containers, AttachedServices: services,
 					Owner: owner, OwnerKind: kind, Internal: n.Internal, Attachable: n.Attachable, IPv6: n.IPv6,
 				}
@@ -556,6 +572,33 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 				Nodes: reportingNodes(agg, clusterNode(agg.Networks)...), NotReporting: agg.NotReporting,
 			}}, nil
 		})
+}
+
+// overlayFullness is how full each swarm overlay of rows is, by network ID, from the address
+// reader's short-lived read. A network that is not an overlay, or whose count could not be read,
+// is not in the map. Nothing is read when no row is a swarm overlay, and a read that fails leaves
+// every value out: the list never fails for a column.
+func overlayFullness(ctx context.Context, d DashboardDeps, envID string, rows []envs.NetworkRow) map[string]*NetworkUsageBody {
+	if d.AddressSpaces == nil || !slices.ContainsFunc(rows, func(n envs.NetworkRow) bool {
+		return n.Scope == dockerx.ScopeSwarm && n.Driver == "overlay"
+	}) {
+		return nil
+	}
+	space, err := d.AddressSpaces.Read(ctx, envID)
+	if err != nil {
+		if d.Log != nil {
+			d.Log.Debug("the address use of the overlay networks could not be read", "environment", envID, "error", err)
+		}
+		return nil
+	}
+	out := make(map[string]*NetworkUsageBody, len(space.Overlays))
+	for _, o := range space.Overlays {
+		if !o.Measured || o.Capacity == 0 {
+			continue
+		}
+		out[o.ID] = &NetworkUsageBody{Used: addresses(o.Used), Capacity: addresses(o.Capacity), Percent: o.Percent, State: string(o.State)}
+	}
+	return out
 }
 
 // byNode lists each reporting node's counts by node name.

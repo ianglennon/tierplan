@@ -176,6 +176,7 @@ type RouterDeps struct {
 	Dashboard     api.DashboardDeps
 	Containers    api.ContainersDeps
 	Networks      api.NetworksDeps
+	AddressSpace  api.AddressSpaceDeps
 	Services      api.ServicesDeps
 	RestartLoop   api.RestartLoopDeps
 	Secrets       api.SecretsDeps
@@ -231,6 +232,7 @@ func NewRouter(d RouterDeps) *httpx.Router {
 	api.RegisterDashboard(r, d.Dashboard)
 	api.RegisterContainers(r, d.Containers)
 	api.RegisterNetworks(r, d.Networks)
+	api.RegisterAddressSpace(r, d.AddressSpace)
 	api.RegisterServices(r, d.Services)
 	api.RegisterRestartLoop(r, d.RestartLoop)
 	api.RegisterSecrets(r, d.Secrets)
@@ -264,12 +266,23 @@ type Option func(*buildOptions)
 type buildOptions struct {
 	selfContainerID string
 	refusalClock    func() time.Time
+	addressClock    func() time.Time
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
 // when a minute of repeated refusals has closed. It exists for tests.
 func WithRefusalClock(now func() time.Time) Option {
 	return func(o *buildOptions) { o.refusalClock = now }
+}
+
+// WithAddressSpaceClock replaces the clock of the address-space reader, which decides
+// when a network has been idle long enough to be listed as orphaned or unused. It exists
+// for tests, which move it past the grace period instead of waiting for it. It is a Go
+// option only: no setting, flag or environment variable reaches it, so a production build,
+// which calls Build without it, always reads the real time. Only the reader's clock moves;
+// sessions, tokens and every other clock keep real time. A nil clock keeps time.Now.
+func WithAddressSpaceClock(now func() time.Time) Option {
+	return func(o *buildOptions) { o.addressClock = now }
 }
 
 // WithSelfContainerID supplies the ID of the container Coaming runs in. The
@@ -703,6 +716,17 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// through the same control streams, and hears their answers the same way (D-30).
 	envSvc.WithUninstaller(updater)
 	aggregator := envs.NewAggregator(envSvc, snapshots, hub, time.Now)
+	// The address reader tells how full the address pools of an environment are. The networks,
+	// stacks and dashboard routes read it as well as its own route, so it is built once.
+	addressSpaces := envs.NewAddressSpaces(envSvc, aggregator, clusters, envs.AddressSpaceOptions{Now: bo.addressClock, Log: log})
+	// The cluster views carry each environment's address space summary, so a swarm that is out of
+	// address space is degraded wherever health is shown (D-06).
+	clusters.WithAddressSpaces(addressSpaces)
+	// The subnet check reads the routes of each node's host: through the agents' tunnels, and for
+	// Coaming's own host from the route file mounted into its container (COAMING_HOST_ROUTE_FILE).
+	hostRoutes := envs.NewHostRoutes(envSvc, tunnelHub, envs.HostRoutesOptions{LocalRouteFile: cfg.HostRouteFile, Log: log})
+	// A standalone host's pools count the blocks its routes overlap, which its daemon skips.
+	addressSpaces.WithHostRoutes(hostRoutes)
 
 	spa := webui.Handler(web.FS(), inst.BasePath)
 	// The wizard restore routes share the setup routes' gate, limiter and audit.
@@ -748,6 +772,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// which looks at each stack of a monitored environment on a timer, on the Docker events that name it and when an
 	// operation on it ends, and never while an operation holds the lock (D-22).
 	stackLocks, driftStore := stackops.NewLocks(), stackops.NewDriftStore()
+	// The orphan check asks the stacks which networks they declare external and whether one holds an operation, so a
+	// network a stack uses or is deploying is never listed (NET-04). It opens the stacks with the vault, as every
+	// other reader of a stack does.
+	addressSpaces.WithStackFacts(stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks})
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
@@ -776,7 +804,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
 	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
-	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
+	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
 		Options: httpx.Options{
@@ -839,9 +867,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Environments:  api.EnvironmentsDeps{Envs: envSvc, Agents: agentSvc, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Checker: checker, Updater: updater, Log: log},
 		UnknownAgents: api.UnknownAgentsDeps{Unknown: agentSvc.Unknown(), Store: st, Log: log},
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
-		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, Log: log},
-		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, Audit: aud, SelfContainerID: selfID, Log: log},
-		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
+		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
+		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
+		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
+		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
 		Configs:       api.ConfigsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},
@@ -934,6 +963,10 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	srv.background.Go(func() { agentAudit.Run(bg, time.Minute) })
 	srv.background.Go(func() { broker.Run(bg) })
 	srv.background.Go(func() { clusters.Run(bg) })
+	// Every environment's address space and orphan list are read every minute and after network, container
+	// and service events, so the overview, the health and the last-seen times of networks stay current
+	// when nobody has the page open (D-09).
+	srv.background.Go(func() { addressSpaces.Run(bg) })
 	// Git stacks are checked against their repositories on their interval, for as long as the server runs (D-14).
 	srv.background.Go(func() { gitDeps.Sync.RunPoller(bg, gitsync.PollerDeps{Clock: stackops.RealClock()}) })
 	// The mirrors of those repositories are a cache: the ones whose repository is gone, that nothing has used for

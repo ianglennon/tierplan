@@ -145,6 +145,10 @@ type StacksDeps struct {
 	DriftRecheck func(envID, stackID string)
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
+	// AddressSpaces reads how full the address pools of the target are, for the compose
+	// lint's address hint and the small-subnet assignment of a deploy. Nil means the feature
+	// is off: the checks that need a pool are skipped.
+	AddressSpaces *envs.AddressSpaces
 	// GitConns and GitSync fill the git part of a git stack's list entry and detail: the repository's name and
 	// address, and whether a sync check runs now. Nil leaves them empty.
 	GitConns *gitconn.Store
@@ -218,7 +222,7 @@ func (d StacksDeps) revisionsKept() int {
 func (d StacksDeps) ops() stackops.Deps {
 	return stackops.Deps{
 		Aggregator: d.Aggregator, Clusters: d.Clusters, Resolver: d.Resolver, Checker: d.Checker,
-		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
+		Clock: d.Clock, ConvergeTimeout: d.ConvergeTimeout, Platforms: d.Platforms, AddressSpaces: d.AddressSpaces, Up: d.Up, StopProject: d.StopProject, StartProject: d.StartProject, DownProject: d.DownProject, Log: d.Log,
 	}
 }
 

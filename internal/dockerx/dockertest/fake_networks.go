@@ -46,6 +46,14 @@ func (f *Fake) serveNetworkCreate(w http.ResponseWriter, r *http.Request, p stri
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "invalid request body: " + err.Error()})
 		return true
 	}
+	if req.IPAM != nil {
+		for _, c := range req.IPAM.Config {
+			if c.Subnet.IsValid() && slices.Contains(cfg.OverlapSubnets, c.Subnet.String()) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"message": "invalid pool request: Pool overlaps with other one on this address space"})
+				return true
+			}
+		}
+	}
 	for _, n := range cfg.Networks {
 		if n.Name == req.Name {
 			writeJSON(w, http.StatusConflict, map[string]string{"message": "network with name " + req.Name + " already exists"})
@@ -70,9 +78,24 @@ func (f *Fake) serveNetworkCreate(w http.ResponseWriter, r *http.Request, p stri
 			}
 		}
 	}
+	unalloc := 0
+	if scope == "swarm" {
+		// A create that names no subnet matches the key "": the pools being full.
+		for _, sub := range cmpOr(fn.Subnets, []string{""}) {
+			if n, ok := cfg.SwarmUnallocated[sub]; ok && n != 0 {
+				unalloc = n
+			}
+		}
+	}
 	f.mu.Lock()
 	f.nets = append(f.nets, fn)
 	f.netCreates = append(f.netCreates, req)
+	if unalloc != 0 {
+		if f.netUnalloc == nil {
+			f.netUnalloc = map[string]int{}
+		}
+		f.netUnalloc[fn.ID] = unalloc
+	}
 	f.mu.Unlock()
 	writeJSON(w, http.StatusCreated, network.CreateResponse{ID: fn.ID})
 	return true
@@ -100,6 +123,33 @@ func (c FakeConfig) withNetworks(created []FakeNetwork) FakeConfig {
 		return c
 	}
 	c.Networks = append(slices.Clone(c.Networks), created...)
+	return c
+}
+
+// cmpOr is a, or b when a is empty.
+func cmpOr(a, b []string) []string {
+	if len(a) == 0 {
+		return b
+	}
+	return a
+}
+
+// withUnallocatedNetworks returns c with each network still counted in unalloc shown as the
+// stub a swarm manager keeps for a network its allocator refused: no driver and no subnets.
+// The slice is copied, so the Fake's own configuration is not touched.
+func (c FakeConfig) withUnallocatedNetworks(unalloc map[string]int) FakeConfig {
+	if len(unalloc) == 0 {
+		return c
+	}
+	nets := slices.Clone(c.Networks)
+	for i, n := range nets {
+		if unalloc[n.ID] != 0 {
+			nets[i].Driver = ""
+			nets[i].Subnets = nil
+			nets[i].Gateways = nil
+		}
+	}
+	c.Networks = nets
 	return c
 }
 
@@ -221,11 +271,17 @@ func (f *Fake) serveNetworkInspect(w http.ResponseWriter, r *http.Request, p str
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + m[1] + " not found"})
 		return true
 	}
+	f.mu.Lock()
+	if n := f.netUnalloc[fn.ID]; n > 0 {
+		f.netUnalloc[fn.ID] = n - 1
+	}
+	f.mu.Unlock()
 	out := network.Inspect{
 		Network: network.Network{
 			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
 			Labels: fn.Labels, Options: fn.Options, Internal: fn.Internal, Attachable: fn.Attachable,
 			Ingress: fn.Ingress, EnableIPv6: fn.IPv6, EnableIPv4: true,
+			ConfigOnly: fn.ConfigOnly, ConfigFrom: network.ConfigReference{Network: fn.ConfigFrom},
 		},
 		Containers: map[string]network.EndpointResource{},
 	}

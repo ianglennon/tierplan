@@ -1,0 +1,126 @@
+{
+  "poolGuide": {
+    "breadcrumb": {
+      "label": "Breadcrumb",
+      "addressSpace": "Address space",
+      "guide": "Pool guidance"
+    },
+    "title": "Pool guidance",
+    "caption": "Plan address pools without touching your hosts. Coaming explains the steps and gives you commands to copy. It never runs them.",
+    "note": "Coaming never runs swarm init or swarm leave, and never edits daemon.json. Run the commands yourself on the right host.",
+    "tabs": {
+      "label": "Parts of the pool guidance",
+      "freeSpace": "Free up space",
+      "newSwarm": "New swarm",
+      "rebuild": "Rebuild a swarm",
+      "standalone": "Standalone host"
+    },
+    "command": {
+      "label": "command: {{caption}}"
+    },
+    "newSwarm": {
+      "intro": "The address pool is fixed when a swarm is created, so decide it now.",
+      "networks": "Networks you expect",
+      "nodes": "Nodes you expect",
+      "mask": "Subnet size",
+      "maskItem": "/{{mask}} · {{usable}} addresses",
+      "avoid": "Ranges to avoid",
+      "avoidPlaceholder": "192.168.0.0/16",
+      "avoidHelper": "Your LAN, VPN and other sites' ranges.",
+      "networksInvalid": "Enter a whole number from 1 to {{max}}.",
+      "nodesInvalid": "Enter a whole number from 1 to {{max}}.",
+      "avoidInvalid": "Enter a CIDR like 192.168.0.0/16 on each line.",
+      "avoidLines_one": "Check line {{lines}}.",
+      "avoidLines_other": "Check lines {{lines}}.",
+      "noFit": "No range outside the ones you listed is big enough. Remove a range to avoid, or use a smaller subnet size.",
+      "summary": "This pool holds {{capacity}} networks of /{{mask}}, so {{expected}} networks leave {{spare}} spare.",
+      "tooSmall": "A /{{mask}} holds {{usable}} addresses, fewer than the {{nodes}} nodes each overlay gives an address to. Choose a bigger subnet size.",
+      "commandCaption": "Run this on the first manager",
+      "fixed": "The pool is fixed at init. Changing it later means rebuilding the swarm."
+    },
+    "freeSpace": {
+      "intro": "Try these before you rebuild anything. They give space back without downtime.",
+      "loading": "Loading the address space…",
+      "loadFailed": "Couldn't read the address space. Reload the page to try again.",
+      "emptyTitle": "Nothing to free up",
+      "emptyBody": "No orphaned networks, and no network is filling up. Small stack subnets are the next thing to turn on.",
+      "orphans": {
+        "title": "Remove orphaned networks",
+        "body": "{{orphaned}} orphaned and {{unused}} unused networks hold {{addresses}} addresses.",
+        "none": "No orphaned or unused networks.",
+        "open": "Open orphaned networks"
+      },
+      "subnets": {
+        "title": "Use smaller subnets for new stack networks",
+        "body": "New networks get a /{{mask}} instead of a /24 and the pool lasts about {{times}} times longer.",
+        "on": "On, /{{mask}}",
+        "open": "Open settings"
+      },
+      "crowded": {
+        "title": "Spread crowded networks",
+        "body": "A network near its limit can run out of addresses during an update. Move some services to a second network.",
+        "item": "{{name}}, {{percent}}% used",
+        "none": "No network is filling up."
+      }
+    },
+    "rebuild": {
+      "intro": "Docker can't change a swarm's pool in place. The only way is to rebuild it.",
+      "downtime": "This means downtime. Every service stops while you rebuild the swarm.",
+      "stepsLabel": "Steps to rebuild the swarm",
+      "captions": {
+        "manager": "Run on a manager",
+        "everyNode": "Run on every node",
+        "firstManager": "Run on the new first manager"
+      },
+      "steps": {
+        "backup": {
+          "title": "Back up",
+          "body": "Back up Coaming's data and anything the stacks keep in volumes."
+        },
+        "remove": {
+          "title": "Remove the stacks",
+          "body": "Remove each stack from Coaming's Stacks page, or run the command below on a manager.",
+          "bodyPlain": "Remove each stack from Coaming's Stacks page.",
+          "skipped_one": "{{count}} stack has a name that can't go in a command. Remove it from Coaming's Stacks page.",
+          "skipped_other": "{{count}} stacks have names that can't go in a command. Remove them from Coaming's Stacks page."
+        },
+        "leave": {
+          "title": "Leave the swarm",
+          "body": "Run this on every worker, then on every manager."
+        },
+        "create": {
+          "title": "Create the swarm with the new pool",
+          "body": "The command follows the fields on this tab.",
+          "waiting": "Fix the fields above to see the command."
+        },
+        "rejoin": {
+          "title": "Rejoin the nodes",
+          "body": "Get the join token on the manager, then run the join command on each node."
+        },
+        "adopt": {
+          "title": "Adopt the new swarm in Coaming",
+          "body": "Coaming sees a new cluster. Open this environment's settings and choose Adopt new cluster.",
+          "link": "Open settings"
+        },
+        "redeploy": {
+          "title": "Redeploy",
+          "body": "Deploy the stacks again from Coaming. Turn on small stack subnets first if you want them."
+        }
+      }
+    },
+    "standalone": {
+      "intro": "Standalone Docker hosts use up their default address pool after about 30 networks. Set your own pools in daemon.json.",
+      "tableLabel": "Address pools for daemon.json",
+      "incomplete": "Fill in the base and size of every pool to see the snippet.",
+      "snippetCaption": "Merge this into /etc/docker/daemon.json",
+      "restart": "Restart the Docker daemon to apply it: sudo systemctl restart docker. Existing networks keep their subnets. Containers stop during the restart unless live-restore is on.",
+      "followUp": "Enter the same pools in this environment's settings so Coaming measures against them.",
+      "openSettings": "Open address pool settings"
+    },
+    "header": {
+      "action": "Pool guidance",
+      "open": "Open pool guidance",
+      "generate": "Generate a daemon.json snippet"
+    }
+  }
+}

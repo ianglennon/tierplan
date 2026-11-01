@@ -588,6 +588,10 @@ func (h *Hub) Views(envID string) []AgentLive {
 			v.ClockOffset, v.ClockWarning = st.ClockOffset, st.ClockWarning
 			v.ReadOnly = s.Facts.Policy.ReadOnly
 			v.PrivilegedServices = s.Facts.Policy.PrivilegedServices
+			switch s.Facts.HostNet {
+			case wire.HostNetOK, wire.HostNetUnmounted:
+				v.HostNet = s.Facts.HostNet
+			}
 		}
 		out = append(out, v)
 	}

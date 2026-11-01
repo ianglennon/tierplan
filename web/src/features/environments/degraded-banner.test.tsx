@@ -19,7 +19,13 @@ import "@/i18n";
 import { makeMe } from "@/test-me";
 import { splitPermissions } from "@/test-permissions";
 
-type Issue = { code: string; node?: string; since?: string };
+type Issue = {
+  code: string;
+  node?: string;
+  subject?: string;
+  percent?: number;
+  since?: string;
+};
 
 function degraded(issues: Issue[] | null, extra: Partial<EnvironmentItem["status"]> = {}) {
   const item: EnvironmentItem = {
@@ -37,6 +43,7 @@ function degraded(issues: Issue[] | null, extra: Partial<EnvironmentItem["status
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,
@@ -88,8 +95,13 @@ async function mount(environment: EnvironmentItem) {
     path: "/settings/environments/$envId",
     component: () => null,
   });
+  const addressSpace = createRoute({
+    getParentRoute: () => root,
+    path: "/env/$envId/address-space",
+    component: () => null,
+  });
   const router = createRouter({
-    routeTree: root.addChildren([settings]),
+    routeTree: root.addChildren([settings, addressSpace]),
     history: createMemoryHistory({ initialEntries: ["/"] }),
   });
   render(
@@ -174,6 +186,71 @@ describe("EnvDegradedBanner", () => {
     // The permission read has to settle before the absence means anything.
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(screen.queryByRole("link", { name: "View nodes" })).toBeNull();
+  });
+
+  it("words the pool cause and opens the address space page", async () => {
+    permissions = splitPermissions(["environments.read", "networks.read"]);
+    await mount(degraded([{ code: "address_space_full", subject: "10.0.0.0/8", percent: 93 }], {}));
+    expect(await screen.findByText("The address pool 10.0.0.0/8 is 93% used.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Remove orphaned networks or use smaller subnets before new stacks fail to deploy.",
+      ),
+    ).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open address space" });
+    expect(link.getAttribute("href")).toBe("/env/e1/address-space");
+  });
+
+  it("words the overlay cause from the summary's kind, or from the subject without one", async () => {
+    const issue = { code: "address_space_full", subject: "shop_default", percent: 96 };
+    await mount(degraded([issue]));
+    expect(await screen.findByText("The network shop_default is 96% full.")).toBeTruthy();
+    cleanup();
+    // The summary names the same network, so its kind decides.
+    const space = {
+      worstName: "ingress",
+      worstKind: "ingress" as const,
+      used: 29,
+      capacity: 30,
+      percent: 96,
+      state: "almost_full" as const,
+      unit: "addresses" as const,
+      estimated: false,
+      orphaned: 0,
+    };
+    await mount({
+      ...degraded([{ ...issue, subject: "ingress" }]),
+      addressSpace: space,
+    });
+    expect(await screen.findByText("The network ingress is 96% full.")).toBeTruthy();
+  });
+
+  it("falls back to the generic text without a subject or a percent", async () => {
+    await mount(degraded([{ code: "address_space_full" }]));
+    expect(await screen.findByText("An address pool or network is almost full.")).toBeTruthy();
+    cleanup();
+    await mount(degraded([{ code: "address_space_full", subject: "shop_default" }]));
+    expect(await screen.findByText("An address pool or network is almost full.")).toBeTruthy();
+  });
+
+  it("leaves the action out without networks.read", async () => {
+    await mount(degraded([{ code: "address_space_full", subject: "10.0.0.0/8", percent: 93 }]));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    expect(screen.queryByRole("link", { name: "Open address space" })).toBeNull();
+  });
+
+  it("ranks the cause last, below every connection issue", async () => {
+    await mount(
+      degraded([
+        { code: "address_space_full", subject: "10.0.0.0/8", percent: 93 },
+        MIXED[2] as Issue,
+      ]),
+    );
+    expect(await screen.findByText("The clock on a node is out of step.")).toBeTruthy();
+    expect(screen.queryByText(/address pool/)).toBeNull();
+    expect(screen.getByText("and 1 more issue")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Open address space" })).toBeNull();
   });
 
   it("renders nothing for an environment that is online or has any other state", async () => {

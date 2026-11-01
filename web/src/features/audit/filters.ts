@@ -50,6 +50,8 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "environment.local_folded",
   "environment.auto_update_changed",
   "environment.restart_loop_settings_changed",
+  "environment.small_subnets_changed",
+  "environment.address_pools_saved",
   "warning.acknowledged",
   "audit.pruned",
   "audit.reanchored",
@@ -96,6 +98,9 @@ export const KNOWN_ACTIONS: readonly string[] = [
   "container.removed",
   "network.created",
   "network.removed",
+  "network.inspect_saved",
+  "network.kept",
+  "network.unkept",
   "network.connected",
   "network.disconnected",
   "volume.created",
@@ -373,6 +378,24 @@ export function actionLabel(key: string, t: Translate, details?: Record<string, 
     details?.stack
   ) {
     return t(`audit.actions.${key}_named`, { name: details.stack });
+  }
+  // Small stack subnets read as turned on, with their size, or turned off.
+  if (key === "environment.small_subnets_changed" && details?.enabled === "true" && details.mask) {
+    return t("audit.actions.environment.small_subnets_on", { mask: details.mask });
+  }
+  if (key === "environment.small_subnets_changed" && details?.enabled === "false") {
+    return t("audit.actions.environment.small_subnets_off");
+  }
+  // Keeping a network off the orphan list, and the details saved before a delete, name the network.
+  if (
+    (key === "network.kept" || key === "network.unkept" || key === "network.inspect_saved") &&
+    details?.name
+  ) {
+    return t(`audit.actions.${key}_named`, { name: details.name });
+  }
+  // A removal made by the orphan clean-up says so, with the network's name.
+  if (key === "network.removed" && details?.source === "orphan_cleanup" && details.name) {
+    return t("audit.actions.network.removed_orphan_cleanup_named", { name: details.name });
   }
   // A git connection change names the credential or repository it was about.
   if (key.startsWith("git.") && details?.name && KNOWN_ACTIONS.includes(key)) {

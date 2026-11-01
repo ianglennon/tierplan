@@ -71,3 +71,50 @@ func TestOverviewOfALocalSwarmDoesNotClaimCachedNodeCountsFromAWorkerOrAnOffline
 		t.Errorf("an offline local manager: nodes = %+v, want unknown, the cached read is stale", *o.Nodes)
 	}
 }
+
+// The address space summary reaches the overview with the cluster view (plan 10-17, D-06 items 1 and 2).
+func TestOverviewAddressSpace(t *testing.T) {
+	now := t0.Add(time.Hour)
+	sum := &AddressSummary{
+		Worst:    &WorstMeter{Kind: MeterOverlay, Name: "backend", Used: 200, Capacity: 256, Percent: 78, State: "getting_full", Unit: UnitAddresses},
+		Orphaned: 2, Measured: true,
+	}
+
+	// A swarm with a manager present shows it.
+	in := swarm(now, mgr("a", "m1"), wrk("b", "w1"))
+	in.Cluster = &ClusterView{AddressSpace: sum}
+	if o := overview(in, Status{}, ""); o.AddressSpace != sum {
+		t.Errorf("swarm: address space = %+v, want the summary of the view", o.AddressSpace)
+	}
+	// No summary, or no cluster view, is nil: nothing was ever measured.
+	in.Cluster = &ClusterView{}
+	if o := overview(in, Status{}, ""); o.AddressSpace != nil {
+		t.Errorf("no summary: address space = %+v, want nil", o.AddressSpace)
+	}
+	in.Cluster = nil
+	if o := overview(in, Status{}, ""); o.AddressSpace != nil {
+		t.Errorf("no view: address space = %+v, want nil", o.AddressSpace)
+	}
+	// Every agent gone: the numbers would be out of date, so none are shown.
+	in = swarm(now, gone(mgr("a", "m1")), gone(mgr("b", "m2")))
+	in.Cluster = &ClusterView{AddressSpace: sum}
+	in.Agents[0].LastSeen, in.Agents[1].LastSeen = t0, t0
+	if o := overview(in, Status{}, ""); o.AddressSpace != nil {
+		t.Errorf("offline: address space = %+v, want nil", o.AddressSpace)
+	}
+	// A standalone host shows its estimate.
+	host := standalone(now, up("a", "host"))
+	host.Cluster = &ClusterView{AddressSpace: sum}
+	if o := overview(host, Status{}, ""); o.AddressSpace != sum {
+		t.Errorf("standalone: address space = %+v, want the summary", o.AddressSpace)
+	}
+
+	// The server's own socket: shown while it answers, not while it does not.
+	local := RollupInput{EnvID: "local", Kind: KindLocal, Now: now, Cluster: &ClusterView{AddressSpace: sum}}
+	if o := overview(local, Status{State: StateOnline, Probe: dockerx.ProbeResult{Type: dockerx.TypeSwarmManager}}, ""); o.AddressSpace != sum {
+		t.Errorf("local online: address space = %+v, want the summary", o.AddressSpace)
+	}
+	if o := overview(local, Status{State: StateOffline}, ""); o.AddressSpace != nil {
+		t.Errorf("local offline: address space = %+v, want nil", o.AddressSpace)
+	}
+}

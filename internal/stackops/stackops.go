@@ -78,6 +78,10 @@ type Deps struct {
 	Checker *rbac.Checker
 	// Clock is the time the deploy waits on for a service to settle. Nil is the wall clock.
 	Clock Clock
+	// AllocationWait is how a swarm network a deploy or a start creates is read back until the swarm has
+	// allocated it. The zero value is the real defaults. It is not Clock: an at-once clock would also drive
+	// the convergence wait.
+	AllocationWait dockerx.AllocationWait
 	// ConvergeTimeout is how long a deploy waits for each service to settle. Zero is
 	// DefaultConvergeTimeout.
 	ConvergeTimeout time.Duration
@@ -103,6 +107,14 @@ type Deps struct {
 	// registry, once for each looked-up digest, for that digest's platforms. One memo is shared by every stack route of a
 	// server.
 	Platforms *PlatformMemo
+	// AddressSpaces reads the environment's small stack subnet setting and the address space a new network is
+	// given a block of (D-20), and holds the allocation lock a deploy shares with the network dialog. Nil means
+	// no deploy gives a network a subnet of its own making.
+	AddressSpaces *envs.AddressSpaces
+	// subnetPlanHook, when set, is called by a swarm or standalone deploy right after it has planned the subnets of its new
+	// networks and before it creates any (a standalone deploy: before the SDK's up), while it holds the allocation lock. Tests order a second allocation
+	// against the deploy with it, never with a sleep; nothing sets it in production.
+	subnetPlanHook func()
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }

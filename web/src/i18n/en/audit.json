@@ -91,7 +91,11 @@
         "cluster_adopted": "Adopted a new cluster",
         "local_folded": "Folded the local host",
         "auto_update_changed": "Changed agent auto-update",
-        "restart_loop_settings_changed": "Changed restart-loop settings"
+        "restart_loop_settings_changed": "Changed restart-loop settings",
+        "small_subnets_changed": "Changed small stack subnets",
+        "small_subnets_on": "Turned on small stack subnets (/{{mask}})",
+        "small_subnets_off": "Turned off small stack subnets",
+        "address_pools_saved": "Saved address pools"
       },
       "agent": {
         "enrolled": "Agent enrolled",
@@ -177,8 +181,15 @@
       "network": {
         "created": "Network created",
         "removed": "Network removed",
+        "inspect_saved": "Network details saved before removal",
+        "kept": "Network kept off the orphan list",
+        "unkept": "Network no longer kept off the orphan list",
         "connected": "Container connected to network",
-        "disconnected": "Container disconnected from network"
+        "disconnected": "Container disconnected from network",
+        "kept_named": "Kept network {{name}}",
+        "unkept_named": "Stopped keeping network {{name}}",
+        "inspect_saved_named": "Saved the details of network {{name}} before deleting it",
+        "removed_orphan_cleanup_named": "Deleted orphaned network {{name}}"
       },
       "volume": {
         "created": "Volume created",

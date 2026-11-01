@@ -4,16 +4,20 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/stacks"
 	"github.com/ianglennon/coaming/internal/stacks/stackstest"
@@ -100,6 +104,9 @@ func TestCheckIsPureAndPositioned(t *testing.T) {
 
 	draftBefore := readDraft(t, viewer, st.ID)
 	auditBefore := len(f.stackAudits(t))
+	// The first check fills the environment's cached network listing and pool read, which the explicit-subnet
+	// hints compare with (plan 10-08); the checks that follow in the cache's lifetime send the engine nothing.
+	viewer.check(st.ID, checkBody("services:\n  web:\n    image: nginx:1.27\n"))
 	readsBefore := engineStateReads(f.fake.Requests())
 
 	// A tab as the indentation of line 2: the problem is the file, the line and the sentence.
@@ -424,5 +431,142 @@ func TestStackCheckAnswerNeverHoldsARunOfASecret(t *testing.T) {
 			}
 			stackstest.NoSecretRun(t, tc.secret, messages...)
 		})
+	}
+}
+
+// netCheckEnv is a swarm manager with an address pool and the given networks, with the address reader a real
+// server hands the editor's check (plan 10-08, D-19).
+func netCheckEnv(t *testing.T, pool string, nets ...dockertest.FakeNetwork) (*envFix, envBody) {
+	t.Helper()
+	return stackEnv(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID, c.SwarmSubnetSize = "cluster-1", 24
+		if pool != "" {
+			c.SwarmDefaultAddrPool = []string{pool}
+		}
+		c.Networks = nets
+	})
+}
+
+// subnetCompose is a one-service compose file with the network backend at the given explicit subnet.
+func subnetCompose(subnet string) string {
+	return "services:\n  web:\n    image: nginx:1.27\n    networks: [backend]\nnetworks:\n  backend:\n    ipam:\n      config:\n        - subnet: " + subnet + "\n"
+}
+
+func TestStackCheckWarnsSubnetOverlap(t *testing.T) {
+	t.Parallel()
+	f, e := netCheckEnv(t, "10.0.0.0/16",
+		dockertest.FakeNetwork{ID: "o1", Name: "other_net", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+
+	answer, code, raw := admin.check(st.ID, checkBody(subnetCompose("10.0.1.0/24")))
+	if code != http.StatusOK {
+		t.Fatalf("check: %d %s", code, raw)
+	}
+	if len(answer.Problems) != 1 {
+		t.Fatalf("problems = %+v, want the one overlap warning", answer.Problems)
+	}
+	p := answer.Problems[0]
+	if p.Severity != "warning" || p.Code != "network_subnet_overlap" || p.Line != 9 ||
+		p.Message != "network “backend” uses subnet 10.0.1.0/24, which overlaps “other_net” (10.0.1.0/24) in this environment." {
+		t.Errorf("problem = %+v", p)
+	}
+}
+
+// createEngineNetwork makes a network on the fake engine the way a daemon would take a deploy's: through its API,
+// after the stack exists.
+func createEngineNetwork(t *testing.T, f *envFix, name, driver, subnet string, labels map[string]string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"Name": name, "Driver": driver, "Labels": labels,
+		"IPAM": map[string]any{"Config": []map[string]string{{"Subnet": subnet}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := f.fake.SocketPath()
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", sock)
+	}}}
+	t.Cleanup(client.CloseIdleConnections)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://docker/networks/create", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("create network %s: %v", name, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create network %s: %d", name, resp.StatusCode)
+	}
+}
+
+func TestStackCheckOwnNetworkNotReported(t *testing.T) {
+	t.Parallel()
+	// The stack's own networks already exist, with the subnets the file asks for: a redeploy must not collide
+	// with itself. A network of another stack on the same subnet does.
+	f, e := netCheckEnv(t, "10.0.0.0/16")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+	createEngineNetwork(t, f, "shop_backend", "overlay", "10.0.1.0/24", map[string]string{"com.docker.stack.namespace": "shop"})
+	createEngineNetwork(t, f, "shop_default", "overlay", "10.0.2.0/24", map[string]string{"com.docker.compose.project": "shop"})
+	createEngineNetwork(t, f, "blog_backend", "overlay", "10.0.3.0/24", map[string]string{"com.docker.stack.namespace": "blog"})
+	f.clk.t = f.clk.t.Add(time.Minute) // past the cached listing, so the new networks are read
+
+	for _, own := range []string{"10.0.1.0/24", "10.0.2.0/24"} {
+		answer, code, raw := admin.check(st.ID, checkBody(subnetCompose(own)))
+		if code != http.StatusOK || len(answer.Problems) != 0 {
+			t.Errorf("check of the stack's own subnet %s: %d %s, want no problem", own, code, raw)
+		}
+	}
+	answer, code, raw := admin.check(st.ID, checkBody(subnetCompose("10.0.3.0/24")))
+	if code != http.StatusOK || len(answer.Problems) != 1 || answer.Problems[0].Code != "network_subnet_overlap" ||
+		!strings.Contains(answer.Problems[0].Message, "“blog_backend”") {
+		t.Errorf("check of another stack's subnet: %d %s, want the overlap with blog_backend", code, raw)
+	}
+}
+
+func TestStackCheckWarnsSubnetOutsidePool(t *testing.T) {
+	t.Parallel()
+	f, e := netCheckEnv(t, "10.0.0.0/16")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+
+	answer, code, raw := admin.check(st.ID, checkBody(subnetCompose("172.30.0.0/24")))
+	if code != http.StatusOK || len(answer.Problems) != 1 {
+		t.Fatalf("check: %d %s, want the one outside-pool warning", code, raw)
+	}
+	if p := answer.Problems[0]; p.Severity != "warning" || p.Code != "network_subnet_outside_pool" || p.Line != 9 ||
+		p.Message != "network “backend” uses subnet 172.30.0.0/24, which is outside the address pool 10.0.0.0/16." {
+		t.Errorf("problem = %+v", p)
+	}
+	if answer, _, raw = admin.check(st.ID, checkBody(subnetCompose("10.0.7.0/24"))); len(answer.Problems) != 0 {
+		t.Errorf("a subnet inside the pool: %s, want no problem", raw)
+	}
+}
+
+func TestStackCheckEnvUnreadable(t *testing.T) {
+	t.Parallel()
+	f, e := netCheckEnv(t, "10.0.0.0/16",
+		dockertest.FakeNetwork{ID: "o1", Name: "other_net", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.1.0/24"}})
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	st := newStack(t, admin, "shop")
+	if answer, _, raw := admin.check(st.ID, checkBody(subnetCompose("10.0.1.0/24"))); len(answer.Problems) != 1 {
+		t.Fatalf("before the engine goes: %s, want the overlap warning", raw)
+	}
+
+	// The engine goes away and the cached listing expires: the environment cannot be read.
+	f.fake.Stop()
+	f.clk.t = f.clk.t.Add(time.Hour)
+	answer, code, raw := admin.check(st.ID, checkBody(subnetCompose("10.0.1.0/24")))
+	if code != http.StatusOK {
+		t.Fatalf("check with the environment unreadable: %d %s, want 200", code, raw)
+	}
+	if len(answer.Problems) != 0 || !strings.Contains(raw, `"problems":[]`) {
+		t.Errorf("problems = %+v, want no network finding when the environment cannot be read", answer.Problems)
 	}
 }

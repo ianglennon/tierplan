@@ -133,6 +133,9 @@ type RevisionDetail struct {
 	Copy     stacks.WorkingCopy
 	// Pins are sorted by service.
 	Pins []RevisionPin
+	// Subnets are the subnets the revision's deploy gave the networks it created, by network name (D-20); none for a
+	// revision that gave none.
+	Subnets map[string]string
 	// DeployedSeq is the number of the stack's newest good revision, 0 when it has none.
 	DeployedSeq int64
 	// YAML is the rendering of the deployed revision against this revision's. It is empty when this is the
@@ -155,7 +158,7 @@ func (r Repo) RevisionDetail(ctx context.Context, stack Stack, seq int64) (Revis
 	if err := json.Unmarshal([]byte(ran.Pins), &pins); err != nil {
 		return RevisionDetail{}, fmt.Errorf("read the pins of revision %d: %w", seq, err)
 	}
-	out := RevisionDetail{Rendered: []byte(ran.Rendered), Copy: snap.Copy, Pins: make([]RevisionPin, 0, len(pins))}
+	out := RevisionDetail{Rendered: []byte(ran.Rendered), Copy: snap.Copy, Subnets: snap.Subnets, Pins: make([]RevisionPin, 0, len(pins))}
 	for service, ref := range pins {
 		out.Pins = append(out.Pins, RevisionPin{Service: service, Image: ref, Digest: digestOf(ref)})
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/ianglennon/coaming/internal/dockerx"
 	"github.com/ianglennon/coaming/internal/envs"
 	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/coaming/internal/netspace"
 	"github.com/ianglennon/coaming/internal/rbac"
 )
 
@@ -30,6 +32,10 @@ const (
 	codeCreated       = "created"
 
 	problemSubnetInvalid         = "subnet_invalid"
+	problemSubnetOverlap         = "subnet_overlap"
+	problemSubnetOverlapSwarm    = "subnet_overlap_swarm"
+	problemNetworkNotAllocated   = "network_not_allocated"
+	problemSubnetRefused         = "subnet_refused"
 	problemGatewayOutsideSubnet  = "gateway_outside_subnet"
 	problemIPRangeOutsideSubnet  = "iprange_outside_subnet"
 	problemAttachableOverlayOnly = "attachable_overlay_only"
@@ -40,6 +46,12 @@ const (
 	problemNetworkNotFound = "network_not_found"
 	problemNodeUnreachable = codeNodeUnreachable
 	codeRemoved            = "removed"
+	// codeNotAllocated and codeRemoveFailed are the audit codes of a swarm network the swarm never
+	// allocated (G-10-8): the create's, and the removal of its stub when that failed.
+	codeNotAllocated = "not_allocated"
+	codeRemoveFailed = "remove_failed"
+	// sourceAllocationCheck is the audit source of the removal of an unallocated stub.
+	sourceAllocationCheck = "allocation_check"
 
 	problemNodeMismatch             = "node_mismatch"
 	problemNetworkNotAttachable     = "network_not_attachable"
@@ -58,10 +70,18 @@ type NetworksDeps struct {
 	Aggregator *envs.Aggregator
 	// Clusters reads the services of a swarm live before a delete.
 	Clusters *envs.Clusters
-	Audit    *audit.Writer
+	// AddressSpaces reads how full the address pools are, for the gate of a create that
+	// would use the last blocks of a pool. Nil means the feature is off: a create is not
+	// checked against a pool.
+	AddressSpaces *envs.AddressSpaces
+	Audit         *audit.Writer
 	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A
 	// connect or disconnect of that container, or of an agent's, needs its name typed.
 	SelfContainerID string
+	// AllocationWait is how a swarm network create waits for the swarm to allocate the network. The
+	// zero value is the real defaults (every 200 ms, up to 30 times); tests pass a clock that fires
+	// at once.
+	AllocationWait dockerx.AllocationWait
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -79,6 +99,8 @@ type NetworkCreateRequest struct {
 	Subnet     string            `json:"subnet,omitempty" maxLength:"64" doc:"The subnet in CIDR form, for example 10.20.0.0/24. Left out, the engine picks one"`
 	Gateway    string            `json:"gateway,omitempty" maxLength:"64" doc:"The gateway address, inside the subnet"`
 	IPRange    string            `json:"ipRange,omitempty" maxLength:"64" doc:"The range containers are given addresses from, in CIDR form, inside the subnet"`
+	// CreateAnyway lets a subnet that overlaps another network of this environment through.
+	CreateAnyway bool `json:"createAnyway,omitempty" doc:"Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Not for an overlap between swarm networks on a swarm: that is 422 subnet_overlap_swarm. Recorded in the audit log"`
 }
 
 // NetworkCreateInput is the path and body of the create route.
@@ -234,6 +256,9 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). " +
 			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
 			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
+			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
+			"A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network Coaming could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. " +
+			"A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. " +
 			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusCreated,
@@ -370,6 +395,12 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemAttachableOverlayOnly,
 			"Only an overlay network on a swarm can be attachable.")
 	}
+	// The check of the subnet and the create are one step: two creates through Coaming cannot
+	// both pass the check with the same subnet (NET-05). The lock is taken before the networks
+	// are read, so the second create sees the first one's network.
+	if body.Subnet != "" && d.AddressSpaces != nil {
+		defer d.AddressSpaces.LockAllocation(envID)()
+	}
 	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
 	if err != nil {
 		return nil, snapshotProblem(d.Log, envID, err)
@@ -389,18 +420,9 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		Labels: body.Labels, Options: body.Options, Subnet: body.Subnet, Gateway: body.Gateway, IPRange: body.IPRange,
 	}
 	scope := dockerx.NetworkScope(body.Driver)
+	clusterWide := swarm && scope == dockerx.ScopeSwarm
 	var id, nodeID string
-	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-	defer cancel()
-	create := func(c *dockerx.Client) error {
-		var e error
-		id, _, e = c.NetworkCreate(writeCtx, spec)
-		return e
-	}
-	if swarm && scope == dockerx.ScopeSwarm {
-		spec.Scope = dockerx.ScopeSwarm
-		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
-	} else {
+	if !clusterWide {
 		nodeID = body.NodeID
 		if nodeID == "" {
 			if swarm || len(agg.Nodes) != 1 {
@@ -409,15 +431,100 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 			}
 			nodeID = agg.Nodes[0].ID
 		}
+	}
+	var extra map[string]string
+	if body.Subnet != "" && d.AddressSpaces != nil {
+		overlaps := sameEnvOverlaps(body.Subnet, agg, swarm && !clusterWide, nodeID)
+		// An overlap the swarm cannot allocate is refused whatever createAnyway says (G-10-8).
+		for _, f := range overlaps {
+			if !overrideAllowed(clusterWide, f) {
+				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlapSwarm, overlapSwarmMessage(body.Subnet, f))
+			}
+		}
+		if len(overlaps) > 0 && !body.CreateAnyway {
+			return nil, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(body.Subnet, overlaps[0]))
+		}
+		if len(overlaps) > 0 {
+			extra = map[string]string{"overlap_override": "true", "overlaps": overlapNames(overlaps)}
+		}
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	create := func(c *dockerx.Client) error {
+		var e error
+		id, _, e = c.NetworkCreateAllocated(writeCtx, spec, d.AllocationWait)
+		return e
+	}
+	if clusterWide {
+		spec.Scope = dockerx.ScopeSwarm
+		err = d.Aggregator.WriteOnManager(writeCtx, envID, create)
+	} else {
 		err = d.Aggregator.WriteOnNode(writeCtx, envID, nodeID, create)
 	}
 	if err != nil {
-		code, problem := networkCreateProblem(d.Log, envID, body.Name, err)
-		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code)
+		code, problem := networkCreateProblem(d.Log, envID, body.Name, body.Subnet, err)
+		// A network the swarm did not allocate was made, so the row is about the stub, and the removal of
+		// the stub has a row of its own.
+		var na *dockerx.NotAllocatedError
+		if errors.As(err, &na) {
+			auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, na.ID, body.Name, nodeID, scope, spec, code, extra)
+			removal := codeRemoved
+			if !na.Removed {
+				removal = codeRemoveFailed
+			}
+			recordNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkRemoved, na.ID, body.Name, removal, map[string]string{
+				"name": body.Name, "driver": spec.Driver, "scope": scope, "source": sourceAllocationCheck, "code": removal,
+			})
+			return nil, problem
+		}
+		auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, body.Name, body.Name, nodeID, scope, spec, code, extra)
 		return nil, problem
 	}
-	auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, id, body.Name, nodeID, scope, spec, codeCreated)
+	auditNetwork(ctx, d, p, envID, in.UserAgent, audit.ActionNetworkCreated, id, body.Name, nodeID, scope, spec, codeCreated, extra)
 	return &NetworkCreateOutput{CacheControl: "no-store", Body: NetworkCreateBody{ID: id, Name: body.Name}}, nil
+}
+
+// maxOverlapNamesAudited is the most bytes of network names the audit row of an override holds.
+const maxOverlapNamesAudited = 512
+
+// nodeName is the name of the node of the aggregate with this ID.
+func nodeName(agg envs.Aggregate, nodeID string) (string, bool) {
+	for _, n := range agg.Nodes {
+		if n.ID == nodeID {
+			return n.Name, true
+		}
+	}
+	return "", false
+}
+
+// overlapMessage is the sentence of a refused overlap, naming the first network.
+func overlapMessage(subnet string, f netspace.Finding) string {
+	on := ""
+	if f.Node != "" {
+		on = " on " + f.Node
+	}
+	return subnet + " overlaps " + f.Network + " (" + f.Subnet + ")" + on + ". Choose another subnet, or create it anyway."
+}
+
+// overlapSwarmMessage is the sentence of an overlap with a swarm network that cannot be created
+// anyway, naming that network.
+func overlapSwarmMessage(subnet string, f netspace.Finding) string {
+	return subnet + " overlaps swarm network " + f.Network + " (" + f.Subnet + "). A swarm can't give two of its networks overlapping subnets, so it can't be created anyway. Choose another subnet."
+}
+
+// overlapNames lists the networks of the findings once each, cut to what an audit row holds.
+func overlapNames(fs []netspace.Finding) string {
+	var names []string
+	for _, f := range fs {
+		if !slices.Contains(names, f.Network) {
+			names = append(names, f.Network)
+		}
+	}
+	joined := strings.Join(names, ", ")
+	if len(joined) > maxOverlapNamesAudited {
+		joined = strings.ToValidUTF8(joined[:maxOverlapNamesAudited], "")
+	}
+	return joined
 }
 
 // validateAddressing checks the subnet, gateway and IP range of a create with net/netip,
@@ -455,12 +562,42 @@ func validateAddressing(subnet, gateway, ipRange string) error {
 }
 
 // networkCreateProblem turns the error of a create into the audit code and the problem
-// the SPA understands.
-func networkCreateProblem(log *slog.Logger, envID, name string, err error) (string, error) {
+// the SPA understands. subnet is the subnet the request asked for, empty when it left the
+// choice to the engine.
+func networkCreateProblem(log *slog.Logger, envID, name, subnet string, err error) (string, error) {
+	var na *dockerx.NotAllocatedError
+	if errors.As(err, &na) {
+		return codeNotAllocated, httpx.Problem(http.StatusUnprocessableEntity, problemNetworkNotAllocated, notAllocatedMessage(na))
+	}
+	if subnet != "" && dockerx.IsPoolOverlap(err) {
+		// The engine's own sentence is for the log: it is not echoed to the browser (T-10-71).
+		log.Warn("the engine refused a network subnet as overlapping", "environment", envID, "network", name, "error", err.Error())
+		return problemSubnetRefused, httpx.Problem(http.StatusUnprocessableEntity, problemSubnetRefused,
+			"Docker refused "+subnet+": it overlaps another network on that host. Choose another subnet.")
+	}
 	if dockerx.IsConflict(err) {
 		return problemNameTaken, httpx.Problem(http.StatusConflict, problemNameTaken, "A network named "+name+" already exists.")
 	}
 	return networkWriteProblem(log, envID, err)
+}
+
+// notAllocatedMessage is the sentence for a swarm network the swarm accepted and never allocated.
+func notAllocatedMessage(na *dockerx.NotAllocatedError) string {
+	msg := "The swarm didn't give " + na.Name + " an address range"
+	if na.Removed {
+		msg += ", so Coaming removed it again."
+	} else {
+		msg += "."
+	}
+	if na.Subnet != "" {
+		msg += " Its subnet " + na.Subnet + " probably overlaps another swarm network. Choose another subnet."
+	} else {
+		msg += " The swarm's address pools may be full. Open the Address space page to free some."
+	}
+	if !na.Removed {
+		msg += " Coaming couldn't remove it, so delete " + na.Name + " on the Networks page."
+	}
+	return msg
 }
 
 // networkWriteProblem is the part of a network write's failure that every write shares:
@@ -483,7 +620,7 @@ func networkWriteProblem(log *slog.Logger, envID string, err error) (string, err
 
 // auditNetwork writes the row of one network create attempt. A row that cannot be written
 // is logged: the network has been made or refused, and the caller must still be told which.
-func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, node, scope string, spec dockerx.NetworkCreateSpec, code string) {
+func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID, userAgent, action, targetID, name, node, scope string, spec dockerx.NetworkCreateSpec, code string, extra map[string]string) {
 	details := map[string]string{
 		"name": name, "driver": spec.Driver, "scope": scope, "code": code,
 		"internal": strconv.FormatBool(spec.Internal), "attachable": strconv.FormatBool(spec.Attachable),
@@ -498,6 +635,8 @@ func auditNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID,
 	if spec.Gateway != "" {
 		details["gateway"] = spec.Gateway
 	}
+	// A create a person let through an overlap says so, and with which networks (D-18).
+	maps.Copy(details, extra)
 	recordNetwork(ctx, d, p, envID, userAgent, action, targetID, name, code, details)
 }
 
@@ -669,13 +808,16 @@ type networkUsage struct {
 	local    map[[2]string]int
 	wide     map[string]int
 	services map[string]int
+	// firstService is, per network ID, the name of the first service by name whose spec
+	// names the network: the owner the subnet map shows for a network with no label.
+	firstService map[string]string
 }
 
 // networkUsageOf counts the attachments in an aggregate. Services come from the cached
 // cluster read of a swarm, whatever age it has: a delete reads them live and never
 // trusts this.
 func networkUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, agg envs.Aggregate) networkUsage {
-	u := networkUsage{local: map[[2]string]int{}, wide: map[string]int{}, services: map[string]int{}}
+	u := networkUsage{local: map[[2]string]int{}, wide: map[string]int{}, services: map[string]int{}, firstService: map[string]string{}}
 	for _, c := range agg.Containers {
 		for _, cn := range c.Networks {
 			u.local[[2]string{c.NodeID, cn.NetworkID}]++
@@ -688,6 +830,9 @@ func networkUsageOf(ctx context.Context, clusters *envs.Clusters, envID string, 
 		for _, ref := range st.ServiceRefs {
 			for _, id := range ref.Networks {
 				u.services[id]++
+				if first, ok := u.firstService[id]; !ok || ref.Name < first {
+					u.firstService[id] = ref.Name
+				}
 			}
 		}
 	}
@@ -708,9 +853,10 @@ func (u networkUsage) of(n envs.NetworkRow) (containers, services int) {
 const maxNamedUsers = 5
 
 // usedBy decides whether a network may be deleted now, from what is true now and not from
-// the list the caller saw: every node's containers are read again, and on a swarm the
-// service specs are read from a manager. It returns an empty code when nothing uses the
-// network. Otherwise it returns the problem code, its status and its words:
+// the list the caller saw: envs.ResolveUsage reads every node's containers again and, on a
+// swarm, the services (their current and previous specs and virtual IPs) and tasks from a
+// manager. It returns an empty code when nothing uses the network. Otherwise it returns the
+// problem code, its status and its words:
 //
 //   - node_unreachable when a node that could hold an attachment did not answer, or the
 //     manager could not be asked for the services, so the picture is incomplete;
@@ -721,16 +867,16 @@ const maxNamedUsers = 5
 // a local network only on its own node, which must answer. A service spec counts even
 // when it has no running task (Pitfall 7).
 func (d NetworksDeps) usedBy(ctx context.Context, envID string, row envs.NetworkRow) (code string, status int, detail string, err error) {
-	fresh, _, err := d.Aggregator.FreshSnapshot(ctx, envID)
+	usage, fresh, err := envs.ResolveUsage(ctx, d.Aggregator, d.Clusters, envID)
 	if err != nil {
 		return "", 0, "", err
 	}
 	swarmScoped := row.Scope == dockerx.ScopeSwarm
 	switch {
-	case swarmScoped && len(fresh.NotReporting) > 0:
+	case swarmScoped && len(usage.Missing) > 0:
 		return problemNodeUnreachable, http.StatusConflict,
-			"Can't tell whether " + row.Name + " is in use: " + joinMore(fresh.NotReporting, 3) + " didn't answer. Try again when it's back.", nil
-	case !swarmScoped && !slices.ContainsFunc(fresh.Nodes, func(n envs.NodeRef) bool { return n.ID == row.NodeID }):
+			"Can't tell whether " + row.Name + " is in use: " + joinMore(usage.Missing, 3) + " didn't answer. Try again when it's back.", nil
+	case !swarmScoped && !usage.Known(row):
 		return problemNodeUnreachable, http.StatusConflict,
 			"Can't tell whether " + row.Name + " is in use: " + row.Node + " didn't answer. Try again when it's back.", nil
 	}
@@ -739,37 +885,10 @@ func (d NetworksDeps) usedBy(ctx context.Context, envID string, row envs.Network
 	}) {
 		return problemNetworkNotFound, http.StatusNotFound, row.Name + " is already gone.", nil
 	}
-
-	var users []string
-	for _, c := range fresh.Containers {
-		if !swarmScoped && c.NodeID != row.NodeID {
-			continue
-		}
-		if slices.ContainsFunc(c.Networks, func(cn dockerx.ContainerNet) bool { return cn.NetworkID == row.ID }) {
-			users = append(users, "container "+c.Name)
-		}
+	if !usage.Known(row) {
+		return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
 	}
-	if swarmScoped && (fresh.Target.Probe.Type == dockerx.TypeSwarmManager || fresh.Target.Probe.Type == dockerx.TypeSwarmWorker) {
-		var refs []dockerx.ServiceRef
-		if d.Clusters == nil {
-			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
-		}
-		readCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-		defer cancel()
-		if err := d.Clusters.ClusterRead(readCtx, envID, func(c *dockerx.Client) error {
-			var e error
-			refs, e = c.ServiceRefs(readCtx)
-			return e
-		}); err != nil {
-			d.Log.Warn("could not read the services before a network delete", "environment", envID, "error", err)
-			return problemNodeUnreachable, http.StatusConflict, "Can't tell whether " + row.Name + " is in use: no manager answered. Try again when one is back.", nil
-		}
-		for _, ref := range refs {
-			if slices.Contains(ref.Networks, row.ID) {
-				users = append(users, "service "+ref.Name)
-			}
-		}
-	}
+	users := usage.UsersOf(row)
 	if len(users) == 0 {
 		return "", 0, "", nil
 	}

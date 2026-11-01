@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { StackReviewObject } from "@/api/stacks";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { OtherResourcesTable } from "@/features/stack-review/other-resources-table";
 import "@/i18n";
 
@@ -157,5 +158,38 @@ describe("OtherResourcesTable", () => {
     render(<OtherResourcesTable objects={[]} />);
     expect(screen.queryByRole("heading", { name: "Other resources" })).toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("shows the small-subnet badge", async () => {
+    render(
+      <TooltipProvider>
+        <OtherResourcesTable
+          objects={[object({ name: "backend", subnet: "10.0.4.0/26", smallSubnetDefault: true })]}
+        />
+      </TooltipProvider>,
+    );
+    const row = screen.getByText("backend").closest("tr") as HTMLElement;
+    expect(within(row).getByText(/network backend:/)).toBeTruthy();
+    expect(within(row).getByText("10.0.4.0/26").className).toContain("font-mono");
+    const badge = within(row).getByText("Small-subnet default");
+    badge.focus();
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(
+          "Coaming picked this subnet because small stack subnets are on for this environment. Your compose file isn't changed.",
+        ).length,
+      ).toBeGreaterThan(0),
+    );
+  });
+
+  it("shows a plain subnet without the badge", () => {
+    render(
+      <TooltipProvider>
+        <OtherResourcesTable objects={[object({ name: "backend", subnet: "10.9.0.0/24" })]} />
+      </TooltipProvider>,
+    );
+    const row = screen.getByText("backend").closest("tr") as HTMLElement;
+    expect(within(row).getByText("10.9.0.0/24")).toBeTruthy();
+    expect(within(row).queryByText("Small-subnet default")).toBeNull();
   });
 });

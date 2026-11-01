@@ -927,11 +927,20 @@ func (f *agentFix) connect(t *testing.T, env tunneltest.Environment, cfg dockert
 // It still returns only once the server has read the agent's first heartbeat.
 func (f *agentFix) connectNoProbe(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
 	t.Helper()
+	return f.connectAs(t, env, cfg, facts, tunneltest.Agent{})
+}
+
+// connectAs is connectNoProbe for an agent with more to say than the token and facts: ag carries
+// what a test sets beyond them (HostNet and HostRoutes, to be an agent that reports its host's
+// routes). Its Token and Facts are the environment's and the facts given.
+func (f *agentFix) connectAs(t *testing.T, env tunneltest.Environment, cfg dockertest.FakeConfig, facts *wire.Facts, ag tunneltest.Agent) *agentConn {
+	t.Helper()
 	fake := dockertest.NewFake(t, cfg)
 	if facts == nil {
 		facts = &wire.Facts{EngineID: "ENG:" + cfg.Hostname, Hostname: cfg.Hostname, EngineReachable: true}
 	}
-	c := f.srv.Dial(t, tunneltest.Agent{Token: env.Token, Facts: facts})
+	ag.Token, ag.Facts = env.Token, facts
+	c := f.srv.Dial(t, ag)
 	if c.Welcome == nil {
 		t.Fatalf("enrolment refused: %+v", c.Refuse)
 	}
@@ -962,9 +971,11 @@ type agentStatus struct {
 	Since  string `json:"since"`
 	Reason string `json:"reason"`
 	Issues []struct {
-		Code  string `json:"code"`
-		Node  string `json:"node"`
-		Since string `json:"since"`
+		Code    string `json:"code"`
+		Node    string `json:"node"`
+		Subject string `json:"subject"`
+		Percent int    `json:"percent"`
+		Since   string `json:"since"`
 	} `json:"issues"`
 }
 
@@ -977,6 +988,17 @@ type agentEnvBody struct {
 	Engine struct {
 		Version string `json:"version"`
 	} `json:"engine"`
+	AddressSpace *struct {
+		WorstName string `json:"worstName"`
+		WorstKind string `json:"worstKind"`
+		Used      int64  `json:"used"`
+		Capacity  int64  `json:"capacity"`
+		Percent   int    `json:"percent"`
+		State     string `json:"state"`
+		Unit      string `json:"unit"`
+		Estimated bool   `json:"estimated"`
+		Orphaned  int    `json:"orphaned"`
+	} `json:"addressSpace"`
 }
 
 // environment reads one environment from GET /api/environments.
@@ -1420,5 +1442,95 @@ func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 				}
 			}
 		})
+	}
+}
+
+// A swarm that runs an overlay to 90% is degraded, with the network named (plan 10-17, D-06 item 3).
+func TestEnvironmentsDegradedAddressSpaceFull(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "hot-id", Name: "hot", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.5.0/24"}})
+	})
+	if e := s.environment(t, s.env.ID); e.Status.State != "online" || len(e.Status.Issues) != 0 {
+		t.Fatalf("before any read the swarm is %+v, want online", e.Status)
+	}
+	// 231 of 256 addresses is 90.2%.
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("hot", dockertest.FakeSubnetUsage{Subnet: "10.0.5.0/24", InUse: 231, Available: 25})
+	}
+	if _, err := s.addressSpaces.Read(testsupport.Context(t), s.env.ID); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+
+	e := s.environment(t, s.env.ID)
+	if e.Status.State != "degraded" || e.Status.Reason != "address_space_full" {
+		t.Fatalf("status = %+v, want degraded / address_space_full", e.Status)
+	}
+	if len(e.Status.Issues) != 1 {
+		t.Fatalf("issues = %+v, want the one", e.Status.Issues)
+	}
+	if is := e.Status.Issues[0]; is.Code != "address_space_full" || is.Subject != "hot" || is.Percent != 90 || is.Node != "" || is.Since == "" {
+		t.Fatalf("issue = %+v, want address_space_full on hot at 90%% with no node", is)
+	}
+}
+
+// The fullest pool or network of each environment is in its body (plan 10-17, D-06 items 1 and 2).
+func TestEnvironmentsAddressSpaceColumn(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFix(t)
+	// A standalone host whose one pool, 10.50.0.0/16 in /24 blocks, has 185 of its 256 blocks taken (72%).
+	edge := s.srv.NewEnvironment(t, "Edge")
+	s.connect(t, edge, dockertest.FakeConfig{
+		Hostname:            "edge-1",
+		DefaultAddressPools: []dockertest.FakeAddressPool{{Base: "10.50.0.0/16", Size: 24}},
+		Networks: []dockertest.FakeNetwork{
+			{ID: "n1", Name: "n1", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.0.0/17"}},
+			{ID: "n2", Name: "n2", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.128.0/19"}},
+			{ID: "n3", Name: "n3", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.160.0/20"}},
+			{ID: "n4", Name: "n4", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.176.0/21"}},
+			{ID: "n5", Name: "n5", Driver: "bridge", Scope: "local", Subnets: []string{"10.50.184.0/24"}},
+		},
+	}, nil)
+	s.whenState(t, edge.ID, "online")
+
+	// Nothing has been read: null, present and not absent.
+	raw := s.req(t, http.MethodGet, "/api/environments", "")
+	var list struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(raw.body, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("%d environments listed, want the swarm and the host", len(list.Items))
+	}
+	for _, it := range list.Items {
+		if string(it["addressSpace"]) != "null" {
+			t.Errorf("before any read addressSpace = %s, want null", it["addressSpace"])
+		}
+	}
+
+	if _, err := s.addressSpaces.Read(testsupport.Context(t), edge.ID); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	e := s.environment(t, edge.ID)
+	a := e.AddressSpace
+	if a == nil {
+		t.Fatalf("addressSpace is null after a read: %+v", e)
+	}
+	if a.WorstName != "10.50.0.0/16" || a.WorstKind != "pool" || a.Used != 185 || a.Capacity != 256 || a.Percent != 72 || a.State != "getting_full" || a.Unit != "subnets" || !a.Estimated || a.Orphaned != 0 {
+		t.Fatalf("addressSpace = %+v, want the estimated pool at 72%% getting_full", *a)
+	}
+	// An estimate never degrades the host.
+	if e.Status.State != "online" || len(e.Status.Issues) != 0 {
+		t.Errorf("status = %+v, want online", e.Status)
+	}
+	// The swarm was never read.
+	if sw := s.environment(t, s.env.ID); sw.AddressSpace != nil {
+		t.Errorf("the swarm that was never read answers %+v, want null", *sw.AddressSpace)
 	}
 }

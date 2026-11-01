@@ -686,3 +686,29 @@ func TestRegistryBlockCIDRsRefusesAnInvalidEntryAtStartupAndNamesIt(t *testing.T
 		t.Fatalf("error = %v, want one naming COAMING_REGISTRY_BLOCK_CIDRS and not-a-range", err)
 	}
 }
+
+// COAMING_HOST_ROUTE_FILE (plan 10-05, NET-05): the host's route table as mounted into
+// Coaming's own container, for the subnet picker's route check on Coaming's own host.
+func TestConfigHostRouteFile(t *testing.T) {
+	if !strings.Contains(strings.Join(config.Names(), " "), "COAMING_HOST_ROUTE_FILE") {
+		t.Error("Names() does not list COAMING_HOST_ROUTE_FILE")
+	}
+	c, err := load(t, nil, envMap{}, files{})
+	if err != nil || c.HostRouteFile != "/host/route" {
+		t.Fatalf("default HostRouteFile = %q, %v; want /host/route", c.HostRouteFile, err)
+	}
+	c, err = load(t, nil, envMap{"COAMING_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
+	if err != nil || c.HostRouteFile != "/proc/host/net/route" {
+		t.Errorf("COAMING_HOST_ROUTE_FILE: %q, %v", c.HostRouteFile, err)
+	}
+	c, err = load(t, []string{"--host-route-file", "/srv/route"}, envMap{"COAMING_HOST_ROUTE_FILE": "/proc/host/net/route"}, files{})
+	if err != nil || c.HostRouteFile != "/srv/route" {
+		t.Errorf("the flag does not win: %q, %v", c.HostRouteFile, err)
+	}
+	for _, bad := range []string{"host/route", "route", "/host/../route", "/host//route", "/host/route/"} {
+		_, err := load(t, nil, envMap{"COAMING_HOST_ROUTE_FILE": bad}, files{})
+		if err == nil || !strings.Contains(err.Error(), "COAMING_HOST_ROUTE_FILE") {
+			t.Errorf("COAMING_HOST_ROUTE_FILE=%q: error = %v, want one naming the variable", bad, err)
+		}
+	}
+}

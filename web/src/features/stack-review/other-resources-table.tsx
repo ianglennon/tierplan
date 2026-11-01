@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { StackReviewObject } from "@/api/stacks";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -10,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsCard } from "@/features/environments/settings-card";
 import { useT } from "@/i18n/use-t";
 
@@ -18,6 +20,38 @@ interface OtherResourcesTableProps {
 }
 
 const GLYPH = { added: "+", changed: "~", removed: "−", external: "" } as const;
+
+// NetworkSubnet is the detail of a network the deploy creates with a subnet (D-20): the name and the subnet in
+// mono and, when Coaming chose the subnet because small stack subnets are on, the badge that says so. It
+// opens its tooltip on keyboard focus too. Swarm and standalone reviews draw the same line.
+function NetworkSubnet({
+  name,
+  subnet,
+  chosen,
+}: {
+  name: string;
+  subnet: string;
+  chosen: boolean;
+}) {
+  const t = useT();
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="break-all">
+        {t("stackReview.network.line", { name })} <span className="font-mono">{subnet}</span>
+      </span>
+      {chosen ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="outline" tabIndex={0}>
+              {t("stackReview.network.smallSubnetDefault")}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent>{t("stackReview.network.smallSubnetTooltip")}</TooltipContent>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+}
 
 // OtherResourcesTable is the Other resources card of the Changes tab (STK-06, D-07, D-11): the
 // networks, secrets and configs a deploy would add, change or remove, and the external ones the
@@ -67,7 +101,15 @@ export function OtherResourcesTable({ objects }: OtherResourcesTableProps) {
                   {o.name}
                 </TableCell>
                 <TableCell className="align-top text-xs whitespace-normal text-muted-foreground">
-                  {detail}
+                  {o.kind === "network" && o.subnet ? (
+                    <NetworkSubnet
+                      name={o.name}
+                      subnet={o.subnet}
+                      chosen={!!o.smallSubnetDefault}
+                    />
+                  ) : (
+                    detail
+                  )}
                 </TableCell>
               </TableRow>
             );

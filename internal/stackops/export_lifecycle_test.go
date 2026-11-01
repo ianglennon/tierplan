@@ -8,3 +8,9 @@ var ReplicasSpec = replicasSpec
 
 // ConvertLogText is convertLogText for the tests of package stackops_test.
 var ConvertLogText = convertLogText
+
+// SetSubnetPlanHook returns d with the hook a swarm deploy calls after planning the subnets of its new networks.
+func SetSubnetPlanHook(d Deps, hook func()) Deps {
+	d.subnetPlanHook = hook
+	return d
+}

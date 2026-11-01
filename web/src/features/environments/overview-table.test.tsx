@@ -33,6 +33,7 @@ function env(id: string, name: string, state: HealthState, extra: Partial<Enviro
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,
@@ -127,7 +128,7 @@ afterEach(() => {
 });
 
 describe("EnvOverviewTable columns and cells", () => {
-  it("has the nine columns in order and a sort button on exactly five of them", async () => {
+  it("has the ten columns in order and a sort button on exactly six of them", async () => {
     await mount({ items: [SWARM] });
     const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
     expect(heads).toEqual([
@@ -136,6 +137,7 @@ describe("EnvOverviewTable columns and cells", () => {
       "Type",
       "Nodes",
       "Failing services",
+      "Address space",
       "Agents",
       "Engine",
       "Agent",
@@ -147,6 +149,7 @@ describe("EnvOverviewTable columns and cells", () => {
       "Sort by Name",
       "Sort by Nodes",
       "Sort by Failing services",
+      "Sort by Address space",
       "Sort by Last seen",
     ]);
   });
@@ -181,6 +184,7 @@ describe("EnvOverviewTable columns and cells", () => {
     const cells = within(standalone as HTMLElement).getAllByRole("cell");
     expect(cells[4]?.textContent).toBe("—");
     expect(cells[5]?.textContent).toBe("—");
+    expect(cells[6]?.textContent).toBe("—");
     const zero = rows.find((r) => within(r).queryByText("zero")) as HTMLElement;
     expect(within(zero).getByLabelText("0 of 0 nodes ready").textContent).toBe("0/0");
     expect(within(zero).getByLabelText("0 of 0 services failing").textContent).toBe("0/0");
@@ -196,7 +200,7 @@ describe("EnvOverviewTable columns and cells", () => {
     const row = screen.getAllByRole("row")[1] as HTMLElement;
     const cells = within(row).getAllByRole("cell");
     expect(cells[3]?.textContent).toBe("—");
-    expect(cells[6]?.textContent).toBe("—");
+    expect(cells[7]?.textContent).toBe("—");
     expect(within(row).getByText("Pending")).toBeTruthy();
     fireEvent.click(within(row).getByRole("button", { name: "Finish setup" }));
     expect(onFinishSetup).toHaveBeenCalledWith(
@@ -309,7 +313,99 @@ describe("EnvOverviewTable sorting", () => {
     await mount({ items: [STANDALONE], sort: "name", dir: "asc" });
     const heads = screen.getAllByRole("columnheader");
     expect(heads[3]?.getAttribute("aria-sort")).toBe("none");
+    expect(heads[5]?.getAttribute("aria-sort")).toBe("none");
     expect(heads[2]?.getAttribute("aria-sort")).toBeNull();
+  });
+});
+
+const space = (
+  percent: number,
+  extra: Partial<NonNullable<EnvironmentItem["addressSpace"]>> = {},
+) => ({
+  worstName: "10.0.0.0/16",
+  worstKind: "pool" as const,
+  used: percent,
+  capacity: 100,
+  percent,
+  state:
+    percent >= 90
+      ? ("almost_full" as const)
+      : percent >= 70
+        ? ("getting_full" as const)
+        : ("normal" as const),
+  unit: "subnets" as const,
+  estimated: false,
+  orphaned: 0,
+  ...extra,
+});
+
+describe("EnvOverviewTable address space column", () => {
+  it("shows each environment's fullest pool and puts a filling one with the problems", async () => {
+    await mount({
+      items: [
+        env("a", "calm", "online", { addressSpace: space(42) }),
+        env("b", "filling", "online", { addressSpace: space(72) }),
+        env("c", "full", "online", { addressSpace: space(91) }),
+        env("d", "down", "offline"),
+      ],
+    });
+    expect(rowNames()).toEqual(["down", "full", "filling", "calm"]);
+    expect(screen.getByLabelText("42 percent, normal").textContent).toBe("42%");
+    expect(screen.getByLabelText("72 percent, getting full").textContent).toBe("72%");
+    expect(screen.getByLabelText("91 percent, almost full").textContent).toBe("91%");
+    expect(screen.getAllByLabelText("Not measured")).toHaveLength(1);
+  });
+
+  it("sorts by the column, the fullest first, and asks for it ascending first", async () => {
+    const onSortChange = vi.fn();
+    const items = [
+      env("a", "calm", "online", { addressSpace: space(42) }),
+      env("b", "unmeasured", "online"),
+      env("c", "full", "online", { addressSpace: space(91) }),
+    ];
+    const view = await mount({ items, onSortChange });
+    fireEvent.click(screen.getByRole("button", { name: "Sort by Address space" }));
+    expect(onSortChange).toHaveBeenLastCalledWith("addressSpace", "asc");
+    await view.update({ items, onSortChange, sort: "addressSpace", dir: "asc" });
+    expect(rowNames()).toEqual(["full", "calm", "unmeasured"]);
+    expect(screen.getAllByRole("columnheader")[5]?.getAttribute("aria-sort")).toBe("ascending");
+  });
+
+  it("shows a 48px skeleton in the column while loading", async () => {
+    await mount({ items: [], loading: true });
+    const row = screen.getAllByRole("row")[1] as HTMLElement;
+    expect(row.querySelectorAll("td")[5]?.querySelector(".w-12")).toBeTruthy();
+  });
+
+  it("appends the pool to a stacked row only from 70 percent", async () => {
+    setWidth(375);
+    const root = createRootRoute({
+      component: () => (
+        <TooltipProvider>
+          <EnvOverviewTable
+            items={[
+              env("a", "calm", "online", {
+                addressSpace: space(42),
+                nodes: { ready: 1, total: 1 },
+              }),
+              env("b", "filling", "online", {
+                addressSpace: space(72),
+                nodes: { ready: 1, total: 1 },
+              }),
+            ]}
+            onSortChange={() => {}}
+          />
+        </TooltipProvider>
+      ),
+    });
+    const router = createRouter({
+      routeTree: root,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(<RouterProvider router={router} />);
+    const items = within(await screen.findByRole("list")).getAllByRole("listitem");
+    expect(within(items[0] as HTMLElement).getByText("1/1 node · pool 72%")).toBeTruthy();
+    expect(within(items[1] as HTMLElement).getByText("1/1 node")).toBeTruthy();
   });
 });
 

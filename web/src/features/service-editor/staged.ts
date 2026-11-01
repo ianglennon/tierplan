@@ -29,6 +29,9 @@ export interface StagedObject {
   templating?: Templating;
   // A network's optional subnet, in CIDR form.
   subnet?: string;
+  // True when the person ticked Create it anyway for a subnet that overlaps a network of the
+  // environment (D-18); the apply carries it, and the server records it.
+  createAnyway?: boolean;
 }
 
 export interface StagedStore {
@@ -130,6 +133,7 @@ export interface ApplyObject {
   data?: string;
   templating?: "golang";
   subnet?: string;
+  createAnyway?: true;
 }
 
 // objectsForApply is what the apply sends for the objects the review says are missing: every
@@ -143,8 +147,14 @@ export function objectsForApply(
   const objects: ApplyObject[] = [];
   let lacking = 0;
   for (const name of missing.networks ?? []) {
-    const subnet = store.get("network", name)?.subnet;
-    objects.push({ kind: "network", name, ...(subnet ? { subnet } : {}) });
+    const staged = store.get("network", name);
+    const subnet = staged?.subnet;
+    objects.push({
+      kind: "network",
+      name,
+      ...(subnet ? { subnet } : {}),
+      ...(subnet && staged?.createAnyway ? { createAnyway: true as const } : {}),
+    });
   }
   const valued = (kind: "secret" | "config", names: readonly string[]) => {
     for (const name of names) {

@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"slices"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -14,6 +15,7 @@ import (
 	"github.com/ianglennon/coaming/internal/rbac"
 	"github.com/ianglennon/coaming/internal/stackops"
 	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/coaming/internal/stacks/lint"
 )
 
 // StackCheckRequest is the body of POST .../check: the working copy to check, in the save shape.
@@ -87,8 +89,10 @@ func registerStackCheck(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 		OperationID: "checkStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/check",
 		Summary: "Check a stack's working copy",
 		Description: "Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. " +
-			"The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing, writes nothing and sends nothing to an engine. " +
+			"The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing and writes nothing. " +
 			"include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. " +
+			"An explicit network subnet is compared with the networks and address pools the environment already shows (a read-only look at the environment's cached listing): a warning when it overlaps another network of the environment or lies outside every pool. " +
+			"The stack's own networks are left out of the comparison, and when the environment cannot be read the check answers without these two warnings. " +
 			"The editor calls it while a person types and on Save, and the review and the deploy run the same check. " +
 			"One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. " +
 			"Needs stacks.read (Viewer).",
@@ -111,8 +115,10 @@ type checkedCopy struct {
 // a secret the browser never held), builds the working copy from the request and runs
 // stacks.Check over it. The slot is held until release is called, which the caller must do once
 // it has finished with the result. It is pure: nothing is written and no engine is called. The
-// check route and the render route share it, and so share the two-checks-per-user limit.
-func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackID string, body StackCheckRequest) (c checkedCopy, release func(), err error) {
+// check route and the render route share it, and so share the two-checks-per-user limit. Only the check
+// route (withNetworks) hands the check the environment's networks and pools, for the explicit-subnet hints
+// (D-19); a render judges the file as it always did.
+func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackID string, body StackCheckRequest, withNetworks bool) (c checkedCopy, release func(), err error) {
 	p, env := httpx.PrincipalFrom(ctx), httpx.EnvFrom(ctx)
 	if p == nil || env == nil {
 		return c, nil, huma.Error500InternalServerError("internal error")
@@ -148,14 +154,62 @@ func runStackCheck(ctx context.Context, d StacksDeps, lim *streamLimiter, stackI
 	if d.OnCheck != nil {
 		d.OnCheck(ctx)
 	}
-	res := stacks.Check(ctx, stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc, Deadline: d.CheckDeadline})
+	in := stacks.CheckInput{Name: st.Name, Target: st.Target, Copy: wc, Deadline: d.CheckDeadline}
+	if withNetworks {
+		in.Env = networkEnv(ctx, d, env.ID, st.Name)
+	}
+	res := stacks.Check(ctx, in)
 	return checkedCopy{stack: st, copy: wc, res: res}, release, nil
+}
+
+// networkEnv is what the explicit-subnet hints compare a stack's networks with: every network of the
+// environment on every node that reports, minus the stack's own (a redeploy must not collide with itself), and
+// the bases of the address pools. It is read through the environment's cached listing and pool reader (a read, never
+// a write). When the listing cannot be read the answer is nil and the check has no network findings;
+// when only the pools cannot be read the pool list is empty and only the overlap hint can fire.
+func networkEnv(ctx context.Context, d StacksDeps, envID, stackName string) *lint.NetEnv {
+	if d.AddressSpaces == nil || d.Aggregator == nil {
+		return nil
+	}
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		if d.Log != nil {
+			d.Log.Debug("the networks of an environment could not be read for a stack check", "environment", envID, "error", err)
+		}
+		return nil
+	}
+	env := &lint.NetEnv{}
+	for _, n := range agg.Networks {
+		if n.Labels[stacks.LabelSwarmNamespace] == stackName || n.Labels[stacks.LabelComposeProject] == stackName {
+			continue
+		}
+		var subnets []netip.Prefix
+		for _, raw := range n.Subnets {
+			if p, err := netip.ParsePrefix(raw); err == nil && p.Addr().Is4() {
+				subnets = append(subnets, p.Masked())
+			}
+		}
+		if len(subnets) > 0 {
+			env.Networks = append(env.Networks, lint.NetInfo{Name: n.Name, Node: n.Node, Subnets: subnets})
+		}
+	}
+	space, err := d.AddressSpaces.Read(ctx, envID)
+	if err != nil {
+		if d.Log != nil {
+			d.Log.Debug("the address pools of an environment could not be read for a stack check", "environment", envID, "error", err)
+		}
+		return env
+	}
+	for _, p := range space.Pools {
+		env.Pools = append(env.Pools, p.Pool.Base)
+	}
+	return env
 }
 
 // checkStack runs stacks.Check over the working copy in the request. It is pure: the only reads
 // are the stack and its saved draft, the second to fill a secret the browser never held.
 func checkStack(ctx context.Context, d StacksDeps, lim *streamLimiter, in *StackCheckInput) (*StackCheckOutput, error) {
-	c, release, err := runStackCheck(ctx, d, lim, in.StackID, in.Body)
+	c, release, err := runStackCheck(ctx, d, lim, in.StackID, in.Body, true)
 	if err != nil {
 		return nil, err
 	}

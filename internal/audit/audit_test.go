@@ -586,3 +586,116 @@ func TestRecordEmitsOneConstantMessageWithFieldsAsAttributes(t *testing.T) {
 		t.Fatalf("log record = %v", rec)
 	}
 }
+
+// inspectEntry is a network.inspect_saved entry whose inspect detail is doc.
+func inspectEntry(doc string) audit.Entry {
+	e := ent(audit.ActionNetworkInspectSaved)
+	e.TargetType, e.TargetID = "network", "net-1"
+	e.Details = map[string]string{"name": "n", "inspect": doc}
+	return e
+}
+
+// jsonOf40KiB is a JSON object a little over 40 KiB, with characters the JSON encoder escapes.
+func jsonOf40KiB() string {
+	var b strings.Builder
+	b.WriteString(`{"Name":"n","Labels":{`)
+	for i := range 160 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"k%d":"%s"`, i, strings.Repeat("<é>&", 60))
+	}
+	b.WriteString(`}}`)
+	return b.String()
+}
+
+// The inspect detail of network.inspect_saved is evidence (D-12): stored byte for byte, and the
+// chain still verifies over it.
+func TestEvidenceStoredWhole(t *testing.T) {
+	f := newFixture(t)
+	doc := jsonOf40KiB()
+	if len(doc) < 40<<10 || len(doc) > audit.MaxEvidenceValue {
+		t.Fatalf("fixture is %d bytes", len(doc))
+	}
+	if err := f.w.Record(context.Background(), inspectEntry(doc)); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	rows, _, err := audit.Query(context.Background(), f.s, audit.Filter{AnyEnv: true}, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Details["inspect"] != doc {
+		t.Fatalf("the inspect was not read back byte for byte (%d rows)", len(rows))
+	}
+	if rows[0].Details["name"] != "n" {
+		t.Errorf("name = %q", rows[0].Details["name"])
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != 1 {
+		t.Fatalf("verify = %+v", got)
+	}
+	// The limit itself is stored.
+	full := strings.Repeat("a", audit.MaxEvidenceValue)
+	if err := f.w.Record(context.Background(), inspectEntry(full)); err != nil {
+		t.Fatalf("a value of exactly MaxEvidenceValue was refused: %v", err)
+	}
+}
+
+// A value over the limit, or one cleaning would change, is refused and nothing is written.
+func TestEvidenceRefusedNotCut(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if err := f.w.Record(ctx, inspectEntry(strings.Repeat("a", audit.MaxEvidenceValue+1))); !errors.Is(err, audit.ErrEvidenceTooLarge) {
+		t.Fatalf("err = %v, want ErrEvidenceTooLarge", err)
+	}
+	for name, doc := range map[string]string{"DEL": "{\"a\":\"x\x7fy\"}", "NUL": "{\"a\":\"x\x00y\"}", "bad UTF-8": "{\"a\":\"x\xffy\"}"} {
+		if err := f.w.Record(ctx, inspectEntry(doc)); !errors.Is(err, audit.ErrInvalidEntry) {
+			t.Errorf("%s: err = %v, want ErrInvalidEntry", name, err)
+		}
+	}
+	if n := f.count(t); n != 0 {
+		t.Fatalf("the log holds %d entries after refusals, want 0", n)
+	}
+	tx, err := f.s.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := f.w.RecordTx(ctx, tx, inspectEntry(strings.Repeat("a", audit.MaxEvidenceValue+1))); !errors.Is(err, audit.ErrEvidenceTooLarge) {
+		t.Fatalf("RecordTx err = %v, want ErrEvidenceTooLarge", err)
+	}
+}
+
+// Only network.inspect_saved's inspect is evidence; every other value keeps the 512-byte cap.
+func TestEvidenceOnlyForItsPair(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	doc := jsonOf40KiB()
+
+	removed := ent(audit.ActionNetworkRemoved)
+	removed.Details = map[string]string{"inspect": doc}
+	if err := f.w.Record(ctx, removed); err != nil {
+		t.Fatal(err)
+	}
+	other := ent(audit.ActionNetworkInspectSaved)
+	other.Details = map[string]string{"name": doc, "inspect": "{}"}
+	if err := f.w.Record(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := audit.Query(ctx, f.s, audit.Filter{AnyEnv: true}, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("%d rows", len(rows))
+	}
+	for _, r := range rows {
+		for k, v := range r.Details {
+			if len(v) > 512 {
+				t.Errorf("%s %s is %d bytes, want it cut to 512", r.Action, k, len(v))
+			}
+		}
+	}
+	if got := f.verify(t); got.Broken != nil || got.Entries != 2 {
+		t.Fatalf("verify = %+v", got)
+	}
+}

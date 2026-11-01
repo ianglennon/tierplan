@@ -31,6 +31,9 @@ const (
 const (
 	SourceApply        = "service_apply"
 	SourceApplyCleanup = "service_apply_cleanup"
+	// SourceAllocationCheck is the source of the row of a staged network the swarm never allocated
+	// and that was removed again by the read-back after its create (G-10-8).
+	SourceAllocationCheck = "allocation_check"
 	// SourceRotate is the source of the rows of the new object and of the old one a rotate removes.
 	SourceRotate = "rotate"
 )
@@ -50,6 +53,7 @@ const (
 	codeNameTaken    = "name_taken"
 	codeCreateFailed = "create_failed"
 	codeRemoveFailed = "remove_failed"
+	codeNotAllocated = "not_allocated"
 	codeInUse        = "object_in_use"
 	codeUpdateFailed = "update_failed"
 	codeNameTakenSvc = "service_name_taken"
@@ -91,7 +95,10 @@ type StagedObject struct {
 	Templating string
 	// Subnet is the optional addressing of a network, in CIDR form.
 	Subnet string
-	Labels map[string]string
+	// CreateAnyway records that the person chose to make the network although its subnet overlaps
+	// another of the environment (the caller has already gated on it); the audit row says so.
+	CreateAnyway bool
+	Labels       map[string]string
 }
 
 // CreatedObject is an object an apply made.
@@ -282,16 +289,29 @@ func kinds(objects []StagedObject) []string {
 // createObjects creates the objects in dependency order (networks, secrets, configs, each in the
 // order given), once each and never retried. It stops at the first that fails and returns what it
 // made so far beside an *ObjectCreateError. Each attempt is recorded. The values are not kept.
-func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObject, record Recorder) ([]CreatedObject, error) {
+func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObject, record Recorder, wait dockerx.AllocationWait) ([]CreatedObject, error) {
 	ordered := slices.Clone(objects)
 	slices.SortStableFunc(ordered, func(a, b StagedObject) int { return kindRank(a.Kind) - kindRank(b.Kind) })
 	created := make([]CreatedObject, 0, len(ordered))
 	for _, o := range ordered {
-		id, err := createOne(ctx, cli, o)
+		id, err := createOne(ctx, cli, o, wait)
 		if err != nil {
 			code := codeCreateFailed
-			if errors.Is(err, dockerx.ErrNameTaken) {
+			var na *dockerx.NotAllocatedError
+			switch {
+			case errors.Is(err, dockerx.ErrNameTaken):
 				code = codeNameTaken
+			case errors.As(err, &na):
+				// The swarm accepted the create and never allocated the network. The read-back has
+				// removed the stub (or tried to): two rows, the failed create and that removal. The
+				// stub is not in created, so the cleanup does not remove it a second time.
+				record.record(createdRow(o, na.ID, codeNotAllocated))
+				rm := codeRemoved
+				if !na.Removed {
+					rm = codeRemoveFailed
+				}
+				record.record(removedRowFrom(CreatedObject{Kind: o.Kind, Name: o.Name, ID: na.ID}, rm, SourceAllocationCheck))
+				return created, &ObjectCreateError{Kind: o.Kind, Name: o.Name, Err: err}
 			}
 			record.record(createdRow(o, o.Name, code))
 			return created, &ObjectCreateError{Kind: o.Kind, Name: o.Name, Err: err}
@@ -303,12 +323,14 @@ func createObjects(ctx context.Context, cli *dockerx.Client, objects []StagedObj
 }
 
 // createOne makes one object. A name the environment has already is dockerx.ErrNameTaken.
-func createOne(ctx context.Context, cli *dockerx.Client, o StagedObject) (string, error) {
+// A staged network is read back after its create until the swarm has allocated it (wait); one the
+// swarm never allocates is removed again and comes back as a *dockerx.NotAllocatedError (G-10-8).
+func createOne(ctx context.Context, cli *dockerx.Client, o StagedObject, wait dockerx.AllocationWait) (string, error) {
 	switch o.Kind {
 	case KindNetwork:
-		id, _, err := cli.NetworkCreate(ctx, dockerx.NetworkCreateSpec{
+		id, _, err := cli.NetworkCreateAllocated(ctx, dockerx.NetworkCreateSpec{
 			Name: o.Name, Driver: dockerx.DriverOverlay, Scope: dockerx.ScopeSwarm, Attachable: true, Subnet: o.Subnet,
-		})
+		}, wait)
 		if err != nil && (cerrdefs.IsConflict(err) || cerrdefs.IsAlreadyExists(err) || strings.Contains(err.Error(), "already exists")) {
 			return "", fmt.Errorf("%w: %w", dockerx.ErrNameTaken, err)
 		}
@@ -341,6 +363,9 @@ func createdRowFrom(o StagedObject, targetID, code, source string) audit.Entry {
 		d["internal"], d["attachable"] = "false", "true"
 		if o.Subnet != "" {
 			d["subnet"] = o.Subnet
+		}
+		if o.CreateAnyway {
+			d["overlap_override"] = "true"
 		}
 	case KindSecret:
 		e.Action = audit.ActionSecretCreated
@@ -422,6 +447,8 @@ func stepCode(err error) string {
 	switch {
 	case errors.Is(err, dockerx.ErrNameTaken):
 		return codeNameTaken
+	case errors.Is(err, dockerx.ErrNetworkNotAllocated):
+		return codeNotAllocated
 	case errors.Is(err, dockerx.ErrServiceNameTaken):
 		return codeNameTakenSvc
 	case errors.Is(err, dockerx.ErrServiceChanged):

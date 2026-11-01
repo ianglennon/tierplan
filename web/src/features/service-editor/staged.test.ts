@@ -113,6 +113,17 @@ describe("objectsForApply", () => {
     ]);
   });
 
+  it("carries createAnyway on a network that has a subnet, and only then", () => {
+    const store = createStagedStore();
+    store.put({ kind: "network", name: "front", subnet: "10.9.0.0/25", createAnyway: true });
+    store.put({ kind: "network", name: "back", createAnyway: true });
+    const got = objectsForApply({ networks: ["front", "back"], secrets: [], configs: [] }, store);
+    expect(got.objects).toEqual([
+      { kind: "network", name: "front", subnet: "10.9.0.0/25", createAnyway: true },
+      { kind: "network", name: "back" },
+    ]);
+  });
+
   it("encodes a value as UTF-8, and a file as its bytes", () => {
     const store = createStagedStore();
     store.put({ kind: "secret", name: "pw", value: typed("pässword") });

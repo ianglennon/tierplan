@@ -140,7 +140,11 @@ func (d Deps) reviewRollback(ctx context.Context, in ReviewInput, rv *Review) (e
 	}
 
 	var problems stacks.Problems
-	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live)
+	// The revision's own record of the subnets its networks were given: one that has to be created again takes it
+	// while it is free, as the deploy of the revision does (D-20).
+	subnets := d.reviewSubnets(ctx, in.EnvID, in.Stack, plan, live, target.Subnets)
+	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live, subnets)
+	problems = append(problems, subnetProblems(plan, subnets)...)
 	rv.Problems = append(rv.Problems, placeProblems(prep.Files, problems)...)
 	for _, o := range rv.Objects {
 		switch o.Kind {
@@ -226,6 +230,11 @@ func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *
 	// a deploy sends, which are not part of what the revision stored.
 	rv.YAML = d.rollbackYAMLChange(in, prep, restored)
 
+	// The revision's own record of the subnets its networks were given: one that has to be created again takes it
+	// while it is free, and one the host holds keeps it (D-20).
+	subnets := d.reviewStandaloneSubnets(ctx, in.EnvID, in.Stack, project, live, target.Subnets)
+	rv.Problems = append(rv.Problems, standaloneSubnetProblems(project, subnets)...)
+
 	if err := stacks.PrepareStandalone(project, in.Stack.ID, standalonePins(items, pinned), objs); err != nil {
 		rv.Problems = append(rv.Problems, prepareProblem(err))
 		return nil
@@ -251,8 +260,8 @@ func (d Deps) reviewRollbackStandalone(ctx context.Context, in ReviewInput, rv *
 		rv.Services = append(rv.Services, stacks.ServiceChange{Name: name, Short: name, Change: stacks.ChangeRemoved})
 		rv.Summary.Services.Removed++
 	}
-	for _, name := range missingNetworks(project, live.Networks) {
-		rv.Objects = append(rv.Objects, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: name})
+	for _, row := range standaloneNetworkRows(project, live.Networks, subnets) {
+		rv.Objects = append(rv.Objects, row)
 		rv.Summary.Networks.Added++
 	}
 	for _, name := range missingVolumes(project, live.Volumes) {

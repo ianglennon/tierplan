@@ -96,6 +96,12 @@ const (
 	// ActionEnvironmentRestartLoopSettingsChanged is a change of the failures and the window
 	// that make a restart loop in one environment (plan 06-35, RES-13).
 	ActionEnvironmentRestartLoopSettingsChanged = "environment.restart_loop_settings_changed"
+	// ActionEnvironmentSmallSubnetsChanged is a change of the opt-in to small stack subnets, or
+	// of their size, in one environment (plan 10-21, D-21).
+	ActionEnvironmentSmallSubnetsChanged = "environment.small_subnets_changed"
+	// ActionEnvironmentAddressPoolsSaved is a save of the address pools a person entered for a
+	// standalone host (plan 10-21, D-07 as amended).
+	ActionEnvironmentAddressPoolsSaved = "environment.address_pools_saved"
 
 	ActionWarningAcknowledged = "warning.acknowledged"
 	ActionAuditPruned         = "audit.pruned"
@@ -144,6 +150,9 @@ const (
 	ActionContainerRemoved           = "container.removed"
 	ActionNetworkCreated             = "network.created"
 	ActionNetworkRemoved             = "network.removed"
+	ActionNetworkInspectSaved        = "network.inspect_saved" // the whole masked inspect of a network, saved before it is removed (D-12)
+	ActionNetworkKept                = "network.kept"          // a person asked never to list a network as orphaned or unused (D-11)
+	ActionNetworkUnkept              = "network.unkept"        // and took it back
 	ActionNetworkConnected           = "network.connected"
 	ActionNetworkDisconnected        = "network.disconnected"
 	ActionVolumeCreated              = "volume.created"
@@ -249,6 +258,9 @@ var (
 	ErrSecretField = errors.New("audit: detail key names a secret")
 	// ErrInvalidEntry means a required field is missing or unknown.
 	ErrInvalidEntry = errors.New("audit: invalid entry")
+	// ErrEvidenceTooLarge means an evidence detail is longer than MaxEvidenceValue. Evidence is
+	// stored whole or refused, never cut; nothing was written (D-12).
+	ErrEvidenceTooLarge = errors.New("audit: evidence detail too large")
 )
 
 // metaLastPruned is the app_meta key holding the hex HMAC of the newest entry
@@ -266,6 +278,19 @@ const (
 	maxDetailValue = 512
 	maxDetails     = 32
 )
+
+// MaxEvidenceValue is the most bytes of one evidence detail the writer stores. Evidence is the
+// one kind of detail that is kept whole: the full secret-masked inspect document of a network
+// removed as orphaned, which D-12 requires in the log before the network is removed so that it
+// can be recreated. Every other detail value is cut at 512 bytes. The allowance is one (action,
+// key) pair, named in evidenceKeys, written once per delete attempt by an Env Admin, so the audit
+// viewer's 50-entry page stays bounded.
+const MaxEvidenceValue = 64 << 10
+
+// evidenceKeys names the only (action, detail key) pairs whose value is evidence (D-12): stored
+// byte for byte up to MaxEvidenceValue, refused with ErrEvidenceTooLarge above it, and refused
+// with ErrInvalidEntry when cleaning would alter it, because a changed copy is no evidence.
+var evidenceKeys = map[string]string{ActionNetworkInspectSaved: "inspect"}
 
 // secretWords are the (case-insensitive) fragments that make a detail key
 // ineligible: secret values are never recorded (D-39, T-01-28).
@@ -375,6 +400,16 @@ func (w *Writer) prepare(e Entry) (record, error) {
 			if strings.Contains(lower, word) {
 				return record{}, fmt.Errorf("%w: %q", ErrSecretField, k)
 			}
+		}
+		if evidenceKeys[e.Action] == k {
+			if len(val) > MaxEvidenceValue {
+				return record{}, fmt.Errorf("%w: %q is %d bytes, over %d", ErrEvidenceTooLarge, k, len(val), MaxEvidenceValue)
+			}
+			if clean(val, MaxEvidenceValue) != val {
+				return record{}, fmt.Errorf("%w: %q holds invalid UTF-8 or a control character", ErrInvalidEntry, k)
+			}
+			details[clean(k, maxDetailKey)] = val
+			continue
 		}
 		details[clean(k, maxDetailKey)] = clean(val, maxDetailValue)
 	}

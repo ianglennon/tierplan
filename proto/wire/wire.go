@@ -44,6 +44,34 @@ const StreamKindDockerHTTP byte = 0x01
 // change.
 const StreamKindControl byte = 0x02
 
+// StreamKindHostNet is the first byte of a server-opened stream that asks the
+// agent for its host's IPv4 routes. The server opens it only when the agent
+// reported Facts.HostNet == HostNetOK; an agent older than Phase 10 closes a
+// stream of a kind it does not know, so the server never asks one. The agent
+// writes one JSON HostNetDoc read fresh from its route file and closes the
+// stream. It reads one file and runs nothing: it never reaches the Docker socket.
+const StreamKindHostNet byte = 0x03
+
+// What Facts.HostNet says about the host route file.
+const (
+	// HostNetOK means the agent can read the host's route file.
+	HostNetOK = "ok"
+	// HostNetUnmounted means the route file is not mounted, or not readable.
+	HostNetUnmounted = "unmounted"
+)
+
+// HostNetDoc.Error codes.
+const (
+	// HostNetUnreadable means the route file could not be read.
+	HostNetUnreadable = "unreadable"
+	// HostNetTooLarge means a line or the file was larger than the agent reads.
+	HostNetTooLarge = "too_large"
+)
+
+// MaxHostNetBytes is the most a server reads from a host-net stream: the 512
+// routes an agent keeps come to well under half of it.
+const MaxHostNetBytes = 64 << 10
+
 // MaxControlLine is the longest line either side accepts on the control stream.
 // The agent is authenticated by then, but not trusted to be well behaved.
 const MaxControlLine = 64 << 10
@@ -166,6 +194,10 @@ type Facts struct {
 	EngineVersion   string      `json:"engineVersion,omitempty"`
 	Swarm           *SwarmFacts `json:"swarm,omitempty"`
 	Policy          PolicyFacts `json:"policy"`
+	// HostNet says whether the agent can read its host's routes: HostNetOK or
+	// HostNetUnmounted. Absent means an agent older than Phase 10, which has no
+	// host-net stream; the server asks only when it is HostNetOK.
+	HostNet string `json:"hostNet,omitempty"`
 }
 
 // SwarmFacts describes the swarm a host belongs to. Only a manager knows the
@@ -188,6 +220,24 @@ type PolicyFacts struct {
 	// agent forwards the volume creates it would refuse (volume creates). Absent
 	// reads as false.
 	PrivilegedServices bool `json:"privilegedServices,omitempty"`
+}
+
+// HostRoute is one IPv4 route of the agent's host, as the agent read it: a
+// destination network (masked, never the default route, never a single host)
+// and the interface it leaves by. The server treats every field as untrusted.
+type HostRoute struct {
+	Iface   string `json:"iface"`
+	Dst     string `json:"dst"`
+	Gateway string `json:"gw,omitempty"`
+}
+
+// HostNetDoc is the one document an agent writes on a StreamKindHostNet stream.
+type HostNetDoc struct {
+	V         int         `json:"v"`
+	Routes    []HostRoute `json:"routes"`
+	Truncated bool        `json:"truncated,omitempty"`
+	// Error is HostNetUnreadable or HostNetTooLarge, with no routes.
+	Error string `json:"error,omitempty"`
 }
 
 // Welcome is the server's answer to a successful handshake. Cert is the DER

@@ -64,6 +64,12 @@ function attachmentOf(r: Row): Attachment | null {
   return next;
 }
 
+// replicasOf is the replica count the spec asks for, or nothing when it has none (a global service).
+function replicasOf(spec: CardProps["spec"]): number | undefined {
+  const n = getPath(spec, "Mode.Replicated.Replicas");
+  return typeof n === "number" && Number.isInteger(n) && n >= 1 ? n : undefined;
+}
+
 // NetworksCard: the networks the service is attached to, one row each: the network (an
 // ObjectPicker) and the extra names other services can reach it by. A network chosen from the list
 // is written by its ID, as the Docker CLI does; one staged in the editor is written by its name
@@ -140,6 +146,7 @@ export function NetworksCard({ spec, set, unset, report, envId }: CardProps) {
                 <ObjectPicker
                   kind="network"
                   envId={envId}
+                  replicas={replicasOf(spec)}
                   id={`${rid}-pick`}
                   label={t("serviceForm.networks.network")}
                   value={pickedOf(r)}

@@ -24,8 +24,8 @@ type AgentCounts struct{ Connected, Expected int }
 // Overview is what the environments table, the switcher and the mobile rows show
 // of an environment without asking for its resources (D-32). A nil pointer or an
 // empty string is "not known": the environment has no agent yet, the engine has
-// not answered, or the data is not read here. There is no place for updates or
-// address pools: those columns arrive with the features behind them.
+// not answered, or the data is not read here. The updates column arrives with the
+// feature behind it.
 type Overview struct {
 	// EnvType is "swarm" or "standalone", empty until it is known.
 	EnvType string
@@ -49,6 +49,10 @@ type Overview struct {
 	// LastSeen is the last sign of life of any agent: this run's, else the stored
 	// one. For the local socket it is the last probe that found the engine online.
 	LastSeen time.Time
+	// AddressSpace is the fullest pool or network of the environment and its orphan count,
+	// from the last read of its address space. It is nil when nothing has been measured, and
+	// while the environment is offline, since the numbers would be out of date.
+	AddressSpace *AddressSummary
 }
 
 // overview works out an environment's Overview from the same input its health is
@@ -79,6 +83,9 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 				o.Nodes = &NodeCounts{Ready: c.NodesReady, Total: c.NodesTotal}
 			}
 			o.Failing = c.Failing
+			if st.State == StateOnline {
+				o.AddressSpace = c.AddressSpace
+			}
 		}
 		if st.State == StateOnline {
 			o.LastSeen = st.LastAttempt
@@ -132,6 +139,9 @@ func overview(in RollupInput, st Status, serverVersion string) Overview {
 			o.Agents = &AgentCounts{Connected: connected, Expected: max(c.ExpectedAgents, connected)}
 		}
 		o.Failing = c.Failing
+		if ready > 0 {
+			o.AddressSpace = c.AddressSpace
+		}
 	}
 
 	// The oldest version stands for the environment, so the update badge shows while

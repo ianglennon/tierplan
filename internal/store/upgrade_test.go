@@ -276,6 +276,59 @@ func TestVersion17DatabaseUpgradesToHeadWithRevisionPlatforms(t *testing.T) {
 	}
 }
 
+// TestVersion23DatabaseUpgradesToHeadWithSubnetDefaults stages a database as the release before the
+// address-space settings leaves it (schema version 23) with environments in it, upgrades it, and checks
+// that every environment reads small subnets off at /26, no entered pools, version 0 and nobody as the
+// last to save, and that the CHECKs refuse a size outside 25 to 28 (plan 10-21, D-21).
+func TestVersion23DatabaseUpgradesToHeadWithSubnetDefaults(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := open(t, dir)
+	res, err := store.Migrate(ctx, s, store.MigrateOptions{
+		AppVersion: "v23-fixture", DataDir: dir, SkipBackup: true, Migrations: migrationsUpTo(t, 23),
+	})
+	if err != nil || res.To != 23 {
+		t.Fatalf("migrate to version 23: %v (at %d)", err, res.To)
+	}
+	var n int
+	if err := s.Read.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('environments') WHERE name = 'small_subnet_mask'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("environments has small_subnet_mask at version 23 (%d, %v)", n, err)
+	}
+	for _, id := range []string{"env-a", "env-b"} {
+		if _, err := s.Write.ExecContext(ctx, `INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at)
+		      VALUES (?, 'agent', ?, '', 1, 30, 30)`, id, id); err != nil {
+			t.Fatalf("seed environment %s: %v", id, err)
+		}
+	}
+	up, err := store.Migrate(ctx, s, store.MigrateOptions{DataDir: dir, AppVersion: "v23-fixture"})
+	if err != nil {
+		t.Fatalf("upgrade to head: %v", err)
+	}
+	if up.From != 23 || up.To < 24 {
+		t.Fatalf("upgrade went %d -> %d, want from 23 to at least 24", up.From, up.To)
+	}
+	for _, id := range []string{"env-a", "env-b"} {
+		var on, mask, version int
+		var pools, by string
+		if err := s.Read.QueryRowContext(ctx, `SELECT small_subnets, small_subnet_mask, address_pools, address_settings_version, address_settings_by FROM environments WHERE id = ?`, id).
+			Scan(&on, &mask, &pools, &version, &by); err != nil || on != 0 || mask != 26 || pools != "[]" || version != 0 || by != "" {
+			t.Errorf("%s reads %d, %d, %q, %d, %q (%v), want 0, 26, [], 0 and empty", id, on, mask, pools, version, by, err)
+		}
+	}
+	for _, c := range []struct {
+		mask int
+		want bool
+	}{{24, false}, {25, true}, {28, true}, {29, false}} {
+		_, err := s.Write.ExecContext(ctx, `UPDATE environments SET small_subnet_mask = ? WHERE id = 'env-a'`, c.mask)
+		if (err == nil) != c.want {
+			t.Errorf("small_subnet_mask = %d: accepted = %v, want %v (%v)", c.mask, err == nil, c.want, err)
+		}
+	}
+	if _, err := s.Write.ExecContext(ctx, `UPDATE environments SET small_subnets = 2 WHERE id = 'env-a'`); err == nil {
+		t.Errorf("small_subnets = 2 was accepted")
+	}
+}
+
 // assertRestartLoopChecks checks that the two thresholds refuse values outside 2 to 50
 // failures and 1 to 120 minutes, and accept the edges.
 func assertRestartLoopChecks(t *testing.T, s *store.Store) {

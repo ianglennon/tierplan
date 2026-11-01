@@ -1,0 +1,254 @@
+{
+  "addressSpace": {
+    "page": {
+      "title": "Address space",
+      "caption": "Where this environment's network addresses have gone.",
+      "error": {
+        "title": "Couldn't load the address space.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading address space"
+      },
+      "summary": {
+        "gettingFull": "Address space is getting full",
+        "almostFull": "Address space is almost full",
+        "body": "{{name}} is {{percent}}% used. New stacks may fail to deploy when it runs out."
+      },
+      "noManager": {
+        "title": "Coaming can't measure the swarm's pools",
+        "body": "No manager is connected. The subnets below are the last ones read from the nodes that are reporting."
+      }
+    },
+    "meters": {
+      "title": "Pools",
+      "loading": "Loading pools",
+      "none": "No pools to show.",
+      "swarmSource": "Measured from the swarm.",
+      "estimatedBadge": "Estimated",
+      "pool": {
+        "captionFree_one": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · largest free block {{cidr}} ({{count, number}} subnet)",
+        "captionFree_other": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · largest free block {{cidr}} ({{count, number}} subnets)",
+        "captionFull": "{{used, number}} of {{capacity, number}} subnets used · each network gets a /{{mask}} · no free /{{mask}} block left",
+        "captionUnknown": "Each network gets a /{{mask}}"
+      },
+      "ingress": {
+        "title": "Ingress",
+        "caption": "{{used, number}} of {{capacity, number}} addresses used",
+        "outside": "Outside the pool",
+        "outsideTip": "Ingress sits outside the default pool, so it has its own meter."
+      },
+      "filling": {
+        "title": "Networks filling up",
+        "caption": "{{used, number}} of {{capacity, number}} addresses used"
+      },
+      "estimatedHealth": "Estimated, so the environment's health isn't affected.",
+      "notMeasuredTip": "Counting used addresses needs Docker Engine 29 or newer on the manager."
+    },
+    "notes": {
+      "estimated": {
+        "daemon": "These numbers are estimated from the address pools the daemon reports and the bridge subnets Coaming can see.",
+        "defaults": "These numbers are estimated. The daemon doesn't set its own address pools, so Coaming counts against Docker's default pools and the bridge subnets it can see.",
+        "entered": "These numbers are estimated from the pools you entered in this environment's settings and the bridge subnets Coaming can see."
+      },
+      "estimatedTip": {
+        "daemon": "Based on the address pools the daemon reports and the bridge subnets Coaming can see.",
+        "defaults": "The daemon sets no pools of its own, so Coaming assumes Docker's documented defaults and counts the bridge subnets it can see.",
+        "entered": "Based on the pools you entered in this environment's settings and the bridge subnets Coaming can see."
+      }
+    },
+    "states": {
+      "gettingFull": "Getting full",
+      "almostFull": "Almost full",
+      "notMeasured": "Not measured",
+      "missing": "—"
+    },
+    "meter": {
+      "value": "{{used}} of {{capacity}} {{unit}} used, {{percent}} percent",
+      "gettingFull": "getting full",
+      "almostFull": "almost full",
+      "estimated": "estimated",
+      "unit": {
+        "subnets": "subnets",
+        "addresses": "addresses"
+      }
+    },
+    "map": {
+      "title": "Subnet map",
+      "caption": "Every network, sorted by address, so overlaps sit next to each other.",
+      "tableLabel": "Subnet map",
+      "loading": "Loading networks",
+      "none": "No networks to show.",
+      "search": {
+        "label": "Search networks",
+        "placeholder": "Search by name, subnet or owner",
+        "clear": "Clear search"
+      },
+      "show": {
+        "label": "Show",
+        "all": "All",
+        "overlay": "Overlays",
+        "local": "Local",
+        "filling": "Filling up",
+        "overlap": "Overlapping"
+      },
+      "columns": {
+        "name": "Network",
+        "subnet": "Subnet",
+        "scope": "Scope",
+        "driver": "Driver",
+        "owner": "Owner",
+        "attached": "Attached",
+        "age": "Age",
+        "used": "Addresses used"
+      },
+      "owner": {
+        "service": "Service {{name}}"
+      },
+      "ingress": "Ingress",
+      "overlap": {
+        "hidden": "Overlaps {{name}}",
+        "tip": "Overlaps {{name}} ({{subnet}}).",
+        "tipNode": "Overlaps {{name}} ({{subnet}}) on {{node}}.",
+        "more": "and {{count, number}} more"
+      },
+      "used": {
+        "value": "{{used, number}} / {{capacity, number}}"
+      },
+      "count_one": "{{count, number}} network",
+      "count_other": "{{count, number}} networks",
+      "cap": "Showing the first {{cap, number}} of {{total, number}}. Search to find the rest.",
+      "truncated": "The map holds the first {{rows, number}} of {{total, number}} networks.",
+      "empty": {
+        "query": "No networks match “{{q}}”.",
+        "filter": "No networks match this filter.",
+        "clear": "Clear filters"
+      },
+      "badge": {
+        "orphaned": "Orphaned",
+        "unused": "Unused",
+        "kept": "Kept"
+      }
+    },
+    "orphans": {
+      "title": "Orphaned and unused networks",
+      "caption": "Coaming lists a network here when nothing has used it for 24 hours. It looks at every service, every task and every node before it decides.",
+      "tableLabel": "Orphaned and unused networks",
+      "loading": "Loading orphaned and unused networks",
+      "empty": {
+        "title": "No orphaned or unused networks",
+        "body": "Coaming lists a network here when nothing has used it for 24 hours."
+      },
+      "groups": {
+        "orphaned": {
+          "label": "Orphaned",
+          "name": "Orphaned ({{count, number}})",
+          "caption": "The stack that created these no longer exists, and nothing uses them."
+        },
+        "unused": {
+          "label": "Unused",
+          "name": "Unused ({{count, number}})",
+          "caption": "No stack created these, and nothing uses them. This is for your information, not a problem."
+        },
+        "cantTell": {
+          "label": "Can't tell yet",
+          "name": "Can't tell yet ({{count, number}})",
+          "caption": "Waiting for {{nodes}} to report.",
+          "captionManager": "Waiting for a manager to report.",
+          "captionOther": "Waiting for Coaming to finish reading the environment."
+        }
+      },
+      "columns": {
+        "network": "Network",
+        "node": "Node",
+        "subnet": "Subnet",
+        "formerStack": "Former stack",
+        "formerProject": "Former project",
+        "idleSince": "Idle since",
+        "actions": "Actions",
+        "select": "Select"
+      },
+      "onNode": "on {{node}}",
+      "idle": {
+        "seen": "The last time Coaming saw this network in use. Coaming waits 24 hours after that, or after the network was created, before it lists it.",
+        "created": "Coaming hasn't seen this network in use. This is when it was created.",
+        "about": "About idle since"
+      },
+      "select": {
+        "row": "Select {{name}}",
+        "group": "Select all in {{group}}"
+      },
+      "actions": {
+        "menu": "Actions for {{name}}",
+        "keep": "Keep",
+        "delete": "Delete…"
+      },
+      "needsOn": "{{need}} on {{name}}",
+      "waiting": "Waiting for {{nodes}} to report. Coaming won't remove a network until every node has answered.",
+      "waitingUnknown": "Coaming can't be sure yet. Coaming won't remove a network until every node has answered.",
+      "keepDone_one": "Keeping {{name}}. Coaming won't list it again.",
+      "keepDone_other": "Keeping {{count, number}} networks.",
+      "delete": {
+        "title": "Delete “{{name}}”?",
+        "body": "Nothing has used it since {{time}}. Coaming checks again just before it deletes the network, and keeps it if something started using it. The network's details are saved in the audit log first.",
+        "titleBulk_one": "Delete {{count, number}} network?",
+        "titleBulk_other": "Delete {{count, number}} networks?",
+        "bodyBulk": "Coaming checks each one again just before it deletes it, and keeps any that something started using. The details of each network are saved in the audit log first.",
+        "cancel": "Cancel",
+        "confirm": "Delete network",
+        "confirmBulk_one": "Delete {{count, number}} network",
+        "confirmBulk_other": "Delete {{count, number}} networks",
+        "pending": "Deleting…",
+        "progress": "Deleting {{done, number}} of {{total, number}}…",
+        "done": "Deleted {{name}}.",
+        "doneBulk_one": "Deleted {{count, number}} network.",
+        "doneBulk_other": "Deleted {{count, number}} networks.",
+        "summary": "Deleted {{deleted, number}}, kept {{kept, number}}, {{failed, number}} failed",
+        "gone": "{{name}} is already gone.",
+        "targetNote": "Subnet"
+      },
+      "results": {
+        "title": "Delete results",
+        "network": "Network",
+        "deleted": "Deleted",
+        "kept": "Kept",
+        "failed": "Failed"
+      },
+      "kept": {
+        "inUseAgain": "{{name}} is in use again, so Coaming kept it.",
+        "notOrphaned": "{{name}} is no longer orphaned, so Coaming kept it.",
+        "nodeMissing": "Couldn't confirm {{name}} is unused: {{node}} isn't reporting. Coaming kept it."
+      },
+      "refused": {
+        "inspectTooLarge": "Coaming didn't delete {{name}}: its details are over 64 KB, too large to save in the audit log first.",
+        "builtin": "{{name}} is one of Docker's own networks, so Coaming can't delete it.",
+        "gone": "{{name}} is already gone.",
+        "keepBuiltin": "{{name}} is one of Docker's own networks, which Coaming never lists, so there is nothing to keep.",
+        "keepNode": "More than one node has a network called {{name}}. Keep it from its row in the list."
+      }
+    },
+    "kept": {
+      "trigger_one": "Kept networks ({{count, number}})",
+      "trigger_other": "Kept networks ({{count, number}})",
+      "caption": "Coaming never lists these as orphaned or unused, and the janitor leaves them alone.",
+      "tableLabel": "Kept networks",
+      "columns": {
+        "network": "Network",
+        "node": "Node",
+        "subnet": "Subnet",
+        "keptBy": "Kept by",
+        "keptSince": "Kept since",
+        "actions": "Actions"
+      },
+      "by": {
+        "label": "A label on the network",
+        "user": "{{user}} in Coaming",
+        "unknown": "A person in Coaming"
+      },
+      "stop": "Stop keeping",
+      "stopLabel": "Stop keeping {{name}}",
+      "labelReason": "Kept by the coaming.keep label on the network. Remove the label to stop keeping it.",
+      "done": "No longer keeping {{name}}.",
+      "notKept": "{{name}} wasn't being kept.",
+      "byLabel": "{{name}} is kept by a label on the network. Remove the label to stop keeping it."
+    }
+  }
+}

@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -379,6 +380,11 @@ type Agent struct {
 	// EKM replaces the TLS exporter value sent and signed. NoEKM sends none.
 	EKM   []byte
 	NoEKM bool
+	// HostNet is the hostNet fact reported in the handshake ("", wire.HostNetOK or
+	// wire.HostNetUnmounted). It overrides Facts.HostNet when set.
+	HostNet string
+	// HostRoutes are the routes AnswerHostNet writes on a host-net stream.
+	HostRoutes []wire.HostRoute
 }
 
 // Conn is a connection after the handshake.
@@ -395,7 +401,17 @@ type Conn struct {
 	// connection instead of answering.
 	Err error
 
-	ctx context.Context
+	// Streams counts every stream the server has opened to this agent and an
+	// acceptor of this connection has accepted, whatever its kind.
+	Streams atomic.Int32
+	// HostNetStreams counts the streams among them that began with
+	// wire.StreamKindHostNet.
+	HostNetStreams atomic.Int32
+
+	ctx        context.Context
+	hostRoutes []wire.HostRoute
+	// hostNetOK is true when the agent said it can read its host's routes.
+	hostNetOK bool
 }
 
 // Dial runs the agent side of the handshake. It returns after the welcome or the
@@ -470,7 +486,7 @@ func (p *Pending) AwaitServerClose() error {
 func (p *Pending) Finish() *Conn {
 	s, t, a, ws, resp, ch, ctx := p.s, p.t, p.a, p.ws, p.resp, p.ch, p.ctx
 	t.Helper()
-	c := &Conn{WS: ws, ctx: ctx}
+	c := &Conn{WS: ws, ctx: ctx, hostRoutes: a.HostRoutes, hostNetOK: a.HostNet == wire.HostNetOK || (a.Facts != nil && a.Facts.HostNet == wire.HostNetOK)}
 	var data []byte
 	var err error
 
@@ -500,6 +516,9 @@ func (p *Pending) Finish() *Conn {
 	facts := wire.Facts{EngineID: "ENG:" + defaultHost(a), Hostname: "test-host", EngineReachable: true}
 	if a.Facts != nil {
 		facts = *a.Facts
+	}
+	if a.HostNet != "" {
+		facts.HostNet = a.HostNet
 	}
 
 	nonce := make([]byte, 32)
@@ -665,6 +684,40 @@ func (c *Conn) AnswerDocker(t testing.TB, status int, body string) {
 	}()
 }
 
+// AnswerHostNet serves the streams the hub opens on this connection like an agent
+// that can read its host's routes: a stream that begins with wire.StreamKindHostNet
+// is answered with one wire.HostNetDoc holding the Agent's HostRoutes and closed;
+// a stream of any other kind is closed with nothing written, as a real agent does.
+// Streams and HostNetStreams count what arrived. It runs until the connection ends.
+func (c *Conn) AnswerHostNet(t testing.TB) {
+	t.Helper()
+	if c.Mux == nil {
+		t.Fatal("tunneltest: no multiplexer on this connection")
+	}
+	go func() {
+		for {
+			st, err := c.Mux.Accept()
+			if err != nil {
+				return
+			}
+			c.Streams.Add(1)
+			go func() {
+				defer func() { _ = st.Close() }()
+				var kind [1]byte
+				if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != wire.StreamKindHostNet {
+					return
+				}
+				c.HostNetStreams.Add(1)
+				doc := wire.HostNetDoc{V: 1, Routes: c.hostRoutes}
+				if doc.Routes == nil {
+					doc.Routes = []wire.HostRoute{}
+				}
+				_ = json.NewEncoder(st).Encode(doc)
+			}()
+		}
+	}()
+}
+
 // ProxyDocker serves the Docker streams the hub opens on this connection by
 // piping each to the unix socket at socketPath, a fake daemon's for instance, so
 // the real client, probe and snapshot run through the real tunnel. It runs until
@@ -680,17 +733,38 @@ func (c *Conn) ProxyDocker(t testing.TB, socketPath string) {
 			if err != nil {
 				return
 			}
-			go pipeDocker(st, socketPath)
+			go c.serveProxied(st, socketPath)
 		}
 	}()
 }
 
-// pipeDocker copies one Docker stream to and from the daemon until either side
-// ends.
-func pipeDocker(st net.Conn, socketPath string) {
-	defer func() { _ = st.Close() }()
+// serveProxied answers one stream of ProxyDocker: a Docker stream is piped to the daemon, and
+// when the agent was dialed with HostNet ok a host-net stream is answered with its HostRoutes
+// as AnswerHostNet does. Anything else is closed with nothing written.
+func (c *Conn) serveProxied(st net.Conn, socketPath string) {
 	var kind [1]byte
-	if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != wire.StreamKindDockerHTTP {
+	if _, err := io.ReadFull(st, kind[:]); err != nil {
+		_ = st.Close()
+		return
+	}
+	if kind[0] == wire.StreamKindHostNet && c.hostNetOK {
+		defer func() { _ = st.Close() }()
+		c.HostNetStreams.Add(1)
+		doc := wire.HostNetDoc{V: 1, Routes: c.hostRoutes}
+		if doc.Routes == nil {
+			doc.Routes = []wire.HostRoute{}
+		}
+		_ = json.NewEncoder(st).Encode(doc)
+		return
+	}
+	pipeDocker(st, kind[0], socketPath)
+}
+
+// pipeDocker copies one Docker stream, whose kind byte has been read, to and from the daemon
+// until either side ends.
+func pipeDocker(st net.Conn, kind byte, socketPath string) {
+	defer func() { _ = st.Close() }()
+	if kind != wire.StreamKindDockerHTTP {
 		return
 	}
 	up, err := net.Dial("unix", socketPath)

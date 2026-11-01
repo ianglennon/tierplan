@@ -98,6 +98,7 @@ func registerServiceCreate(r *httpx.Router, d ServicesDeps) {
 			"The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. " +
 			"The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. " +
 			"If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. " +
+			"A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. " +
 			"Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. " + problems +
 			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
 			"Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.",
@@ -157,6 +158,10 @@ func createService(ctx context.Context, d ServicesDeps, p *rbac.Principal, envID
 		}
 	}()
 	if err := requireSwarm(ctx, d, envID); err != nil {
+		return ServiceCreateBody{}, err
+	}
+	defer lockStagedSubnets(d, envID, objects)()
+	if err := stagedOverlapGate(ctx, d, envID, objects); err != nil {
 		return ServiceCreateBody{}, err
 	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}

@@ -29,7 +29,7 @@ const D40 = [
   "agent_policy_denied",
 ];
 const ENROLMENT = ["duplicate_environment", "type_mismatch", "host_mismatch"];
-const EXTRA = ["cert_expiring"];
+const EXTRA = ["cert_expiring", "address_space_full"];
 // Said when an agent holds a certificate the environment issued but is not in the
 // database, as after a restore (D-31).
 const RESTORE = ["unknown_agent"];
@@ -182,6 +182,43 @@ describe("ReasonText", () => {
     expect(container.textContent).toContain("This environment already manages a different host.");
     expect(container.textContent).toContain("Add this host as its own environment.");
     expect(container.textContent).not.toContain("{{");
+  });
+
+  it("words address_space_full for a pool, a network and neither, with the hint", () => {
+    const { container, rerender } = render(
+      <ReasonText code="address_space_full" params={{ subject: "10.0.0.0/8", percent: 93 }} />,
+    );
+    expect(container.textContent).toContain("The address pool 10.0.0.0/8 is 93% used.");
+    expect(container.textContent).toContain(
+      "Remove orphaned networks or use smaller subnets before new stacks fail to deploy.",
+    );
+    rerender(
+      <ReasonText
+        code="address_space_full"
+        params={{ subject: "shop_default", percent: 96, kind: "overlay" }}
+      />,
+    );
+    expect(container.textContent).toContain("The network shop_default is 96% full.");
+    // A kind the caller names wins over what the subject looks like.
+    rerender(
+      <ReasonText
+        code="address_space_full"
+        params={{ subject: "shop_default", percent: 96, kind: "pool" }}
+      />,
+    );
+    expect(container.textContent).toContain("The address pool shop_default is 96% used.");
+    rerender(<ReasonText code="address_space_full" params={{ subject: "10.0.0.0/8" }} />);
+    expect(container.textContent).toContain("An address pool or network is almost full.");
+    expect(container.textContent).not.toContain("{{");
+  });
+
+  it("shows a subject with markup in it as text", () => {
+    const hostile = "<img src=x onerror=1>";
+    const { container } = render(
+      <ReasonText code="address_space_full" params={{ subject: hostile, percent: 95 }} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toContain(`The network ${hostile} is 95% full.`);
   });
 
   it("says unknown_agent with the node and the reinstall hint, and without the node", () => {

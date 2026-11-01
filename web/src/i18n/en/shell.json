@@ -23,6 +23,7 @@
       "images": "Images",
       "volumes": "Volumes",
       "networks": "Networks",
+      "addressSpace": "Address space",
       "events": "Events",
       "swarm": "Swarm",
       "services": "Services",

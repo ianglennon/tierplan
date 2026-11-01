@@ -47,9 +47,13 @@ func stepOf(ctx context.Context, err error) (code, name string) {
 // stack owns is left alone even if its options differ from the file's: the review (plan 07-14)
 // reports the difference, and a network cannot be changed in place. A name another owner holds is
 // network_conflict. Every other network is created with all its pools, its IPAM driver, its driver
-// options, its flags and the stack's labels, through WriteOnManager, once. The first failure ends
-// the call with a *stepError; the networks created before it stay in created.
-func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress) (created []string, err error) {
+// options, its flags and the stack's labels, through WriteOnManager, once. Every swarm network it
+// creates is read back until the swarm has allocated it (G-10-8): one the swarm never allocates is
+// removed again by its ID and fails the call with CodeNetworkNotAllocated, so no service is ever
+// created against a stub. A stub that could not be removed is added to created, so the deploy's
+// cleanup tries it once more and names it if it stays. The first failure ends the call with a
+// *stepError; the networks created before it stay in created.
+func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, plans []convert.NetworkPlan, live []dockerx.NetworkRow, prog *progress, subnets *SubnetPlan) (created []string, err error) {
 	own := OwnershipOf(stack)
 	for _, n := range plans {
 		if n.External {
@@ -73,12 +77,38 @@ func (d Deps) ensureNetworks(ctx context.Context, envID string, stack Stack, pla
 		}
 		spec := networkSpec(n)
 		prog.start(idNetwork + n.Name)
-		werr := d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
-			_, _, e := c.NetworkCreate(wctx, spec)
-			return e
-		})
+		create := func() error {
+			return d.write(ctx, envID, func(wctx context.Context, c *dockerx.Client) error {
+				_, _, e := c.NetworkCreateAllocated(wctx, spec, d.AllocationWait)
+				return e
+			})
+		}
+		werr := create()
+		// The engine refused a subnet this deploy chose as overlapping something it could not see. Nothing was
+		// created, so the choice is made again for this one network, once; a second refusal is a failure.
+		// A chosen block the swarm accepted but never allocated (and removed again) is treated the same way. A
+		// stub that could not be removed still holds the name, so it is not chosen again.
+		var notAllocated *dockerx.NotAllocatedError
+		unallocated := errors.As(werr, &notAllocated) && notAllocated.Removed
+		if refused, chosen := subnets.assigned(n); werr != nil && chosen && (isOverlapRefusal(werr) || unallocated) && ctx.Err() == nil {
+			d.log().Warn("the engine refused the subnet chosen for a stack network as overlapping", "environment", envID, "stack", stack.Name, "network", n.Name, "subnet", refused)
+			next, ok := subnets.reassign(n.Key, n.Name, refused)
+			if !ok {
+				return created, &stepError{code: CodeNoFreeSubnet, name: n.Name, err: werr}
+			}
+			n.Pools = []convert.Pool{{Subnet: next}}
+			spec = networkSpec(n)
+			werr = create()
+		}
 		if werr != nil {
 			d.log().Warn("could not create a stack network", "environment", envID, "stack", stack.Name, "network", n.Name, "error", werr)
+			if errors.As(werr, &notAllocated) {
+				// The swarm never allocated it. A stub that is still there goes to the deploy's cleanup.
+				if !notAllocated.Removed {
+					created = append(created, n.Name)
+				}
+				return created, &stepError{code: CodeNetworkNotAllocated, name: n.Name, err: werr}
+			}
 			code := codeOf(ctx, werr)
 			if code == CodeEngineError {
 				code = CodeNetworkFailed

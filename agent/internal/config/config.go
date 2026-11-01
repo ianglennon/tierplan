@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ianglennon/coaming/agent/internal/hostnet"
 	"github.com/ianglennon/coaming/agent/internal/state"
 )
 
@@ -54,6 +55,12 @@ const (
 	// answer then cross the network unencrypted to a server the agent cannot check
 	// (T-02-31). The default is false; wss:// is verified whatever its value.
 	envAllowInsecure = "COAMING_AGENT_ALLOW_INSECURE"
+
+	// envHostRouteFile is where the agent reads its host's routes: a read-only bind
+	// mount of the host's /proc/1/net/route. The default is hostnet.DefaultRouteFile
+	// (/host/route). The file being absent is a state the agent reports, not an
+	// error, so the setting only names a place.
+	envHostRouteFile = "COAMING_AGENT_HOST_ROUTE_FILE"
 
 	// envPin is the pin of the server's certificate, or several separated by
 	// commas, as "sha256/" and a base64 SPKI hash. The install command carries it
@@ -92,6 +99,9 @@ type Config struct {
 	AllowInsecure bool
 	// Pins are the server certificate pins from the install command, validated.
 	Pins []string
+	// HostRouteFile is COAMING_AGENT_HOST_ROUTE_FILE: an absolute path, by default
+	// /host/route.
+	HostRouteFile string
 }
 
 // Load reads the configuration. env looks up an environment variable and
@@ -111,6 +121,7 @@ type Config struct {
 //	COAMING_AGENT_DOCKER_GID       non-negative integer; overrides the socket's group
 //	COAMING_AGENT_BACKOFF_MIN      first reconnect delay, default 1s
 //	COAMING_AGENT_BACKOFF_MAX      longest reconnect delay, default 60s; at least the minimum
+//	COAMING_AGENT_HOST_ROUTE_FILE  absolute, clean path of the host's route file, default /host/route
 //
 // The host policy flags (envReadOnly, envSelfUpdate and envAllowPrivilegedServices) and envAllowInsecure are
 // true or false; a value that is neither stops the agent, so that a restriction is
@@ -154,6 +165,10 @@ func Load(env func(string) string, readFile func(string) ([]byte, error)) (Confi
 		return Config{}, err
 	}
 	if cfg.AllowPrivilegedServices, err = parseFlag(env, envAllowPrivilegedServices, false); err != nil {
+		return Config{}, err
+	}
+
+	if cfg.HostRouteFile, err = parseRouteFile(env(envHostRouteFile)); err != nil {
 		return Config{}, err
 	}
 
@@ -252,6 +267,19 @@ func parseFlag(env func(string) string, name string, def bool) (bool, error) {
 		return false, fmt.Errorf("%s must be true or false, got %q", name, raw)
 	}
 	return v, nil
+}
+
+// parseRouteFile is the route file path: empty means the default, anything else
+// must be absolute and already clean, so what is read is what was written.
+func parseRouteFile(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return hostnet.DefaultRouteFile, nil
+	}
+	if !filepath.IsAbs(raw) || filepath.Clean(raw) != raw {
+		return "", fmt.Errorf("%s must be an absolute, clean path, got %q", envHostRouteFile, raw)
+	}
+	return raw, nil
 }
 
 // parsePins reads a comma-separated list of pins. Each must be well formed, so

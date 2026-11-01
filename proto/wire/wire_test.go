@@ -78,6 +78,23 @@ func TestTheStreamKindAndSubprotocolAreFrozen(t *testing.T) {
 	if Subprotocol != "coaming.agent.v1" || ProtoVersion != 1 || StreamKindDockerHTTP != 0x01 {
 		t.Fatalf("a frozen wire constant changed: %q %d %#x", Subprotocol, ProtoVersion, StreamKindDockerHTTP)
 	}
+	if StreamKindControl != 0x02 || StreamKindHostNet != 0x03 {
+		t.Fatalf("a stream kind changed: control %#x, host net %#x", StreamKindControl, StreamKindHostNet)
+	}
+}
+
+func TestHostNetDocRoundTrips(t *testing.T) {
+	in := HostNetDoc{V: 1, Routes: []HostRoute{{Iface: "eth0", Dst: "192.168.2.0/24", Gateway: "192.168.2.1"}, {Iface: "wg0", Dst: "10.8.0.0/24"}}, Truncated: true}
+	if out := roundTrip(t, in); !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip changed the document:\n in: %+v\nout: %+v", in, out)
+	}
+	b, err := json.Marshal(HostNetDoc{V: 1, Routes: []HostRoute{{Iface: "wg0", Dst: "10.8.0.0/24"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"v":1,"routes":[{"iface":"wg0","dst":"10.8.0.0/24"}]}`; string(b) != want {
+		t.Fatalf("doc = %s, want %s", b, want)
+	}
 }
 
 func TestEveryD40ReasonCodeIsDefinedOnce(t *testing.T) {
@@ -163,6 +180,49 @@ func TestPolicyFactsPrivilegedServicesIsOptional(t *testing.T) {
 	var old PolicyFacts
 	if err := json.Unmarshal([]byte(`{"readOnly":true,"selfUpdate":false}`), &old); err != nil || old.PrivilegedServices {
 		t.Fatalf("a policy without the field read as %+v (%v)", old, err)
+	}
+}
+
+func TestFactsHostNetIsOptional(t *testing.T) {
+	b, err := json.Marshal(Facts{EngineReachable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "hostNet") {
+		t.Fatalf("facts without a host-net state carry the key: %s", b)
+	}
+	b, err = json.Marshal(Facts{EngineReachable: true, HostNet: HostNetOK})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"hostNet":"ok"`) {
+		t.Fatalf("facts = %s, want hostNet ok", b)
+	}
+	var old Facts
+	if err := json.Unmarshal([]byte(`{"engineReachable":true,"policy":{"readOnly":false,"selfUpdate":true}}`), &old); err != nil || old.HostNet != "" {
+		t.Fatalf("facts from an older agent read as %+v (%v)", old, err)
+	}
+	// A receiver built before the field ignores it: the same JSON decodes into a
+	// struct that has no HostNet.
+	var unaware struct {
+		EngineReachable bool `json:"engineReachable"`
+	}
+	if err := json.Unmarshal(b, &unaware); err != nil || !unaware.EngineReachable {
+		t.Fatalf("a receiver without the field failed on %s: %v", b, err)
+	}
+}
+
+func TestAHostNetDocOf512RoutesFitsTheStreamLimit(t *testing.T) {
+	doc := HostNetDoc{V: 1}
+	for range 512 {
+		doc.Routes = append(doc.Routes, HostRoute{Iface: "0123456789abcde", Dst: "255.255.255.254/31", Gateway: "255.255.255.255"})
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) >= MaxHostNetBytes {
+		t.Fatalf("the largest document is %d bytes, the limit is %d", len(b), MaxHostNetBytes)
 	}
 }
 

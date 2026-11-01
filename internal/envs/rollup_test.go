@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ianglennon/coaming/internal/dockerx"
 )
 
 // The D-33 rollup (plan 02-11, ENV-06, ENV-08, D-33, D-40, D-41, D-45). Rollup is
@@ -511,5 +513,80 @@ func TestOverviewTakesNodesAgentsAndFailingFromAKnownClusterView(t *testing.T) {
 	o = overview(st, Status{}, "")
 	if o.Failing == nil || *o.Failing != (FailingCounts{Failing: 1, Total: 4}) || o.Agents != nil {
 		t.Errorf("standalone overview = %+v, want failing 1 of 4 and no agent counts", o)
+	}
+}
+
+// An environment out of address space is degraded with its own issue (plan 10-17, D-06 item 3). The
+// rollup stays pure: it reads the summary the address reader made and decides nothing about it.
+func TestRollupAddressSpaceFull(t *testing.T) {
+	full := t0.Add(20 * time.Minute)
+	summary := func(isFull bool) *AddressSummary {
+		return &AddressSummary{Full: isFull, FullName: "backend_net", FullPercent: 91, FullSince: full}
+	}
+
+	// A swarm with the summary Full is degraded with the issue, which is ranked after every other.
+	in := swarm(t0.Add(time.Hour), mgr("a", "m1"), mgr("b", "m2"))
+	in.Cluster = &ClusterView{AddressSpace: summary(true)}
+	got := Rollup(in)
+	if got.State != StateDegraded || got.Reason != IssueAddressSpaceFull || issueList(got) != "address_space_full@" || !got.Since.Equal(full) {
+		t.Fatalf("got %+v (%s), want degraded / address_space_full since %v", got, issueList(got), full)
+	}
+	if is := got.Issues[0]; is.Subject != "backend_net" || is.Percent != 91 {
+		t.Errorf("issue = %+v, want subject backend_net at 91%%", is)
+	}
+
+	// Ranked last: after a clock problem, which is the least urgent existing cause, and after a missing node.
+	skewed := mgr("c", "m3")
+	skewed.ClockOffset = time.Minute
+	gone := mgr("d", "m4")
+	gone.Connected, gone.LastSeen, gone.Ended = false, t0, t0
+	in = swarm(t0.Add(time.Hour), mgr("a", "m1"), skewed, gone)
+	in.Cluster = &ClusterView{AddressSpace: summary(true)}
+	if got := Rollup(in); issueList(got) != "agent_offline@m4,clock_skew@m3,address_space_full@" || got.Reason != ReasonAgentOffline {
+		t.Fatalf("issues = %s (reason %s), want the new cause last and the reason the worst", issueList(got), got.Reason)
+	}
+
+	// Not full adds nothing, and no summary adds nothing.
+	in = swarm(t0.Add(time.Hour), mgr("a", "m1"))
+	in.Cluster = &ClusterView{AddressSpace: summary(false)}
+	if got := Rollup(in); got.State != StateOnline || len(got.Issues) != 0 {
+		t.Fatalf("not full: got %+v, want online", got)
+	}
+	in.Cluster = &ClusterView{}
+	if got := Rollup(in); got.State != StateOnline {
+		t.Fatalf("no summary: got %+v, want online", got)
+	}
+
+	// A swarm on the server's own socket is degraded the same way, when it is online.
+	local := RollupInput{
+		EnvID: "local", Kind: KindLocal, EnvType: "swarm", Now: t0.Add(time.Hour), ServerStart: t0,
+		Local: Status{State: StateOnline, Since: t0}, Cluster: &ClusterView{AddressSpace: summary(true)},
+	}
+	got = Rollup(local)
+	if got.State != StateDegraded || got.Reason != IssueAddressSpaceFull || issueList(got) != "address_space_full@" || !got.Since.Equal(full) {
+		t.Fatalf("local swarm: got %+v, want degraded / address_space_full", got)
+	}
+	// Known to be a swarm by its probe alone, as the input of a local environment does not say.
+	local.EnvType = ""
+	local.Local.Probe.Type = dockerx.TypeSwarmManager
+	if got := Rollup(local); got.State != StateDegraded {
+		t.Fatalf("local swarm by probe: got %+v, want degraded", got)
+	}
+	// Not online: the socket's own state stands.
+	local.Local = Status{State: StateOffline, Since: t0, Reason: "unreachable", Probe: dockerx.ProbeResult{Type: dockerx.TypeSwarmManager}}
+	if got := Rollup(local); got.State != StateOffline || got.Reason != "unreachable" || len(got.Issues) != 0 {
+		t.Fatalf("local offline: got %+v, want offline", got)
+	}
+	// A standalone engine is never degraded by it.
+	local.Local = Status{State: StateOnline, Since: t0, Probe: dockerx.ProbeResult{Type: dockerx.TypeStandalone}}
+	if got := Rollup(local); got.State != StateOnline || len(got.Issues) != 0 {
+		t.Fatalf("local standalone: got %+v, want online", got)
+	}
+
+	// A standalone agent host is not degraded by a stray summary either (only a swarm is).
+	st := standalone(t0.Add(time.Hour), up("a", "host"))
+	st.Cluster = &ClusterView{AddressSpace: summary(true)}
+	if got := Rollup(st); got.State != StateOnline {
+		t.Fatalf("standalone host: got %+v, want online", got)
 	}
 }

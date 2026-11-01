@@ -160,7 +160,7 @@ export function CopyableCode({ code, label, secret, showLabel, hideLabel }: Copy
         <pre
           // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable region
           tabIndex={0}
-          className="min-w-0 flex-1 overflow-x-auto rounded-lg py-3 pr-3 pl-3 font-mono text-xs leading-relaxed text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          className="min-w-0 flex-1 overflow-x-auto whitespace-pre rounded-lg py-3 pr-3 pl-3 font-mono text-xs leading-relaxed text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         >
           <code ref={codeRef}>{shown}</code>
         </pre>

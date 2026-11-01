@@ -63,7 +63,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetDraft :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft';
 
 -- name: UpdateDraftVersion :execrows
@@ -103,7 +103,7 @@ WHERE stack_id = ? AND kind = 'revision';
 
 -- name: LatestGoodRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1;
 
@@ -117,7 +117,7 @@ WHERE stack_id = ? AND kind = 'revision';
 -- The newest good revision numbered below seq: what a roll back restores when the newest revision is
 -- itself good.
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1;
 
@@ -139,7 +139,7 @@ UPDATE stack_snapshots SET rendered = ? WHERE id = ? AND kind = 'revision';
 
 -- name: GetRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?;
 
 -- name: SetDraftBaseSeq :execrows
@@ -173,6 +173,10 @@ SELECT reverted_drift FROM stack_snapshots WHERE stack_id = ? AND kind = 'revisi
 -- name: SetSnapshotPlatforms :execrows
 -- The platforms each service of a revision was sent with, JSON by swarm service name.
 UPDATE stack_snapshots SET platforms = ? WHERE id = ? AND kind = 'revision';
+
+-- name: SetSnapshotSubnets :execrows
+-- The subnets a deploy gave the networks it created for a revision, JSON by network name.
+UPDATE stack_snapshots SET subnets = ? WHERE id = ? AND kind = 'revision';
 
 -- name: InsertStackDeploy :exec
 INSERT INTO stack_deploys (id, stack_id, env_id, kind, state, revision_seq, job_id, started_by, started_at)

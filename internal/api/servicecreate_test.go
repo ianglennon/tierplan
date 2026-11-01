@@ -304,3 +304,84 @@ func TestCreateServiceRefusesTooLargeABodyAndTooManyObjects(t *testing.T) {
 		t.Errorf("writes = %v", w)
 	}
 }
+
+func TestServiceCreateStagedNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.88.0.0/25", false))
+	rec := admin.create(body)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap" {
+		t.Fatalf("create: %d %s, want 422 subnet_overlap", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "10.88.0.0/25 overlaps lan (10.88.0.0/24)") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	// Ticked, the same body creates the network and the service, and says so in the audit log.
+	body = chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.88.0.0/25", true))
+	if rec := admin.create(body); rec.Code != http.StatusCreated {
+		t.Fatalf("create anyway: %d %s", rec.Code, rec.Body)
+	}
+	rows := f.auditLike(t, "network.created")
+	if len(rows) != 1 || rows[0].Details["overlap_override"] != "true" {
+		t.Errorf("network rows = %+v, want one with overlap_override", rows)
+	}
+}
+
+// A staged network the swarm never allocates fails the create: the stub is removed and no service
+// is created (G-10-8, T-10-80).
+func TestServiceCreateStagedNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	body := chatBody(t, func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "front"}}
+	}, stagedFront("10.66.0.0/24", false))
+	rec := admin.create(body)
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("create: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "The swarm didn't give network front an address range") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if c := f.fake.ServiceCreates(); len(c) != 0 {
+		t.Errorf("service creates = %+v, want none", c)
+	}
+	if del := deletedNetworks(f); len(del) != 1 {
+		t.Errorf("removals = %v, want the stub removed once", del)
+	}
+}
+
+// A staged network that overlaps a swarm network is refused with or without the tick, and nothing
+// is created (G-10-8, T-10-69).
+func TestServiceCreateStagedNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	for _, anyway := range []bool{false, true} {
+		body := chatBody(t, func(spec map[string]any) {
+			tt, _ := spec["TaskTemplate"].(map[string]any)
+			tt["Networks"] = []any{map[string]any{"Target": "front"}}
+		}, stagedFront("10.77.0.0/25", anyway))
+		rec := admin.create(body)
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap_swarm" {
+			t.Fatalf("create (createAnyway %v): %d %s, want 422 subnet_overlap_swarm", anyway, rec.Code, rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	if rows := f.auditLike(t, "network.created"); len(rows) != 0 {
+		t.Errorf("network rows = %+v, a refusal made nothing", rows)
+	}
+}

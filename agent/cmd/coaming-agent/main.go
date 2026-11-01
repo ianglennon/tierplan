@@ -101,6 +101,7 @@ func run(d deps) int {
 		"self_update", cfg.SelfUpdate,
 		"allow_privileged_services", cfg.AllowPrivilegedServices,
 		"allow_insecure", cfg.AllowInsecure,
+		"host_route_file", cfg.HostRouteFile,
 		"dropped_privileges", res.Dropped,
 		"uid", d.getuid(),
 		"gid", d.getgid(),
@@ -119,7 +120,7 @@ func run(d deps) int {
 	err = d.connect(ctx, connect.Config{
 		URL: cfg.URL, JoinToken: cfg.JoinToken, SocketPath: cfg.SocketPath, Version: version.Version, Log: log,
 		StateDir: cfg.StateDir, BackoffMin: cfg.BackoffMin, BackoffMax: cfg.BackoffMax,
-		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, AllowPrivilegedServices: cfg.AllowPrivilegedServices, AllowInsecure: cfg.AllowInsecure, InstallPins: cfg.Pins,
+		ReadOnly: cfg.ReadOnly, SelfUpdate: cfg.SelfUpdate, AllowPrivilegedServices: cfg.AllowPrivilegedServices, AllowInsecure: cfg.AllowInsecure, InstallPins: cfg.Pins, HostRouteFile: cfg.HostRouteFile,
 		Maint: selfmaint.New(selfmaint.Config{
 			SocketPath: cfg.SocketPath, SelfUpdate: cfg.SelfUpdate, StateDir: cfg.StateDir, Log: log,
 		}),

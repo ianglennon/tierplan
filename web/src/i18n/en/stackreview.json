@@ -195,6 +195,12 @@
     "rowMenu": {
       "open": "Open stack",
       "label": "Actions for {{name}}"
+    },
+    "network": {
+      "line": "network {{name}}:",
+      "smallSubnetDefault": "Small-subnet default",
+      "smallSubnetTooltip": "Coaming picked this subnet because small stack subnets are on for this environment. Your compose file isn't changed.",
+      "openAddressSpace": "Open address space"
     }
   }
 }

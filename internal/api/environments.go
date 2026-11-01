@@ -84,9 +84,11 @@ type EnvironmentsDeps struct {
 // missing, cannot reach Docker, runs an unsupported engine, or has a certificate or
 // clock that needs attention. It carries only a fixed code and a node name.
 type EnvironmentIssueBody struct {
-	Code  string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew"`
-	Node  string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet"`
-	Since string `json:"since,omitempty" format:"date-time" doc:"When this began"`
+	Code    string `json:"code" doc:"A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full"`
+	Node    string `json:"node,omitempty" doc:"The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster"`
+	Subject string `json:"subject,omitempty" doc:"For address_space_full, the address pool (its CIDR) or the network (its name) that is nearly full; absent for every other code"`
+	Percent int    `json:"percent,omitempty" doc:"For address_space_full, how full that pool or network is, in whole percent; absent for every other code"`
+	Since   string `json:"since,omitempty" format:"date-time" doc:"When this began"`
 }
 
 // EnvironmentStatusBody is the health of an environment: the rollup of its agents
@@ -95,7 +97,7 @@ type EnvironmentIssueBody struct {
 type EnvironmentStatusBody struct {
 	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Coaming does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
 	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
-	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop"`
+	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm"`
 	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
 	Issues      []EnvironmentIssueBody `json:"issues,omitempty" doc:"What is wrong with a degraded environment, worst first, then by node"`
 }
@@ -107,7 +109,7 @@ func statusBody(h envs.Health, lastAttempt time.Time) EnvironmentStatusBody {
 		State: string(h.State), Since: rfc3339(h.Since), Reason: h.Reason, LastAttempt: rfc3339(lastAttempt),
 	}
 	for _, is := range h.Issues {
-		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Since: rfc3339(is.Since)})
+		body.Issues = append(body.Issues, EnvironmentIssueBody{Code: is.Code, Node: is.Node, Subject: is.Subject, Percent: is.Percent, Since: rfc3339(is.Since)})
 	}
 	return body
 }
@@ -138,6 +140,21 @@ type EnvironmentAgentsBody struct {
 	Expected  int `json:"expected" doc:"Agents the swarm should have: one per node whose agent was not revoked"`
 }
 
+// EnvironmentAddressSpaceBody is the fullest address pool or network of an environment and how many of
+// its networks are orphaned: the numbers behind the overview's Address space column and the dashboard
+// card, from the last read of the environment's address space.
+type EnvironmentAddressSpaceBody struct {
+	WorstName string `json:"worstName" doc:"The pool (its CIDR) or the network (its name) that is fullest"`
+	WorstKind string `json:"worstKind" enum:"pool,ingress,overlay" doc:"What the fullest one is: an address pool, the swarm's ingress network or an overlay network"`
+	Used      int64  `json:"used" doc:"What is in use of it, in the unit"`
+	Capacity  int64  `json:"capacity" doc:"What there is of it, in the unit"`
+	Percent   int    `json:"percent" doc:"Used over capacity, in whole percent, rounded down"`
+	State     string `json:"state" enum:"normal,getting_full,almost_full,unknown" doc:"normal below 70%, getting_full from 70%, almost_full from 90%"`
+	Unit      string `json:"unit" enum:"subnets,addresses" doc:"subnets for a pool, which hands out subnets of its mask; addresses for a network"`
+	Estimated bool   `json:"estimated" doc:"True when the number is an estimate: a standalone host's pool, which the daemon fills in its own way. An estimate never makes an environment degraded"`
+	Orphaned  int    `json:"orphaned" doc:"How many networks the last orphan check found orphaned"`
+}
+
 // EnvironmentBody is one managed environment.
 type EnvironmentBody struct {
 	ID         string                `json:"id" doc:"The environment ID, used in /api/env/{envId}/..."`
@@ -150,18 +167,19 @@ type EnvironmentBody struct {
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
 
-	EnvType          string                           `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
-	IsLocalSocket    bool                             `json:"isLocalSocket" doc:"True for the Docker socket on the host Coaming runs on, as opposed to hosts that dial in through an agent"`
-	Nodes            Nullable[EnvironmentNodesBody]   `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
-	FailingServices  Nullable[EnvironmentFailingBody] `json:"failingServices" doc:"Failing and total services; null until service data is known"`
-	Agents           Nullable[EnvironmentAgentsBody]  `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
-	AgentVersion     *string                          `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
-	UpdateAvailable  bool                             `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
-	AutoUpdate       *bool                            `json:"autoUpdate,omitempty" doc:"Whether Coaming updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
-	EngineVersion    *string                          `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
-	LastSeen         *string                          `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
-	PendingClusterID string                           `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
-	FoldOffered      bool                             `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Coaming host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
+	EnvType          string                                `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
+	IsLocalSocket    bool                                  `json:"isLocalSocket" doc:"True for the Docker socket on the host Coaming runs on, as opposed to hosts that dial in through an agent"`
+	Nodes            Nullable[EnvironmentNodesBody]        `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
+	FailingServices  Nullable[EnvironmentFailingBody]      `json:"failingServices" doc:"Failing and total services; null until service data is known"`
+	Agents           Nullable[EnvironmentAgentsBody]       `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
+	AgentVersion     *string                               `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
+	UpdateAvailable  bool                                  `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
+	AutoUpdate       *bool                                 `json:"autoUpdate,omitempty" doc:"Whether Coaming updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
+	EngineVersion    *string                               `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
+	LastSeen         *string                               `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
+	PendingClusterID string                                `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
+	AddressSpace     Nullable[EnvironmentAddressSpaceBody] `json:"addressSpace" doc:"The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline"`
+	FoldOffered      bool                                  `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Coaming host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -303,6 +321,13 @@ func environmentBody(e envs.Environment) EnvironmentBody {
 	}
 	if o.Failing != nil {
 		body.FailingServices = Some(EnvironmentFailingBody{Failing: o.Failing.Failing, Total: o.Failing.Total})
+	}
+	if a := o.AddressSpace; a != nil && a.Worst != nil {
+		w := a.Worst
+		body.AddressSpace = Some(EnvironmentAddressSpaceBody{
+			WorstName: w.Name, WorstKind: w.Kind, Used: addresses(w.Used), Capacity: addresses(w.Capacity),
+			Percent: w.Percent, State: string(w.State), Unit: w.Unit, Estimated: w.Estimated, Orphaned: a.Orphaned,
+		})
 	}
 	if o.Agents != nil {
 		body.Agents = Some(EnvironmentAgentsBody{Connected: o.Agents.Connected, Expected: o.Agents.Expected})

@@ -138,6 +138,9 @@ type ReviewInput struct {
 	Base     *stacks.WorkingCopy
 	// Pins is where the pins of the stack's last good revision are read from. Nil means none.
 	Pins PinStore
+	// Subnets is where the subnets of the stack's last good revision are read from, which a network that has to be
+	// created again takes while they are free (D-20). Nil means none.
+	Subnets SubnetStore
 	// Target is the revision a roll back restores, with its files and variables opened, and TargetPins the images it
 	// ran (by swarm service name) and TargetRendering the masked rendering it stored, which may be empty. They are read
 	// only for ReviewModeRollback and ReviewModeRestore, which review Target against what is running instead of the draft.
@@ -223,6 +226,11 @@ type ImageRow struct {
 // ObjectChange is a network, secret or config a deploy would add, change or remove.
 type ObjectChange struct {
 	Change, Kind, Name, Detail string
+	// Subnet is the subnet a network that is added will be created with: the block small stack subnets chose, or
+	// the one the file addresses. Empty for the engine's own choice and for anything but an added network.
+	Subnet string
+	// SmallSubnetDefault is true when Subnet was chosen by the environment's small stack subnets and not by the file.
+	SmallSubnetDefault bool
 }
 
 // Review is what a deploy of a stack would do, read against what is running. Nothing was changed
@@ -437,7 +445,16 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}
 
 	var problems stacks.Problems
-	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live)
+	var recorded map[string]string
+	if in.Subnets != nil {
+		var serr error
+		if recorded, serr = in.Subnets.GoodSubnets(ctx, in.Stack.ID); serr != nil {
+			d.log().Warn("could not read the subnets of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+		}
+	}
+	subnets := d.reviewSubnets(ctx, in.EnvID, in.Stack, plan, live, recorded)
+	rv.Objects, problems = resourceChanges(in.Stack, plan, objs, live, subnets)
+	problems = append(problems, subnetProblems(plan, subnets)...)
 	rv.Problems = append(rv.Problems, placeProblemsOf(in.Copy, problems)...)
 	for _, o := range rv.Objects {
 		switch o.Kind {
@@ -655,7 +672,7 @@ func imageRows(items []pinItem, pinned PinOutcome, current map[string]string, up
 
 // resourceChanges lists the networks, secrets and configs a deploy would add, change or remove,
 // and the problems that stop a deploy for them: an external object that does not exist.
-func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent, live liveStack) ([]ObjectChange, stacks.Problems) {
+func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent, live liveStack, subnets SubnetPlan) ([]ObjectChange, stacks.Problems) {
 	own := OwnershipOf(stack)
 	var out []ObjectChange
 	var problems stacks.Problems
@@ -672,7 +689,15 @@ func resourceChanges(stack Stack, plan convert.Plan, objs []stacks.ObjectContent
 		row, ok := findNetwork(live.Networks, n.Name)
 		switch {
 		case !ok:
-			out = append(out, ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: n.Name})
+			row := ObjectChange{Change: stacks.ChangeAdded, Kind: "network", Name: n.Name}
+			if len(n.Pools) > 0 {
+				row.Subnet = n.Pools[0].Subnet
+			}
+			// The plan was converted without the choice, which the deploy then adds with Options.Subnets.
+			if chosen := subnets.ByName[n.Name]; chosen != "" {
+				row.Subnet, row.SmallSubnetDefault = chosen, true
+			}
+			out = append(out, row)
 		case own.OwnsNetwork(row.Name, row.Labels) && networkDiffers(n, row):
 			out = append(out, ObjectChange{Change: stacks.ChangeChanged, Kind: "network", Name: n.Name, Detail: detailNetwork})
 		}

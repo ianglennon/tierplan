@@ -2,11 +2,19 @@
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
 import type { EnvironmentItem, HealthState } from "@/api/environments";
+import { poolPercent, poolRank } from "@/features/environments/pool-cell";
 
-export type SortKey = "name" | "health" | "nodes" | "failing" | "lastSeen";
+export type SortKey = "name" | "health" | "nodes" | "failing" | "addressSpace" | "lastSeen";
 export type SortDir = "asc" | "desc";
 
-export const SORT_KEYS: readonly SortKey[] = ["name", "health", "nodes", "failing", "lastSeen"];
+export const SORT_KEYS: readonly SortKey[] = [
+  "name",
+  "health",
+  "nodes",
+  "failing",
+  "addressSpace",
+  "lastSeen",
+];
 
 // SEVERITY is the "problems first" order, worst first (UI-SPEC Color, D-32).
 // `unknown` is not in the UI-SPEC list: it only means the local socket has not
@@ -27,6 +35,18 @@ const RANK = new Map<HealthState, number>(SEVERITY.map((s, i) => [s, i]));
 
 function rank(e: EnvironmentItem): number {
   return RANK.get(e.status.state) ?? SEVERITY.length;
+}
+
+// The default order, problems first: the health rank, except that an online environment whose
+// address pool is getting full or almost full is ranked with the problems, after the degraded
+// ones and before everything that is merely not online yet, the almost full ones first
+// (UI-SPEC default 14). The Health column sorts on health alone.
+function problemRank(e: EnvironmentItem): number {
+  const pool = poolRank(e);
+  if (e.status.state === "online" && pool > 0) {
+    return (RANK.get("degraded") ?? 0) + 0.6 - 0.1 * pool;
+  }
+  return rank(e);
 }
 
 // Names compare without regard to case; accents still count.
@@ -52,6 +72,12 @@ function numbers(e: EnvironmentItem, key: SortKey): number[] | undefined {
       return e.nodes ? [e.nodes.ready, e.nodes.total] : undefined;
     case "failing":
       return e.failingServices ? [e.failingServices.failing, e.failingServices.total] : undefined;
+    // The fullest first when ascending: the percent is negated so the column's own direction
+    // reads like the others'.
+    case "addressSpace": {
+      const percent = poolPercent(e);
+      return percent === undefined ? undefined : [-percent];
+    }
     case "lastSeen": {
       const at = e.lastSeen ? Date.parse(e.lastSeen) : Number.NaN;
       return Number.isNaN(at) ? undefined : [at];
@@ -72,7 +98,7 @@ export function sortEnvironments(
 ): EnvironmentItem[] {
   const sign = dir === "desc" ? -1 : 1;
   const out = [...items];
-  if (sort === undefined) return out.sort((a, b) => rank(a) - rank(b) || tie(a, b));
+  if (sort === undefined) return out.sort((a, b) => problemRank(a) - problemRank(b) || tie(a, b));
   switch (sort) {
     case "name":
       return out.sort((a, b) => sign * byName(a, b) || byId(a, b));

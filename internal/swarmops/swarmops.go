@@ -148,6 +148,9 @@ type Deps struct {
 	// CanCreate says whether the caller may create an object of a kind (KindNetwork, KindSecret,
 	// KindConfig). Nil means nobody may: an apply that needs an object made is then refused.
 	CanCreate func(kind string) bool
+	// AllocationWait is how the creation of a staged network waits for the swarm to allocate it.
+	// The zero value is the real defaults; tests pass a clock that fires at once.
+	AllocationWait dockerx.AllocationWait
 }
 
 // HostPolicy is what the manager's agent will forward: whether its owner allowed services with

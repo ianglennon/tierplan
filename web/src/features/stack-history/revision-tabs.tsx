@@ -118,7 +118,7 @@ export function RevisionTabs({ envId, stackId, seq, name }: RevisionTabsProps) {
         )}
       </TabsContent>
       <TabsContent value="contents" className="flex min-w-0 flex-col gap-2">
-        {detail ? <RevisionContents detail={detail} /> : failed("contents")}
+        {detail ? <RevisionContents detail={detail} stackName={name} /> : failed("contents")}
       </TabsContent>
     </Tabs>
   );

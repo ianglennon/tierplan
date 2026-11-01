@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -67,12 +68,13 @@ const (
 
 // ServiceStagedObject is an object the editor made that does not exist yet.
 type ServiceStagedObject struct {
-	Kind       string            `json:"kind" enum:"network,secret,config" doc:"What to create. A network is made as an attachable overlay"`
-	Name       string            `json:"name" doc:"The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)"`
-	Data       string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
-	Templating string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
-	Labels     map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
-	Subnet     string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid)"`
+	Kind         string            `json:"kind" enum:"network,secret,config" doc:"What to create. A network is made as an attachable overlay"`
+	Name         string            `json:"name" doc:"The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid)"`
+	Data         string            `json:"data,omitempty" doc:"A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network"`
+	Templating   string            `json:"templating,omitempty" doc:"A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid"`
+	Labels       map[string]string `json:"labels,omitempty" maxProperties:"64" doc:"Labels of a secret or config, at most 64 (422 labels_invalid for a key over 256 or a value over 4096 characters)"`
+	Subnet       string            `json:"subnet,omitempty" doc:"A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true. One that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it"`
+	CreateAnyway bool              `json:"createAnyway,omitempty" doc:"A network only: create it even though its subnet overlaps a network of this environment; not for an overlap with a swarm network (422 subnet_overlap_swarm). Recorded in the audit log"`
 }
 
 // ServiceApplyRequest is the body of the apply route: the review's body and the objects the spec
@@ -253,6 +255,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 			"Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. " +
 			"The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. " +
 			"If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. " +
+			"A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. " +
 			"Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. " + problems +
 			"No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. " +
 			"Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.",
@@ -273,7 +276,7 @@ func registerServiceEdit(r *httpx.Router, d ServicesDeps) {
 
 // swarmopsDeps is what the orchestrator needs from the routes' dependencies.
 func swarmopsDeps(d ServicesDeps) swarmops.Deps {
-	sd := swarmops.Deps{Checker: d.Checker, StackOwner: namespaceOwner}
+	sd := swarmops.Deps{Checker: d.Checker, StackOwner: namespaceOwner, AllocationWait: d.AllocationWait}
 	if d.Resolver != nil {
 		sd.Resolver = d.Resolver
 	}
@@ -386,7 +389,7 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 		switch o.Kind {
 		case swarmops.KindNetwork:
 			if err = validateAddressing(o.Subnet, "", ""); err == nil {
-				so.Subnet = o.Subnet
+				so.Subnet, so.CreateAnyway = o.Subnet, o.CreateAnyway
 			}
 		case swarmops.KindSecret:
 			if so.Data, err = decodeSecretValue(o.Data); err == nil {
@@ -409,6 +412,57 @@ func stagedObjects(in []ServiceStagedObject) ([]swarmops.StagedObject, error) {
 		}
 	}
 	return out, nil
+}
+
+// stagedOverlapGate refuses, before anything is created, a staged network whose subnet overlaps a
+// network of this environment, unless the person ticked "create it anyway" for it (D-18, T-10-48). A
+// staged network is an attachable overlay, so the cluster-wide rule of the subnet map applies: it is
+// compared with every network. One that overlaps a swarm network is refused whatever createAnyway
+// says (422 subnet_overlap_swarm): the managers' allocator would refuse it after the create answered
+// and leave a stub (G-10-8, T-10-69). The refusal is the network dialog's: 422 subnet_overlap naming the
+// first network it overlaps. Like the dialog's override, createAnyway is kept only on a network that
+// does overlap one (it is cleared in objects on the others), so the audit row's overlap_override is
+// true only for an override that was needed.
+func stagedOverlapGate(ctx context.Context, d ServicesDeps, envID string, objects []swarmops.StagedObject) error {
+	if !slices.ContainsFunc(objects, func(o swarmops.StagedObject) bool { return o.Kind == swarmops.KindNetwork && o.Subnet != "" }) {
+		return nil
+	}
+	if d.Aggregator == nil {
+		d.Log.Error("the service routes have no aggregator to check a staged subnet against")
+		return huma.Error500InternalServerError("internal error")
+	}
+	agg, _, err := d.Aggregator.Snapshot(ctx, envID)
+	if err != nil {
+		return snapshotProblem(d.Log, envID, err)
+	}
+	for i, o := range objects {
+		if o.Kind != swarmops.KindNetwork || o.Subnet == "" {
+			continue
+		}
+		overlaps := sameEnvOverlaps(o.Subnet, agg, false, "")
+		for _, f := range overlaps {
+			if !overrideAllowed(true, f) {
+				return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlapSwarm, overlapSwarmMessage(o.Subnet, f))
+			}
+		}
+		if len(overlaps) > 0 && !o.CreateAnyway {
+			return httpx.Problem(http.StatusUnprocessableEntity, problemSubnetOverlap, overlapMessage(o.Subnet, overlaps[0]))
+		}
+		objects[i].CreateAnyway = len(overlaps) > 0
+	}
+	return nil
+}
+
+// lockStagedSubnets holds the environment's allocation lock while the staged networks that have a
+// subnet are checked and made, so two creates through Coaming cannot both pass the check with one
+// subnet (NET-05). The returned function releases it; it does nothing when no lock applies.
+func lockStagedSubnets(d ServicesDeps, envID string, objects []swarmops.StagedObject) func() {
+	if d.AddressSpaces != nil && slices.ContainsFunc(objects, func(o swarmops.StagedObject) bool {
+		return o.Kind == swarmops.KindNetwork && o.Subnet != ""
+	}) {
+		return d.AddressSpaces.LockAllocation(envID)
+	}
+	return func() {}
 }
 
 // applyDeps are swarmopsDeps with the two hooks that need the caller: whether they may create a
@@ -445,6 +499,10 @@ func applyServiceUpdate(ctx context.Context, d ServicesDeps, p *rbac.Principal, 
 		}
 	}()
 	if err := requireSwarm(ctx, d, envID); err != nil {
+		return ServiceApplyBody{}, err
+	}
+	defer lockStagedSubnets(d, envID, objects)()
+	if err := stagedOverlapGate(ctx, d, envID, objects); err != nil {
 		return ServiceApplyBody{}, err
 	}
 	caller := swarmops.Caller{Principal: p, Reveal: redact.CanReveal(ctx, d.Checker, p, envID)}
@@ -644,6 +702,21 @@ func serviceWriteProblem(ctx context.Context, d ServicesDeps, envID, failed stri
 		}
 	case errors.As(err, &perm):
 		return problem(http.StatusForbidden, problemObjectPermission, "Needs Admin to create "+kindsSentence(perm.Kinds)+".")
+	case errors.As(err, &made) && errors.Is(err, dockerx.ErrNetworkNotAllocated):
+		var na *dockerx.NotAllocatedError
+		name := made.Name
+		if errors.As(err, &na) && na.Name != "" {
+			name = na.Name
+		}
+		detail := "The swarm didn't give network " + name + " an address range, so Coaming removed it again. " +
+			"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet."
+		if na != nil && !na.Removed {
+			detail = "The swarm didn't give network " + name + " an address range. " +
+				"Its subnet probably overlaps another swarm network, or the swarm's address pools are full. Choose another subnet. " +
+				"Coaming couldn't remove it, so delete " + name + " on the Networks page."
+		}
+		return problem(http.StatusUnprocessableEntity, problemNetworkNotAllocated, detail,
+			&huma.ErrorDetail{Location: "object", Message: "network:" + name})
 	case errors.As(err, &made) && errors.Is(err, dockerx.ErrNameTaken):
 		return problem(http.StatusConflict, problemNameTaken, "A "+made.Kind+" named "+made.Name+" already exists.",
 			&huma.ErrorDetail{Location: "object", Message: made.Kind + ":" + made.Name})

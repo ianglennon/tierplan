@@ -29,11 +29,14 @@ var sharedSwarmCases = []struct {
 	name string
 	run  func(*testing.T, *swarmFix)
 }{
+	{"AddressSpacePools", sharedAddressSpacePools},
 	{"ConstraintsMatchPlacement", sharedConstraintsMatchPlacement},
 	{"Enrol", sharedEnrol},
+	{"HostRoutes", sharedHostRoutes},
 	{"ImagePullFanOut", sharedImagePullFanOut},
 	{"NetworkConnect", sharedNetworkConnect},
 	{"Networks", sharedNetworks},
+	{"OrphanMatrix", sharedOrphanMatrix},
 	{"PrivatePullEveryNode", sharedPrivatePullEveryNode},
 	{"RealEngineFacts", sharedRealEngineFacts},
 	{"RealEvents", sharedRealEvents},
@@ -59,9 +62,21 @@ var sharedSwarmCases = []struct {
 	{"StackReviewEmptyAfterDeploy", sharedStackReviewEmptyAfterDeploy},
 	{"StackUpdateImages", sharedStackUpdateImages},
 	{"StatsFromWorker", sharedStatsFromWorker},
+	{"SubnetOverlap", sharedSubnetOverlap},
 	{"UninstallOnRemove", sharedUninstallOnRemove},
 	{"Volumes", sharedVolumes},
 	{"WorkerShellAndLogs", sharedWorkerShellAndLogs},
+}
+
+// sharedCaseOptions are the server options a shared case starts its Coaming with, by case
+// name, over the defaults every case gets. A case missing here gets the defaults. They are
+// the Go-level test hooks of servertest, never settings of a real server.
+var sharedCaseOptions = map[string]func(*servertest.Options){
+	// OrphanMatrix moves the address-space reader's clock a day and an hour on, so every
+	// network it makes is past the 24-hour orphan grace period at once.
+	"OrphanMatrix": func(o *servertest.Options) {
+		o.AddressSpaceClock = func() time.Time { return time.Now().Add(25 * time.Hour) }
+	},
 }
 
 // TestSwarmShared runs sharedSwarmCases as subtests on one swarm of three managers and
@@ -118,7 +133,11 @@ func TestSwarmShared(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			dirty = true // a case -run filters out never gets here
 			dumpOnFailure(t, sw.Nodes()...)
-			srv := servertest.Start(t, servertest.Options{Host: sw.Gateway})
+			opts := servertest.Options{Host: sw.Gateway}
+			if apply := sharedCaseOptions[c.name]; apply != nil {
+				apply(&opts)
+			}
+			srv := servertest.Start(t, opts)
 			c.run(t, &swarmFix{sw: sw, srv: srv, env: srv.CreateAgentEnvironment("")})
 		})
 	}

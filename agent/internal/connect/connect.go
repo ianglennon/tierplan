@@ -44,6 +44,7 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/ianglennon/coaming/agent/internal/facts"
+	"github.com/ianglennon/coaming/agent/internal/hostnet"
 	"github.com/ianglennon/coaming/agent/internal/proxy"
 	"github.com/ianglennon/coaming/agent/internal/selfmaint"
 	"github.com/ianglennon/coaming/agent/internal/state"
@@ -91,6 +92,10 @@ type Config struct {
 	// Maint answers the server's update and uninstall messages (D-24, D-26). Nil
 	// answers every such message self_update_disabled.
 	Maint selfmaint.Service
+	// HostRouteFile is the read-only mount of the host's /proc/1/net/route, which
+	// the agent reads when the server asks for the host's routes. Empty means
+	// hostnet.DefaultRouteFile.
+	HostRouteFile string
 }
 
 // runEnv is what a test replaces: the wait between attempts, the jitter and the
@@ -121,6 +126,8 @@ const (
 	defaultSocket = "/var/run/docker.sock"
 	// kindTimeout bounds the wait for the kind byte of a new stream.
 	kindTimeout = 10 * time.Second
+	// hostNetWriteTimeout bounds writing the host-net document to the server.
+	hostNetWriteTimeout = 5 * time.Second
 	// maxRetryAfter bounds how long the agent will wait because a server said so.
 	maxRetryAfter = 5 * time.Minute
 )
@@ -437,6 +444,14 @@ func transient(code string) bool {
 	return code == wire.RefuseRateLimited || code == wire.RefuseInternal
 }
 
+// routeFile is the host route file the agent reads.
+func (r *runner) routeFile() string {
+	if r.cfg.HostRouteFile != "" {
+		return r.cfg.HostRouteFile
+	}
+	return hostnet.DefaultRouteFile
+}
+
 // hint is what an operator should do about a refusal code.
 func (r *runner) hint(code string) string {
 	switch code {
@@ -484,6 +499,14 @@ func (r *runner) once(ctx context.Context) (welcomed bool, err error) {
 	// What the host owner set is part of the facts, so the UI can say "read-only
 	// (set on host)" and show the manual update commands (D-28).
 	reported.Policy = wire.PolicyFacts{ReadOnly: r.cfg.ReadOnly, SelfUpdate: r.cfg.SelfUpdate, PrivilegedServices: r.cfg.AllowPrivilegedServices}
+
+	// Whether the host's route file can be read tells the server whether to ask
+	// for the host's routes (stream kind 0x03). An agent older than this field
+	// sends nothing and is never asked.
+	reported.HostNet = hostnet.Probe(r.routeFile())
+	if reported.HostNet == wire.HostNetUnmounted {
+		r.log.Info("the host's route file is not mounted; the subnet picker skips this host's route check", "path", r.routeFile())
+	}
 
 	cr, err := r.credentials()
 	if err != nil {
@@ -578,7 +601,7 @@ func (r *runner) attempt(ctx context.Context, tg target, reported wire.Facts, cr
 	}
 	// A server cannot make the agent spin: the floor is far below any real setting.
 	every = max(every, minHeartbeat)
-	return true, true, serve(ctx, c, r.cfg.SocketPath, every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly, AllowPrivilegedServices: r.cfg.AllowPrivilegedServices}, r.hooks(verified))
+	return true, true, serve(ctx, c, r.cfg.SocketPath, r.routeFile(), every, r.env.now, r.log, proxy.Policy{ReadOnly: r.cfg.ReadOnly, AllowPrivilegedServices: r.cfg.AllowPrivilegedServices}, r.hooks(verified))
 }
 
 // hooks is what the control stream of the next session hands the server's messages
@@ -897,7 +920,7 @@ func refusal(raw []byte) error {
 // server's Docker streams until the session ends. It ends when the multiplexer
 // does, and when the control stream breaks, so a server that stopped reading
 // heartbeats is not served as if all were well.
-func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time.Duration, now func() time.Time, log *slog.Logger, policy proxy.Policy, hooks controlHooks) error {
+func serve(ctx context.Context, c *websocket.Conn, socketPath, routeFile string, every time.Duration, now func() time.Time, log *slog.Logger, policy proxy.Policy, hooks controlHooks) error {
 	conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
 	sess, err := yamux.Server(conn, muxConfig())
 	if err != nil {
@@ -940,25 +963,32 @@ func serve(ctx context.Context, c *websocket.Conn, socketPath string, every time
 			}
 			return fmt.Errorf("the connection to Coaming ended: %w", err)
 		}
-		go serveStream(st, handler, log)
+		go serveStream(st, handler, routeFile, log)
 	}
 }
 
-// serveStream reads the kind byte and, for the one kind that exists, runs the
-// allowlisting proxy on the stream. Any other kind is closed.
-func serveStream(st net.Conn, h http.Handler, log *slog.Logger) {
+// serveStream reads the kind byte and answers the stream by its kind: Docker
+// HTTP goes to the allowlisting proxy, a host-net request gets one document read
+// from the route file. Any other kind is closed.
+func serveStream(st net.Conn, h http.Handler, routeFile string, log *slog.Logger) {
 	defer func() { _ = st.Close() }()
 	_ = st.SetReadDeadline(time.Now().Add(kindTimeout))
 	var kind [1]byte
 	if _, err := io.ReadFull(st, kind[:]); err != nil {
 		return
 	}
-	if kind[0] != wire.StreamKindDockerHTTP {
+	switch kind[0] {
+	case wire.StreamKindDockerHTTP:
+		_ = st.SetReadDeadline(time.Time{})
+		proxy.ServeConn(st, h)
+	case wire.StreamKindHostNet:
+		// One file read, one document, no Docker call and no command. A server
+		// that does not read the answer cannot hold the stream open.
+		_ = st.SetWriteDeadline(time.Now().Add(hostNetWriteTimeout))
+		_ = json.NewEncoder(st).Encode(hostnet.Read(routeFile))
+	default:
 		log.Warn("closed a stream of an unknown kind", "kind", kind[0])
-		return
 	}
-	_ = st.SetReadDeadline(time.Time{})
-	proxy.ServeConn(st, h)
 }
 
 func readJSON(ctx context.Context, c *websocket.Conn, v any) error {

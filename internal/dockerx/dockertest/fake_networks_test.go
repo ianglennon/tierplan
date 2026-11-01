@@ -242,3 +242,50 @@ func TestTheFakeStoresTheNetworkIDsAServiceWriteNamesWhenAskedTo(t *testing.T) {
 		}
 	})
 }
+
+func TestFakeSwarmUnallocated(t *testing.T) {
+	f := dockertest.NewFake(t, dockertest.FakeConfig{
+		SwarmState: "active", SwarmControl: true,
+		SwarmUnallocated: map[string]int{"10.9.0.0/24": 2, "10.8.0.0/24": -1},
+	})
+	create := func(name, subnet string) string {
+		t.Helper()
+		body := `{"Name":"` + name + `","Driver":"overlay","Scope":"swarm","IPAM":{"Config":[{"Subnet":"` + subnet + `"}]}}`
+		req, err := http.NewRequestWithContext(awaitCtx(t), http.MethodPost, "http://engine/v1.52/networks/create", bytes.NewReader([]byte(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := fakeClient(f).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %s = %d, want 201", name, resp.StatusCode)
+		}
+		var out network.CreateResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out.ID
+	}
+	late, never, fine := create("late", "10.9.0.0/24"), create("never", "10.8.0.0/24"), create("fine", "10.7.0.0/24")
+
+	for i := 0; i < 2; i++ {
+		in := inspectNetwork(t, f, late)
+		if in.Driver != "" || len(in.IPAM.Config) != 0 {
+			t.Errorf("inspect %d of late = driver %q, %d IPAM configs; want the unallocated stub", i+1, in.Driver, len(in.IPAM.Config))
+		}
+	}
+	if in := inspectNetwork(t, f, late); in.Driver != "overlay" || len(in.IPAM.Config) != 1 || in.IPAM.Config[0].Subnet.String() != "10.9.0.0/24" {
+		t.Errorf("the third inspect of late = driver %q, IPAM %+v; want it allocated", in.Driver, in.IPAM.Config)
+	}
+	for i := 0; i < 5; i++ {
+		if in := inspectNetwork(t, f, never); in.Driver != "" || len(in.IPAM.Config) != 0 {
+			t.Fatalf("inspect %d of never = driver %q, %d IPAM configs; want the stub for good", i+1, in.Driver, len(in.IPAM.Config))
+		}
+	}
+	if in := inspectNetwork(t, f, fine); in.Driver != "overlay" || len(in.IPAM.Config) != 1 {
+		t.Errorf("a network not listed as unallocated = driver %q, IPAM %+v", in.Driver, in.IPAM.Config)
+	}
+}

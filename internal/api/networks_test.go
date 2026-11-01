@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/moby/moby/api/types/swarm"
+
 	"github.com/ianglennon/coaming/internal/audit"
 	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
 	"github.com/ianglennon/coaming/proto/wire"
@@ -420,16 +422,18 @@ func TestCreateNetworkRefusesBadAddressingWithItsOwnProblemTypeAndSendsNothing(t
 func TestCreateNetworkTheGatewayMayBeTheFirstAndLastAddressOfTheSubnetButNotTheNextOne(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, networkEngine())
+	// Each made network has a subnet of its own: one that overlaps a network of the environment is
+	// refused (subnet_overlap), which is not what this test is about.
 	for i, tc := range []struct {
-		gateway string
-		code    int
+		subnet, gateway string
+		code            int
 	}{
-		{"10.20.0.0", http.StatusCreated},
-		{"10.20.0.255", http.StatusCreated},
-		{"10.20.1.0", http.StatusUnprocessableEntity},
-		{"10.19.255.255", http.StatusUnprocessableEntity},
+		{"10.20.0.0/24", "10.20.0.0", http.StatusCreated},
+		{"10.21.0.0/24", "10.21.0.255", http.StatusCreated},
+		{"10.22.0.0/24", "10.22.1.0", http.StatusUnprocessableEntity},
+		{"10.23.0.0/24", "10.22.255.255", http.StatusUnprocessableEntity},
 	} {
-		body := fmt.Sprintf(`{"name":"edge%d","driver":"bridge","subnet":"10.20.0.0/24","gateway":%q}`, i, tc.gateway)
+		body := fmt.Sprintf(`{"name":"edge%d","driver":"bridge","subnet":%q,"gateway":%q}`, i, tc.subnet, tc.gateway)
 		if rec := f.createNet(t, e, body); rec.code != tc.code {
 			t.Errorf("gateway %s: %d, want %d: %s", tc.gateway, rec.code, tc.code, rec.body)
 		}
@@ -885,6 +889,129 @@ func TestDeleteNetworkAnOverlayThatOnlyAScaledToZeroServiceMentionsIs409InUseWit
 		}
 	}
 	s.noDeletes(t)
+}
+
+// swarmTuned is a swarm fixture whose managers (not the worker) are tuned by tune, so each lists
+// the same services, networks and tasks, as the managers of one swarm do.
+func swarmTuned(t *testing.T, tune func(cfg *dockertest.FakeConfig)) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if strings.HasPrefix(host, "mgr-") {
+			tune(cfg)
+		}
+	})
+}
+
+// swarmWith is a swarm fixture whose managers also have the swarm-scoped overlay `extra` and the
+// services svcs.
+func swarmWith(t *testing.T, extra dockertest.FakeNetwork, svcs ...dockertest.FakeService) *swarmFix {
+	t.Helper()
+	return swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, extra)
+		cfg.ServiceRows = append(cfg.ServiceRows, svcs...)
+		cfg.Services = len(cfg.ServiceRows)
+	})
+}
+
+// A service updated away from a network still names it in its previous spec, which a rollback
+// returns to: the network is in use (RESEARCH F6, Pitfall 7).
+func TestNetworkDeleteRefusesPreviousSpecUser(t *testing.T) {
+	t.Parallel()
+	s := swarmWith(t, dockertest.FakeNetwork{ID: "old-id", Name: "old", Driver: "overlay", Scope: "swarm"},
+		dockertest.FakeService{ID: "svc-roll", Name: "rolled", Mode: "replicated", Running: 1, Desired: 1, Networks: []string{"ovl"},
+			PreviousSpec: &swarm.ServiceSpec{TaskTemplate: swarm.TaskSpec{Networks: []swarm.NetworkAttachmentConfig{{Target: "old"}}}}})
+	rec := s.del(t, "old-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "service rolled (previous spec)") {
+		t.Errorf("the detail does not name the previous spec user: %s", rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// The endpoint of a service still holds a virtual IP on a network its spec no longer names: the
+// network is in use.
+func TestNetworkDeleteRefusesVIPUser(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "vip-id", Name: "vipnet", Driver: "overlay", Scope: "swarm"})
+		cfg.ServiceRows = append(cfg.ServiceRows, dockertest.FakeService{ID: "svc-vip", Name: "vipped", Mode: "replicated", Running: 1, Desired: 1})
+		cfg.ServiceVIPNetworks = map[string][]string{"vipped": {"vip-id"}}
+	})
+	rec := s.del(t, "vip-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "service vipped (virtual IP)") {
+		t.Errorf("the detail does not name the virtual IP user: %s", rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// A task that an update has told to shut down is still attached until it has: the network is in use,
+// though no spec names it any more.
+func TestNetworkDeleteRefusesTaskUser(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "tnet-id", Name: "tnet", Driver: "overlay", Scope: "swarm"})
+		cfg.ServiceRows = append(cfg.ServiceRows, dockertest.FakeService{ID: "svc-t", Name: "tasked", Mode: "replicated", Running: 1, Desired: 1,
+			Spec: &swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "tasked"}}})
+		cfg.TasksFollowWrites = true
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetServiceTasks("tasked",
+			dockertest.FakeServiceTask{Node: "node-mgr-1", State: "running", Desired: "shutdown", Networks: []string{"tnet"}},
+			dockertest.FakeServiceTask{Node: "node-mgr-2", State: "shutdown", Desired: "shutdown", Networks: []string{"tnet"}})
+	}
+	rec := s.del(t, "tnet-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "task of service tasked on node-mgr-1") {
+		t.Errorf("the detail does not name the task: %s", rec.body)
+	}
+	if strings.Contains(string(rec.body), "node-mgr-2") {
+		t.Errorf("a task the swarm has finished with is named: %s", rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// No manager can be asked for the services: the picture is incomplete, so nothing is deleted and
+// the refusal says so.
+func TestNetworkDeleteRefusesWhenManagerReadFails(t *testing.T) {
+	t.Parallel()
+	s := swarmWith(t, dockertest.FakeNetwork{ID: "spare-id", Name: "spare", Driver: "overlay", Scope: "swarm"})
+	s.m1.fake.LoseQuorum()
+	s.m2.fake.LoseQuorum()
+	rec := s.del(t, "spare-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "node_unreachable" || !strings.Contains(string(rec.body), "no manager answered") {
+		t.Fatalf("%d %q, want 409 node_unreachable saying no manager answered: %s", rec.code, rec.ptyp, rec.body)
+	}
+	s.noDeletes(t)
+}
+
+// Everything checks out and the engine still says something is attached, as when a container joins
+// between the check and the call: network_in_use, sent once and never again (P2 D-42).
+func TestNetworkDeleteEngineInUseIsNetworkInUse(t *testing.T) {
+	t.Parallel()
+	s := swarmTuned(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "late-id", Name: "late", Driver: "overlay", Scope: "swarm"})
+		cfg.RemoveErrors = map[string]string{"late": "error while removing network: network late id late-id has active endpoints"}
+	})
+	rec := s.del(t, "late-id", "")
+	if rec.code != http.StatusConflict || rec.ptyp != "network_in_use" {
+		t.Fatalf("%d %q, want 409 network_in_use: %s", rec.code, rec.ptyp, rec.body)
+	}
+	got := s.deletesOn()
+	if n := len(got["m1"]) + len(got["m2"]) + len(got["w"]); n != 1 {
+		t.Fatalf("deletes = %v, want exactly one remove request", got)
+	}
+	audits := s.networkAudits(t)
+	last := audits[len(audits)-1]
+	if last.Action != audit.ActionNetworkRemoved || last.Result != string(audit.ResultFailure) || last.Reason != "network_in_use" || last.Details["code"] != "network_in_use" {
+		t.Fatalf("audit = %+v, want network.removed failure network_in_use", last)
+	}
 }
 
 func TestDeleteNetworkAnOverlayNothingMentionsIsRemovedOnceThroughAManager(t *testing.T) {
@@ -1712,5 +1839,259 @@ func TestDisconnectOfAnOwnContainerThatDropsTheConnectionIsAcceptedAndAuditedAsC
 	rows := f.networkAudits(t)
 	if len(rows) != 2 || rows[0].Details["stage"] != "initiated" || rows[1].Details["stage"] != "connection_lost" || rows[1].Result != string(audit.ResultSuccess) {
 		t.Fatalf("audit = %+v, want initiated then connection_lost with result success", rows)
+	}
+}
+
+// A subnet that overlaps another network of the environment (plan 10-16, D-18, T-10-40).
+
+func TestCreateNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarmWithBridge(t, "mgr-2", "lan", "10.0.1.0/24")
+	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("status = %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps lan (10.0.1.0/24) on") {
+		t.Errorf("the problem does not name the network: %s", rec.body)
+	}
+	if got := s.createsOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
+		t.Errorf("a refused create reached an engine: %v", got)
+	}
+	// A subnet beside it is made.
+	if rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.2.0/24"}`); rec.code != http.StatusCreated {
+		t.Fatalf("a free subnet: %d: %s", rec.code, rec.body)
+	}
+}
+
+// An overlay that overlaps only a node-local network can be created anyway: the swarm allocator
+// does not see the node's bridge.
+func TestCreateNetworkOverlapCreateAnyway(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarmWithBridge(t, "mgr-2", "lan", "10.0.1.0/24")
+	if rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("without the override: %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
+	rec := s.post(t, `{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25","createAnyway":true}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	s.onlyCreate(t)
+	audits := s.networkAudits(t)
+	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "lan" || audits[0].Result != "success" {
+		t.Fatalf("audit = %+v, want a success with overlap_override and overlaps lan", audits)
+	}
+}
+
+// An overlay that overlaps another swarm network is refused with or without createAnyway: the
+// managers' allocator would refuse it after the create answered and leave a stub (G-10-8, T-10-69).
+func TestCreateNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	for _, body := range []string{
+		`{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25"}`,
+		`{"name":"new-ovl","driver":"overlay","subnet":"10.0.1.0/25","createAnyway":true}`,
+	} {
+		rec := s.post(t, body)
+		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap_swarm" {
+			t.Fatalf("%s: status = %d %q, want 422 subnet_overlap_swarm: %s", body, rec.code, rec.ptyp, rec.body)
+		}
+		if !strings.Contains(string(rec.body), "10.0.1.0/25 overlaps swarm network ovl-a (10.0.1.0/24)") || !strings.Contains(string(rec.body), "can't be created anyway") {
+			t.Errorf("the problem does not name the network or say why: %s", rec.body)
+		}
+	}
+	if got := s.createsOn(); len(got["m1"])+len(got["m2"])+len(got["w"]) != 0 {
+		t.Errorf("a refused create reached an engine: %v", got)
+	}
+	if rows := s.networkAudits(t); len(rows) != 0 {
+		t.Errorf("a refused create wrote audit rows: %+v", rows)
+	}
+}
+
+// A local network on a node is made against a swarm network when createAnyway says so: the
+// node keeps the overlay's pool in another address space.
+func TestCreateNetworkLocalOverSwarmIsOverridable(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t, overlayNet("ovl-a", "10.0.1.0/24"))
+	body := `{"name":"mine","driver":"bridge","nodeId":"` + s.m2.id + `","subnet":"10.0.1.0/25"`
+	if rec := s.post(t, body+`}`); rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("without the override: %d %q, want 422 subnet_overlap: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if rec := s.post(t, body+`,"createAnyway":true}`); rec.code != http.StatusCreated {
+		t.Fatalf("with the override: %d: %s", rec.code, rec.body)
+	}
+	s.onlyCreate(t)
+	audits := s.networkAudits(t)
+	if len(audits) != 1 || audits[0].Details["overlap_override"] != "true" || audits[0].Details["overlaps"] != "ovl-a" {
+		t.Fatalf("audit = %+v, want a success with overlap_override and overlaps ovl-a", audits)
+	}
+}
+
+// A local network is compared with its own node's networks and the swarm's, not other nodes'.
+func TestCreateNetworkOverlapLocalScope(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if host == "mgr-2" {
+			cfg.Networks = append(cfg.Networks, dockertest.FakeNetwork{ID: "br-x", Name: "br-x", Driver: "bridge", Scope: "local", Subnets: []string{"172.30.0.0/24"}})
+		}
+	})
+	// mgr-2 has the bridge; the same subnet on mgr-1 is another host's address space.
+	if rec := s.post(t, `{"name":"mine","driver":"bridge","nodeId":"`+s.m1.id+`","subnet":"172.30.0.0/24"}`); rec.code != http.StatusCreated {
+		t.Fatalf("the same subnet on another node: %d: %s", rec.code, rec.body)
+	}
+	rec := s.post(t, `{"name":"mine2","driver":"bridge","nodeId":"`+s.m2.id+`","subnet":"172.30.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_overlap" {
+		t.Fatalf("on the node that has it: %d %q: %s", rec.code, rec.ptyp, rec.body)
+	}
+}
+
+// Two creates of one subnet through Coaming at once: one is made, the other refused (NET-05).
+func TestCreateNetworkConcurrentSameSubnet(t *testing.T) {
+	t.Parallel()
+	s := subnetSwarm(t)
+	codes := make(chan int, 2)
+	for _, name := range []string{"race-a", "race-b"} {
+		go func() {
+			codes <- s.post(t, `{"name":"`+name+`","driver":"overlay","subnet":"10.5.0.0/24"}`).code
+		}()
+	}
+	a, b := <-codes, <-codes
+	if a+b != http.StatusCreated+http.StatusUnprocessableEntity || a == b {
+		t.Fatalf("statuses = %d and %d, want one 201 and one 422", a, b)
+	}
+}
+
+// unallocatedSwarm is a swarm whose managers accept a create of the subnet and never allocate it
+// (G-10-8), and whose removal of the network called failRemove fails.
+func unallocatedSwarm(t *testing.T, subnet, failRemove string) *swarmFix {
+	t.Helper()
+	return newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.SwarmUnallocated = map[string]int{subnet: -1}
+		if failRemove != "" {
+			cfg.RemoveErrors = map[string]string{failRemove: "network is busy"}
+		}
+	})
+}
+
+// A swarm network the managers accept and never allocate is removed again, refused with
+// network_not_allocated and audited twice (G-10-8, T-10-73, T-10-74, T-10-76).
+func TestCreateNetworkNotAllocatedIsRemoved(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "")
+	rec := s.post(t, `{"name":"stub","driver":"overlay","subnet":"10.77.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	for _, want := range []string{"The swarm didn't give stub an address range", "Coaming removed it again", "10.77.0.0/24"} {
+		if !strings.Contains(string(rec.body), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.body)
+		}
+	}
+	a := s.onlyCreate(t)
+	var removed []string
+	for _, w := range a.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE /networks/") {
+			removed = append(removed, w)
+		}
+	}
+	if len(removed) != 1 {
+		t.Fatalf("removals = %v, want exactly one, by ID", removed)
+	}
+	list := decode[nodeListBody[nodeNetwork]](t, s.get(t, s.env.ID, "networks"))
+	for _, n := range list.Items {
+		if n.Name == "stub" {
+			t.Errorf("the stub is still listed: %+v", n)
+		}
+	}
+	rows := s.networkAudits(t)
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %+v, want network.created then network.removed", rows)
+	}
+	c, r := rows[0], rows[1]
+	if c.Action != audit.ActionNetworkCreated || c.Result != string(audit.ResultFailure) || c.Reason != "not_allocated" || c.Details["code"] != "not_allocated" {
+		t.Errorf("created row = %+v", c)
+	}
+	if r.Action != audit.ActionNetworkRemoved || r.Result != string(audit.ResultSuccess) || r.Details["source"] != "allocation_check" || r.Details["code"] != "removed" || r.TargetID != c.TargetID {
+		t.Errorf("removed row = %+v", r)
+	}
+	if "DELETE /networks/"+c.TargetID != removed[0] {
+		t.Errorf("the removal %q is not of the stub's ID %q", removed[0], c.TargetID)
+	}
+}
+
+// A stub that cannot be removed is said so and audited as remove_failed.
+func TestCreateNetworkNotAllocatedAndNotRemovable(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "stub")
+	rec := s.post(t, `{"name":"stub","driver":"overlay","subnet":"10.77.0.0/24"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "Coaming couldn't remove it, so delete stub on the Networks page.") || strings.Contains(string(rec.body), "removed it again") {
+		t.Errorf("the problem does not say the stub is left: %s", rec.body)
+	}
+	if strings.Contains(string(rec.body), "network is busy") {
+		t.Errorf("the engine's own sentence reached the browser: %s", rec.body)
+	}
+	rows := s.networkAudits(t)
+	if len(rows) != 2 || rows[1].Action != audit.ActionNetworkRemoved || rows[1].Result != string(audit.ResultFailure) || rows[1].Details["code"] != "remove_failed" || rows[1].Details["source"] != "allocation_check" {
+		t.Fatalf("audit rows = %+v, want created (not_allocated) then removed (remove_failed)", rows)
+	}
+}
+
+// With no subnet the sentence points at the pools instead.
+func TestCreateNetworkNotAllocatedWithoutASubnetPointsAtThePools(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "", "")
+	rec := s.post(t, `{"name":"stub","driver":"overlay"}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "network_not_allocated" {
+		t.Fatalf("status = %d %q, want 422 network_not_allocated: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "The swarm's address pools may be full. Open the Address space page to free some.") || strings.Contains(string(rec.body), "overlaps another swarm network") {
+		t.Errorf("the sentence does not point at the pools: %s", rec.body)
+	}
+}
+
+// An overlay the swarm allocates is created as before and nothing is removed.
+func TestCreateNetworkAllocatedOverlayIsKept(t *testing.T) {
+	t.Parallel()
+	s := unallocatedSwarm(t, "10.77.0.0/24", "")
+	rec := s.post(t, `{"name":"fine","driver":"overlay","subnet":"10.78.0.0/24"}`)
+	if rec.code != http.StatusCreated {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	a := s.onlyCreate(t)
+	for _, w := range a.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE") {
+			t.Errorf("an allocated network was removed: %v", a.fake.Writes())
+		}
+	}
+	if rows := s.networkAudits(t); len(rows) != 1 || rows[0].Details["code"] != "created" {
+		t.Errorf("audit rows = %+v", rows)
+	}
+}
+
+// The engine refuses a subnet at once (the bridge driver's or the default IPAM's overlap
+// refusal, which 10-28's override rule leaves to it): 422 subnet_refused, never the unreachable
+// problem, and the engine's own sentence stays out of the answer (T-10-71).
+func TestCreateNetworkEngineOverlapRefusal(t *testing.T) {
+	t.Parallel()
+	cfg := networkEngine()
+	cfg.OverlapSubnets = []string{"10.99.0.0/24"}
+	f, e := dashEnv(t, cfg)
+	rec := f.createNet(t, e, `{"name":"lan","driver":"bridge","subnet":"10.99.0.0/24","createAnyway":true}`)
+	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "subnet_refused" {
+		t.Fatalf("status = %d %q, want 422 subnet_refused: %s", rec.code, rec.ptyp, rec.body)
+	}
+	if !strings.Contains(string(rec.body), "Docker refused 10.99.0.0/24: it overlaps another network on that host. Choose another subnet.") ||
+		strings.Contains(string(rec.body), "Pool overlaps") {
+		t.Errorf("the problem is not the fixed wording: %s", rec.body)
+	}
+	rows := f.networkAudits(t)
+	if len(rows) != 1 || rows[0].Action != audit.ActionNetworkCreated || rows[0].Result != string(audit.ResultFailure) || rows[0].Reason != "subnet_refused" || rows[0].Details["code"] != "subnet_refused" {
+		t.Fatalf("audit rows = %+v, want one failed create named subnet_refused", rows)
 	}
 }

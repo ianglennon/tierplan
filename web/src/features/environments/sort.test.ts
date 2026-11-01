@@ -26,6 +26,7 @@ function env(
     agents: null,
     engineVersion: null,
     failingServices: null,
+    addressSpace: null,
     lastSeen: null,
     nodes: null,
     updateAvailable: false,
@@ -129,5 +130,53 @@ describe("sortEnvironments", () => {
   it("treats a missing direction as ascending", () => {
     const items = [env("2", "b"), env("1", "a")];
     expect(ids(sortEnvironments(items, "name"))).toEqual(["1", "2"]);
+  });
+});
+
+const space = (percent: number, estimated = false): EnvironmentItem["addressSpace"] => ({
+  worstName: "10.0.0.0/16",
+  worstKind: "pool",
+  used: percent,
+  capacity: 100,
+  percent,
+  state: percent >= 90 ? "almost_full" : percent >= 70 ? "getting_full" : "normal",
+  unit: "subnets",
+  estimated,
+  orphaned: 0,
+});
+
+describe("sortEnvironments and the address pool", () => {
+  it("ranks a filling pool with the problems: after offline and degraded, before healthy", () => {
+    const items = [
+      env("1", "healthy", "online", { addressSpace: space(42) }),
+      env("2", "pool72", "online", { addressSpace: space(72) }),
+      env("3", "pending", "pending"),
+      env("4", "degraded", "degraded"),
+      env("5", "pool91", "online", { addressSpace: space(91) }),
+      env("6", "offline", "offline"),
+    ];
+    // The almost full pool leads the getting full one; both outrank what is not online yet.
+    expect(ids(sortEnvironments(items))).toEqual(["6", "4", "5", "2", "3", "1"]);
+  });
+
+  it("leaves a pool that is not measured where the health puts it", () => {
+    const items = [env("1", "b", "online"), env("2", "a", "online", { addressSpace: null })];
+    expect(ids(sortEnvironments(items))).toEqual(["2", "1"]);
+  });
+
+  it("sorts by the column fullest first, 91 then 72 then 42, then unmeasured", () => {
+    const items = [
+      env("1", "a", "online", { addressSpace: space(42) }),
+      env("2", "b", "online", { addressSpace: null }),
+      env("3", "c", "online", { addressSpace: space(91) }),
+      env("4", "d", "online", { addressSpace: space(72, true) }),
+    ];
+    expect(ids(sortEnvironments(items, "addressSpace", "asc"))).toEqual(["3", "4", "1", "2"]);
+    expect(ids(sortEnvironments(items, "addressSpace", "desc"))).toEqual(["1", "4", "3", "2"]);
+  });
+
+  it("keeps the Health column on health alone", () => {
+    const items = [env("1", "a", "online"), env("2", "b", "online", { addressSpace: space(95) })];
+    expect(ids(sortEnvironments(items, "health", "asc"))).toEqual(["1", "2"]);
   });
 });

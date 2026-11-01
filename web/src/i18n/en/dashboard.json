@@ -24,6 +24,19 @@
       "memoryValue": "{{value}} GiB",
       "missing": "—"
     },
+    "addressCard": {
+      "title": "Address space",
+      "caption": "{{used, number}} of {{capacity, number}} {{unit}} used",
+      "orphaned_one": "{{count, number}} orphaned network",
+      "orphaned_other": "{{count, number}} orphaned networks",
+      "open": "Open address space",
+      "estimatedBadge": "Estimated",
+      "estimatedHealth": "Estimated, so the environment's health isn't affected.",
+      "notMeasured": "Not measured yet",
+      "notMeasuredBody": "Coaming reads the pools from a manager, or estimates them on a standalone host.",
+      "loading": "Loading the address space",
+      "error": "Couldn't read the address space."
+    },
     "events": {
       "title": "Recent events",
       "filterLabel": "Filter events by type",

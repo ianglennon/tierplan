@@ -254,6 +254,35 @@ describe("NetworkList columns", () => {
     expect(within(ovl).getByText("Swarm")).toBeTruthy();
   });
 
+  it("adds the Addresses used column for overlays", async () => {
+    swarmEnv = true;
+    items = [
+      net("ovl", {
+        scope: "swarm",
+        node: "Cluster",
+        driver: "overlay",
+        addressesUsed: { used: 230, capacity: 254, percent: 90, state: "almost_full" },
+      }),
+      net("blind", { scope: "swarm", node: "Cluster", driver: "overlay" }),
+      net("plain"),
+    ];
+    mount();
+    const row = (await screen.findByText("ovl")).closest("tr") as HTMLElement;
+    const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    // Between Attached and Owner.
+    const at = headers.indexOf("Addresses used");
+    expect(at).toBeGreaterThan(-1);
+    expect(headers[at - 1]).toBe("Attached");
+    expect(headers[at + 1]).toBe("Owner");
+    expect(within(row).getByRole("meter", { name: "ovl" })).toBeTruthy();
+    expect(within(row).getByText("230 / 254")).toBeTruthy();
+    expect(within(row).getByText("Almost full")).toBeTruthy();
+    const blind = screen.getByText("blind").closest("tr") as HTMLElement;
+    expect(within(blind).queryByRole("meter")).toBeNull();
+    const plain = screen.getByText("plain").closest("tr") as HTMLElement;
+    expect(within(plain).queryByRole("meter")).toBeNull();
+  });
+
   it("on a swarm counts services too and says Cluster for a swarm-wide network", async () => {
     swarmEnv = true;
     items = [

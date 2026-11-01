@@ -4,7 +4,7 @@ Coaming is an open-source, web-based manager for Docker: many Docker Swarm clust
 
 Licence: [AGPL-3.0-or-later](LICENSE). Anyone who runs a modified version as a network service must offer its users the source.
 
-**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Coaming, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings, users and teams with Viewer, Operator and Admin roles per environment, and encrypted backups you can restore. On a Docker Swarm it also manages services (scale, edit, force update, roll back, create and remove), nodes (drain, promote, label and remove), secrets and configs, shows where tasks run, and merges a service's logs and live stats across its tasks. It also manages **compose stacks**: write a stack in the editor, review what will change, and deploy it to a swarm or a standalone host, with every image pinned to a digest and nothing left behind when you remove it ([docs/stacks.md](docs/stacks.md)).
+**Status: pre-release.** No version has been published yet; the first release will be v0.1.0, and breaking changes are allowed between 0.x minors. This build lets you install Coaming, sign in, and look at the Docker host it runs on: a dashboard, containers, images, volumes and networks (read-only), a live event feed, an audit log and settings, users and teams with Viewer, Operator and Admin roles per environment, and encrypted backups you can restore. On a Docker Swarm it also manages services (scale, edit, force update, roll back, create and remove), nodes (drain, promote, label and remove), secrets and configs, shows where tasks run, and merges a service's logs and live stats across its tasks. It also manages **compose stacks**: write a stack in the editor, review what will change, and deploy it to a swarm or a standalone host, with every image pinned to a digest and nothing left behind when you remove it ([docs/stacks.md](docs/stacks.md)). It also shows where each environment's network address space has gone, warns before a swarm pool or overlay runs out, finds orphaned networks and picks right-sized subnets ([docs/networks.md](docs/networks.md)).
 
 ## Before you install
 
@@ -19,8 +19,11 @@ docker run -d --name coaming --restart unless-stopped \
   -p 7480:7480 \
   -v coaming-data:/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /proc/1/net/route:/host/route:ro \
   ghcr.io/ianglennon/coaming:edge
 ```
+
+The last `-v` is optional: it lets the subnet picker check Coaming's own host's routes against a subnet you choose; without it that check is skipped and says so.
 
 The same thing as a Compose file:
 
@@ -35,6 +38,7 @@ services:
     volumes:
       - coaming-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - /proc/1/net/route:/host/route:ro  # optional, see above
 
 volumes:
   coaming-data:
@@ -116,6 +120,7 @@ Every setting is an environment variable, and most are also a command-line flag 
 | `COAMING_TLS_KEY_FILE` | unset | no | Path to the TLS private key in PEM form. Needs `COAMING_TLS_CERT_FILE`. |
 | `COAMING_TLS_SELF_SIGNED` | `false` | no | Serve a generated self-signed certificate. Cannot be combined with the two file settings. |
 | `COAMING_DOCKER_GID` | detected | no | Group ID of the Docker socket, overriding detection. |
+| `COAMING_HOST_ROUTE_FILE` | `/host/route` | no | The host's `/proc/1/net/route` bind-mounted read-only into Coaming's own container (`-v /proc/1/net/route:/host/route:ro`), so the subnet picker can warn about a subnet that collides with a LAN or VPN route of the host Coaming runs on. An absolute path. Optional: without the mount the check says it cannot read this host's routes and nothing else changes. See [docs/agent.md](docs/agent.md#host-routes). |
 | `COAMING_AGENT_HEARTBEAT_INTERVAL` | `10s` | no | How often each agent sends a heartbeat; the value is sent to the agent when it connects. |
 | `COAMING_AGENT_OFFLINE_AFTER` | `30s` | no | Silence after which an agent connection is closed and the agent counts as offline. At least twice the heartbeat interval. |
 | `COAMING_AGENT_RECONNECT_GRACE` | `60s` | no | After Coaming starts, how long an environment shows "Reconnecting" instead of offline while its agents come back. |
@@ -201,6 +206,7 @@ The source code, version and commit are linked from **Settings > About**, as the
 - [docs/reverse-proxy.md](docs/reverse-proxy.md): running Coaming behind Caddy, nginx or Traefik, at the root or a subpath.
 - [docs/containers.md](docs/containers.md): containers and bulk actions, logs, browser shells, networks, volumes and events, and what each one records.
 - [docs/stacks.md](docs/stacks.md): compose stacks: the editor, stack files and variables, the review, image pinning, deploying to a swarm or a standalone host, stopping, starting and removing, the labels Coaming writes, and what is still open.
+- [docs/networks.md](docs/networks.md): the Address space page, pool and overlay warnings, orphaned and unused networks, the subnet picker, small stack subnets, and the pool guidance.
 - [docs/services.md](docs/services.md): swarm services, nodes, secrets and configs, service logs and stats, restart loops, and why Coaming cannot change a service with host access unless the host allows it.
 - [docs/access.md](docs/access.md): instance admins, roles, teams, invite and reset links, sessions.
 - [docs/permissions.md](docs/permissions.md): what each role may do, generated from the code.

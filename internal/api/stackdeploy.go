@@ -562,7 +562,7 @@ func deployDraft(ctx context.Context, d StacksDeps, p *rbac.Principal, env *http
 	swarmIn := stackops.SwarmDeployInput{
 		EnvID: env.ID, Stack: st, Project: loaded.Project, Files: files, Vars: vars, Copy: draft.Copy,
 		Caller: caller, Masker: rendering.masker,
-		Pins: repo, RevisionID: rev.ID, Update: update, Reviewed: body.Pins,
+		Pins: repo, Subnets: repo, RevisionID: rev.ID, Update: update, Reviewed: body.Pins,
 	}
 	out, err := launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -666,6 +666,8 @@ func deployStandaloneStack(ctx context.Context, d StacksDeps, p *rbac.Principal,
 	standaloneIn := stackops.StandaloneDeployInput{
 		EnvID: env.ID, NodeID: node, Stack: st, Copy: draft.Copy, Reviewed: body.Pins, Update: update,
 		Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+		// The subnets small stack subnets gave its networks, read from the last good revision and stored on this one.
+		Subnets: repo,
 	}
 	return launchStackDeploy(ctx, d, launch{
 		p: p, env: env, st: st, rev: rev, mode: mode, kind: stackops.DeployKindDeploy, userAgent: userAgent, trigger: o.Trigger,
@@ -833,6 +835,9 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		standaloneIn := stackops.StandaloneDeployInput{
 			EnvID: env.ID, NodeID: node, Stack: st, Copy: target.Copy, Reviewed: pins, Rollback: true,
 			Pins: repo, RevisionID: rev.ID, Caller: caller, Masker: rendering.masker,
+			// The revision's own record of the subnets its networks were given, which a network the roll back
+			// has to create again takes while it is free, and which a network that exists keeps.
+			Subnets: repo, RestoredSubnets: target.Subnets,
 		}
 		l.items = stackops.StandaloneItemSpecs()
 		l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {
@@ -847,6 +852,8 @@ func rollbackStack(ctx context.Context, d StacksDeps, in *StackRollbackInput) (*
 		Pins: repo, RevisionID: rev.ID, Reviewed: pins, Rollback: true,
 		// The revision's own record of its platforms goes with its digests, so the roll back asks no registry for them.
 		RestoredPlatforms: target.Platforms,
+		// And the subnets it gave its networks, so a network the roll back has to create again can have the same block.
+		Subnets: repo, RestoredSubnets: target.Subnets,
 	}
 	l.items = stackops.DeployItemSpecs()
 	l.run = func(jctx context.Context, r *jobs.Reporter, onDone func(stackops.DeployResult)) {

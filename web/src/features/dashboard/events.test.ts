@@ -145,6 +145,7 @@ describe("mergeEvents", () => {
 describe("invalidationKeys", () => {
   const summary = ["env", "e1", "summary"];
   const list = (resource: string) => ["env", "e1", resource];
+  const addressSpace = ["env", "e1", "address-space"];
 
   it("maps a container event to the summary, containers, volumes, networks and images", () => {
     expect(invalidationKeys("container", "e1")).toEqual([
@@ -153,6 +154,7 @@ describe("invalidationKeys", () => {
       list("volumes"),
       list("networks"),
       list("images"),
+      addressSpace,
     ]);
   });
 
@@ -173,7 +175,18 @@ describe("invalidationKeys", () => {
       summary,
       list("networks"),
       list("containers"),
+      addressSpace,
     ]);
+  });
+
+  it("makes the Address space page stale on a network, container or service event, and on no other", () => {
+    for (const type of ["network", "container", "service"] as const) {
+      expect(invalidationKeys(type, "e1")).toContainEqual(addressSpace);
+      expect(invalidationKeys(type, "e1", true)).toContainEqual(addressSpace);
+    }
+    for (const type of ["volume", "image", "secret", "config", "node", "coaming"] as const) {
+      expect(invalidationKeys(type, "e1")).not.toContainEqual(addressSpace);
+    }
   });
 
   it("maps a volume event to the summary and volumes, and an image event to the summary and images", () => {
@@ -216,6 +229,7 @@ describe("invalidationKeys", () => {
       list("services"),
       list("secrets"),
       list("configs"),
+      addressSpace,
     ]);
   });
 
@@ -384,6 +398,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
       ["env", "e1", "images"],
+      ["env", "e1", "address-space"],
     ]);
 
     // A burst inside the second collapses into one trailing refetch.
@@ -417,6 +432,7 @@ describe("createEventsConnection", () => {
       ["env", "e1", "volumes"],
       ["env", "e1", "networks"],
       ["env", "e1", "images"],
+      ["env", "e1", "address-space"],
       // An invalidate frame carries no attributes, so it may be about a stack's object.
       ["env", "e1", "stacks"],
     ]);

@@ -76,6 +76,8 @@ const (
 	CodeUseAPISocket             = lint.CodeUseAPISocket
 	CodeStandaloneUnsupported    = lint.CodeStandaloneUnsupported
 	CodeNetworkOptionUnsupported = lint.CodeNetworkOptionUnsupported
+	CodeNetworkSubnetOverlap     = lint.CodeNetworkSubnetOverlap
+	CodeNetworkSubnetOutsidePool = lint.CodeNetworkSubnetOutsidePool
 )
 
 // Problem is one thing the check found wrong with a stack: where (a file and a 1-based line and

@@ -99,6 +99,27 @@ type FakeConfig struct {
 	SwarmClusterID string
 	// FailInfo makes /info answer 500, for the partial-failure path.
 	FailInfo bool
+	// SwarmDefaultAddrPool and SwarmSubnetSize are Info.Swarm.Cluster.DefaultAddrPool and
+	// SubnetSize, what a manager reports of the pool its swarm allocates networks from. They
+	// make the Cluster exist, as SwarmClusterID does; a manager with neither is reported with a
+	// null pool and a mask of 0, which is how a swarm initialised without --default-addr-pool
+	// reads in this fake (a real one reports 24).
+	SwarmDefaultAddrPool []string
+	SwarmSubnetSize      uint32
+	// OverlapSubnets are subnets the daemon refuses a network create for, as a real one does when the pool overlaps a
+	// network or route it holds that Coaming cannot see: nothing is created and the answer is 403 "Pool overlaps with
+	// other one on this address space".
+	OverlapSubnets []string
+	// SwarmUnallocated are subnets of swarm-scoped networks the managers accept but their allocator refuses (UAT G-10-8: the
+	// pool overlaps another swarm network, or the pools are full). The create answers 201 as usual, but the network inspects
+	// and lists as the stub the managers keep: no driver and no IPAM config. The value is how many inspects answer that
+	// way before the network reads as allocated; a negative value means it is never allocated. The key "" matches a
+	// create that names no subnet (the pools being full). Removal works as on any
+	// created network (RemoveErrors makes it fail).
+	SwarmUnallocated map[string]int
+	// DefaultAddressPools is Info.DefaultAddressPools, the daemon's default-address-pools
+	// setting. Empty leaves it out of /info, as a real daemon does when none is configured.
+	DefaultAddressPools []FakeAddressPool
 
 	// Containers, Images, Volumes and Networks are what the list endpoints
 	// answer. Nil means an empty engine: the fake answers an empty list, never
@@ -196,6 +217,12 @@ type FakeConfig struct {
 	// request as it was sent. It is off by default, so a test that reads back the names it wrote
 	// keeps them (fake_networks.go).
 	NetworkTargetsByID bool
+	// ServiceVIPNetworks sets, by service name or ID, the networks (by ID) the service's endpoint
+	// has a virtual IP on, in place of the ones the fake works out. Without it (and without the
+	// service's own VirtualIPs) every service has one virtual IP per network its current spec
+	// names, as a manager gives a service in virtual-IP mode, so a test that needs a virtual IP
+	// the spec no longer names sets it here (fake_services.go).
+	ServiceVIPNetworks map[string][]string
 	// taskStates are the states SetTaskState gave those tasks, by service name.
 	taskStates map[string]fakeTaskState
 	// OnWrite, when set, is called with each write as Writes lists it ("METHOD path?query") the
@@ -249,6 +276,13 @@ type FakeConfig struct {
 	// show what must keep working while a list is outstanding (a probe, a stop, a caller that
 	// gave up) by ordering instead of by comparing elapsed time with a bound.
 	ListHold <-chan struct{}
+}
+
+// FakeAddressPool is one entry of a daemon's default-address-pools setting: a range in CIDR
+// form and the mask of each network allocated from it.
+type FakeAddressPool struct {
+	Base string
+	Size int
 }
 
 // FakePullStatus is an HTTP status and message a pull is answered with.
@@ -506,6 +540,10 @@ type FakeNetwork struct {
 	Internal   bool
 	Attachable bool
 	Ingress    bool
+	// ConfigOnly and ConfigFrom are what /networks reports of a config-only network and of the
+	// config-only network another takes its configuration from (by name).
+	ConfigOnly bool
+	ConfigFrom string
 	// IPv6 is EnableIPv6, Options the driver options, and Gateways the gateway of
 	// each subnet of Subnets by position (a shorter list leaves the rest without
 	// one). They are what an inspect of the network reports.
@@ -566,6 +604,9 @@ type Fake struct {
 	// netGone are the IDs of networks removed through the fake; withoutNetworks
 	// leaves them out of every list.
 	netGone map[string]bool
+	// netUnalloc is, by ID, how many more inspects show a created network as the unallocated stub of
+	// FakeConfig.SwarmUnallocated; a negative count is for good (fake_networks.go).
+	netUnalloc map[string]int
 	// netConnects and netDisconnects are the bodies of the connects and disconnects the
 	// fake accepted, and epChanges the attachments they left, by container ID and
 	// network name: a nil endpoint is a disconnect (fake_networks.go).
@@ -839,7 +880,7 @@ func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 func (f *Fake) config() FakeConfig {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
+	return f.cfg.withStates(f.states).withNetworks(f.nets).withoutNetworks(f.netGone).withUnallocatedNetworks(f.netUnalloc).withEndpoints(f.epChanges).withVolumes(f.vols).withoutVolumes(f.volGone).withImages(f.pulled, f.imgGone, f.imgUntagged).withCreatedServices(f.svcCreated).withServices(f.svcState).withoutServices(f.svcGone).withNodes(f.nodeState).withoutNodes(f.nodeGone).withSecrets(f.secrets).withoutSecrets(f.secretGone).withConfigs(f.configs).withoutConfigs(f.configGone).withTaskStates(f.taskStates).withUpdateStates(f.updateStates).withQuorum(f.quorumLost)
 }
 
 func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
@@ -956,6 +997,8 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			MemTotal:        8 << 30,
 			SecurityOptions: cfg.SecurityOptions,
 			Swarm:           cfg.swarmInfo(),
+
+			DefaultAddressPools: cfg.addressPools(),
 		})
 	case "/events":
 		f.serveEvents(w, r)
@@ -1052,14 +1095,30 @@ func (c FakeConfig) swarmInfo() swarm.Info {
 		LocalNodeState:   swarm.LocalNodeState(c.SwarmState),
 		ControlAvailable: c.SwarmControl,
 	}
-	if c.SwarmClusterID != "" || c.HistoryLimit != 0 {
+	if c.SwarmClusterID != "" || c.HistoryLimit != 0 || len(c.SwarmDefaultAddrPool) != 0 || c.SwarmSubnetSize != 0 {
 		info.Cluster = &swarm.ClusterInfo{ID: c.SwarmClusterID}
 	}
 	if c.HistoryLimit != 0 {
 		limit := int64(c.HistoryLimit)
 		info.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit = &limit
 	}
+	if info.Cluster != nil {
+		for _, p := range c.SwarmDefaultAddrPool {
+			info.Cluster.DefaultAddrPool = append(info.Cluster.DefaultAddrPool, netip.MustParsePrefix(p))
+		}
+		info.Cluster.SubnetSize = c.SwarmSubnetSize
+	}
 	return info
+}
+
+// addressPools is Info.DefaultAddressPools: nil unless the daemon is configured with some, so
+// the field is left out of the answer as a real daemon leaves it.
+func (c FakeConfig) addressPools() []system.NetworkAddressPool {
+	var out []system.NetworkAddressPool
+	for _, p := range c.DefaultAddressPools {
+		out = append(out, system.NetworkAddressPool{Base: netip.MustParsePrefix(p.Base), Size: p.Size})
+	}
+	return out
 }
 
 func (c FakeConfig) swarmManager() bool { return c.SwarmState == "active" && c.SwarmControl }
@@ -1143,7 +1202,7 @@ func (c FakeConfig) networkList() []network.Summary {
 		n := network.Summary{Network: network.Network{
 			ID: fn.ID, Name: fn.Name, Driver: fn.Driver, Scope: fn.Scope, Created: fn.Created,
 			Labels: fn.Labels, Internal: fn.Internal, Attachable: fn.Attachable, Ingress: fn.Ingress,
-			EnableIPv6: fn.IPv6,
+			EnableIPv6: fn.IPv6, ConfigOnly: fn.ConfigOnly, ConfigFrom: network.ConfigReference{Network: fn.ConfigFrom},
 		}}
 		for _, sub := range fn.Subnets {
 			n.IPAM.Config = append(n.IPAM.Config, network.IPAMConfig{Subnet: netip.MustParsePrefix(sub)})
@@ -1487,6 +1546,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 				s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 			}
 			fs.decorate(&s)
+			c.virtualIPs(fs, &s)
 			out = append(out, s)
 			continue
 		}
@@ -1543,6 +1603,7 @@ func (c FakeConfig) serviceList(withStatus bool) []swarm.Service {
 			s.ServiceStatus = &swarm.ServiceStatus{RunningTasks: fs.Running, DesiredTasks: fs.Desired}
 		}
 		fs.decorate(&s)
+		c.virtualIPs(fs, &s)
 		out = append(out, s)
 	}
 	return out

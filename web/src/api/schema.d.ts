@@ -412,6 +412,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/address-space": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The address pools of an environment and how full each is
+         * @description One row per address pool. A swarm answers the pools its manager reports (Swarm.Cluster.DefaultAddrPool of the engine info; none reported means the swarm's built-in 10.0.0.0/8) at the swarm's subnet size, measured: every network of the cluster, ingress included when it lies inside a pool, and every node's local network that overlaps a pool is counted. A standalone host answers the pools its daemon reports (source daemon) or, when it reports none, Docker's built-in pools (source defaults), always estimated. used and capacity count blocks of the pool's mask; state is decided on the exact ratio (normal under 70%, getting_full from 70%, almost_full from 90%) and percent is that ratio rounded down. largestFree is the largest aligned free block and largestFreeSubnets how many blocks it holds. networks is the subnet map: every network of every reporting node (a swarm-wide network once, a local network once per node) with its subnets, owner, attachments, age and, for an overlay, its usage, at most 5000 rows with networksTotal and networksTruncated. overlays is every swarm overlay network, ingress included, with its addresses used against what it can still hand out (read from the manager's address status, Engine 29 and later), the fullest first; a network whose count cannot be read has measured false and no numbers. ingress repeats the ingress network with outsidePool (absent when the swarm lists none). When no manager of a swarm answers, notMeasured is no_manager and the pools last read are returned with state unknown and nothing counted; notReporting names the nodes that did not answer. The server reads the engines at most once in 5 seconds per environment; the answer is never cached by the browser. IPv4 only. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getAddressSpace"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/keeps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Keep networks out of the orphan list
+         * @description Stores a keep for each named network (1 to 100), in one transaction: the networks are never listed as orphaned or unused, and a network of that name made again is kept too. A network that is kept already changes and records nothing. Each new keep is audited as network.kept. 422 node_required when a name is held by a local network on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
+         */
+        put: operations["keepNetworks"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/keeps/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Stop keeping a network out of the orphan list
+         * @description Removes the keep of one network, audited as network.unkept. 404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. 422 node_required when a local network of that name is on more than one node and no nodeId is given. Needs networks.keep (Admin) on the environment.
+         */
+        delete: operations["unkeepNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/orphans/{networkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an orphaned or unused network
+         * @description Removes one network from the orphan list, once and never retried. Coaming first reads the environment again and judges this one network from that fresh read, so a network that something started using, whose stack exists again, that was kept, or that sits on a node or manager that stopped answering is kept and not removed: 200 with outcome kept and the reason (in_use_again, not_orphaned or node_missing). The engine refusing the remove because the network is in use is also kept (in_use_again), not an error. Before the remove, the network's whole inspect document as the engine returned it, with secret-like values in its labels and options masked, is written to the audit log as network.inspect_saved. A document over 64 KB cannot be stored whole, so the delete is refused: 409 inspect_too_large and nothing is removed. A failure to write it is a 500 and nothing is removed. 200 with outcome deleted when the network was removed, audited as network.removed with source orphan_cleanup. 404 network_not_found when the network is not there; 409 network_builtin for the engine's own networks; 422 node_required when two nodes have a local network with that ID. Needs networks.manage (Admin) on the environment.
+         */
+        delete: operations["deleteOrphanNetwork"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/pools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Enter the address pools of a standalone host
+         * @description An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.address_pools_saved, with the new and the previous pools.
+         */
+        put: operations["setAddressPools"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The address-space settings of an environment
+         * @description Whether small stack subnets are on and their size (off at /26 by default), the pools entered for a standalone host (none by default), the version of the two and the display name of whoever saved them last. Needs networks.read (Viewer) on the environment.
+         */
+        get: operations["getAddressSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/small-subnets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn small stack subnets on or off, and choose their size
+         * @description mask is 25 to 28. version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. Needs networks.addressing (Env Admin) on the environment. A change is audited as environment.small_subnets_changed, with the new and the previous values.
+         */
+        put: operations["setSmallSubnets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/env/{envId}/address-space/subnet-check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Suggest a free subnet, recommend a size and check a typed subnet
+         * @description With suggest true, answers suggestion: the lowest free block of mask (or of the recommended size) inside the pools of the network to be made, clear of every IPv4 subnet of every network on every node. An overlay (or no driver) on a swarm takes the swarm's pools; a local driver on a swarm takes the daemon pools of the node nodeId (or Docker's defaults when it sets none); a standalone host takes its pools as the address space reads them. When no block of the size is free the answer is noFreeBlock, never an error. The suggestion reserves nothing. With tasks, answers needed, recommendedMask and recommendedUsable, or tooManyTasks when not even a /24 holds them. With subnet, answers subnetError (subnet_invalid, host_bits with corrected, too_small) as the create dialog's server check does; an IPv6 subnet has no error and ipv6NotChecked is true. With a valid IPv4 subnet, answers findings: the networks of this environment it overlaps (blocking: the create refuses it without createAnyway), networks of other environments the caller may read from their last read, and the pools it lies outside of (warnings). The overlap rule is the subnet map's: an overlay against every network, a local network of a node against that node's local networks and every swarm network. IPv4 only. Reads only the cached view of the environment. At most 120 checks a minute per user: 429 rate_limited. Needs networks.read (Viewer) on the environment.
+         */
+        post: operations["checkSubnet"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/adopt-cluster": {
         parameters: {
             query?: never;
@@ -1283,7 +1443,7 @@ export interface paths {
         put?: never;
         /**
          * Create a network
-         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
+         * @description Creates a bridge, overlay, macvlan or ipvlan network. An overlay network on a swarm belongs to the cluster: it is made once, through a manager, and nodeId is ignored. Every other network is local to one node, named by nodeId (the nodeId of a row of a list); nodeId may be left out only on an environment of one node that is not a swarm (else 422 node_required). An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network Coaming could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. 409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.
          */
         post: operations["createNetwork"];
         delete?: never;
@@ -1851,7 +2011,7 @@ export interface paths {
         put?: never;
         /**
          * Create a service
-         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.
+         * @description Creates one standalone service from a full spec, once and never retried; the tasks start in the swarm, so the answer is 201. The spec is decoded strictly, the host-escalation policy runs on the whole of it, the image is required and resolved to its digest (a failed lookup is 422 image_unresolved and nothing is created), and one create is sent with the registry credential and without the engine's own registry lookup. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is created; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If the service cannot be created, every object this request made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, 422 spec_rejected, with Docker's words, for a spec Docker refuses, 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already, and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage for a kind it would create. Problems, all before anything is created: 409 service_name_taken for a name a service has; 422 image_required for no image; 422 name_invalid for a name that is not 1 to 63 letters, numbers, dot, dash or underscore; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at; 422 placeholder_unmatched for a <hidden> in the spec; 422 stack_label_reserved for a com.docker.stack. label; 422 image_unresolved when the tag cannot be resolved to a digest (a new service is never created unpinned); 409 not_a_swarm for a standalone host; 403 privileged_service, with each finding in errors, when the caller is below env Admin and the spec asks for host access. No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.manage (Env Admin) on the environment. Every attempt is audited as service.created, with result failure and the code when it was refused.
          */
         post: operations["createService"];
         delete?: never;
@@ -1935,7 +2095,7 @@ export interface paths {
         put?: never;
         /**
          * Apply a full service spec
-         * @description Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.
+         * @description Sends a full service spec once and never retried; the rollout continues in the swarm, so the answer is 202. In one write on a manager it inspects the service fresh, refuses a version that is not the one sent, merges the masked values back, runs the host-escalation policy on the merged spec that will be forwarded, resolves the digest when the image changed (a failed lookup is 422 image_unresolved and nothing is sent) and sends one update with the version and the registry credential. Two applies racing on one service: Docker's version check lets one through and the other gets 409 service_changed; neither is retried, and sending the same version twice makes the second 409. Also 422 nothing_to_apply for a spec equal to the current one, 422 objects_missing for a network, secret or config the spec names that does not exist and was not sent in objects, and 422 spec_rejected, with Docker's words, for a spec Docker refuses. The networks, secrets and configs in objects are created first, networks then secrets then configs, their IDs are written into the spec's references, and then the service is updated; each is audited as network.created, secret.created or config.created with source service_apply, never with a value. If anything after the first creation fails, every object this apply made is removed again in reverse order (audited with source service_apply_cleanup); the problem's detail says so and its errors carry the reason on its own (location reason) and the objects as removed and notRemoved, each as kind:name. A staged network is read back after its create until the swarm has allocated it: one still not allocated after about 6 seconds is removed again by its ID, the objects made before it are removed as for any failed object create, no service is created or updated and the answer is 422 network_not_allocated naming the network; the audit log holds network.created with code not_allocated (source service_apply) and network.removed with source allocation_check, and the step of that network carries the code not_allocated. Also 422 too_many_objects for more than 16 objects, 422 object_duplicate for the same kind and name twice, the name, value, labels, templating and subnet problems of the secrets, configs and networks routes for a bad object, 409 name_taken when an object's name exists already (nothing is retried), and 403 object_permission, before anything is created, for a caller without networks.manage, secrets.manage or configs.manage (Env Admin) for a kind it would create. Problems, all before anything is sent: 409 service_changed when the version is not the current one; 409 stack_owned for a service a stack owns; 404 service_not_found; 409 not_a_swarm for a standalone host; 422 spec_invalid (the decoder's message) for a spec that does not decode strictly into a swarm service spec, or for a secret reference whose SecretName is not the name of the secret its SecretID points at, whoever sends it; 422 placeholder_unmatched for a <hidden> with no current value behind it; 422 placeholder_reserved when a caller who may reveal secrets sends <hidden>; 422 name_immutable and 422 mode_immutable for a changed name or kind of mode; 422 stack_label_reserved for a com.docker.stack. label the service did not have; 403 privileged_service, with each finding in errors, when a caller below env Admin sends host access (a bind outside /srv, /mnt and /media or of a runtime socket, a local volume that binds a relative host path or one outside those roots, or mounts a filesystem type other than tmpfs or a network share, a named pipe, an added capability, SELinux disabled or spc_t, seccomp unconfined or custom, AppArmor disabled, the host network, a plugin runtime). 403 secret_reveal_required, with each added reference in errors, when a caller without secrets.reveal adds a secret the service does not use (compared by the engine's secret ID, a name being resolved through the swarm's secret list); No answer, error or audit row carries a value of the environment, the command line, the health check or the log options for a caller without secrets.reveal, or the value of a staged secret or config. Needs services.control (Operator) on the environment. Every attempt on a service that exists is audited as service.updated, with result failure and the code when it was refused.
          */
         post: operations["applyServiceUpdate"];
         delete?: never;
@@ -2243,7 +2403,7 @@ export interface paths {
         put?: never;
         /**
          * Check a stack's working copy
-         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing, writes nothing and sends nothing to an engine. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
+         * @description Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing and writes nothing. include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. An explicit network subnet is compared with the networks and address pools the environment already shows (a read-only look at the environment's cached listing): a warning when it overlaps another network of the environment or lies outside every pool. The stack's own networks are left out of the comparison, and when the environment cannot be read the check answers without these two warnings. The editor calls it while a person types and on Save, and the review and the deploy run the same check. One user may have two checks running; a third is 429 check_busy. A check stops after 5 seconds and answers 200 with one error problem, check_timeout. Needs stacks.read (Viewer).
          */
         post: operations["checkStack"];
         delete?: never;
@@ -4699,6 +4859,8 @@ export interface components {
             token: string;
         };
         AddEnvironmentBody: {
+            /** @description The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline */
+            addressSpace: components["schemas"]["EnvironmentAddressSpaceBody"] | null;
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
@@ -4774,6 +4936,163 @@ export interface components {
              * @description How many users were added. Users who were already in the team are not counted and leave no audit entry
              */
             added: number;
+        };
+        AddressMapRowBody: {
+            /**
+             * Format: int64
+             * @description Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node
+             */
+            attachedContainers: number;
+            /**
+             * Format: int64
+             * @description Swarm services whose spec names the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network
+             */
+            attachedServices: number;
+            /** @description True for bridge, host, none, ingress, docker_gwbridge and any ingress network: the engine's own */
+            builtIn: boolean;
+            /** Format: date-time */
+            created?: string;
+            driver: string;
+            /** @description The network's full ID */
+            id: string;
+            /** @description True for the swarm's ingress (routing mesh) network */
+            ingress: boolean;
+            name: string;
+            /** @description The node a local network is on, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /**
+             * Format: int64
+             * @description This row's position in the address order (its index in networks)
+             */
+            order: number;
+            /** @description The other networks whose IPv4 subnets overlap this one's, within scope: a swarm network against every swarm network and every local network, a local network against the local networks of its own node and every swarm network. Empty when none. At most 50 are named */
+            overlaps: components["schemas"]["MapOverlapBody"][] | null;
+            /** @description The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; for a swarm network with neither, the first service by name whose spec names it; empty otherwise */
+            owner: string;
+            /**
+             * @description What owner is: a stack, a compose project, a service, or none
+             * @enum {string}
+             */
+            ownerKind: "stack" | "project" | "service" | "none";
+            /** @description The ID of the Coaming stack of this environment the network belongs to, so the page can link to it. Empty when no Coaming stack of the environment owns it */
+            ownerStackId: string;
+            /**
+             * @description swarm for a cluster-wide network, local for every other
+             * @enum {string}
+             */
+            scope: "swarm" | "local";
+            /** @description The IPAM subnets in CIDR notation; empty for host and none and any network without one */
+            subnets: string[] | null;
+            /** @description Overlay networks only: addresses used against what the subnet can still hand out. Absent for every other network and when the count could not be read, never a zero */
+            usage?: components["schemas"]["NetworkUsageBody"];
+        };
+        AddressPoolBody: {
+            /**
+             * Format: int64
+             * @description How many blocks the pool holds in all (at most 2^30). Zero cannot happen for a listed pool
+             */
+            capacity: number;
+            /** @description The pool's range, for example 10.0.0.0/8 */
+            cidr: string;
+            /** @description True when the numbers cannot be taken as exact. Every standalone row is: the daemon skips pool slots that overlap routes of the host, and engines differ */
+            estimated: boolean;
+            /**
+             * Format: int64
+             * @description How many of the used blocks only a route of the host takes: blocks the daemon will not hand out because a route overlaps them and no Docker network holds. 0 for a swarm and when the host's routes could not be read
+             */
+            hostRouteBlocks: number;
+            /** @description The largest free block made of whole blocks of the pool, aligned to the pool, in CIDR form. Empty when no block is free or the pool was not measured */
+            largestFree: string;
+            /**
+             * Format: int64
+             * @description How many blocks of the pool's mask largestFree holds. 0 with an empty largestFree
+             */
+            largestFreeSubnets: number;
+            /**
+             * Format: int64
+             * @description The mask of each network allocated from the pool (the swarm's SubnetSize, or the daemon's pool size)
+             */
+            mask: number;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down, so 69.99% is 69
+             */
+            percent: number;
+            /**
+             * @description Where the pool came from: swarm (the swarm's own, or its built-in 10.0.0.0/8), daemon (the host's default-address-pools setting), defaults (Docker's built-in pools, because the host sets none) or entered (a pool a person entered)
+             * @enum {string}
+             */
+            source: "swarm" | "daemon" | "defaults" | "entered";
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio and never on the rounded percent. unknown when the pool could not be measured
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /**
+             * Format: int64
+             * @description How many blocks of the pool, each of the size the mask gives, any subnet overlaps. A /28 inside one /26 block uses 1; a /16 in a /24-size pool uses 256. IPv6 subnets are not counted. At most 2^30, so it always fits
+             */
+            used: number;
+        };
+        AddressPoolsRequest: {
+            /** @description The pools of the host, up to 16, replacing the ones saved. An empty list goes back to the host's own or Docker's default pools */
+            pools: components["schemas"]["PoolEntryBody"][] | null;
+            /**
+             * Format: int64
+             * @description The version read with the settings; a save against another version is 409 settings_changed
+             */
+            version: number;
+        };
+        AddressSettingsBody: {
+            /** @description The display name of whoever saved either setting last; empty when none was saved or that person is not known */
+            changedBy: string;
+            /** @description The pools entered for a standalone host, in the order entered. Empty means the host's own (default-address-pools) or Docker's default pools are used */
+            pools: components["schemas"]["PoolEntryBody"][] | null;
+            smallSubnets: components["schemas"]["SmallSubnetsBody"];
+            /**
+             * Format: int64
+             * @description How many times either setting was saved. Send it back with a save: a save made against any other version is 409 settings_changed
+             */
+            version: number;
+        };
+        AddressSpaceBody: {
+            /**
+             * @description What the environment is
+             * @enum {string}
+             */
+            envType: "swarm" | "standalone";
+            /** @description The ingress network again (it is also in overlays), with outsidePool saying whether it lies outside every pool of the swarm. Absent when the swarm lists none */
+            ingress?: components["schemas"]["OverlayUsageBody"];
+            /** @description The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name */
+            kept: components["schemas"]["KeptRowBody"][] | null;
+            /** @description True when the numbers were read from the swarm's own pools through a manager. False for a standalone host, whose rows are all estimated, and when notMeasured is set */
+            measured: boolean;
+            /** @description The subnet map: every network of every reporting node, one row for a swarm-wide network and one per node for a local one, ordered by the numeric start address of the first IPv4 subnet, then its mask, name and node; a network with no IPv4 subnet is last. At most 5000 rows (the page shows 500 and searches the rest); networksTotal is the full count. The overlaps are decided on the server over every row, before the cap */
+            networks: components["schemas"]["AddressMapRowBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many networks the map holds, whatever the cap
+             */
+            networksTotal: number;
+            /** @description True when networksTotal is more than the rows returned */
+            networksTruncated: boolean;
+            /**
+             * @description Why a swarm could not be measured: no_manager means no manager answered. The pools last read are returned with state unknown and nothing counted. Absent when the swarm was measured or the environment is standalone
+             * @enum {string}
+             */
+            notMeasured?: "no_manager";
+            /** @description The nodes that did not answer, whose networks are left out of the counts and of the map. Empty when every node answered */
+            notReporting: string[] | null;
+            /** @description The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name */
+            orphans: components["schemas"]["OrphanRowBody"][] | null;
+            /** @description Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld */
+            orphansWithheld?: components["schemas"]["OrphansWithheldBody"];
+            /** @description Every swarm overlay network, ingress included, with how many of its addresses are handed out against what it can still hand out, the fullest first and then by name. Empty for a standalone host. A network whose count could not be read has measured false (Not measured: an engine before 29 on the manager, or no swarm count), never a zero */
+            overlays: components["schemas"]["OverlayUsageBody"][] | null;
+            /** @description One row per address pool, in the order the swarm or the daemon lists them. Empty when a swarm was never measured */
+            pools: components["schemas"]["AddressPoolBody"][] | null;
         };
         AdoptCheckBody: {
             /** @description True when a pasted file has an error, so nothing was compared with what runs: gaps and ownershipOnly are then empty */
@@ -6193,6 +6512,47 @@ export interface components {
             /** @description Only the warnings that apply, errors first, then newest first; empty when there are none */
             items: components["schemas"]["EnvWarningBody"][] | null;
         };
+        EnvironmentAddressSpaceBody: {
+            /**
+             * Format: int64
+             * @description What there is of it, in the unit
+             */
+            capacity: number;
+            /** @description True when the number is an estimate: a standalone host's pool, which the daemon fills in its own way. An estimate never makes an environment degraded */
+            estimated: boolean;
+            /**
+             * Format: int64
+             * @description How many networks the last orphan check found orphaned
+             */
+            orphaned: number;
+            /**
+             * Format: int64
+             * @description Used over capacity, in whole percent, rounded down
+             */
+            percent: number;
+            /**
+             * @description normal below 70%, getting_full from 70%, almost_full from 90%
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /**
+             * @description subnets for a pool, which hands out subnets of its mask; addresses for a network
+             * @enum {string}
+             */
+            unit: "subnets" | "addresses";
+            /**
+             * Format: int64
+             * @description What is in use of it, in the unit
+             */
+            used: number;
+            /**
+             * @description What the fullest one is: an address pool, the swarm's ingress network or an overlay network
+             * @enum {string}
+             */
+            worstKind: "pool" | "ingress" | "overlay";
+            /** @description The pool (its CIDR) or the network (its name) that is fullest */
+            worstName: string;
+        };
         EnvironmentAgentsBody: {
             /**
              * Format: int64
@@ -6206,6 +6566,8 @@ export interface components {
             expected: number;
         };
         EnvironmentBody: {
+            /** @description The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline */
+            addressSpace: components["schemas"]["EnvironmentAddressSpaceBody"] | null;
             /** @description The oldest agent version in the environment; null when it has no agent, and for the local socket */
             agentVersion: string | null;
             /** @description Connected and expected agents; null except on a swarm */
@@ -6281,15 +6643,22 @@ export interface components {
             total: number;
         };
         EnvironmentIssueBody: {
-            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring or clock_skew */
+            /** @description A stable code: agent_offline, engine_unreachable, unsupported_engine, cert_expiring, clock_skew or address_space_full */
             code: string;
-            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet */
+            /** @description The node's host name, at most 64 characters; absent for an agent that has not enrolled yet and for an issue of the whole cluster */
             node?: string;
+            /**
+             * Format: int64
+             * @description For address_space_full, how full that pool or network is, in whole percent; absent for every other code
+             */
+            percent?: number;
             /**
              * Format: date-time
              * @description When this began
              */
             since?: string;
+            /** @description For address_space_full, the address pool (its CIDR) or the network (its name) that is nearly full; absent for every other code */
+            subject?: string;
         };
         EnvironmentListBody: {
             items: components["schemas"]["EnvironmentBody"][] | null;
@@ -6369,7 +6738,7 @@ export interface components {
              * @description When the most recent probe of the environment's engine finished
              */
             lastAttempt?: string;
-            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum or cert_expiring; the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop */
+            /** @description Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm */
             reason?: string;
             /**
              * Format: date-time
@@ -7359,6 +7728,46 @@ export interface components {
             /** @description The registry user name; 422 username_required */
             username?: string;
         };
+        KeepBody: {
+            /**
+             * Format: int64
+             * @description How many networks are newly kept. One that was kept already changes and records nothing and is not counted
+             */
+            kept: number;
+        };
+        KeepRequest: {
+            /** @description The networks to keep, 1 to 100 (T-10-33) */
+            targets: components["schemas"]["KeepTarget"][] | null;
+        };
+        KeepTarget: {
+            /** @description The network's name. A keep follows the name, so it holds for a network of that name made again */
+            name: string;
+            /** @description The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it */
+            nodeId?: string;
+        };
+        KeptRowBody: {
+            /**
+             * Format: date-time
+             * @description When it was kept; absent when kept by label alone
+             */
+            keptAt?: string;
+            /**
+             * @description label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it
+             * @enum {string}
+             */
+            keptBy: "label" | "user";
+            /** @description The display name of the person who kept it; empty when kept by label or when that person is not known */
+            keptByName: string;
+            name: string;
+            /** @description The node a local network is on, Cluster for a swarm-wide network, empty for a keep whose network is gone and whose node is not known */
+            node: string;
+            /** @description The node the keep is for: the node's ID for a local network, empty for a swarm-wide one */
+            nodeId: string;
+            /** @description True when a network of this name (and node) exists now. A keep outlives its network, so it holds when one of that name is made again */
+            present: boolean;
+            /** @description The network's subnets in CIDR notation; empty when it is not present or has none */
+            subnets: string[] | null;
+        };
         LinkBody: {
             /**
              * Format: date-time
@@ -7413,6 +7822,14 @@ export interface components {
         LookupInviteInputBody: {
             /** @description The token from the part of the link after #token= */
             token: string;
+        };
+        MapOverlapBody: {
+            /** @description The other network's name */
+            name: string;
+            /** @description The node of the other network when it is local; empty for a swarm-wide network */
+            node: string;
+            /** @description The first subnet of the other network that overlaps this row's */
+            subnet: string;
         };
         MeBody: {
             /** @description The user's access by environment ID, and the key * for access that applies to every environment */
@@ -7485,6 +7902,8 @@ export interface components {
         NetworkCreateRequest: {
             /** @description Let standalone containers join it. Only for an overlay network on a swarm */
             attachable?: boolean;
+            /** @description Create the network even though its subnet overlaps another network of this environment (macvlan sometimes needs that). Not for an overlap between swarm networks on a swarm: that is 422 subnet_overlap_swarm. Recorded in the audit log */
+            createAnyway?: boolean;
             /**
              * @description The network driver. Ingress, config-only and config-from networks cannot be created
              * @enum {string}
@@ -7590,6 +8009,8 @@ export interface components {
             };
         };
         NetworkItem: {
+            /** @description Overlay networks only: addresses used against what the subnet can still hand out, from the manager (Engine 29 and later). Absent (null in the table) for every other network and when the count could not be read, never a zero */
+            addressesUsed?: components["schemas"]["NetworkUsageBody"];
             /** @description Standalone containers can join it */
             attachable: boolean;
             /**
@@ -7643,6 +8064,28 @@ export interface components {
             total: number;
             /** @description True when total is more than the rows returned */
             truncated: boolean;
+        };
+        NetworkUsageBody: {
+            /**
+             * Format: int64
+             * @description Addresses handed out plus those it can still hand out
+             */
+            capacity: number;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down
+             */
+            percent: number;
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full";
+            /**
+             * Format: int64
+             * @description Addresses the swarm has handed out on the network's IPv4 subnets
+             */
+            used: number;
         };
         NodeAgentBody: {
             /**
@@ -8073,6 +8516,97 @@ export interface components {
             /** @description The option's value; absent while masked */
             value?: string;
         };
+        OrphanDeleteBody: {
+            /** @description The network's name */
+            name: string;
+            /**
+             * @description deleted: the network was removed. kept: Coaming checked again just before and left it alone, which is a safe answer and not an error
+             * @enum {string}
+             */
+            outcome: "deleted" | "kept";
+            /**
+             * @description Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so Coaming could not be sure
+             * @enum {string}
+             */
+            reason: "in_use_again" | "not_orphaned" | "node_missing" | "";
+        };
+        OrphanRowBody: {
+            /**
+             * @description orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load
+             * @enum {string}
+             */
+            class: "orphaned" | "unused" | "cant_tell";
+            /** @description The stack or compose project the network's labels name; empty for a network with no owner label */
+            formerOwner: string;
+            /**
+             * @description What formerOwner is, or empty when the network has no owner label
+             * @enum {string}
+             */
+            formerOwnerKind: "stack" | "project" | "";
+            /**
+             * Format: date-time
+             * @description When the network's idle time started: the later of its creation and the last time Coaming saw it in use
+             */
+            idleSince: string;
+            /**
+             * @description seen when idleSince is the last time Coaming saw the network in use, created when it is the network's creation
+             * @enum {string}
+             */
+            idleSinceSource: "seen" | "created";
+            name: string;
+            /** @description The network's full ID */
+            networkId: string;
+            /** @description The node a local network is on, or Cluster for a swarm-wide network */
+            node: string;
+            /** @description The ID of the node the network was read from; for a swarm-wide network, the manager in use */
+            nodeId: string;
+            /** @enum {string} */
+            scope: "swarm" | "local";
+            /** @description The IPAM subnets in CIDR notation; empty when there is none */
+            subnets: string[] | null;
+        };
+        OrphansWithheldBody: {
+            /** @description True when a swarm's managers did not answer, so its services and tasks were not read */
+            managerMissing: boolean;
+            /** @description The nodes that did not report, because of which a network was not judged */
+            nodes: string[] | null;
+            /** @description The Coaming stacks that did not load, whose external networks are therefore not known */
+            stacks: string[] | null;
+        };
+        OverlayUsageBody: {
+            /**
+             * Format: int64
+             * @description Addresses handed out plus those the swarm can still hand out, so a /24 reads 256 and an ip-range /25 inside a /24 reads 129. 0 with measured false
+             */
+            capacity: number;
+            /** @description The network's full ID */
+            id: string;
+            /** @description True for the swarm's ingress (routing mesh) network */
+            ingress: boolean;
+            /** @description False when the count could not be read: the engine on the manager is older than 29 (no address status), the manager reports no swarm count, or the read failed. The numbers are then 0 and mean nothing */
+            measured: boolean;
+            /** @description The network's name */
+            name: string;
+            /** @description Only ever true for the ingress network: none of its IPv4 subnets lies inside a pool of the swarm, so no pool row counts it. Ingress inside a pool is counted in that pool once */
+            outsidePool: boolean;
+            /**
+             * Format: int64
+             * @description used over capacity as a whole percent, rounded down. 0 with measured false
+             */
+            percent: number;
+            /**
+             * @description normal under 70%, getting_full from 70% and almost_full from 90%, decided on the exact ratio. unknown when measured is false
+             * @enum {string}
+             */
+            state: "normal" | "getting_full" | "almost_full" | "unknown";
+            /** @description The network's IPv4 subnets in CIDR form */
+            subnets: string[] | null;
+            /**
+             * Format: int64
+             * @description Addresses the swarm has handed out on the network's IPv4 subnets, the network and broadcast addresses, gateway, virtual IPs and load-balancer endpoints included. 0 with measured false
+             */
+            used: number;
+        };
         OwnedBody: {
             /** @description The environment it acts on */
             envId: string;
@@ -8210,6 +8744,15 @@ export interface components {
             size: number;
             /** @description The architecture variant, like v7; empty when there is none */
             variant: string;
+        };
+        PoolEntryBody: {
+            /** @description The pool's range as an IPv4 CIDR with no host bits set, for example 10.20.0.0/16. Anything else is 422 pool_base_invalid */
+            base: string;
+            /**
+             * Format: int64
+             * @description The mask of each network allocated from the pool: from the base's own mask to 30, else 422 pool_size_invalid
+             */
+            size: number;
         };
         PreviewTeamImpactInputBody: {
             /**
@@ -8857,6 +9400,21 @@ export interface components {
             stack: string;
             /** @description The owner of the file; kept */
             uid: string;
+        };
+        RouteCheckBody: {
+            /** @description With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's */
+            fix?: string;
+            /** @description True for the host Coaming itself runs on, read from the route file mounted into Coaming's own container */
+            local: boolean;
+            /** @description The node's name */
+            node: string;
+            /** @description The node's ID; absent for a standalone host */
+            nodeId?: string;
+            /**
+             * @description ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or Coaming itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes
+             * @enum {string}
+             */
+            state: "ok" | "old_agent" | "unmounted" | "offline" | "failed";
         };
         RunningContainerBody: {
             /** @description The container's ID */
@@ -9622,6 +10180,8 @@ export interface components {
             version: number;
         };
         ServiceStagedObject: {
+            /** @description A network only: create it even though its subnet overlaps a network of this environment; not for an overlap with a swarm network (422 subnet_overlap_swarm). Recorded in the audit log */
+            createAnyway?: boolean;
             /** @description A secret's value or a config's content, as standard base64: 1 to 511,999 bytes for a secret and 1 to 1,023,999 for a config (else 422 value_required, value_invalid or value_too_large). It is sent to the swarm once and never kept, logged, audited or returned. Ignored for a network */
             data?: string;
             /**
@@ -9635,7 +10195,7 @@ export interface components {
             };
             /** @description The name the spec uses for it: letters, numbers, dot, dash and underscore, starting and ending with a letter or number, at most 64 characters (else 422 name_invalid) */
             name: string;
-            /** @description A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid) */
+            /** @description A network only: the subnet in CIDR form; left out, the swarm chooses (422 subnet_invalid). One that overlaps a network of this environment is 422 subnet_overlap naming it, before anything is created, unless createAnyway is true. One that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it */
             subnet?: string;
             /** @description A config only: none (the default) or golang, to have the swarm fill the content in as a Go template; anything else is 422 templating_invalid */
             templating?: string;
@@ -9877,6 +10437,29 @@ export interface components {
              * @description The most open shells one person may hold across all environments
              */
             maxPerUser: number;
+        };
+        SmallSubnetsBody: {
+            /** @description True when a stack deployed here gets a small subnet of its own for its networks */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description The size of each small subnet: 25 to 28 (a /26 holds 59 usable addresses, a /28 holds 11). Kept while the setting is off
+             */
+            mask: number;
+        };
+        SmallSubnetsRequest: {
+            /** @description Whether small stack subnets are on */
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description The size of each small subnet, 25 to 28
+             */
+            mask: number;
+            /**
+             * Format: int64
+             * @description The version read with the settings; a save against another version is 409 settings_changed
+             */
+            version: number;
         };
         SourceBody: {
             /**
@@ -11223,6 +11806,10 @@ export interface components {
             kind: "network" | "volume" | "secret" | "config";
             /** @description Its name in the compose file (the swarm name for an external one) */
             name: string;
+            /** @description True when subnet was chosen by the environment's small stack subnets and not by the file: the row shows the Small-subnet default badge. Absent otherwise */
+            smallSubnetDefault?: boolean;
+            /** @description For an added network, the subnet it will be created with; absent when the file leaves the choice to the engine and for any other row */
+            subnet?: string;
         };
         StackReviewRequest: {
             /**
@@ -11331,6 +11918,10 @@ export interface components {
             pins: components["schemas"]["StackRevisionPinBody"][] | null;
             /** @description The rendering stored with the revision, masked when it was stored: a secret value is <hidden>. Empty for a revision with none */
             rendered: string;
+            /** @description The subnets the revision's deploy gave the networks it created under the environment's small stack subnets, by network name on the swarm (name to CIDR). Empty when it gave none */
+            subnets: {
+                [key: string]: string;
+            };
             /** @description The stack's variables in the revision, by name */
             vars: components["schemas"]["StackRevisionVarBody"][] | null;
             /** @description The deployed revision's rendering against this revision's. No hunks for the deployed revision itself, for a revision with the same rendering, and when either has no stored rendering */
@@ -11672,6 +12263,122 @@ export interface components {
              * @description Containers whose health is unhealthy, whatever their state
              */
             unhealthy: number;
+        };
+        SubnetCheckBody: {
+            /** @description What the typed subnet collides with, never null: this environment's networks on every node (blocking, or blocking for good with noOverride), other environments' networks the caller may read, host routes and the pools it lies outside of (warnings). In that order, and within a kind by name or address. Empty when the subnet is fine, absent subnet, invalid or IPv6 */
+            findings: components["schemas"]["SubnetFindingBody"][] | null;
+            /** @description True when the typed subnet is IPv6, which is not checked */
+            ipv6NotChecked: boolean;
+            /**
+             * Format: int64
+             * @description Addresses the expected tasks need: ceil((2 x tasks + services + nodes) x 1.25) + 3. Present when tasks was given
+             */
+            needed?: number;
+            /** @description Present when no block of the size is free in the pools; never an error */
+            noFreeBlock?: components["schemas"]["SubnetNoFreeBody"];
+            /**
+             * Format: int64
+             * @description The smallest of /28 to /24 whose usable addresses hold needed. Absent with tooManyTasks
+             */
+            recommendedMask?: number;
+            /**
+             * Format: int64
+             * @description The usable addresses of recommendedMask: the size less the network, broadcast and gateway addresses
+             */
+            recommendedUsable?: number;
+            /** @description With a valid IPv4 subnet or suggest, one entry per node of the environment saying whether its host's routes were read for the check. Never null; empty when neither was asked for */
+            routeChecks: components["schemas"]["RouteCheckBody"][] | null;
+            /** @description Why the typed subnet is refused; absent when it is fine or none was sent */
+            subnetError?: components["schemas"]["SubnetErrorBody"];
+            /** @description The lowest free block of the size asked for, clear of every IPv4 subnet of every network on every node. It reserves nothing: two people asking at once get the same block, and the create refuses the second. Absent when suggest is off, when no pool is known (a swarm no manager answered for, or a local driver with no nodeId) and when noFreeBlock is set */
+            suggestion?: components["schemas"]["SubnetSuggestionBody"];
+            /** @description True when not even a /24 holds needed */
+            tooManyTasks: boolean;
+        };
+        SubnetCheckRequest: {
+            /**
+             * @description The driver of the network to be made: overlay (or none) on a swarm takes the swarm's pools, a local driver the pools of its node's daemon
+             * @enum {string}
+             */
+            driver?: "bridge" | "overlay" | "macvlan" | "ipvlan";
+            /**
+             * Format: int64
+             * @description The size of the subnet to find a free block for. Left out, the recommended size is used when tasks is given, and else the mask of the first pool
+             */
+            mask?: number;
+            /** @description The node a local network (bridge, macvlan, ipvlan) is made on. Needed on a swarm for a local driver, because its pools are the node's own */
+            nodeId?: string;
+            /**
+             * Format: int64
+             * @description How many nodes the network spans; the swarm's node count when left out, 0 on a standalone host
+             */
+            nodes?: number;
+            /**
+             * Format: int64
+             * @description How many services are expected on the network; 1 when left out
+             */
+            services?: number;
+            /** @description A subnet a person typed, in CIDR form, to be checked as the create dialog does */
+            subnet?: string;
+            /** @description True to find the lowest free block of the mask */
+            suggest?: boolean;
+            /**
+             * Format: int64
+             * @description How many tasks are expected on the network. With it the answer carries needed, recommendedMask and recommendedUsable, or tooManyTasks
+             */
+            tasks?: number;
+        };
+        SubnetErrorBody: {
+            /**
+             * @description subnet_invalid: not in CIDR form. host_bits: host bits are set, so it is not a network address. too_small: smaller than a /29
+             * @enum {string}
+             */
+            code: "subnet_invalid" | "host_bits" | "too_small";
+            /** @description With host_bits, the network address the subnet is meant to be, for example 10.0.0.0/24 for 10.0.0.5/24 */
+            corrected?: string;
+        };
+        SubnetFindingBody: {
+            /** @description other_env: the name of the other environment */
+            environment?: string;
+            /** @description host_route: the interface the route is on */
+            iface?: string;
+            /**
+             * @description same_env: a network of this environment. other_env: a network of another environment the caller may read. host_route: a route of a host. outside_pool: the subnet is in none of the pools
+             * @enum {string}
+             */
+            kind: "same_env" | "other_env" | "host_route" | "outside_pool";
+            /** @description same_env, other_env: the network the subnet overlaps */
+            network?: string;
+            /** @description same_env only: true when the network to be made and the network it overlaps are both swarm networks on a swarm. A swarm never allocates two of its networks with overlapping subnets, so createAnyway cannot help and the create answers 422 subnet_overlap_swarm */
+            noOverride?: boolean;
+            /** @description The node a local network (same_env, other_env) or a route (host_route) is on; absent for a swarm-wide network */
+            node?: string;
+            /** @description outside_pool: the pool the subnet should be in; several pools are joined with a comma */
+            pool?: string;
+            /** @description host_route: the route's destination in CIDR form */
+            route?: string;
+            /**
+             * @description blocking: creating the network is refused until createAnyway is true (same_env only), or for good when noOverride is true. warning: shown, never stops anything
+             * @enum {string}
+             */
+            severity: "blocking" | "warning";
+            /** @description same_env, other_env: the subnet of that network that overlaps */
+            subnet?: string;
+        };
+        SubnetNoFreeBody: {
+            /**
+             * Format: int64
+             * @description The size that was asked for
+             */
+            mask: number;
+            /** @description The pool that was searched; several pools are joined with a comma */
+            pool: string;
+        };
+        SubnetSuggestionBody: {
+            /** @description The pool the block lies in */
+            pool: string;
+            /** @description The lowest free block of the size asked for, in CIDR form */
+            subnet: string;
         };
         SummaryCountsBody: {
             /**
@@ -13239,6 +13946,293 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getAddressSpace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSpaceBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    keepNetworks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeepRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeepBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    unkeepNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local network is on: the nodeId of its row. Left out for a swarm-wide network, and for a local network when one node has it */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network's name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteOrphanNetwork: {
+        parameters: {
+            query?: {
+                /** @description The node a local network is on: the nodeId of its row. Ignored for a swarm-scoped network, which belongs to the cluster */
+                nodeId?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The network ID: the networkId of a row of the orphans list */
+                networkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrphanDeleteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setAddressPools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddressPoolsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getAddressSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    setSmallSubnets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SmallSubnetsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AddressSettingsBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    checkSubnet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubnetCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubnetCheckBody"];
+                };
             };
             /** @description Error */
             default: {

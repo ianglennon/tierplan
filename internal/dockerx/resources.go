@@ -128,6 +128,11 @@ type NetworkRow struct {
 	// Internal, Attachable and IPv6 are the network's flags; Ingress marks the
 	// swarm's routing mesh network, whatever it is named.
 	Internal, Attachable, IPv6, Ingress bool
+	// ConfigOnly marks a network that exists only to configure others, and ConfigFrom is the name
+	// of the config-only network this one takes its configuration from, empty for none. Neither
+	// is ever an orphan: the one is a template, the other is what a template is for.
+	ConfigOnly bool
+	ConfigFrom string
 }
 
 // Counts are the dashboard tiles. Every one is derived from the lists of the
@@ -249,6 +254,7 @@ func networkRows(items []network.Summary) []NetworkRow {
 		row := NetworkRow{
 			ID: n.ID, Name: n.Name, Driver: n.Driver, Scope: n.Scope, Subnets: []string{}, Created: n.Created.UTC(),
 			Labels: maps.Clone(n.Labels), Internal: n.Internal, Attachable: n.Attachable, IPv6: n.EnableIPv6, Ingress: n.Ingress,
+			ConfigOnly: n.ConfigOnly, ConfigFrom: n.ConfigFrom.Network,
 		}
 		for _, cfg := range n.IPAM.Config {
 			if cfg.Subnet.IsValid() {

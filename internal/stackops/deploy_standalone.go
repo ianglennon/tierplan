@@ -87,7 +87,13 @@ type StandaloneDeployInput struct {
 	// stored, on the revision RevisionID. Nil means neither.
 	Pins       PinStore
 	RevisionID string
-	Caller     Caller
+	// Subnets is where the subnets of the stack's last good revision are read from and where this deploy's are
+	// stored, on the revision RevisionID. Nil means neither: no network of the stack is given a subnet.
+	Subnets SubnetStore
+	// RestoredSubnets, for a Rollback, is the revision's own record of the subnets its networks were given
+	// (Snapshot.Subnets), used in place of the last good revision's.
+	RestoredSubnets map[string]string
+	Caller          Caller
 	// Masker hides the stack's secret values in every text a remote system sent that the deploy puts in
 	// its job.
 	Masker stacks.Masker
@@ -237,6 +243,31 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	if foreignLive(live, OwnershipOf(in.Stack)) {
 		return fail(ItemCheck, CodeNameClash, "")
 	}
+	// Small stack subnets (D-20, D-22): a network the stack records a subnet for is given exactly that subnet on
+	// every deploy, so the Compose SDK never sees it change and never recreates it; a network about to be created
+	// gets a block of the size the environment chose, decided under the allocation lock, which is held until the
+	// up has returned. The compose file is never rewritten, only the project handed to the SDK. Off, with no record,
+	// this changes nothing.
+	var recorded map[string]string
+	if in.Subnets != nil {
+		recorded = in.RestoredSubnets
+		if !in.Rollback {
+			var serr error
+			if recorded, serr = in.Subnets.GoodSubnets(ctx, in.Stack.ID); serr != nil {
+				d.log().Warn("could not read the subnets of a stack's last good revision", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+			}
+		}
+	}
+	subnets, serr := d.planStandaloneSubnets(ctx, in.EnvID, project, live, recorded, true)
+	defer subnets.Release()
+	if serr != nil {
+		d.log().Warn("could not plan the subnets of a standalone stack's new networks", "environment", in.EnvID, "stack", in.Stack.Name, "error", serr)
+		return failErr(ItemCheck, codeOf(ctx, serr), "", serr)
+	}
+	if len(subnets.Missing) > 0 {
+		return failWith(ItemCheck, CodeNoFreeSubnet, subnets.Missing[0], subnets.Message(subnets.Missing[0]))
+	}
+	applyProjectSubnets(project, subnets)
 	r.Finish(ItemCheck, jobs.ItemDone, "", "", nil)
 
 	// 2. Look up images: decide which image each service is sent with (D-15, D-17). A service that runs the
@@ -375,9 +406,16 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 	cleanup = func() {
 		d.cleanupStandalone(ctx, in.EnvID, in.NodeID, in.Stack, live.Containers, netNames, &res, prog)
 	}
+	if d.subnetPlanHook != nil {
+		d.subnetPlanHook()
+	}
 	err = d.Aggregator.WriteOnNode(ctx, in.EnvID, in.NodeID, func(c *dockerx.Client) error {
 		return d.up(ctx, c, project, dockerx.ComposeUpOptions{WaitTimeout: timeout, ForceRecreate: diff.Forced}, events.on)
 	})
+	// The networks exist now, or the up stopped where it did: the blocks are no longer only a plan, and what the
+	// revision records is what the host holds, however the up ended.
+	subnets.Release()
+	d.recordStandaloneSubnets(context.WithoutCancel(ctx), in, recorded, subnets, err == nil)
 	if err != nil {
 		d.log().Warn("the Compose SDK's up failed", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
 		kind, name := events.firstFailure()
@@ -427,6 +465,32 @@ func (d Deps) DeployStandalone(ctx context.Context, in StandaloneDeployInput, r 
 		"removedServices": strconv.Itoa(len(diff.Removed)),
 	}}
 	return res
+}
+
+// recordStandaloneSubnets stores on the deploy's revision the subnets its networks have: those the plan chose and
+// those a revision recorded before for networks the host still holds, as the host has them now. When the up failed, a
+// network the plan chose that the host does not hold (the up stopped before it) is not recorded. Without a store or a
+// revision, nothing is stored.
+func (d Deps) recordStandaloneSubnets(ctx context.Context, in StandaloneDeployInput, recorded map[string]string, plan SubnetPlan, upSucceeded bool) {
+	if in.Subnets == nil || in.RevisionID == "" || (len(plan.ByName) == 0 && len(recorded) == 0) {
+		return
+	}
+	after, err := d.readStandalone(ctx, in.EnvID, in.NodeID, in.Stack.Name)
+	if err != nil {
+		d.log().Warn("could not read a standalone host to record the subnets of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		return
+	}
+	chosen := map[string]string{}
+	for name, subnet := range plan.ByName {
+		if _, held := findNetwork(after.Networks, name); held || upSucceeded {
+			chosen[name] = subnet
+		}
+	}
+	if rec := subnetsToRecord(recorded, after.Networks, chosen); len(rec) > 0 {
+		if err := in.Subnets.SetSubnets(ctx, in.RevisionID, rec); err != nil {
+			d.log().Error("could not store the subnets of a deploy", "environment", in.EnvID, "stack", in.Stack.Name, "error", err)
+		}
+	}
 }
 
 // pullPins are the references of the services whose containers the up creates or recreates: the added and

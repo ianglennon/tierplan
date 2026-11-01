@@ -41,6 +41,11 @@ type AgentLive struct {
 	// owner set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
 	// that give tasks host access. Like ReadOnly it is a fact of the live session.
 	PrivilegedServices bool
+	// HostNet is what the connected agent reported about reading its host's routes:
+	// wire.HostNetOK, wire.HostNetUnmounted, or "" for an agent that reported
+	// nothing (older than Phase 10), an agent that is not connected, or a value this
+	// server does not know. The server opens a host-net stream only for "ok".
+	HostNet string
 }
 
 // agentMemory is what the hub keeps of one agent between and during sessions. It

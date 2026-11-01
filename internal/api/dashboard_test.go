@@ -866,6 +866,14 @@ func newSwarmFix(t *testing.T) *swarmFix { return newSwarmFixWith(t, nil) }
 // node's hostname, before it connects.
 func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig)) *swarmFix {
 	t.Helper()
+	return newSwarmFixHostNet(t, tune, nil)
+}
+
+// newSwarmFixHostNet is newSwarmFixWith where each node's agent can report its host's routes:
+// hostNet gives, by the node's hostname, the hostNet fact the agent reports ("", wire.HostNetOK or
+// wire.HostNetUnmounted) and the routes it answers a host-net stream with.
+func newSwarmFixHostNet(t *testing.T, tune func(host string, cfg *dockertest.FakeConfig), hostNet func(host string) (string, []wire.HostRoute)) *swarmFix {
+	t.Helper()
 	if tune == nil {
 		tune = func(string, *dockertest.FakeConfig) {}
 	}
@@ -902,10 +910,19 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 		}
 	}
 	s := &swarmFix{agentFix: f, env: env}
+	connect := func(cfg dockertest.FakeConfig, facts *wire.Facts) *agentConn {
+		var ag tunneltest.Agent
+		if hostNet != nil {
+			ag.HostNet, ag.HostRoutes = hostNet(cfg.Hostname)
+		}
+		a := f.connectAs(t, env, cfg, facts, ag)
+		awaitFirstProbe(t, f.mon, envs.AgentTarget(a.id))
+		return a
+	}
 	cfg, facts := mgr(1)
-	s.m1 = f.connect(t, env, cfg, facts)
+	s.m1 = connect(cfg, facts)
 	cfg, facts = mgr(2)
-	s.m2 = f.connect(t, env, cfg, facts)
+	s.m2 = connect(cfg, facts)
 	var many []dockertest.FakeContainer
 	for i := range 501 {
 		many = append(many, dockertest.FakeContainer{ID: fmt.Sprintf("w%03d", i), Names: []string{fmt.Sprintf("/job-%03d", i)}, State: "running"})
@@ -915,7 +932,7 @@ func newSwarmFixWith(t *testing.T, tune func(host string, cfg *dockertest.FakeCo
 		Networks: []dockertest.FakeNetwork{{ID: "ovl", Name: "ovl", Driver: "overlay", Scope: "swarm"}, {ID: "brw", Name: "bridge", Driver: "bridge", Scope: "local"}},
 	}
 	tune("wrk-1", &wcfg)
-	s.w = f.connect(t, env, wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
+	s.w = connect(wcfg, &wire.Facts{EngineID: "ENG:wrk-1", Hostname: "wrk-1", EngineReachable: true, Swarm: &wire.SwarmFacts{State: "active", NodeID: "node-wrk-1"}})
 	f.whenState(t, env.ID, "online")
 	return s
 }
@@ -1098,5 +1115,60 @@ func TestDashboardRestartLoopsIsLeftOutOfAStandaloneHostAndOfASwarmNothingWasRea
 	f, e := dashEnv(t, richEngine())
 	if rec := f.get(t, e, "summary"); rec.code != http.StatusOK || strings.Contains(string(rec.body), "restartLoops") {
 		t.Errorf("standalone summary = %d %s, want no restartLoops", rec.code, rec.body)
+	}
+}
+
+// The Networks list's Addresses used column (plan 10-03, NET-03, D-01): an overlay row carries
+// the numbers of the address reader, every other row and an unmeasured overlay carries null.
+func TestListNetworksAddressesUsed(t *testing.T) {
+	t.Parallel()
+	s := newSwarmFixWith(t, func(host string, cfg *dockertest.FakeConfig) {
+		if !strings.HasPrefix(host, "mgr-") {
+			return
+		}
+		cfg.SwarmClusterID, cfg.SwarmSubnetSize = "cluster-1", 24
+		cfg.Networks = []dockertest.FakeNetwork{
+			{ID: "busy-id", Name: "busy", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.2.0/24"}},
+			{ID: "old-engine-id", Name: "old", Driver: "overlay", Scope: "swarm", Subnets: []string{"10.0.3.0/24"}},
+			{ID: fmt.Sprintf("br-%s", host), Name: "bridge", Driver: "bridge", Scope: "local", Subnets: []string{"172.17.0.0/16"}},
+		}
+	})
+	for _, m := range []*agentConn{s.m1, s.m2} {
+		m.fake.SetNetworkUsage("busy", dockertest.FakeSubnetUsage{Subnet: "10.0.2.0/24", InUse: 200, Available: 56})
+	}
+
+	rec := s.get(t, s.env.ID, "networks")
+	if rec.code != http.StatusOK {
+		t.Fatalf("networks: %d %s", rec.code, rec.body)
+	}
+	type used struct {
+		Used     int64  `json:"used"`
+		Capacity int64  `json:"capacity"`
+		Percent  int    `json:"percent"`
+		State    string `json:"state"`
+	}
+	type row struct {
+		Name          string `json:"name"`
+		AddressesUsed *used  `json:"addressesUsed"`
+	}
+	got := map[string]*used{}
+	for _, n := range decode[listBody[row]](t, rec).Items {
+		if _, dup := got[n.Name]; dup && n.Name != "bridge" {
+			t.Errorf("network %s listed twice", n.Name)
+		}
+		got[n.Name] = n.AddressesUsed
+	}
+	if u := got["busy"]; u == nil || *u != (used{Used: 200, Capacity: 256, Percent: 78, State: "getting_full"}) {
+		t.Errorf("busy addressesUsed = %+v, want 200 of 256, 78%%, getting_full", u)
+	}
+	if u, ok := got["old"]; !ok || u != nil {
+		t.Errorf("old addressesUsed = %+v (listed %v), want none for an overlay with no count", u, ok)
+	}
+	if u, ok := got["bridge"]; !ok || u != nil {
+		t.Errorf("bridge addressesUsed = %+v (listed %v), want none for a local network", u, ok)
+	}
+	// An unmeasured value is left out of the JSON, never written as zeros.
+	if n := strings.Count(string(rec.body), `"addressesUsed"`); n != 1 {
+		t.Errorf("body has %d addressesUsed members, want only the measured overlay's: %s", n, rec.body)
 	}
 }

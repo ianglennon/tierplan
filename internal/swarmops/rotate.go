@@ -355,7 +355,7 @@ func Rotate(ctx context.Context, deps Deps, in RotateInput) (RotateResult, error
 	}
 
 	staged := StagedObject{Kind: in.Kind, Name: res.NewName, Data: in.Data, Templating: in.Templating, Labels: old.labels}
-	id, err := createOne(ctx, in.Client, staged)
+	id, err := createOne(ctx, in.Client, staged, dockerx.AllocationWait{})
 	if err != nil {
 		code := codeCreateFailed
 		if errors.Is(err, dockerx.ErrNameTaken) {

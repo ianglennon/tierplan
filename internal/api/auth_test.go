@@ -128,6 +128,9 @@ type authFixture struct {
 	// routes and the {envId} resolver (plan 16). Without it, no environment
 	// exists and the environment routes are never called.
 	envSvc *envs.Service
+	// addressSpaces is the address reader build made for the routes; nil before build or
+	// without an aggregator.
+	addressSpaces *envs.AddressSpaces
 	// snaps, when set with envSvc, is the snapshot cache behind the summary and
 	// list routes (plan 18); agg is the aggregator over it that the routes read
 	// through (plan 02-11).
@@ -238,6 +241,9 @@ type authFixture struct {
 	liveAgents api.AgentSessions
 	// clusters is the cluster reader of a swarm fixture; nil elsewhere.
 	clusters *envs.Clusters
+	// hostRouteFile is the route file mounted into Coaming's own container, as the subnet check
+	// reads it for the local host; empty means none is mounted.
+	hostRouteFile string
 	// agentCluster says which agent leads a swarm, for the role in the node list.
 	agentCluster api.AgentCluster
 	// updater and serverVersion are what the agent update routes use, when set.
@@ -373,12 +379,32 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		})
 	}
 	if f.envSvc != nil && f.agg != nil {
-		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, Log: log})
 		api.RegisterContainers(r, api.ContainersDeps{Aggregator: f.agg, Audit: f.aud, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Clusters: f.clusters, Store: f.st, Log: log})
-		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), Log: log})
+		// The address reader of a real server. A fixture of one standalone engine has no cluster
+		// reader; the reader needs one to tell a swarm from a host, so it gets a bare one.
+		addrClusters := f.clusters
+		if addrClusters == nil {
+			addrClusters = envs.NewClusters(f.envSvc, f.snaps, envs.ClusterOptions{Now: f.clk.now})
+		}
+		addressSpaces := envs.NewAddressSpaces(f.envSvc, f.agg, addrClusters, envs.AddressSpaceOptions{Now: f.clk.now, Log: log})
+		// As on a real server, the cluster views carry the summaries, so health and the
+		// overview show an environment that is out of address space.
+		addrClusters.WithAddressSpaces(addressSpaces)
+		f.addressSpaces = addressSpaces
+		// The route reader of a real server: through the tunnel hub when the fixture has one.
+		var routeSrc envs.HostNetSource
+		if src, ok := f.liveAgents.(envs.HostNetSource); ok {
+			routeSrc = src
+		}
+		hostRoutes := envs.NewHostRoutes(f.envSvc, routeSrc, envs.HostRoutesOptions{Now: f.clk.now, LocalRouteFile: f.hostRouteFile, Log: log})
+		api.RegisterDashboard(r, api.DashboardDeps{Aggregator: f.agg, Clusters: f.clusters, Checker: checker, SelfContainerID: f.envSvc.SelfContainerID(), Store: f.st, AddressSpaces: addressSpaces, Log: log})
+		api.RegisterAddressSpace(r, api.AddressSpaceDeps{
+			AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, HostRoutes: hostRoutes, Now: f.clk.now, Log: log,
+		})
+		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),
-			Audit: f.aud, Checker: checker, Store: f.st, Log: log,
+			AddressSpaces: addressSpaces, Audit: f.aud, Checker: checker, Store: f.st, AllocationWait: atOnceWait(), Log: log,
 		})
 		api.RegisterRestartLoop(r, api.RestartLoopDeps{Store: f.st, Clusters: f.clusters, Aggregator: f.agg, Audit: f.aud, Log: log})
 		rotateResolver := registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now))
@@ -409,7 +435,9 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 			// One memo for every stack route, as the server builds it: a deploy that follows a review asks no registry for platforms.
 			Platforms: stackops.NewPlatformMemo(),
 			Audit:     f.aud, Checker: checker, Jobs: f.jobHub, Store: f.st, Vault: f.v, Log: log, RevisionsKept: f.inst.StackRevisionsKept,
-			GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
+			// The address reader of a real server, which the editor's check compares an explicit subnet with.
+			AddressSpaces: addressSpaces,
+			GitConns:      gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed,
 			CheckDeadline: f.stackCheckDeadline, OnCheck: f.stackOnCheck, OnChanges: f.stackOnChanges, OnAdoptCheck: f.stackOnAdoptCheck, OnDrift: f.stackOnDrift, DriftRecheck: f.stackDriftRecheck, BeforeJob: f.stackBeforeJob, Up: f.stackUp, StopProject: f.stackStop, StartProject: f.stackStart, DownProject: f.stackDown, ReadEnv: f.stackReadEnv,
 		}
 		// The deployer of a background service shares the locks and the environment lookup of the routes.
@@ -1359,4 +1387,15 @@ func refusalSource(c *auth.RefusalCoalescer) interface{ Bursts(time.Time) []auth
 		return nil
 	}
 	return c
+}
+
+// atOnceWait is the read-back wait of the network routes with a clock that fires at once, so no
+// API test waits on the wall clock for the swarm to allocate a network. The attempts are the real
+// default; the fake allocates at once unless FakeConfig.SwarmUnallocated says otherwise.
+func atOnceWait() dockerx.AllocationWait {
+	return dockerx.AllocationWait{After: func(time.Duration) <-chan time.Time {
+		ch := make(chan time.Time, 1)
+		ch <- time.Time{}
+		return ch
+	}}
 }

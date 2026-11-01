@@ -129,6 +129,100 @@ func TestInstallCommandCarriesTheNamesTheAgentIdentifiesItselfBy(t *testing.T) {
 	}
 }
 
+// TestInstallCommandMountsOnlyTheRouteFile pins the prohibition on the host-route mount (NET-05, T-10-21): every form
+// of an install and the manual standalone update mount the one file /proc/1/net/route read-only at /host/route, and
+// none mounts /proc, /proc/1/net or any other procfs path.
+func TestInstallCommandMountsOnlyTheRouteFile(t *testing.T) {
+	in := mustBuild(t, goldenParams())
+	p := goldenParams()
+	update := agents.ManualUpdateCommand("standalone", in.Image, p)
+
+	want := map[string]string{
+		"swarm command":       "--mount type=bind,src=/proc/1/net/route,dst=/host/route,ro",
+		"standalone command":  "-v /proc/1/net/route:/host/route:ro",
+		"swarm stack file":    "      - type: bind\n        source: /proc/1/net/route\n        target: /host/route\n        read_only: true\n",
+		"standalone compose":  "      - /proc/1/net/route:/host/route:ro\n",
+		"update (standalone)": "-v /proc/1/net/route:/host/route:ro",
+	}
+	texts := allInstallText(in)
+	texts["update (standalone)"] = update
+	for name, mount := range want {
+		if got := strings.Count(texts[name], mount); got != 1 {
+			t.Errorf("%s holds the route mount %d times, want once:\n%s", name, got, texts[name])
+		}
+	}
+	// Any other mention of a procfs path in a source or target is a wider mount than the one file.
+	procfs := regexp.MustCompile(`/proc[^ \n'"]*`)
+	for name, text := range texts {
+		for _, m := range procfs.FindAllString(text, -1) {
+			if m != "/proc/1/net/route" && m != "/proc/1/net/route:/host/route:ro" && m != "/proc/1/net/route,dst=/host/route,ro" {
+				t.Errorf("%s names the procfs path %q; only /proc/1/net/route may be mounted:\n%s", name, m, text)
+			}
+		}
+		for _, bad := range []string{"src=/proc,", "source: /proc\n", " /proc:/", " -v /proc:", "/proc/1/net:", "/proc/net"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s mounts more of /proc than the route file (%q):\n%s", name, bad, text)
+			}
+		}
+	}
+	// The hardening is unchanged by the extra mount.
+	for name, text := range map[string]string{"swarm command": in.SwarmCommand, "standalone command": in.StandaloneCommand} {
+		for _, w := range []string{"--read-only", "--cap-drop ALL", "--cap-add SETUID", "--cap-add SETGID"} {
+			if !strings.Contains(text, w) {
+				t.Errorf("%s lost %q", name, w)
+			}
+		}
+		if strings.Contains(text, "--network host") || strings.Contains(text, "--net host") || strings.Contains(text, "--privileged") {
+			t.Errorf("%s widens the container's access:\n%s", name, text)
+		}
+	}
+}
+
+func TestHostRouteMountCommand(t *testing.T) {
+	p := goldenParams()
+	p.Token = "" // an agent that is already installed has its identity; the fix carries no join token
+
+	const swarm = " docker service update --mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro coaming-agent"
+	if got := agents.HostRouteMountCommand("swarm", p); got != swarm {
+		t.Errorf("swarm = %q, want %q", got, swarm)
+	}
+
+	got := agents.HostRouteMountCommand("standalone", p)
+	for _, want := range []string{
+		"-v /proc/1/net/route:/host/route:ro", "docker rm -f coaming-agent", "--read-only", "--cap-drop ALL",
+		"--cap-add SETUID", "--cap-add SETGID", "--security-opt no-new-privileges",
+		"-v coaming-agent:/var/lib/coaming-agent", "COAMING_AGENT_URL=" + goldenEndpoint,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("standalone lacks %q:\n%s", want, got)
+		}
+	}
+	if want := agents.ManualUpdateCommand("standalone", agents.AgentImage(p.ServerVersion), p); got != want {
+		t.Errorf("standalone = %q, want the recreate the manual update gives (%q)", got, want)
+	}
+	if strings.Contains(got, "JOIN_TOKEN") || strings.Contains(got, "--network host") {
+		t.Errorf("standalone carries a join token or the host network:\n%s", got)
+	}
+	for name, cmd := range map[string]string{"swarm": agents.HostRouteMountCommand("swarm", p), "standalone": got} {
+		if !strings.HasPrefix(cmd, " ") || strings.HasPrefix(cmd, "  ") || strings.Contains(cmd, "\n") {
+			t.Errorf("%s is not a one-liner with one leading space: %q", name, cmd)
+		}
+	}
+
+	if got := agents.HostRouteMountCommand("unknown", p); got != "" {
+		t.Errorf("an unknown type answered %q, want nothing", got)
+	}
+	if got := agents.HostRouteMountCommand("", p); got != "" {
+		t.Errorf("no type answered %q, want nothing", got)
+	}
+	// A standalone host whose recreate cannot be built has no fix to show.
+	bad := p
+	bad.Endpoint = ""
+	if got := agents.HostRouteMountCommand("standalone", bad); got != "" {
+		t.Errorf("a standalone host with no endpoint answered %q, want nothing", got)
+	}
+}
+
 func TestInstallCommandWithoutAPinNamesNone(t *testing.T) {
 	p := goldenParams()
 	p.Pin = ""

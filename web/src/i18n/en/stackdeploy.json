@@ -175,6 +175,7 @@
         "host_read_only": "The host is read-only, so Coaming can't change it.",
         "network_conflict": "The swarm already has a network of that name that this stack does not own.",
         "network_failed": "The swarm could not create a network.",
+        "network_not_allocated": "The swarm didn't give a network of the stack an address range, so Coaming removed it again.",
         "object_failed": "The swarm could not create a secret or config.",
         "object_invalid": "A secret or config of the stack has no usable content.",
         "object_name_taken": "The swarm already has a secret or config of that name that this stack does not own.",

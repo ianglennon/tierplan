@@ -139,6 +139,13 @@
       "docker_desktop": {
         "text": "This Docker setup isn't supported.",
         "hint": "Coaming manages Docker Engine 24 or later."
+      },
+      "address_space_full": {
+        "textPool": "The address pool {{subject}} is {{percent}}% used.",
+        "textNetwork": "The network {{subject}} is {{percent}}% full.",
+        "textGeneric": "An address pool or network is almost full.",
+        "hint": "Remove orphaned networks or use smaller subnets before new stacks fail to deploy.",
+        "action": "Open address space"
       }
     }
   }

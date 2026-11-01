@@ -129,6 +129,11 @@ type Environment struct {
 	LocalSocketPath          sql.NullString
 	RestartLoopFailures      int64
 	RestartLoopWindowMinutes int64
+	SmallSubnets             int64
+	SmallSubnetMask          int64
+	AddressPools             string
+	AddressSettingsVersion   int64
+	AddressSettingsBy        string
 }
 
 type GitCredential struct {
@@ -166,6 +171,23 @@ type GitRepo struct {
 	CreatedAt        int64
 	UpdatedAt        int64
 	CreatedBy        string
+}
+
+type NetworkKeep struct {
+	EnvID  string
+	NodeID string
+	Name   string
+	KeptBy string
+	KeptAt int64
+}
+
+type NetworkSeen struct {
+	EnvID       string
+	NodeID      string
+	NetworkID   string
+	Name        string
+	FirstSeenAt int64
+	LastInUseAt int64
 }
 
 type OwnedResource struct {
@@ -340,6 +362,7 @@ type StackSnapshot struct {
 	ComposeFiles  string
 	SyncTrigger   string
 	RevertedDrift string
+	Subnets       string
 }
 
 type StackSnapshotFile struct {

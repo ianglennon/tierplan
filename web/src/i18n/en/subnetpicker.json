@@ -1,0 +1,92 @@
+{
+  "subnetPicker": {
+    "legend": "Subnet",
+    "helper": "Leave this empty and Docker picks one from the pool. Choose one to control how much address space the network uses.",
+    "poolUsed": "This pool is {{percent}}% used. A smaller subnet keeps more room.",
+    "size": {
+      "label": "Size",
+      "item": "/{{mask}} · {{usable}} addresses"
+    },
+    "tasks": {
+      "label": "Expected tasks",
+      "placeholder": "20",
+      "helper": "Optional. Coaming recommends the smallest size that fits twice this number, plus service and node addresses and headroom.",
+      "helperReplicas_one": "Based on {{count}} replica.",
+      "helperReplicas_other": "Based on {{count}} replicas.",
+      "invalid": "Enter a whole number from 1 to 10000.",
+      "recommended_one": "Recommended: /{{mask}} ({{usable}} addresses) for {{count}} task.",
+      "recommended_other": "Recommended: /{{mask}} ({{usable}} addresses) for {{count}} tasks.",
+      "tooMany": "{{n}} tasks need more than a /24 holds. Split the work across more than one network."
+    },
+    "how": {
+      "trigger": "How Coaming works this out",
+      "body": "Addresses needed = (2 × tasks + services + nodes) × 1.25, rounded up, plus 3 reserved. Twice the tasks covers a start-first update, where old and new tasks run together. Services is the number of services on the network (1 when unknown). Nodes is the number of nodes that can run its tasks (0 on a standalone host)."
+    },
+    "subnet": {
+      "label": "Subnet",
+      "placeholder": "10.0.5.0/26",
+      "hostBits": "{{subnet}} has host bits set. Did you mean {{network}}?",
+      "tooSmall": "A subnet smaller than /29 can't hold a gateway and any containers."
+    },
+    "suggest": {
+      "button": "Suggest a subnet",
+      "pending": "Suggesting…",
+      "name": "Suggest a free subnet of the chosen size",
+      "needsNode": "Choose a node first. A local network gets its subnet from that node's pools.",
+      "result": "Lowest free /{{mask}} block in {{pool}}.",
+      "announce": "Suggested {{subnet}}",
+      "noFree": "No free /{{mask}} block is left in {{pool}}. Try a smaller size, free up space first, or plan a bigger pool.",
+      "openAddressSpace": "Open address space",
+      "error": "Couldn't suggest a subnet. Type one, or try again."
+    },
+    "check": {
+      "pending": "Checking the subnet…",
+      "error": "Couldn't check this subnet. You can still create the network.",
+      "clean": "No overlaps found.",
+      "ipv6": "IPv6 subnets aren't checked for overlaps."
+    },
+    "findings": {
+      "label": "Subnet check",
+      "blocking": "Blocking",
+      "warning": "Warning",
+      "note": "Note",
+      "sameEnv": "Overlaps {{network}} ({{subnet}}). Docker can't tell the two networks apart.",
+      "sameEnvOnNode": "Overlaps {{network}} ({{subnet}}) on {{node}}. Docker can't tell the two networks apart.",
+      "otherEnv": "Overlaps {{network}} ({{subnet}}) on {{environment}}. This only matters if the two sites are routed or joined by a VPN.",
+      "hostRoute": "Overlaps a route on {{node}}: {{route}} on {{iface}}. Traffic to that range may go to the network instead of the container.",
+      "outsidePool": "Outside the address pool {{pool}}. Docker allows it, but it won't count toward the pool's usage.",
+      "more_one": "Show {{count}} more finding",
+      "more_other": "Show {{count}} more findings"
+    },
+    "routes": {
+      "skipped": "Route check skipped on {{where}}: {{why}}",
+      "nodes_one": "{{count}} node",
+      "nodes_other": "{{count}} nodes",
+      "oldAgent": "update the agent to check host routes.",
+      "unmounted": "the agent can't read the host's routes. Mount the route file (see the agent install).",
+      "unmountedFixName": "the command that adds the route mount",
+      "unmountedStandalone": "Re-run the agent install command from this environment's settings to add the mount.",
+      "local": "Coaming's container can't read this host's routes. Add -v /proc/1/net/route:/host/route:ro to Coaming's docker run.",
+      "offline": "the agent isn't connected.",
+      "failed": "the agent's answer couldn't be read."
+    },
+    "createAnyway": {
+      "label": "Create it anyway",
+      "helper": "Some setups, such as macvlan, share a range on purpose. Coaming records that you chose this.",
+      "announce": "Overlap accepted",
+      "needsOnEnvironment": "{{need}} on {{name}}",
+      "blocked": "Resolve the overlap, or tick Create it anyway."
+    },
+    "noOverride": {
+      "note": "A swarm can't give two of its networks overlapping subnets, so this one can't be created anyway. Choose another subnet.",
+      "blocked": "Choose a subnet that doesn't overlap another swarm network."
+    },
+    "compact": {
+      "automatic": "Automatic"
+    },
+    "errors": {
+      "overlapRefused": "Another network in this environment overlaps this subnet. Resolve the overlap, or tick Create it anyway.",
+      "overlapSwarm": "This subnet overlaps another swarm network. A swarm can't give its networks overlapping subnets, so choose another one."
+    }
+  }
+}

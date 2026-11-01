@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The Coaming Authors
 
+import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 
+import { addressSpaceQuery } from "@/api/address-space";
+import { NeedsTooltip } from "@/components/needs-tooltip";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -32,6 +35,8 @@ import {
   valueProblem,
 } from "@/features/secrets/value-source-field";
 import type { StagedKind, StagedObject, Templating } from "@/features/service-editor/staged";
+import { type BlockingState, SubnetPicker } from "@/features/subnet-picker/subnet-picker";
+import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 
 // 44px targets under 768px (D-64), the dense 32px size from there up.
@@ -43,6 +48,10 @@ const NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 
 interface StagedObjectDialogProps {
   kind: StagedKind;
+  // The environment the object is made in: a network's subnet is checked against its networks.
+  envId: string;
+  // The service's replica count, which the network's Expected tasks starts from.
+  replicas?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   // The names that are taken: the objects that exist and the ones already staged.
@@ -60,6 +69,8 @@ interface StagedObjectDialogProps {
 // the server checks it again.
 export function StagedObjectDialog({
   kind,
+  envId,
+  replicas,
   open,
   onOpenChange,
   taken,
@@ -72,6 +83,10 @@ export function StagedObjectDialog({
   const [value, setValue] = useState<ObjectValue>(EMPTY_VALUE);
   const [templating, setTemplating] = useState<Templating>("none");
   const [subnet, setSubnet] = useState("");
+  // What the findings say about the network (none, overridable, final), and whether the person
+  // ticked Create it anyway for an overridable one.
+  const [blocking, setBlocking] = useState<BlockingState>("none");
+  const [createAnyway, setCreateAnyway] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
@@ -82,6 +97,8 @@ export function StagedObjectDialog({
     setValue(EMPTY_VALUE);
     setTemplating("none");
     setSubnet("");
+    setBlocking("none");
+    setCreateAnyway(false);
     setAdvanced(false);
     setSubmitted(false);
   }, [open]);
@@ -99,14 +116,26 @@ export function StagedObjectDialog({
     kind === "network" ? undefined : valueProblem(kind, value);
   const subnetBad = kind === "network" && subnet.trim() !== "" && parseCidr(subnet.trim()) === null;
 
+  // A tick belongs to an overlap that can be overridden, so it goes when that overlap does or
+  // turns into one that can't be.
+  const onBlockingChange = useCallback((now: BlockingState) => {
+    setBlocking(now);
+    if (now !== "overridable") setCreateAnyway(false);
+  }, []);
+  const blocked =
+    kind === "network" && (blocking === "final" || (blocking === "overridable" && !createAnyway));
+
   function submit() {
     setSubmitted(true);
-    if (nameProblem || valueIssue || subnetBad) {
-      if (subnetBad) setAdvanced(true);
-      return;
-    }
+    if (nameProblem || valueIssue || subnetBad || blocked) return;
     if (kind === "network") {
-      onAdd({ kind, name: trimmed, ...(subnet.trim() ? { subnet: subnet.trim() } : {}) });
+      const chosen = subnet.trim();
+      onAdd({
+        kind,
+        name: trimmed,
+        ...(chosen ? { subnet: chosen } : {}),
+        ...(chosen && blocking === "overridable" && createAnyway ? { createAnyway: true } : {}),
+      });
     } else if (kind === "config") {
       onAdd({ kind, name: trimmed, value, templating });
     } else {
@@ -192,56 +221,51 @@ export function StagedObjectDialog({
           ) : null}
 
           {kind === "network" ? (
-            <Collapsible open={advanced} onOpenChange={setAdvanced} className="flex flex-col gap-4">
-              <CollapsibleTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="group/advanced w-fit max-md:h-11"
-                >
-                  <ChevronRight
-                    aria-hidden="true"
-                    className="transition-transform group-aria-expanded/advanced:rotate-90"
-                  />
-                  {t("serviceForm.staged.network.advanced")}
-                </Button>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="flex flex-col gap-4">
-                <Field>
-                  <FieldLabel htmlFor={`${ids}-driver`}>
-                    {t("serviceForm.staged.network.driver")}
-                  </FieldLabel>
-                  <Input
-                    id={`${ids}-driver`}
-                    value="overlay"
-                    readOnly
-                    className={`font-mono ${TOUCH_HEIGHT}`}
-                  />
-                </Field>
-                <Field data-invalid={subnetBad && submitted ? true : undefined}>
-                  <FieldLabel htmlFor={`${ids}-subnet`}>
-                    {t("serviceForm.staged.network.subnet")}
-                  </FieldLabel>
-                  <Input
-                    id={`${ids}-subnet`}
-                    value={subnet}
-                    placeholder={t("serviceForm.staged.network.subnetPlaceholder")}
-                    autoComplete="off"
-                    spellCheck={false}
-                    aria-invalid={subnetBad && submitted ? true : undefined}
-                    aria-describedby={subnetBad && submitted ? `${ids}-subnet-error` : undefined}
-                    className={`font-mono ${TOUCH_HEIGHT}`}
-                    onChange={(e) => setSubnet(e.target.value)}
-                  />
-                  {subnetBad && submitted ? (
-                    <FieldError id={`${ids}-subnet-error`}>
-                      {t("serviceForm.staged.errors.subnet")}
-                    </FieldError>
-                  ) : null}
-                </Field>
-              </CollapsibleContent>
-            </Collapsible>
+            <>
+              <StagedSubnet
+                envId={envId}
+                replicas={replicas}
+                value={subnet}
+                onChange={setSubnet}
+                error={subnetBad && submitted ? t("serviceForm.staged.errors.subnet") : undefined}
+                createAnyway={createAnyway}
+                onCreateAnywayChange={setCreateAnyway}
+                onBlockingChange={onBlockingChange}
+              />
+              <Collapsible
+                open={advanced}
+                onOpenChange={setAdvanced}
+                className="flex flex-col gap-4"
+              >
+                <CollapsibleTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="group/advanced w-fit max-md:h-11"
+                  >
+                    <ChevronRight
+                      aria-hidden="true"
+                      className="transition-transform group-aria-expanded/advanced:rotate-90"
+                    />
+                    {t("serviceForm.staged.network.advanced")}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="flex flex-col gap-4">
+                  <Field>
+                    <FieldLabel htmlFor={`${ids}-driver`}>
+                      {t("serviceForm.staged.network.driver")}
+                    </FieldLabel>
+                    <Input
+                      id={`${ids}-driver`}
+                      value="overlay"
+                      readOnly
+                      className={`font-mono ${TOUCH_HEIGHT}`}
+                    />
+                  </Field>
+                </CollapsibleContent>
+              </Collapsible>
+            </>
           ) : null}
           <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
         </form>
@@ -254,11 +278,54 @@ export function StagedObjectDialog({
           >
             {t("serviceForm.staged.cancel")}
           </Button>
-          <Button type="button" className="max-md:h-11" onClick={submit}>
-            {t(`serviceForm.staged.${kind}.submit`)}
-          </Button>
+          <NeedsTooltip
+            reason={
+              blocking === "final"
+                ? t("subnetPicker.noOverride.blocked")
+                : blocked
+                  ? t("subnetPicker.createAnyway.blocked")
+                  : undefined
+            }
+          >
+            <Button type="button" className="max-md:h-11" onClick={submit}>
+              {t(`serviceForm.staged.${kind}.submit`)}
+            </Button>
+          </NeedsTooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+interface StagedSubnetProps {
+  envId: string;
+  replicas?: number;
+  value: string;
+  onChange: (subnet: string) => void;
+  error?: string;
+  createAnyway: boolean;
+  onCreateAnywayChange: (checked: boolean) => void;
+  onBlockingChange: (state: BlockingState) => void;
+}
+
+// StagedSubnet is the compact Subnet picker of a staged network (D-19): a closed section reading
+// Automatic or the chosen subnet, sized from the service's replicas. A staged network is an
+// attachable overlay of the swarm, so the swarm's pools and the cluster-wide overlap rule apply.
+function StagedSubnet({ envId, replicas, ...rest }: StagedSubnetProps) {
+  const space = useQuery(addressSpaceQuery(envId));
+  const manage = useNeeds("networks.manage", envId);
+  const pools = space.data?.pools ?? [];
+  const defaultMask = (pools.find((p) => p.source === "swarm") ?? pools[0])?.mask;
+  return (
+    <SubnetPicker
+      variant="compact"
+      envId={envId}
+      envType="swarm"
+      driver="overlay"
+      defaultMask={defaultMask}
+      replicas={replicas}
+      canCreateAnyway={manage.allowed}
+      {...rest}
+    />
   );
 }

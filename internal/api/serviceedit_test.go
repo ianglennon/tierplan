@@ -1098,3 +1098,220 @@ func TestServiceApplyCannotAttachASecretByGivingAUsedReferenceAnotherSecretsName
 		}
 	})
 }
+
+// A staged network whose subnet overlaps a network of the environment (plan 10-19, D-18, T-10-48).
+
+// overlapEnv is an environment that has the overlay "existing" on 10.77.0.0/24 and the bridge
+// "lan", local to its node, on 10.88.0.0/24. A staged network that overlaps the overlay cannot be
+// created anyway (G-10-8); one that overlaps only the bridge can.
+func overlapEnv(t *testing.T) (*envFix, envBody) {
+	t.Helper()
+	return actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.Networks = append(cfg.Networks, overlayNet("existing", "10.77.0.0/24"),
+			dockertest.FakeNetwork{ID: "lan", Name: "lan", Driver: "bridge", Scope: "local", Subnets: []string{"10.88.0.0/24"}})
+	}, editableService(nil))
+}
+
+// refsFront makes the masked spec name only the network "front".
+func refsFront(spec map[string]any) {
+	tt, _ := spec["TaskTemplate"].(map[string]any)
+	tt["Networks"] = []any{map[string]any{"Target": "front"}}
+}
+
+func stagedFront(subnet string, anyway bool) []map[string]any {
+	o := map[string]any{"kind": "network", "name": "front", "subnet": subnet}
+	if anyway {
+		o["createAnyway"] = true
+	}
+	return []map[string]any{o}
+}
+
+func TestServiceApplyStagedNetworkOverlapRefused(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.88.0.0/25", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap" {
+		t.Fatalf("apply: %d %s, want 422 subnet_overlap", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "10.88.0.0/25 overlaps lan (10.88.0.0/24)") {
+		t.Errorf("the problem does not name the network: %s", rec.Body)
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	if rows := f.auditLike(t, "network.created"); len(rows) != 0 {
+		t.Errorf("network rows = %+v, a refusal made nothing", rows)
+	}
+	// A subnet beside it goes through.
+	if rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.78.0.0/24", false))); rec.Code != http.StatusAccepted {
+		t.Fatalf("a free subnet: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A staged network that overlaps a swarm network is refused with or without the tick, and nothing
+// is created (G-10-8, T-10-69).
+func TestServiceApplyStagedNetworkSwarmOverlapIsNotOverridable(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	for _, anyway := range []bool{false, true} {
+		rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.77.0.0/25", anyway)))
+		if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "subnet_overlap_swarm" {
+			t.Fatalf("apply (createAnyway %v): %d %s, want 422 subnet_overlap_swarm", anyway, rec.Code, rec.Body)
+		}
+		if !strings.Contains(rec.Body.String(), "10.77.0.0/25 overlaps swarm network existing (10.77.0.0/24)") || !strings.Contains(rec.Body.String(), "can't be created anyway") {
+			t.Errorf("the problem does not name the network or say why: %s", rec.Body)
+		}
+	}
+	if w := f.fake.Writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want nothing created before the refusal", w)
+	}
+	if rows := f.auditLike(t, "network.created"); len(rows) != 0 {
+		t.Errorf("network rows = %+v, a refusal made nothing", rows)
+	}
+}
+
+// unallocatedEnv is a swarm environment whose managers accept a create of each subnet and never
+// allocate it (G-10-8).
+func unallocatedEnv(t *testing.T, subnets ...string) (*envFix, envBody) {
+	t.Helper()
+	return actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.SwarmUnallocated = map[string]int{}
+		for _, s := range subnets {
+			cfg.SwarmUnallocated[s] = -1
+		}
+	}, editableService(nil))
+}
+
+// deletedNetworks lists the removals of networks the fake was sent, by path.
+func deletedNetworks(f *envFix) []string {
+	var out []string
+	for _, w := range f.fake.Writes() {
+		if strings.HasPrefix(w, "DELETE /networks/") {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// A staged network the swarm never allocates fails the apply: the stub is removed by its ID, no
+// service is updated, and the problem names the network (G-10-8, UAT test 8, T-10-80).
+func TestServiceApplyStagedNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.66.0.0/24", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	for _, want := range []string{"The swarm didn't give network front an address range", "Coaming removed it again", "network:front"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.Body)
+		}
+	}
+	if n := f.fake.NetworkCreates(); len(n) != 1 {
+		t.Fatalf("network creates = %+v, want one", n)
+	}
+	if del := deletedNetworks(f); len(del) != 1 {
+		t.Errorf("removals = %v, want the stub removed once, by ID", del)
+	}
+	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %+v, want none against a network the swarm did not allocate", ups)
+	}
+	created, removed := f.auditLike(t, "network.created"), f.auditLike(t, "network.removed")
+	if len(created) != 1 || created[0].Result != string(audit.ResultFailure) || created[0].Details["code"] != "not_allocated" || created[0].Details["source"] != "service_apply" {
+		t.Errorf("network.created rows = %+v, want one failure with code not_allocated from service_apply", created)
+	}
+	if len(removed) != 1 || removed[0].Result != string(audit.ResultSuccess) || removed[0].Details["source"] != "allocation_check" || removed[0].Details["code"] != "removed" {
+		t.Errorf("network.removed rows = %+v, want one success from allocation_check", removed)
+	}
+}
+
+// With two staged networks, the first allocated and the second never: the problem names the second,
+// the first is removed again by the apply's cleanup and the stub by the read-back, so no staged
+// network is left, and the cleanup entries name the first (G-10-8).
+func TestServiceApplyStagedNetworkNotAllocatedAfterAnother(t *testing.T) {
+	t.Parallel()
+	f, e := unallocatedEnv(t, "10.66.0.0/24")
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", func(spec map[string]any) {
+		tt, _ := spec["TaskTemplate"].(map[string]any)
+		tt["Networks"] = []any{map[string]any{"Target": "first"}, map[string]any{"Target": "front"}}
+	})
+	objs := []map[string]any{
+		{"kind": "network", "name": "first", "subnet": "10.65.0.0/24"},
+		{"kind": "network", "name": "front", "subnet": "10.66.0.0/24"},
+	}
+	rec := admin.apply("svc-api", withObjects(t, body, objs))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	for _, want := range []string{"network front an address range", `"removed"`, "network:first"} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the problem lacks %q: %s", want, rec.Body)
+		}
+	}
+	if n, del := len(f.fake.NetworkCreates()), len(deletedNetworks(f)); n != 2 || del != 2 {
+		t.Errorf("network creates = %d, removals = %d, want every staged network made and removed again", n, del)
+	}
+	if ups := f.fake.ServiceUpdates(); len(ups) != 0 {
+		t.Errorf("service updates = %+v, want none", ups)
+	}
+}
+
+// A stub the engine will not remove is said so, and left for the person to delete.
+func TestServiceApplyStagedNetworkNotAllocatedAndNotRemovable(t *testing.T) {
+	t.Parallel()
+	f, e := actionsEnv(t, func(cfg *dockertest.FakeConfig) {
+		cfg.SwarmUnallocated = map[string]int{"10.66.0.0/24": -1}
+		cfg.RemoveErrors = map[string]string{"front": "network is busy"}
+	}, editableService(nil))
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.66.0.0/24", false)))
+	if rec.Code != http.StatusUnprocessableEntity || problemType(t, rec) != "network_not_allocated" {
+		t.Fatalf("apply: %d %s, want 422 network_not_allocated", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "Coaming couldn't remove it, so delete front on the Networks page.") || strings.Contains(rec.Body.String(), "removed it again") {
+		t.Errorf("the problem does not say the stub is left: %s", rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "network is busy") {
+		t.Errorf("the engine's own sentence reached the browser: %s", rec.Body)
+	}
+	if removed := f.auditLike(t, "network.removed"); len(removed) != 1 || removed[0].Details["code"] != "remove_failed" || removed[0].Details["source"] != "allocation_check" {
+		t.Errorf("network.removed rows = %+v, want one remove_failed from allocation_check", removed)
+	}
+}
+
+func TestServiceApplyStagedNetworkCreateAnyway(t *testing.T) {
+	t.Parallel()
+	f, e := overlapEnv(t)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	_, body := admin.maskedSpec("svc-api", refsFront)
+	rec := admin.apply("svc-api", withObjects(t, body, stagedFront("10.88.0.0/25", true)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	if n := f.fake.NetworkCreates(); len(n) != 1 {
+		t.Fatalf("network creates = %+v, want one", n)
+	}
+	rows := f.auditLike(t, "network.created")
+	if len(rows) != 1 || rows[0].Result != string(audit.ResultSuccess) ||
+		rows[0].Details["source"] != "service_apply" || rows[0].Details["overlap_override"] != "true" {
+		t.Fatalf("network rows = %+v, want one success with source service_apply and overlap_override", rows)
+	}
+	// A ticked box on a network that overlaps nothing is no override: the row does not say so.
+	f2, e2 := overlapEnv(t)
+	admin2 := f2.caller(t, e2, "envadmin-1", "admin")
+	_, body2 := admin2.maskedSpec("svc-api", refsFront)
+	if rec := admin2.apply("svc-api", withObjects(t, body2, stagedFront("10.78.0.0/24", true))); rec.Code != http.StatusAccepted {
+		t.Fatalf("apply: %d %s", rec.Code, rec.Body)
+	}
+	if rows := f2.auditLike(t, "network.created"); len(rows) != 1 || rows[0].Details["source"] != "service_apply" || rows[0].Details["overlap_override"] != "" {
+		t.Errorf("network rows = %+v", rows)
+	}
+}

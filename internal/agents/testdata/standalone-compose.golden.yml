@@ -21,6 +21,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - coaming-agent:/var/lib/coaming-agent
+      - /proc/1/net/route:/host/route:ro
 volumes:
   coaming-agent:
     name: coaming-agent

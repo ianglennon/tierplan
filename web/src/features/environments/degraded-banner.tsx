@@ -6,6 +6,7 @@ import { TriangleAlert } from "lucide-react";
 
 import type { EnvironmentItem } from "@/api/environments";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { ReasonText } from "@/features/environments/reason-text";
 import { usePermission } from "@/hooks/use-me";
 import { useT } from "@/i18n/use-t";
@@ -22,6 +23,7 @@ const SEVERITY = [
   "cert_expired",
   "cert_expiring",
   "clock_skew",
+  "address_space_full",
 ];
 
 function rank(code: string): number {
@@ -32,6 +34,8 @@ function rank(code: string): number {
 interface Issue {
   code: string;
   node?: string;
+  subject?: string;
+  percent?: number;
   since?: string;
 }
 
@@ -62,8 +66,14 @@ export function EnvDegradedBanner({ environment }: EnvDegradedBannerProps) {
   // The node list is on the environment's settings page, which is for those who hold
   // environments.configure on it (D-07).
   const canConfigure = usePermission("environments.configure", environment.id);
+  // The address space page is for those who may read networks.
+  const canNetworks = usePermission("networks.read", environment.id);
   if (environment.status.state !== "degraded") return null;
   const [worst, ...rest] = issuesOf(environment);
+  // The kind of the full pool or network, when the environment's own summary names the same one
+  // as the issue; otherwise the words follow from the subject.
+  const space = environment.addressSpace;
+  const kind = space && space.worstName === worst?.subject ? space.worstKind : undefined;
   return (
     <Alert variant="warning">
       <TriangleAlert aria-hidden="true" />
@@ -73,12 +83,27 @@ export function EnvDegradedBanner({ environment }: EnvDegradedBannerProps) {
           <ReasonText
             variant="compact"
             code={worst.code}
-            params={{ node: worst.node, envType: environment.envType }}
+            params={{
+              node: worst.node,
+              envType: environment.envType,
+              subject: worst.subject,
+              percent: worst.percent,
+              kind,
+            }}
           />
         ) : null}
         {rest.length > 0 ? (
           <p className="text-muted-foreground">
             {t("fullpage.degraded.more", { count: rest.length })}
+          </p>
+        ) : null}
+        {worst?.code === "address_space_full" && canNetworks ? (
+          <p>
+            <Button asChild variant="outline" size="sm" className="max-md:h-11">
+              <Link to="/env/$envId/address-space" params={{ envId: environment.id }}>
+                {t("reason.codes.address_space_full.action")}
+              </Link>
+            </Button>
           </p>
         ) : null}
         {canConfigure ? (

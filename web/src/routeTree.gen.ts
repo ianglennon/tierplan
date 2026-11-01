@@ -31,6 +31,7 @@ import { Route as AppSettingsBackupRouteImport } from './routes/_app/settings/ba
 import { Route as AppSettingsEnvironmentsRouteImport } from './routes/_app/settings/environments'
 import { Route as AppSettingsGeneralRouteImport } from './routes/_app/settings/general'
 import { Route as AppEnvEnvIdIndexRouteImport } from './routes/_app/env/$envId/index'
+import { Route as AppEnvEnvIdAddressSpaceRouteImport } from './routes/_app/env/$envId/address-space'
 import { Route as AppEnvEnvIdConfigsRouteImport } from './routes/_app/env/$envId/configs'
 import { Route as AppEnvEnvIdContainersRouteImport } from './routes/_app/env/$envId/containers'
 import { Route as AppEnvEnvIdEventsRouteImport } from './routes/_app/env/$envId/events'
@@ -46,6 +47,7 @@ import { Route as AppSettingsAccessIndexRouteImport } from './routes/_app/settin
 import { Route as AppSettingsAccessTeamsRouteImport } from './routes/_app/settings/access/teams'
 import { Route as AppSettingsAccessUsersRouteImport } from './routes/_app/settings/access/users'
 import { Route as AppSettingsEnvironmentsEnvIdRouteImport } from './routes/_app/settings/environments_.$envId'
+import { Route as AppEnvEnvIdAddressSpaceGuideRouteImport } from './routes/_app/env/$envId/address-space_.guide'
 import { Route as AppEnvEnvIdConfigsConfigIdRouteImport } from './routes/_app/env/$envId/configs_.$configId'
 import { Route as AppEnvEnvIdContainersContainerIdRouteImport } from './routes/_app/env/$envId/containers_.$containerId'
 import { Route as AppEnvEnvIdGitStacksNewRouteImport } from './routes/_app/env/$envId/git-stacks.new'
@@ -224,6 +226,11 @@ const AppEnvEnvIdIndexRoute = AppEnvEnvIdIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppEnvEnvIdRoute,
 } as any)
+const AppEnvEnvIdAddressSpaceRoute = AppEnvEnvIdAddressSpaceRouteImport.update({
+  id: '/address-space',
+  path: '/address-space',
+  getParentRoute: () => AppEnvEnvIdRoute,
+} as any)
 const AppEnvEnvIdConfigsRoute = AppEnvEnvIdConfigsRouteImport.update({
   id: '/configs',
   path: '/configs',
@@ -299,6 +306,12 @@ const AppSettingsEnvironmentsEnvIdRoute =
     id: '/environments_/$envId',
     path: '/environments/$envId',
     getParentRoute: () => AppSettingsRoute,
+  } as any)
+const AppEnvEnvIdAddressSpaceGuideRoute =
+  AppEnvEnvIdAddressSpaceGuideRouteImport.update({
+    id: '/address-space_/guide',
+    path: '/address-space/guide',
+    getParentRoute: () => AppEnvEnvIdRoute,
   } as any)
 const AppEnvEnvIdConfigsConfigIdRoute =
   AppEnvEnvIdConfigsConfigIdRouteImport.update({
@@ -727,6 +740,7 @@ export interface FileRoutesByFullPath {
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings/': typeof AppSettingsIndexRoute
+  '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -743,6 +757,7 @@ export interface FileRoutesByFullPath {
   '/settings/environments/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/configs/$configId': typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   '/env/$envId/containers/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
@@ -830,6 +845,7 @@ export interface FileRoutesByTo {
   '/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/settings/general': typeof AppSettingsGeneralRoute
   '/settings': typeof AppSettingsIndexRoute
+  '/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -845,6 +861,7 @@ export interface FileRoutesByTo {
   '/settings/access/users': typeof AppSettingsAccessUsersRoute
   '/env/$envId': typeof AppEnvEnvIdIndexRoute
   '/settings/access': typeof AppSettingsAccessIndexRoute
+  '/env/$envId/address-space/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
   '/env/$envId/services/new': typeof AppEnvEnvIdServicesNewRoute
   '/settings/access/teams/$teamId': typeof AppSettingsAccessTeamsTeamIdRoute
@@ -927,6 +944,7 @@ export interface FileRoutesById {
   '/_app/settings/environments': typeof AppSettingsEnvironmentsRoute
   '/_app/settings/general': typeof AppSettingsGeneralRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
+  '/_app/env/$envId/address-space': typeof AppEnvEnvIdAddressSpaceRoute
   '/_app/env/$envId/configs': typeof AppEnvEnvIdConfigsRoute
   '/_app/env/$envId/containers': typeof AppEnvEnvIdContainersRoute
   '/_app/env/$envId/events': typeof AppEnvEnvIdEventsRoute
@@ -943,6 +961,7 @@ export interface FileRoutesById {
   '/_app/settings/environments_/$envId': typeof AppSettingsEnvironmentsEnvIdRouteWithChildren
   '/_app/env/$envId/': typeof AppEnvEnvIdIndexRoute
   '/_app/settings/access/': typeof AppSettingsAccessIndexRoute
+  '/_app/env/$envId/address-space_/guide': typeof AppEnvEnvIdAddressSpaceGuideRoute
   '/_app/env/$envId/configs_/$configId': typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   '/_app/env/$envId/containers_/$containerId': typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   '/_app/env/$envId/git-stacks/new': typeof AppEnvEnvIdGitStacksNewRoute
@@ -1035,6 +1054,7 @@ export interface FileRouteTypes {
     | '/settings/environments'
     | '/settings/general'
     | '/settings/'
+    | '/env/$envId/address-space'
     | '/env/$envId/configs'
     | '/env/$envId/containers'
     | '/env/$envId/events'
@@ -1051,6 +1071,7 @@ export interface FileRouteTypes {
     | '/settings/environments/$envId'
     | '/env/$envId/'
     | '/settings/access/'
+    | '/env/$envId/address-space/guide'
     | '/env/$envId/configs/$configId'
     | '/env/$envId/containers/$containerId'
     | '/env/$envId/git-stacks/new'
@@ -1138,6 +1159,7 @@ export interface FileRouteTypes {
     | '/settings/environments'
     | '/settings/general'
     | '/settings'
+    | '/env/$envId/address-space'
     | '/env/$envId/configs'
     | '/env/$envId/containers'
     | '/env/$envId/events'
@@ -1153,6 +1175,7 @@ export interface FileRouteTypes {
     | '/settings/access/users'
     | '/env/$envId'
     | '/settings/access'
+    | '/env/$envId/address-space/guide'
     | '/env/$envId/git-stacks/new'
     | '/env/$envId/services/new'
     | '/settings/access/teams/$teamId'
@@ -1234,6 +1257,7 @@ export interface FileRouteTypes {
     | '/_app/settings/environments'
     | '/_app/settings/general'
     | '/_app/settings/'
+    | '/_app/env/$envId/address-space'
     | '/_app/env/$envId/configs'
     | '/_app/env/$envId/containers'
     | '/_app/env/$envId/events'
@@ -1250,6 +1274,7 @@ export interface FileRouteTypes {
     | '/_app/settings/environments_/$envId'
     | '/_app/env/$envId/'
     | '/_app/settings/access/'
+    | '/_app/env/$envId/address-space_/guide'
     | '/_app/env/$envId/configs_/$configId'
     | '/_app/env/$envId/containers_/$containerId'
     | '/_app/env/$envId/git-stacks/new'
@@ -1488,6 +1513,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppEnvEnvIdIndexRouteImport
       parentRoute: typeof AppEnvEnvIdRoute
     }
+    '/_app/env/$envId/address-space': {
+      id: '/_app/env/$envId/address-space'
+      path: '/address-space'
+      fullPath: '/env/$envId/address-space'
+      preLoaderRoute: typeof AppEnvEnvIdAddressSpaceRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
+    }
     '/_app/env/$envId/configs': {
       id: '/_app/env/$envId/configs'
       path: '/configs'
@@ -1592,6 +1624,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/settings/environments/$envId'
       preLoaderRoute: typeof AppSettingsEnvironmentsEnvIdRouteImport
       parentRoute: typeof AppSettingsRoute
+    }
+    '/_app/env/$envId/address-space_/guide': {
+      id: '/_app/env/$envId/address-space_/guide'
+      path: '/address-space/guide'
+      fullPath: '/env/$envId/address-space/guide'
+      preLoaderRoute: typeof AppEnvEnvIdAddressSpaceGuideRouteImport
+      parentRoute: typeof AppEnvEnvIdRoute
     }
     '/_app/env/$envId/configs_/$configId': {
       id: '/_app/env/$envId/configs_/$configId'
@@ -2375,6 +2414,7 @@ const AppEnvEnvIdVolumesVolumeNameRouteWithChildren =
   )
 
 interface AppEnvEnvIdRouteChildren {
+  AppEnvEnvIdAddressSpaceRoute: typeof AppEnvEnvIdAddressSpaceRoute
   AppEnvEnvIdConfigsRoute: typeof AppEnvEnvIdConfigsRoute
   AppEnvEnvIdContainersRoute: typeof AppEnvEnvIdContainersRoute
   AppEnvEnvIdEventsRoute: typeof AppEnvEnvIdEventsRoute
@@ -2387,6 +2427,7 @@ interface AppEnvEnvIdRouteChildren {
   AppEnvEnvIdStacksRoute: typeof AppEnvEnvIdStacksRoute
   AppEnvEnvIdVolumesRoute: typeof AppEnvEnvIdVolumesRoute
   AppEnvEnvIdIndexRoute: typeof AppEnvEnvIdIndexRoute
+  AppEnvEnvIdAddressSpaceGuideRoute: typeof AppEnvEnvIdAddressSpaceGuideRoute
   AppEnvEnvIdConfigsConfigIdRoute: typeof AppEnvEnvIdConfigsConfigIdRouteWithChildren
   AppEnvEnvIdContainersContainerIdRoute: typeof AppEnvEnvIdContainersContainerIdRouteWithChildren
   AppEnvEnvIdGitStacksNewRoute: typeof AppEnvEnvIdGitStacksNewRoute
@@ -2404,6 +2445,7 @@ interface AppEnvEnvIdRouteChildren {
 }
 
 const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
+  AppEnvEnvIdAddressSpaceRoute: AppEnvEnvIdAddressSpaceRoute,
   AppEnvEnvIdConfigsRoute: AppEnvEnvIdConfigsRoute,
   AppEnvEnvIdContainersRoute: AppEnvEnvIdContainersRoute,
   AppEnvEnvIdEventsRoute: AppEnvEnvIdEventsRoute,
@@ -2416,6 +2458,7 @@ const AppEnvEnvIdRouteChildren: AppEnvEnvIdRouteChildren = {
   AppEnvEnvIdStacksRoute: AppEnvEnvIdStacksRoute,
   AppEnvEnvIdVolumesRoute: AppEnvEnvIdVolumesRoute,
   AppEnvEnvIdIndexRoute: AppEnvEnvIdIndexRoute,
+  AppEnvEnvIdAddressSpaceGuideRoute: AppEnvEnvIdAddressSpaceGuideRoute,
   AppEnvEnvIdConfigsConfigIdRoute: AppEnvEnvIdConfigsConfigIdRouteWithChildren,
   AppEnvEnvIdContainersContainerIdRoute:
     AppEnvEnvIdContainersContainerIdRouteWithChildren,

@@ -122,7 +122,7 @@ func (q *Queries) FinishStackDeploy(ctx context.Context, arg FinishStackDeployPa
 
 const getDraft = `-- name: GetDraft :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'draft'
 `
 
@@ -150,13 +150,14 @@ func (q *Queries) GetDraft(ctx context.Context, stackID string) (StackSnapshot, 
 		&i.ComposeFiles,
 		&i.SyncTrigger,
 		&i.RevertedDrift,
+		&i.Subnets,
 	)
 	return i, err
 }
 
 const getRevision = `-- name: GetRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND seq = ?
 `
 
@@ -189,6 +190,7 @@ func (q *Queries) GetRevision(ctx context.Context, arg GetRevisionParams) (Stack
 		&i.ComposeFiles,
 		&i.SyncTrigger,
 		&i.RevertedDrift,
+		&i.Subnets,
 	)
 	return i, err
 }
@@ -286,7 +288,7 @@ func (q *Queries) GetStackByName(ctx context.Context, arg GetStackByNameParams) 
 
 const goodRevisionBefore = `-- name: GoodRevisionBefore :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good' AND seq < ?
 ORDER BY seq DESC LIMIT 1
 `
@@ -322,6 +324,7 @@ func (q *Queries) GoodRevisionBefore(ctx context.Context, arg GoodRevisionBefore
 		&i.ComposeFiles,
 		&i.SyncTrigger,
 		&i.RevertedDrift,
+		&i.Subnets,
 	)
 	return i, err
 }
@@ -688,7 +691,7 @@ func (q *Queries) LatestDoneStackDeploysByEnv(ctx context.Context, envID string)
 
 const latestGoodRevision = `-- name: LatestGoodRevision :one
 SELECT id, stack_id, kind, seq, base_seq, version, outcome, rendered, pins, created_by, created_at, origin, restored_from, platforms,
-       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift
+       git_commit, git_tree, git_source, compose_files, sync_trigger, reverted_drift, subnets
 FROM stack_snapshots WHERE stack_id = ? AND kind = 'revision' AND outcome = 'good'
 ORDER BY seq DESC LIMIT 1
 `
@@ -717,6 +720,7 @@ func (q *Queries) LatestGoodRevision(ctx context.Context, stackID string) (Stack
 		&i.ComposeFiles,
 		&i.SyncTrigger,
 		&i.RevertedDrift,
+		&i.Subnets,
 	)
 	return i, err
 }
@@ -1306,6 +1310,24 @@ type SetSnapshotRevertedDriftParams struct {
 // The lines an automatic deploy put back to what the repository says, a JSON array of strings.
 func (q *Queries) SetSnapshotRevertedDrift(ctx context.Context, arg SetSnapshotRevertedDriftParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSnapshotRevertedDrift, arg.RevertedDrift, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSnapshotSubnets = `-- name: SetSnapshotSubnets :execrows
+UPDATE stack_snapshots SET subnets = ? WHERE id = ? AND kind = 'revision'
+`
+
+type SetSnapshotSubnetsParams struct {
+	Subnets string
+	ID      string
+}
+
+// The subnets a deploy gave the networks it created for a revision, JSON by network name.
+func (q *Queries) SetSnapshotSubnets(ctx context.Context, arg SetSnapshotSubnetsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSnapshotSubnets, arg.Subnets, arg.ID)
 	if err != nil {
 		return 0, err
 	}

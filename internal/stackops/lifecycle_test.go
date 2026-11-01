@@ -877,3 +877,54 @@ func TestStandaloneStopAndStartGoAheadBesideAContainerTheHostCLIAdded(t *testing
 		}
 	}
 }
+
+func TestStartSwarmNetworkNotAllocated(t *testing.T) {
+	t.Parallel()
+	var cfg dockertest.FakeConfig
+	rig := newSwarmRig(t, func(c *dockertest.FakeConfig) {
+		c.SwarmClusterID = "cluster-1"
+		cfg = *c
+	})
+	const compose = "services:\n  agent:\n    image: nginx:1.28-alpine\n    networks: [back]\n    deploy:\n      mode: global\nnetworks:\n  back:\n    ipam:\n      config:\n        - subnet: 10.70.0.0/24\n"
+	st, store := rig.deployedStack(t, "shop", compose, nil)
+	if res, _ := rig.stop(t, st, store); !res.OK() {
+		t.Fatalf("stop = %+v", res)
+	}
+	// Somebody removed the network while the stack was stopped, and the swarm will not allocate it again.
+	err := rig.deps.Clusters.ClusterRead(testsupport.Context(t), rig.envID, func(c *dockerx.Client) error {
+		rows, e := c.NetworksWithLabel(testsupport.Context(t), stacks.LabelSwarmNamespace, "shop")
+		if e != nil {
+			return e
+		}
+		for _, row := range rows {
+			if e := c.NetworkRemove(testsupport.Context(t), row.ID); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.SwarmUnallocated = map[string]int{"10.70.0.0/24": -1}
+	rig.fake.Reconfigure(cfg)
+	creates, writes := len(rig.fake.ServiceCreates()), len(rig.fake.ServiceUpdates())
+
+	res, job := rig.start(t, st, store)
+
+	if res.OK() || res.Code != stackops.CodeNetworkNotAllocated {
+		t.Fatalf("start = %+v %v, want code %s", res, itemStates(job), stackops.CodeNetworkNotAllocated)
+	}
+	if n := rig.stackNetworks(t, "shop"); len(n) != 0 {
+		t.Errorf("networks = %v, want none left: the stub is removed again", n)
+	}
+	if len(rig.fake.ServiceCreates()) != creates || len(rig.fake.ServiceUpdates()) != writes {
+		t.Errorf("start wrote a service: creates %d -> %d, updates %d -> %d", creates, len(rig.fake.ServiceCreates()), writes, len(rig.fake.ServiceUpdates()))
+	}
+	if got := itemStates(job)[stackops.ItemServices]; got != "failed:network_not_allocated" {
+		t.Errorf("services item = %q (%v), want failed:network_not_allocated", got, itemStates(job))
+	}
+	if store.isStopped(st.ID) != true {
+		t.Errorf("the stack is marked as running, want it still stopped")
+	}
+}
