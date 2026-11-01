@@ -95,15 +95,16 @@ Each swarm test needs a real swarm of dind nodes, and starting one costs about h
 
 ### The network and address-space cases
 
-Phase 10 adds three cases to `sharedSwarmCases`, so they share the one swarm and each gets its own Coaming:
+Phase 10 adds four cases to `sharedSwarmCases`, so they share the one swarm and each gets its own Coaming:
 
 - `TestSwarmShared/AddressSpacePools` checks the numbers of a real swarm through the Address space route: the pool (`10.0.0.0/8` at `/24`, capacity 65,536, measured and not estimated), ingress counted once, and each overlay's used and capacity. A test-only reader clock (`WithAddressSpaceClock`, `servertest.Options.AddressSpaceClock`) lets the case move the 5-second cache without sleeping.
 - `TestSwarmShared/HostRoutes` installs the agent on the swarm with the command Coaming generates, route-file mount included, and reads a node's routes back through the tunnel. It proves that a swarm service accepts a bind mount of the single file `/proc/1/net/route`.
 - `TestSwarmShared/OrphanMatrix` judges real networks on the swarm with the reader's clock a day and an hour on, so none is held back by the grace period (`sharedCaseOptions` gives the case its own server options). The list must hold a labelled overlay whose stack is gone and an unlabelled unused one, and must not hold the ones that look idle and are not: an overlay a service scaled to zero names, an overlay only a service's previous spec names, and an attachable overlay a standalone container on the worker uses. Deleting the orphan saves its inspect to the audit log first; deleting the previous-spec overlay is refused as in use again and nothing reaches the engine.
+- `TestSwarmShared/SubnetOverlap` holds the rule of UAT gap G-10-8 against a real swarm: an overlay over an overlay is refused `subnet_overlap_swarm` with `createAnyway` on the network route and on service create with a staged network, with nothing left on any manager; a worker bridge over the overlay is created anyway and a second bridge on the same subnet is `subnet_refused`; `dockerx.NetworkCreateAllocated` reports an overlapping overlay not allocated and removed and a free one allocated; and a stack whose network overlaps the overlay fails its networks step with `network_not_allocated` and leaves no network or service. It uses subnets of `10.231.0.0/16` to `10.234.0.0/16` and runs on Engine 29 and Engine 24.
 
-Run them on their own with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/(HostRoutes|AddressSpacePools|OrphanMatrix)' -count=1 -timeout 60m`.
+Run them on their own with `go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/(HostRoutes|AddressSpacePools|OrphanMatrix|SubnetOverlap)' -count=1 -timeout 60m`.
 
-**The Engine 24 run.** `COAMING_TEST_ENGINE=24` starts the swarm on Docker Engine 24 instead of the default 29. Run `COAMING_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/AddressSpacePools' -count=1 -timeout 60m` to see what an older engine gives: the pool figures are still computed, and an overlay's address counts read *Not measured*, because only Engine 29 reports them. Both runs belong to the phase gate.
+**The Engine 24 run.** `COAMING_TEST_ENGINE=24` starts the swarm on Docker Engine 24 instead of the default 29. Run `COAMING_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/AddressSpacePools' -count=1 -timeout 60m` to see what an older engine gives: the pool figures are still computed, and an overlay's address counts read *Not measured*, because only Engine 29 reports them. Run `COAMING_TEST_ENGINE=24 go test -tags=swarm ./internal/agents/ -run 'TestSwarmShared/SubnetOverlap$' -count=1 -timeout 60m` as well: the override rule and the read-back hold on both ends. All of these runs belong to the phase gate.
 
 Two integration-tagged tests prove the standalone half on real engines (`make test-int` runs them with the rest):
 

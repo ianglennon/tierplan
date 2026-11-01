@@ -213,11 +213,29 @@ warns about a subnet written in the file.
 
 | Check | Kind | Effect |
 | --- | --- | --- |
-| This environment's networks, on every node | same environment | **Blocks** until you tick **Create it anyway**. Macvlan sometimes needs an overlap on purpose. The override is recorded in the audit log. |
+| This environment's networks, on every node | same environment | **Blocks** until you tick **Create it anyway**, except between two swarm networks on a swarm, which can't be created anyway (see below). Macvlan sometimes needs an overlap on purpose. The override is recorded in the audit log. |
 | Other environments' networks | other environment | A note, for sites linked by a route or a VPN. Only environments you may read are named. |
 | The host's own IPv4 routes, read by the agent | host route | A warning, named by interface. |
 
 One more note, **outside the pool**, says when a subnet you typed is not inside any of the environment's pools.
+
+**Which overlaps can be created anyway.** On a swarm, an overlay whose subnet overlaps another swarm network
+(the `ingress` network too) is refused, and **Create it anyway** is not offered. The swarm's allocator would accept the
+request and then never give the network an address range, so a service on it would never start a task. The server
+answers `subnet_overlap_swarm` whatever the box says. Every other overlap can be created anyway: a bridge,
+macvlan or ipvlan network on one node over a swarm network, or over a network of another node. Docker itself may still
+refuse such a network (two bridges on one subnet on the same host, for example), and then Coaming says Docker refused the
+subnet. The service editor's new networks follow the same rule.
+
+**Checked after the create.** After Coaming creates a swarm network (from the Create network dialog, the service editor,
+or a stack deploy or **Start**) it reads the network back for up to about 6 seconds to see that the swarm gave it an
+address range. A network the swarm never allocates, because its subnet overlaps a swarm network Coaming could not see or
+because the pools are full, is removed again straight away, by the ID the create returned, with a message saying why
+and two audit rows (`network.created` failed with `not_allocated`, then `network.removed` from `allocation_check`).
+A service apply or create stops before the service is changed. A stack deploy stops at its networks step, before any
+service is created or updated; a small-subnet block that came back unallocated is chosen again once. If Coaming cannot
+remove the leftover network, the message names it so you can delete it on the Networks page; a deploy tries once more
+to remove it and lists it in its result, while **Start** does not retry. Nothing is left that a service could hang on.
 
 Coaming does not warn about a subnet only because it lies in a private (RFC 1918) range such as `10.0.0.0/8`,
 `172.16.0.0/12` or `192.168.0.0/16`. Docker's own pools and most networks use those ranges, so such a warning would sit on
@@ -266,6 +284,9 @@ recorded in the audit log) gives each new stack network a small subnet instead.
 **A known gap.** Starting a **stopped swarm stack** that must make a missing network again (**Start** on the stack
 page, after the network was removed behind Coaming's back) creates it without a small subnet: it takes the swarm's
 default size. A normal deploy is unaffected. Deploy the stack instead of starting it if you need the small block.
+
+The same **Start** path does not retry a network it could not remove after the swarm refused to allocate it; the step
+fails with `network_not_allocated` and the leftover is deleted on the Networks page.
 
 ## Pool guidance
 

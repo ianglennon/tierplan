@@ -451,6 +451,15 @@ network's name you may not see. The check and the create run under a per-environ
 creating networks at once cannot take the same block, and the picker's endpoint is rate limited (120 a minute per user,
 a burst of 20). (`TestCreateNetworkOverlapRefused`, `TestSubnetCheckSuggest`)
 
+**A swarm overlap is never an override, and every swarm network is read back.** A swarm's allocator accepts an overlay whose
+subnet overlaps another swarm network and then never allocates it, so Coaming refuses that overlap whatever `createAnyway`
+says, on the network route and for a service's new networks, and a client that ignores the picker gains nothing
+(`TestCreateNetworkSwarmOverlapIsNotOverridable`). It also reads back every swarm network it creates (network dialog,
+service editor, stack deploy and Start) and removes one the swarm never allocated, by the ID the create returned and never by
+name, so it cannot remove a network of the same name that someone else made
+(`TestCreateNetworkNotAllocatedIsRemoved`, `TestDeploySwarmNetworkNotAllocated`, `TestSwarmShared/SubnetOverlap`). An
+immediate engine refusal of a subnet is reported as a fixed sentence without echoing the engine's text.
+
 **The generated commands use canonical values only, and nothing is run (T-10-66, T-10-67).** The Pool guidance page builds
 `docker swarm init`, `docker stack rm`, `daemon.json` and the mount commands for you to copy. The page only reads: it
 sends no request that changes anything, a value that is not a plain CIDR, number or stack name produces an error line and not a
