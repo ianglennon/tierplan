@@ -38,6 +38,8 @@ type fakeEngine struct {
 	mu        sync.Mutex
 	removeErr map[string]error
 	removed   []string
+	// calls are the IDs RemoveContainer was asked for, whatever it answered.
+	calls []string
 	// onRemove, when set, is called with the ID of each container the engine is asked to remove,
 	// before it answers: a test reads the record of the run there.
 	onRemove func(id string)
@@ -77,11 +79,18 @@ func (e *fakeEngine) RemoveContainer(_ context.Context, _, _, id string) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.calls = append(e.calls, id)
 	if err := e.removeErr[id]; err != nil {
 		return err
 	}
 	e.removed = append(e.removed, id)
 	return nil
+}
+
+func (e *fakeEngine) removeCalls() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.calls)
 }
 
 func (e *fakeEngine) removedIDs() []string {
@@ -299,7 +308,7 @@ func TestRunnerReportsWhatItDidNotRemove(t *testing.T) {
 	}
 	want := map[string][2]string{
 		"container/n1-id/c1": {jobs.ItemFailed, codeNoLongerStale},
-		"container/n1-id/c2": {jobs.ItemDone, codeGone},
+		"container/n1-id/c2": {jobs.ItemDone, codeGone}, // already gone: a skip, not a removal
 		"container/n1-id/c3": {jobs.ItemFailed, codeNodeOffline},
 	}
 	for _, it := range job.Items {
@@ -490,7 +499,7 @@ func TestRunnerPartialWhenItemErrors(t *testing.T) {
 	if got.State != StatePartial || got.Reason != "" || got.Counts != (Counts{RemovedContainers: 1, Failed: 1}) {
 		t.Fatalf("run = %+v, want partial with one removed and one failed", got)
 	}
-	if len(items) != 2 || items[0].Ref != "c1" || items[0].Outcome != OutcomeError || items[0].Code != codeFailed ||
+	if len(items) != 2 || items[0].Ref != "c1" || items[0].Outcome != OutcomeError || items[0].Code != codeActionFailed ||
 		items[1].Ref != "c2" || items[1].Outcome != OutcomeRemoved {
 		t.Fatalf("items = %+v, want c1 recorded as an error and c2 as removed", items)
 	}
@@ -504,6 +513,7 @@ func TestRunnerRecordsEachOutcome(t *testing.T) {
 	eng.removeErr["c2"] = ErrInUse
 	eng.removeErr["c3"] = ErrGone
 	eng.removeErr["c4"] = fmt.Errorf("%w: down", ErrNodeOffline)
+	eng.removeErr["c5"] = &CodedError{Code: CodeAgentPolicyDenied, Err: errors.New("refused")}
 	run, _, hub := newRunner(t, eng)
 	ctx := testsupport.Context(t)
 	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: ticked("c1", "c2", "c3", "c4", "c5")})
@@ -521,8 +531,9 @@ func TestRunnerRecordsEachOutcome(t *testing.T) {
 		outcome Outcome
 		code    string
 	}{
-		{OutcomeSkippedProtected, codeNoLongerStale}, {OutcomeRefusedInUse, codeInUse}, {OutcomeRemoved, codeGone},
-		{OutcomeSkippedNodeOffline, codeNodeOffline}, {OutcomeRemoved, ""},
+		{OutcomeSkippedProtected, codeNoLongerStale}, {OutcomeRefusedInUse, codeInUse}, {OutcomeSkippedProtected, codeGone},
+		// c4's node did not answer, so nothing is sent for c5, which is on the same node: the engine never hears of it.
+		{OutcomeSkippedNodeOffline, codeNodeOffline}, {OutcomeSkippedNodeOffline, codeNodeOffline},
 	}
 	if len(items) != len(want) {
 		t.Fatalf("items = %+v, want %d", items, len(want))
@@ -532,9 +543,12 @@ func TestRunnerRecordsEachOutcome(t *testing.T) {
 			t.Errorf("item %d (%s) = %s/%q, want %s/%q", i, items[i].Ref, items[i].Outcome, items[i].Code, w.outcome, w.code)
 		}
 	}
-	// The one already gone is not a removal of this run's, and an offline node is not an error.
-	if got.State != StateCompleted || got.Counts != (Counts{RemovedContainers: 1, Kept: 2, SkippedOffline: 1}) {
-		t.Fatalf("run = %+v, want completed with 1 removed, 2 kept and 1 skipped offline", got)
+	// The one already gone is not a removal of this run's, and a node that did not answer makes the run partial, not failed.
+	if got.State != StatePartial || got.Counts != (Counts{Kept: 2, SkippedOffline: 2}) {
+		t.Fatalf("run = %+v, want partial with 2 kept and 2 skipped offline", got)
+	}
+	if calls := eng.removeCalls(); !slices.Equal(calls, []string{"c1", "c2", "c3", "c4"}) {
+		t.Fatalf("the engine was asked to remove %v, want c1 to c4 once each and nothing for c5", calls)
 	}
 }
 

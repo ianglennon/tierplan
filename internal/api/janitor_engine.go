@@ -54,6 +54,9 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 	for _, n := range agg.Nodes {
 		snap.Nodes = append(snap.Nodes, janitor.Node{ID: n.ID, Name: n.Name})
 	}
+	for _, n := range agg.Unreachable {
+		snap.Unreachable = append(snap.Unreachable, janitor.Node{ID: n.ID, Name: n.Name})
+	}
 	for _, c := range agg.Containers {
 		snap.Containers = append(snap.Containers, janitor.Container{
 			ID: c.ID, Name: strings.TrimPrefix(c.Name, "/"), NodeID: c.NodeID, Node: c.Node, State: c.State,
@@ -140,6 +143,9 @@ const removeContainerTimeout = time.Minute
 // inspects the container again (its state and labels) and removes it only if it is still exited and is not labelled
 // tierplan.keep; the removal is neither forced nor takes the container's volumes (JAN-06). Nothing
 // is retried: a removal whose answer was lost may have happened, and a second one would be wrong.
+// The engine's refusal because the container is in use is ErrInUse, a container that is not there
+// is ErrGone, a node that is not connected is ErrNodeOffline, and any other failure is a
+// *janitor.CodedError.
 func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, removeContainerTimeout)
 	defer cancel()
@@ -164,5 +170,8 @@ func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id s
 	case dockerx.IsConflict(err):
 		return fmt.Errorf("%w: %w", janitor.ErrInUse, err)
 	}
-	return err
+	// Anything else is a failure of the removal itself, given the word the containers API gives it:
+	// the agent's policy refused, the host is read-only, the node did not answer, or it failed.
+	code, _ := actionError(err)
+	return &janitor.CodedError{Code: code, Err: err}
 }

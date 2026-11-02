@@ -166,6 +166,10 @@ func (f *Fake) serveRemove(w http.ResponseWriter, r *http.Request, p string, cfg
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "agent_policy_denied: " + r.Method + " " + r.URL.Path})
 		return true
 	}
+	if refusal, refused := cfg.RefuseRemove[m[1]]; refused {
+		writeJSON(w, refusal.Status, map[string]string{"message": refusal.Message})
+		return true
+	}
 	c, known := cfg.resolveContainer(m[1])
 	if !known {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + m[1]})

@@ -24,8 +24,10 @@ const (
 	StateRunning = "running"
 	// StateCompleted: the run ended and every item it attempted ended as it should.
 	StateCompleted = "completed"
-	// StatePartial: the run ended but an item errored, or it was cut short.
+	// StatePartial: the run ended but an item errored, a node was skipped, or it was cut short.
 	StatePartial = "partial"
+	// StateSkipped: the run did not run because no node reported.
+	StateSkipped = "skipped"
 	// StateFailed: the run could not do its work.
 	StateFailed = "failed"
 )
@@ -34,6 +36,8 @@ const (
 const (
 	// ReasonRunFailed: the run could not read the environment or its policy, or could not start.
 	ReasonRunFailed = "failed"
+	// ReasonNoNodeReporting: no node of the environment reported, so there was nothing to judge.
+	ReasonNoNodeReporting = "no_node_reporting"
 )
 
 // Outcome is how the attempt to remove one item ended.
@@ -41,11 +45,12 @@ type Outcome string
 
 // The outcomes of an item.
 const (
-	// OutcomeRemoved: the object was removed, or was already gone.
+	// OutcomeRemoved: the object was removed.
 	OutcomeRemoved Outcome = "removed"
 	// OutcomeRefusedInUse: the engine said the object is in use, so it was left alone.
 	OutcomeRefusedInUse Outcome = "refused_in_use"
-	// OutcomeSkippedProtected: the object was no longer stale or had gained a keep label, so it was left alone.
+	// OutcomeSkippedProtected: the object was no longer stale (code no_longer_stale) or was already gone (code gone), so
+	// nothing was removed.
 	OutcomeSkippedProtected Outcome = "skipped_protected"
 	// OutcomeSkippedNodeOffline: its node was not connected, so nothing was sent.
 	OutcomeSkippedNodeOffline Outcome = "skipped_node_offline"

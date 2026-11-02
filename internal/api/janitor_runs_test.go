@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
@@ -473,5 +474,60 @@ func TestJanitorRunOtherEnvNotFound(t *testing.T) {
 	}
 	if rec, run := s.getRun(t, started.RunID); rec.code != http.StatusOK || run.ID != started.RunID {
 		t.Fatalf("the run in its own environment: %d %s, want 200", rec.code, rec.body)
+	}
+}
+
+// refusing makes the daemon of the worker refuse the DELETE of the containers given, as it answers: a
+// container that came into use after the preview is 409, one that is gone is 404, an agent whose policy
+// refuses is 403.
+func refusing(refusals map[string]dockertest.FakeRefusal) func(string, *dockertest.FakeConfig) {
+	return func(host string, cfg *dockertest.FakeConfig) {
+		if host == "wrk-1" {
+			cfg.RefuseRemove = refusals
+		}
+	}
+}
+
+// deletesOf counts the DELETEs of one container the daemons saw.
+func (s *swarmFix) deletesOf(id string) int {
+	n := 0
+	for _, w := range s.containerDeletes() {
+		if w == "DELETE /containers/"+id {
+			n++
+		}
+	}
+	return n
+}
+
+// The tracer of JAN-06 and D-16: a container that something started using between the preview and the
+// delete is refused by the engine. That is TierPlan doing its job: the item is kept and recorded as
+// such, asked of the engine once, and the rest of the run goes on.
+func TestJanitorRunInUseIsKeptOnce(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), refusing(map[string]dockertest.FakeRefusal{
+		"web-x1": {Status: http.StatusConflict, Message: "cannot remove container \"web-x1\": container is in use"},
+	}))
+	_, preview := s.previewJanitor(t)
+	rec, started := s.runJanitor(t, tick(preview.Items[0], preview.Items[1]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	job := s.awaitRun(t, started.JobID)
+	if len(job.Items) != 2 {
+		t.Fatalf("job items = %+v, want one for each ticked item", job.Items)
+	}
+	if n := s.deletesOf("web-x1"); n != 1 {
+		t.Fatalf("the daemon saw %d deletes of web-x1, want exactly one: a refusal is never retried", n)
+	}
+	if n := s.deletesOf("web-x2"); n != 1 {
+		t.Fatalf("the daemon saw %d deletes of web-x2, want the run to go on to it", n)
+	}
+	_, run := s.getRun(t, started.RunID)
+	if run.State != "completed" || run.Reason != "" || run.Counts.Kept != 1 || run.Counts.RemovedContainers != 1 || run.Counts.Failed != 0 {
+		t.Fatalf("run = %+v, want completed with 1 kept and 1 removed: a refusal because it is in use is not a failure", run)
+	}
+	if len(run.Items) != 2 || run.Items[0].Ref != "web-x1" || run.Items[0].Outcome != "refused_in_use" || run.Items[0].Code != "in_use" ||
+		run.Items[1].Ref != "web-x2" || run.Items[1].Outcome != "removed" {
+		t.Fatalf("items = %+v, want web-x1 refused_in_use and web-x2 removed", run.Items)
 	}
 }

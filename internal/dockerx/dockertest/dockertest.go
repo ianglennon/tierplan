@@ -62,6 +62,12 @@ type Component struct {
 	Version string
 }
 
+// FakeRefusal is the answer of a request the fake daemon refuses: the HTTP status and the message.
+type FakeRefusal struct {
+	Status  int
+	Message string
+}
+
 // FakeConfig describes the engine a FakeDaemon pretends to be. Zero values
 // become the defaults noted on each field.
 type FakeConfig struct {
@@ -167,6 +173,11 @@ type FakeConfig struct {
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
 	WriteError string
+	// RefuseRemove makes the DELETE of the container with that ID, or name, answer the status and message
+	// given, as an engine does when a container came into use after it was listed (409), is gone (404) or
+	// cannot be removed (500), or as an agent does when its policy refuses (403 with the agent_policy_denied
+	// marker). The write is recorded whatever the answer.
+	RefuseRemove map[string]FakeRefusal
 	// RemoveErrors makes the removal of the secret, config or network of that name answer 500 with the
 	// message, as a manager does when it cannot remove one. A name not listed removes as usual.
 	RemoveErrors map[string]string

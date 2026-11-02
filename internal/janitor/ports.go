@@ -62,7 +62,10 @@ type Snapshot struct {
 	// NotReporting names the nodes that were expected and did not report. None of their objects
 	// is in the snapshot.
 	NotReporting []string
-	Containers   []Container
+	// Unreachable are the same nodes with their IDs, which is how a ticked item names its node: a
+	// run skips the items it finds on one of them without sending anything.
+	Unreachable []Node
+	Containers  []Container
 	// Services are the swarm's services by ID, nil when no manager answered.
 	Services map[string]Service
 	// Tasks are the tasks the swarm wants running. Without a manager there are none.
@@ -113,6 +116,34 @@ var (
 	// ErrNodeOffline: the node is not connected, so nothing was sent.
 	ErrNodeOffline = errors.New("janitor: the node is not connected")
 )
+
+// The codes a failed removal is given when the engine's error is not one of the Err values above.
+// They are the words the containers API gives for the same failures, so the SPA reads one set.
+const (
+	// CodeAgentPolicyDenied: the node's agent refused the request by its own policy.
+	CodeAgentPolicyDenied = "agent_policy_denied"
+	// CodeHostReadOnly: the host's owner made its agent read-only.
+	CodeHostReadOnly = "host_read_only"
+	// CodeNodeUnreachable: the node did not answer.
+	CodeNodeUnreachable = "node_unreachable"
+	// CodeActionFailed: any other failure of the removal itself.
+	CodeActionFailed = "action_failed"
+)
+
+// CodedError is a failed removal with the stable word the run records for it. RemoveContainer
+// answers one for every failure it can name, and the runner records the word as the item's code.
+type CodedError struct {
+	Code string
+	Err  error
+}
+
+// Error implements error.
+func (e *CodedError) Error() string {
+	return "janitor: the removal failed (" + e.Code + "): " + e.Err.Error()
+}
+
+// Unwrap returns the engine's error.
+func (e *CodedError) Unwrap() error { return e.Err }
 
 // inspectNodes is how many nodes are inspected at once. A node is asked one container at a time.
 const inspectNodes = 4

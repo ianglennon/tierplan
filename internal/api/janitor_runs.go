@@ -81,9 +81,9 @@ type JanitorRunItemBody struct {
 	Node      string            `json:"node" doc:"The node's name"`
 	Ref       string            `json:"ref" doc:"The engine's ID of the object"`
 	Name      string            `json:"name"`
-	Reason    JanitorReasonBody `json:"reason" doc:"Why the run selected it"`
-	Outcome   string            `json:"outcome" enum:"removed,refused_in_use,skipped_protected,skipped_node_offline,error" doc:"How the attempt ended. removed with the code already_gone means the object was gone before the run reached it"`
-	Code      string            `json:"code" doc:"A stable word for why the attempt did not end as a clean removal, empty for one that did"`
+	Reason    JanitorReasonBody `json:"reason" doc:"Why the run selected it. For a ticked item the fresh plan did not list, the reason the planner gave for leaving it, and an empty code when the planner did not look at it"`
+	Outcome   string            `json:"outcome" enum:"removed,refused_in_use,skipped_protected,skipped_node_offline,error" doc:"How the attempt ended. refused_in_use: the engine said something uses it, so it was kept (a safety success, not an error). skipped_protected: nothing was removed because it is no longer stale (code no_longer_stale) or is already gone (code gone). skipped_node_offline: its node was not connected, so nothing was sent. error: the removal failed, with the code agent_policy_denied, host_read_only, node_unreachable or action_failed"`
+	Code      string            `json:"code" doc:"A stable word for why the attempt did not end as a clean removal, empty for one that did: in_use, no_longer_stale, gone, node_offline, agent_policy_denied, host_read_only, node_unreachable or action_failed"`
 	SizeBytes *int64            `json:"sizeBytes" nullable:"true" minimum:"0" doc:"The bytes removing the object frees, null when not known"`
 }
 
@@ -118,7 +118,8 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 		Description: "Removes the items ticked in a preview, and answers 202 with the run and its job at once; the clean-up goes on if the browser closes. " +
 			"The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. " +
 			"With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: " +
-			"an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone, and the job shows it. " +
+			"an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone and the run records it. " +
+				"An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. " +
 			"A container is removed through the agent of its node, without force and without its volumes. " +
 			"The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxJanitorRunBody,

@@ -175,8 +175,11 @@ type runState struct {
 	ctx context.Context
 	// counts are the selected items by how their removal ended; gone counts the ones that were
 	// already gone and notNow the ticked items that were not removable on the fresh plan.
-	counts        Counts
-	gone, notNow  int
+	counts Counts
+	gone   int
+	// offline are the nodes the run will not send anything to, by ID: the ones the fresh read could
+	// not reach, and the ones that stopped answering while the run went on.
+	offline       map[string]string
 	freed         int64
 	freedKnown    bool
 	seq           int
@@ -224,15 +227,15 @@ func (s *runState) flush(r *Runner) {
 }
 
 // end is the one place a run ends, deferred so that it runs however the run ends. It records the
-// items still waiting and the run's final state: completed, partial when an item errored or the run
-// was cut short, or failed when it could not do its work.
+// items still waiting and the run's final state: completed, partial when an item errored, a node's
+// items were skipped or the run was cut short, or failed when it could not do its work.
 func (s *runState) end(r *Runner, req RunRequest) {
 	s.flush(r)
 	run := Run{ID: s.runID, State: StateCompleted, Counts: s.counts, EstBytes: -1}
 	switch {
 	case s.planFailed || !s.reachedTheEnd:
 		run.State, run.Reason = StateFailed, ReasonRunFailed
-	case s.counts.Failed > 0 || s.cut:
+	case s.counts.Failed > 0 || s.counts.SkippedOffline > 0 || s.cut:
 		run.State = StatePartial
 	}
 	if s.freedKnown {
@@ -241,7 +244,7 @@ func (s *runState) end(r *Runner, req RunRequest) {
 	r.endRecord(s.ctx, run)
 	r.log().Info("a janitor run ended", "environment", req.EnvID, "run", s.runID, "state", run.State,
 		"removed", s.counts.RemovedContainers+s.counts.RemovedImages+s.counts.RemovedNetworks, "gone", s.gone,
-		"kept", s.counts.Kept, "skipped_offline", s.counts.SkippedOffline, "failed", s.counts.Failed, "not_removable_now", s.notNow)
+		"kept", s.counts.Kept, "skipped_offline", s.counts.SkippedOffline, "failed", s.counts.Failed)
 }
 
 // planItemID is the ID of a plan item in the job: unique across types and nodes.
@@ -251,9 +254,9 @@ func planItemID(it Item) string { return string(it.Type) + "/" + it.NodeID + "/"
 const (
 	codeNoLongerStale = "no_longer_stale"
 	codeInUse         = "in_use"
-	codeGone          = "already_gone"
+	codeGone          = "gone"
 	codeNodeOffline   = "node_offline"
-	codeFailed        = "remove_failed"
+	codeActionFailed  = CodeActionFailed
 	codePlanFailed    = "plan_failed"
 )
 
@@ -277,7 +280,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 	finish := sync.OnceFunc(func() { run.end(r, req) })
 	defer finish()
 
-	selected, err := r.plan(ctx, req, run)
+	selected, unsent, err := r.plan(ctx, req, run)
 	if err != nil {
 		r.log().Warn("a janitor run could not plan", "environment", req.EnvID, "run", runID, "error", err)
 		run.planFailed = true
@@ -286,6 +289,12 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 		free()
 		rep.Finish("plan", jobs.ItemFailed, codePlanFailed, "TierPlan could not read the environment, so nothing was removed.", nil)
 		return
+	}
+	// What was ticked and is not removable now is on record before the first removal: it asks
+	// nothing of any engine.
+	for _, l := range unsent {
+		run.tally(l.item, l.out)
+		run.record(r, l.item, l.out)
 	}
 	// Every item is added before the first is finished: a job whose items have all ended has ended.
 	for _, it := range selected {
@@ -299,6 +308,7 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 		id := planItemID(it)
 		rep.Update(id, func(x *jobs.Item) { x.State = jobs.ItemRunning })
 		out := r.remove(ctx, req.EnvID, it, run)
+		run.tally(it, out)
 		run.record(r, it, out)
 		result := map[string]string{"nodeId": it.NodeID, "node": it.Node, "ref": it.Ref}
 		fin := func() { rep.Finish(id, out.state, out.code, out.message, result) }
@@ -317,26 +327,37 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 	}
 }
 
+// unsentItem is a ticked item the run did not send to an engine, and how it ended.
+type unsentItem struct {
+	item Item
+	out  outcome
+}
+
 // plan reads the environment fresh, plans with the policy and returns the items to remove: the
 // ticked ones that are removable now, or all of them for a run that was not ticked, in the plan's
-// order and each once.
-func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Item, error) {
+// order and each once. The ticked items that are not removable now are returned as unsent, in the
+// order they were ticked and each once: no longer stale, or on a node that did not answer.
+func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Item, []unsentItem, error) {
 	pol := DefaultPolicy()
 	if r.Policy != nil {
 		p, err := r.Policy(ctx, req.EnvID)
 		if err != nil {
-			return nil, fmt.Errorf("read the policy: %w", err)
+			return nil, nil, fmt.Errorf("read the policy: %w", err)
 		}
 		pol = p
 	}
 	snap, err := r.Engine.Snapshot(ctx, req.EnvID)
 	if err != nil {
-		return nil, fmt.Errorf("read the environment: %w", err)
+		return nil, nil, fmt.Errorf("read the environment: %w", err)
+	}
+	run.offline = make(map[string]string, len(snap.Unreachable))
+	for _, n := range snap.Unreachable {
+		run.offline[n.ID] = n.Name
 	}
 	ends := InspectCandidates(ctx, r.Engine, req.EnvID, Candidates(snap, pol))
 	plan := Build(Input{Snapshot: snap, Ends: ends}, pol, r.clock().Now().UTC())
 	if req.All {
-		return plan.Items, nil
+		return plan.Items, nil, nil
 	}
 	ticked := make(map[string]bool, len(req.Ticked))
 	for _, t := range req.Ticked {
@@ -344,17 +365,70 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 	}
 	var out []Item
 	for _, it := range plan.Items {
-		if ticked[ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}.key()] {
+		k := ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}.key()
+		if ticked[k] {
 			out = append(out, it)
-			delete(ticked, ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}.key())
+			ticked[k] = false
 		}
 	}
-	run.notNow = len(ticked)
-	return out, nil
+	var notNow []unsentItem
+	for _, t := range req.Ticked {
+		if !ticked[t.key()] {
+			continue
+		}
+		ticked[t.key()] = false
+		it := absentItem(snap, plan, t)
+		o := outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone.", recorded: OutcomeSkippedProtected}
+		if _, down := run.offline[t.NodeID]; down {
+			o = offlineOutcome()
+		}
+		notNow = append(notNow, unsentItem{item: it, out: o})
+	}
+	return out, notNow, nil
 }
 
-// remove removes one item of the plan and says how it ended, and counts it.
+// absentItem is the item a ticked reference stands for when the fresh plan does not remove it: the
+// planner's own item when it looked at the object and left it, else what the snapshot knows of the
+// object, else the reference alone.
+func absentItem(snap Snapshot, plan Plan, ref ItemRef) Item {
+	for _, it := range plan.NotRemoved {
+		if (ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}) == ref {
+			return it
+		}
+	}
+	it := Item{Type: ref.Type, NodeID: ref.NodeID, Ref: ref.Ref, Name: ref.Ref, Size: -1}
+	if ref.Type == KindContainer {
+		for _, c := range snap.Containers {
+			if c.ID == ref.Ref && c.NodeID == ref.NodeID {
+				it.Name, it.Node = c.Name, c.Node
+				return it
+			}
+		}
+	}
+	for _, n := range snap.Unreachable {
+		if n.ID == ref.NodeID {
+			it.Node = n.Name
+		}
+	}
+	for _, n := range snap.Nodes {
+		if n.ID == ref.NodeID {
+			it.Node = n.Name
+		}
+	}
+	return it
+}
+
+// offlineOutcome is an item whose node does not answer: nothing was sent for it.
+func offlineOutcome() outcome {
+	return outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "Its node is not connected, so nothing was sent.", recorded: OutcomeSkippedNodeOffline}
+}
+
+// remove removes one item of the plan, once, and says how it ended. An item on a node the run
+// already found not answering is not sent at all.
 func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runState) outcome {
+	if _, down := run.offline[it.NodeID]; down {
+		return offlineOutcome()
+	}
 	var err error
 	switch it.Type {
 	case KindContainer:
@@ -362,26 +436,46 @@ func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runStat
 	default:
 		err = errUnsupported
 	}
+	var coded *CodedError
 	switch {
 	case err == nil:
-		run.countRemoved(it)
 		return outcome{state: jobs.ItemDone, message: "Removed.", recorded: OutcomeRemoved}
 	case errors.Is(err, ErrGone):
-		run.gone++
-		return outcome{state: jobs.ItemDone, code: codeGone, message: "It was already gone.", recorded: OutcomeRemoved}
+		return outcome{state: jobs.ItemDone, code: codeGone, message: "It was already gone.", recorded: OutcomeSkippedProtected}
 	case errors.Is(err, ErrNoLongerStale):
-		run.counts.Kept++
 		return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone.", recorded: OutcomeSkippedProtected}
 	case errors.Is(err, ErrInUse):
-		run.counts.Kept++
 		return outcome{state: jobs.ItemFailed, code: codeInUse, message: "The engine says it is in use, so it was left alone.", recorded: OutcomeRefusedInUse}
 	case errors.Is(err, ErrNodeOffline):
-		run.counts.SkippedOffline++
-		return outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "Its node is not connected, so nothing was sent.", recorded: OutcomeSkippedNodeOffline}
-	default:
-		run.counts.Failed++
-		r.log().Warn("a janitor run could not remove an item", "environment", envID, "type", it.Type, "node", it.NodeID, "ref", it.Ref, "error", err)
-		return outcome{state: jobs.ItemFailed, code: codeFailed, message: "It could not be removed.", recorded: OutcomeError}
+		// The rest of this node's items are not sent: the node does not answer.
+		run.offline[it.NodeID] = it.Node
+		return offlineOutcome()
+	}
+	code := CodeActionFailed
+	if errors.As(err, &coded) && coded.Code != "" {
+		code = coded.Code
+	}
+	r.log().Warn("a janitor run could not remove an item", "environment", envID, "type", it.Type, "node", it.NodeID, "ref", it.Ref, "code", code, "error", err)
+	return outcome{state: jobs.ItemFailed, code: code, message: "It could not be removed.", recorded: OutcomeError}
+}
+
+// tally counts how an item ended.
+func (s *runState) tally(it Item, out outcome) {
+	switch out.recorded {
+	case OutcomeRemoved:
+		s.countRemoved(it)
+	case OutcomeRefusedInUse:
+		s.counts.Kept++
+	case OutcomeSkippedProtected:
+		if out.code == codeGone {
+			s.gone++ // neither a removal of this run's nor a failure
+		} else {
+			s.counts.Kept++
+		}
+	case OutcomeSkippedNodeOffline:
+		s.counts.SkippedOffline++
+	case OutcomeError:
+		s.counts.Failed++
 	}
 }
 
