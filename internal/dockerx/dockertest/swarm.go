@@ -156,7 +156,7 @@ func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 			if i >= managers {
 				role, idx = "w", i-managers+1
 			}
-			nodes[i], errs[i] = startNode(t, engine, plan, ips[i], fmt.Sprintf("cm-%s%d-%s", role, idx, randHex(2)), i < managers)
+			nodes[i], errs[i] = startNode(t, engine, plan, ips[i], fmt.Sprintf("tp-%s%d-%s", role, idx, randHex(2)), i < managers)
 		}()
 	}
 	wg.Wait()
@@ -207,7 +207,7 @@ func StartHost(t testing.TB, engine string) *Node {
 		engine = EngineFromEnv()
 	}
 	plan := newNetwork(t)
-	n, err := startNode(t, engine, plan, plan.ip(), "cm-h1-"+randHex(2), false)
+	n, err := startNode(t, engine, plan, plan.ip(), "tp-h1-"+randHex(2), false)
 	if err != nil {
 		t.Fatalf("start the dind host: %v", err)
 	}

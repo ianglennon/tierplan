@@ -1,4 +1,4 @@
-# Create the secret first:  printf %s 'cmjt_E_S' | docker secret create tierplan-agent-token-g1 -
+# Create the secret first:  printf %s 'tpjt_E_S' | docker secret create tierplan-agent-token-g1 -
 # Then deploy this file:  docker stack deploy -c tierplan-agent.yml tierplan
 services:
   tierplan-agent:

@@ -529,13 +529,13 @@ func snapshotStack(ctx context.Context, node *dockertest.Node, stack string, ask
 
 // compareGroup fails the test with the field-level differences between the docker CLI's objects of
 // one kind and TierPlan's. An empty group on both sides is fine (a file with no secrets has none).
-func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) {
+func compareGroup(t *testing.T, kind string, cli, tp map[string]map[string]any) {
 	t.Helper()
 	seen := map[string]bool{}
 	for n := range cli {
 		seen[n] = true
 	}
-	for n := range cm {
+	for n := range tp {
 		seen[n] = true
 	}
 	var names []string
@@ -545,7 +545,7 @@ func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) 
 	sort.Strings(names)
 	for _, n := range names {
 		a, okA := cli[n]
-		b, okB := cm[n]
+		b, okB := tp[n]
 		switch {
 		case !okA:
 			t.Errorf("%s %s: only TierPlan made it", kind, n)
@@ -564,15 +564,15 @@ func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) 
 
 // compareSnapshots fails the test with every difference between the docker CLI's deploy and
 // TierPlan's, and when neither made a service, because then it would prove nothing.
-func compareSnapshots(t *testing.T, cli, cm stackSnapshot) {
+func compareSnapshots(t *testing.T, cli, tp stackSnapshot) {
 	t.Helper()
-	if len(cli.Services) == 0 && len(cm.Services) == 0 {
+	if len(cli.Services) == 0 && len(tp.Services) == 0 {
 		t.Fatal("neither deploy created a service: the comparison would prove nothing")
 	}
-	compareGroup(t, "service", cli.Services, cm.Services)
-	compareGroup(t, "network", cli.Networks, cm.Networks)
-	compareGroup(t, "secret", cli.Secrets, cm.Secrets)
-	compareGroup(t, "config", cli.Configs, cm.Configs)
+	compareGroup(t, "service", cli.Services, tp.Services)
+	compareGroup(t, "network", cli.Networks, tp.Networks)
+	compareGroup(t, "secret", cli.Secrets, tp.Secrets)
+	compareGroup(t, "config", cli.Configs, tp.Configs)
 }
 
 // removeStackCLI removes the stack with the docker CLI and waits until no service, no container and

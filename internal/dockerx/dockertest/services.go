@@ -146,8 +146,8 @@ func PushVariant(t testing.TB, node *Node, base, target, marker string, login *L
 	LoadImage(t, base, node)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	name := "cm-variant-" + randHex(3)
-	if out, err := node.Sh(ctx, fmt.Sprintf("docker run --name %s %s sh -c 'echo %s > /cm-marker' && docker commit %s %s && docker rm %s", name, base, marker, name, target, name)); err != nil {
+	name := "tp-variant-" + randHex(3)
+	if out, err := node.Sh(ctx, fmt.Sprintf("docker run --name %s %s sh -c 'echo %s > /tp-marker' && docker commit %s %s && docker rm %s", name, base, marker, name, target, name)); err != nil {
 		t.Fatalf("make a variant of %s on %s: %v\n%s", base, node.Hostname, err, out)
 	}
 	return pushTagged(t, node, target, login)

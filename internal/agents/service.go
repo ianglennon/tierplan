@@ -69,7 +69,7 @@ const (
 	// KindAgent is the kind of an environment reached through agents.
 	KindAgent = "agent"
 
-	tokenPrefix = "cmjt_"
+	tokenPrefix = "tpjt_"
 	// secretBytes is the entropy of a join token: 256 bits.
 	secretBytes = 32
 	maxNameLen  = 64
@@ -1273,7 +1273,7 @@ func (s *Service) Hello(ctx context.Context, req tunnel.HelloRequest) (tunnel.He
 	return tunnel.HelloResult{AgentID: agentID, EnvID: envID, NotAfter: leaf.NotAfter}, nil
 }
 
-// newToken makes a join token cmjt_<envId>_<base64url of 32 random bytes> and
+// newToken makes a join token tpjt_<envId>_<base64url of 32 random bytes> and
 // returns it with its secret part, the only part that is hashed.
 func newToken(envID string) (token, secret string, err error) {
 	b := make([]byte, secretBytes)

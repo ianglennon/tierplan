@@ -270,7 +270,7 @@ func (f *saFix) noDenials(t *testing.T) {
 // recreates only its container, and a redeploy nobody edited changes no container.
 func TestStandaloneStackThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name = "sfull"
@@ -512,7 +512,7 @@ func (f *saFix) states(t *testing.T, project string) map[string]saState {
 // 07-21 (networks, a volume, a healthcheck, depends_on, a secret and a config) the review lists nothing.
 func TestStandaloneReviewEmptyAfterDeployThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name = "srev"
@@ -540,7 +540,7 @@ func TestStandaloneReviewEmptyAfterDeployThroughAnAgent(t *testing.T) {
 func TestStandaloneHandChangedContainerIsReviewedAndRedeployed(t *testing.T) {
 	// The sidecar shares web's network namespace, which the agent refuses without the host owner's opt-in.
 	f := startSAFixWith(t, dockertest.RegistryOptions{}, true)
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name = "sdep"
@@ -635,7 +635,7 @@ func (s saState) startedAfter(before saState) bool {
 // volume removal are on its allowlist.
 func TestStandaloneRemoveKeepsUntickedVolumes(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name, outer, outerVolume = "srm", "srmouter", "srmextvol"

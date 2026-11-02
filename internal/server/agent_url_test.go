@@ -88,7 +88,7 @@ func TestTheHubTellsAgentsTheEndpointFromTheAgentURLElseThePublicURL(t *testing.
 		t.Cleanup(func() { _ = srv.Close() })
 		return srv
 	}
-	if got := build(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test/cm"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://tierplan.test/cm/agent/connect" {
+	if got := build(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test/tp"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://tierplan.test/tp/agent/connect" {
 		t.Errorf("public URL only: %v", got)
 	}
 	if got := build(map[string]string{"TIERPLAN_PUBLIC_URL": "https://tierplan.test", "TIERPLAN_AGENT_URL": "https://10.0.0.5:7480"}).tunnel.URLs(); len(got) != 1 || got[0] != "wss://10.0.0.5:7480/agent/connect" {

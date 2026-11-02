@@ -22,7 +22,7 @@ func UnixProxy(t testing.TB, host string) string {
 	t.Helper()
 	// A short path: a unix socket path may not be longer than about 100 bytes, and a test's own
 	// temporary directory is named after the test.
-	dir, err := os.MkdirTemp("", "cmx")
+	dir, err := os.MkdirTemp("", "tpx")
 	if err != nil {
 		t.Fatalf("make the proxy directory: %v", err)
 	}

@@ -71,7 +71,7 @@ func startBroker(t *testing.T, r *tunRig) {
 
 // tamper is a join token for the same environment with a wrong secret.
 func tamper(token string) string {
-	i := len("cmjt_") + 36 + 1 // the first character of the secret
+	i := len("tpjt_") + 36 + 1 // the first character of the secret
 	c := byte('A')
 	if token[i] == 'A' {
 		c = 'B'

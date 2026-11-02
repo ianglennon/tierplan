@@ -16,7 +16,7 @@ func TestIsMissingNetworkRecognisesTheEnginesWords(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{errors.New("Error response from daemon: network cm-no-such-network not found"), true},
+		{errors.New("Error response from daemon: network tp-no-such-network not found"), true},
 		{errors.New("update service on tcp://x: Error response from daemon: network web_default not found"), true},
 		{errors.New("Error response from daemon: service web not found"), false},
 		{errors.New("Error response from daemon: network web_default is in use"), false},

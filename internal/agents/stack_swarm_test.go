@@ -100,13 +100,13 @@ func sharedStackDeployParity(t *testing.T, f *swarmFix) {
 			removeStackCLI(t, f, parityCLIStack)
 
 			deployWithTierPlan(t, f, tierplanStack, src)
-			cm, err := snapshotStack(execCtx(t, time.Minute), mgr, tierplanStack, askedPools)
+			tp, err := snapshotStack(execCtx(t, time.Minute), mgr, tierplanStack, askedPools)
 			if err != nil {
 				t.Fatal(err)
 			}
 			removeStackCLI(t, f, tierplanStack)
 
-			compareSnapshots(t, cli, cm)
+			compareSnapshots(t, cli, tp)
 		})
 	}
 }

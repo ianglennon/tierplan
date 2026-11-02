@@ -23,7 +23,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Toaster } from "@/components/ui/sonner";
 
-const TOKEN = "cmjt_harness_S3CRET";
+const TOKEN = "tpjt_harness_S3CRET";
 const COMMAND = ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e TIERPLAN_AGENT_URL='wss://tierplan.test/agent/connect' ghcr.io/ianglennon/tierplan-agent:edge`;
 
 const code = <CopyableCode code={COMMAND} secret={TOKEN} label="the install command" />;

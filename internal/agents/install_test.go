@@ -25,7 +25,7 @@ import (
 var update = flag.Bool("update-golden", false, "rewrite the install golden files")
 
 const (
-	goldenToken    = "cmjt_E_S" //nolint:gosec // a made-up token for the golden files
+	goldenToken    = "tpjt_E_S" //nolint:gosec // a made-up token for the golden files
 	goldenEndpoint = "wss://example.com/tierplan/agent/connect"
 	goldenPin      = "sha256/P"
 )
@@ -457,10 +457,10 @@ func TestInstallCommandCleanupNamesWhatTheInstallCreated(t *testing.T) {
 
 func TestInstallCommandRefusesValuesThatCouldBreakOutOfTheQuotes(t *testing.T) {
 	for name, mutate := range map[string]func(*agents.InstallParams){
-		"token with a quote":    func(p *agents.InstallParams) { p.Token = "cm'; touch /tmp/x; '" },
+		"token with a quote":    func(p *agents.InstallParams) { p.Token = "tp'; touch /tmp/x; '" },
 		"endpoint with a quote": func(p *agents.InstallParams) { p.Endpoint = "wss://x'y/agent/connect" },
 		"pin with a quote":      func(p *agents.InstallParams) { p.Pin = "sha256/a'b" },
-		"token with a newline":  func(p *agents.InstallParams) { p.Token = "cm\nrm" },
+		"token with a newline":  func(p *agents.InstallParams) { p.Token = "tp\nrm" },
 		"endpoint with newline": func(p *agents.InstallParams) { p.Endpoint = "wss://x/agent/connect\n" },
 		"empty token":           func(p *agents.InstallParams) { p.Token = "" },
 		"empty endpoint":        func(p *agents.InstallParams) { p.Endpoint = "" },
@@ -546,7 +546,7 @@ func TestManualUpdateCommandUpdateHintCarriesTheCommandForTheEnvironmentType(t *
 }
 
 func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration(t *testing.T) {
-	in, err := agents.BuildInstall(agents.InstallParams{Token: "cmjt_x", Endpoint: "wss://tierplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
+	in, err := agents.BuildInstall(agents.InstallParams{Token: "tpjt_x", Endpoint: "wss://tierplan.example/agent/connect", ServerVersion: "v0.2.1", Generation: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +554,7 @@ func TestCleanupCommandsAreTheOnesTheInstallGivesAndNameTheGivenSecretGeneration
 	if swarm != in.SwarmCleanup || standalone != in.StandaloneCleanup {
 		t.Fatalf("CleanupCommands differ from the install's: %q %q", swarm, standalone)
 	}
-	if !strings.Contains(swarm, "docker secret rm "+agents.SecretName(3)) || strings.Contains(swarm+standalone, "cmjt_") {
+	if !strings.Contains(swarm, "docker secret rm "+agents.SecretName(3)) || strings.Contains(swarm+standalone, "tpjt_") {
 		t.Fatalf("the swarm cleanup must name generation 3's secret and carry no token: %q", swarm)
 	}
 	if other, _ := agents.CleanupCommands(4); !strings.Contains(other, agents.SecretName(4)) {

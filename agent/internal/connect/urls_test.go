@@ -59,7 +59,7 @@ func TestAPushedURLIsDialedFirstFromTheNextConnectionAndTheOldOneStaysAsAFallbac
 		},
 		func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
 
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: pins}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: pins}, fastEnv())
 	b.authN(t, 1)
 	if n := a.attempts(); n != 1 {
 		t.Fatalf("A was dialed %d times, want once: after the push B is dialed first and B works", n)
@@ -82,7 +82,7 @@ func TestWhenThePushedURLCannotBeReachedTheAgentFallsBackToThePreviousOne(t *tes
 		}
 		return reply{heartbeatMs: 30}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.authN(t, 2) // back at A after the dead address
 	got := urlsOnDisk(t, dir)
 	if len(got) != 2 || got[0].URL != deadURL || got[1].URL != a.url() {
@@ -131,7 +131,7 @@ func TestAPreviousURLPastItsThirtyDaysIsNotDialedAndOneInsideThemIs(t *testing.T
 func TestTheEnvironmentURLIsTheOnlyAddressUntilTheServerPushesADifferentOne(t *testing.T) {
 	dir := t.TempDir()
 	a := newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30, urls: nil} })
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.authN(t, 1)
 	a.heartbeatsAfterWelcome(t, 2) // the welcome was handled before the first heartbeat
 	if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
@@ -143,7 +143,7 @@ func TestAWelcomeThatListsTheAddressTheAgentIsOnChangesNothing(t *testing.T) {
 	dir := t.TempDir()
 	var a *fakeServer
 	a = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30, urls: []string{a.url()}} })
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.authN(t, 1)
 	a.heartbeatsAfterWelcome(t, 2)
 	if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
@@ -162,7 +162,7 @@ func TestAWelcomeThatListsAnotherAddressMovesTheAgentThereOnTheNextConnection(t 
 			return reply{heartbeatMs: 30}
 		},
 		func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: pins}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: pins}, fastEnv())
 	b.authN(t, 1)
 	if got := urlsOnDisk(t, dir); len(got) != 2 || got[0].URL != b.url() || got[1].URL != a.url() {
 		t.Fatalf("urls.json = %+v, want B then A", got)
@@ -176,7 +176,7 @@ func TestPinsInAPushAreKeptLikePinsInAWelcome(t *testing.T) {
 	a.script = func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{pushLine(t, []string{serverPin(a), other}, a.url()), fenceLine}}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.awaitFence(t) // the push before the fence has been handled
 	ps, err := state.LoadPins(dir)
 	if err != nil || len(ps) != 2 {
@@ -196,7 +196,7 @@ func TestAPushOverASessionThatWasNotVerifiedIsIgnored(t *testing.T) {
 	a.script = func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{pushLine(t, []string{other}, b.url()), fenceLine}}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir}, fastEnv())
 	a.authN(t, 1)
 	a.awaitFence(t) // the push before the fence has been handled, and ignored
 	for _, name := range []string{state.URLsFile, state.PinsFile} {
@@ -221,7 +221,7 @@ func TestAPushThatIsADowngradeOrNotAnAddressIsIgnoredAndTheOldAddressesStay(t *t
 			fenceLine,
 		}}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.authN(t, 1)
 	a.awaitFence(t) // every push before the fence has been handled
 	if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {
@@ -239,7 +239,7 @@ func TestAServerThatPushesTooManyAddressesGetsTheFirstFewKept(t *testing.T) {
 	a.script = func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{pushLine(t, nil, many...), fenceLine}}
 	}
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.awaitFence(t) // the push before the fence has been handled
 	if got := urlsOnDisk(t, dir); len(got) == 0 || len(got) > state.MaxURLs || got[0].URL != many[0] {
 		t.Fatalf("kept %d addresses starting with %s, want at most %d starting with the server's first", len(got), got[0].URL, state.MaxURLs)
@@ -320,7 +320,7 @@ func TestAnAgentWithNoRecordOfItsLastEnvironmentURLKeepsTheStoredOrderAndRecords
 func TestAFirstStartRecordsTheEnvironmentURL(t *testing.T) {
 	dir := t.TempDir()
 	a := newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
-	startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
+	startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}}, fastEnv())
 	a.heartbeatsAfterWelcome(t, 2) // the start address is recorded before the first dial, the welcome handled before the first heartbeat
 	if rec, ok, _ := state.LoadEnvURL(dir); !ok || rec != a.url() {
 		t.Errorf("env-url.json = %q, %v; want %q recorded", rec, ok, a.url())
@@ -461,7 +461,7 @@ func TestAPushedPlainAddressIsIgnoredEvenWithTheSwitch(t *testing.T) {
 				fenceLine,
 			}}
 		}
-		startAgent(t, Config{URL: a.url(), JoinToken: "cmjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}, AllowInsecure: allow}, fastEnv())
+		startAgent(t, Config{URL: a.url(), JoinToken: "tpjt_x", StateDir: dir, InstallPins: []string{serverPin(a)}, AllowInsecure: allow}, fastEnv())
 		a.authN(t, 1)
 		a.awaitFence(t) // the push before the fence has been handled
 		if _, err := os.Stat(filepath.Join(dir, state.URLsFile)); err == nil {

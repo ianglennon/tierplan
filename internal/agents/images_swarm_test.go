@@ -206,7 +206,7 @@ func sharedPrivatePullEveryNode(t *testing.T, f *swarmFix) {
 	}
 	worker := f.sw.Workers[0]
 	sh(t, worker, "docker image rm -f "+ref)
-	id := dockertest.CreateServiceWithAuth(t, mgr, "cm-private", ref, header)
+	id := dockertest.CreateServiceWithAuth(t, mgr, "tp-private", ref, header)
 	dockertest.Wait(t, 3*time.Minute, "the task to run on the worker", func() (bool, string) {
 		out, err := mgr.Sh(ctx, "docker service ps --filter desired-state=running --format '{{.Node}} {{.CurrentState}}' "+id)
 		if err != nil {

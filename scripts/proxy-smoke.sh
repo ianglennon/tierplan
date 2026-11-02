@@ -242,7 +242,7 @@ run_scenario() {
   PUBLIC="http://${HOST}${BASE}"
   LABEL="${kind} ${site}"
   [ "${variant}" = ok ] || LABEL="${LABEL} (${variant})"
-  TIERPLAN_NAME="tierplan-psmoke-${RUN_ID}-cm"
+  TIERPLAN_NAME="tierplan-psmoke-${RUN_ID}-tp"
   PROXY_NAME="tierplan-psmoke-${RUN_ID}-px"
   SESSION=""
 

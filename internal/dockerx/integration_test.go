@@ -188,7 +188,7 @@ func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
 	}
 
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
-	running, stopped, vol, net := "cm-run-"+sfx, "cm-stop-"+sfx, "cm-vol-"+sfx, "cm-net-"+sfx
+	running, stopped, vol, net := "tp-run-"+sfx, "tp-stop-"+sfx, "tp-vol-"+sfx, "tp-net-"+sfx
 	for _, name := range []string{running, stopped} {
 		if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 			Name:   name,
@@ -265,7 +265,7 @@ func TestIntegrationSnapshotCountsEqualTheCreatedResources(t *testing.T) {
 		}
 		cleanup(func(c context.Context) { _, _ = raw.SwarmLeave(c, client.SwarmLeaveOptions{Force: true}) })
 		svc, err := raw.ServiceCreate(ctx, client.ServiceCreateOptions{Spec: swarm.ServiceSpec{
-			Annotations:  swarm.Annotations{Name: "cm-svc-" + sfx},
+			Annotations:  swarm.Annotations{Name: "tp-svc-" + sfx},
 			TaskTemplate: swarm.TaskSpec{ContainerSpec: &swarm.ContainerSpec{Image: "alpine:3", Command: []string{"sleep", "300"}}},
 		}})
 		if err != nil {
@@ -325,7 +325,7 @@ func TestIntegrationEventsHubSeesAContainerStart(t *testing.T) {
 	backlog, ch, stop := hub.Subscribe(ctx, env)
 	defer func() { stop() }()
 
-	name := "cm-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-ev-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:   name,
 		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{"tierplan.test.secret": "hunter2"}},
@@ -420,11 +420,11 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 	defer scancel()
 	rows, errc := cli.Events(sctx, time.Time{})
 
-	name := "cm-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-evt-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{Image: "alpine:3", Cmd: []string{"sleep", "60"}, Labels: map[string]string{
-			"tierplan.test.secret": "hunter2", "com.docker.compose.project": "cm-test",
+			"tierplan.test.secret": "hunter2", "com.docker.compose.project": "tp-test",
 		}},
 	}); err != nil {
 		t.Fatalf("create: %v", err)
@@ -449,7 +449,7 @@ func TestEventsSwarmTypesOnStandalone(t *testing.T) {
 			if row.Type != "container" || row.Action != "start" || row.Name != name {
 				continue
 			}
-			if row.Attributes["com.docker.compose.project"] != "cm-test" {
+			if row.Attributes["com.docker.compose.project"] != "tp-test" {
 				t.Errorf("the compose project label did not pass: %v", row.Attributes)
 			}
 			if _, leaked := row.Attributes["tierplan.test.secret"]; leaked {
@@ -486,7 +486,7 @@ func TestContainerHealthInList(t *testing.T) {
 		t.Fatalf("pull alpine: %v", err)
 	}
 
-	name := "cm-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	name := "tp-health-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{

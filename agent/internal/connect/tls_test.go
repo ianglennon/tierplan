@@ -345,7 +345,7 @@ func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t
 	env, rounds := countingEnv()
 	logs := &lockedBuffer{}
 
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
 	for i := range 3 {
 		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
 	}
@@ -360,7 +360,7 @@ func TestTheAgentRefusesAnUnpinnedSelfSignedServerSaysSoOnceAndKeepsBackingOff(t
 	if !strings.Contains(out, "hint=") || !strings.Contains(out, "Show install command") {
 		t.Errorf("the line carries no fix hint:\n%s", out)
 	}
-	if strings.Contains(out, "cmjt_x") {
+	if strings.Contains(out, "tpjt_x") {
 		t.Errorf("the join token is in the log:\n%s", out)
 	}
 }
@@ -371,7 +371,7 @@ func TestTheAgentRefusesAServerWhosePinIsWrong(t *testing.T) {
 	logs := &lockedBuffer{}
 
 	wrong := "sha256/" + strings.Repeat("A", 43) + "="
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{wrong}, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{wrong}, Log: slog.New(slog.NewTextHandler(logs, nil))}, env)
 	for i := range 2 {
 		testsupport.Await(t, fmt.Sprintf("refused attempt %d", i+1), rounds)
 	}
@@ -389,7 +389,7 @@ func TestTheAgentWithTheInstallPinConnectsAndKeepsTheWelcomePins(t *testing.T) {
 	f = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{pins: []string{serverPin(f), other}} })
 	dir := t.TempDir()
 
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 1) // the welcome's pins are stored before the first heartbeat
 	ps, err := state.LoadPins(dir)
@@ -407,7 +407,7 @@ func TestStoredPinsLetARestartedAgentConnectWithoutTheInstallPin(t *testing.T) {
 	f = newFakeServerTLS(t, func(int, wire.Auth) reply { return reply{pins: []string{serverPin(f)}} })
 	dir := t.TempDir()
 
-	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
+	cancel, _ := startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", InstallPins: []string{serverPin(f)}, StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 1) // the identity and the pins are stored before the first heartbeat
 	if ps, err := state.LoadPins(dir); err != nil || len(ps) != 1 {
@@ -431,7 +431,7 @@ func TestPinsFromAPlainSessionAreNeverStored(t *testing.T) {
 		return reply{pins: []string{"sha256/" + strings.Repeat("Z", 43) + "="}}
 	})
 	dir := t.TempDir()
-	startAgent(t, Config{URL: f.url(), JoinToken: "cmjt_x", StateDir: dir}, fastEnv())
+	startAgent(t, Config{URL: f.url(), JoinToken: "tpjt_x", StateDir: dir}, fastEnv())
 	f.authN(t, 1)
 	f.heartbeatsAfterWelcome(t, 2) // the welcome was handled, and its pins ignored, before the first heartbeat
 	if _, err := os.Stat(filepath.Join(dir, state.PinsFile)); err == nil {

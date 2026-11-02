@@ -102,7 +102,7 @@ func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t
 	if got.Install.Generation != 2 || got.Install.SecretName != "tierplan-agent-token-g2" {
 		t.Errorf("generation %d secret %q, want 2 and tierplan-agent-token-g2", got.Install.Generation, got.Install.SecretName)
 	}
-	if !strings.HasPrefix(got.Install.JoinToken, "cmjt_"+id+"_") || got.Install.JoinToken == first {
+	if !strings.HasPrefix(got.Install.JoinToken, "tpjt_"+id+"_") || got.Install.JoinToken == first {
 		t.Errorf("the new token %q is not a fresh token of the environment", got.Install.JoinToken)
 	}
 	if !strings.Contains(got.Install.Swarm.Command, got.Install.JoinToken) || !strings.Contains(got.Install.Swarm.Command, "tierplan-agent-token-g2") {

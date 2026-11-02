@@ -693,7 +693,7 @@ func TestInjectingIntoATargetWithNoFeedIsRefusedAndAnInjectedRowDoesNotMoveTheRe
 	// The resume point is the time of the newest event the daemon sent; a row of
 	// TierPlan's own, however new, must not move it past events the daemon has yet to send.
 	future := time.Now().Add(time.Hour).UnixNano()
-	r.hub.Inject(hubEnv, dockerx.EventRow{ID: "cm", Time: time.Now().Add(time.Hour).UTC(), TimeNano: future, Type: "tierplan", Action: "failover"})
+	r.hub.Inject(hubEnv, dockerx.EventRow{ID: "tp", Time: time.Now().Add(time.Hour).UTC(), TimeNano: future, Type: "tierplan", Action: "failover"})
 	r.hub.mu.Lock()
 	f := r.hub.feeds[hubEnv]
 	r.hub.mu.Unlock()

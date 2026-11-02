@@ -29,8 +29,8 @@ const (
 	// trusted over plain HTTP by default.
 	swarmRegistryHost = "127.0.0.1:5000"
 
-	registryName = "cm-registry"
-	registryDir  = "/tmp/cm-registry"
+	registryName = "tp-registry"
+	registryDir  = "/tmp/tp-registry"
 )
 
 // RegistryOptions turns a fixture registry's authentication and transport on.

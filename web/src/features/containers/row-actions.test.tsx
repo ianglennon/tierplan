@@ -607,7 +607,7 @@ describe("Kill and Remove", () => {
 
 describe("TierPlan's own containers", () => {
   const own = (extra: Partial<ContainerRow> = {}) =>
-    row({ name: "tierplan", id: "cm-id", selfKind: "server", isSelf: true, ...extra });
+    row({ name: "tierplan", id: "tp-id", selfKind: "server", isSelf: true, ...extra });
 
   it.each([
     ["Stop", "Stop tierplan?"],
@@ -630,7 +630,7 @@ describe("TierPlan's own containers", () => {
 
   it("starts an own container that is stopped at once, as for any other", async () => {
     answer = () =>
-      Response.json({ results: [{ nodeId: "n1", id: "cm-id", name: "tierplan", result: "done" }] });
+      Response.json({ results: [{ nodeId: "n1", id: "tp-id", name: "tierplan", result: "done" }] });
     mount(own({ state: "exited" }));
     await openMenu("tierplan");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Start" }));

@@ -752,7 +752,7 @@ func FakeDaemon(t testing.TB, cfg FakeConfig) engine.Transport {
 // requests it served and change what it reports.
 func NewFake(t testing.TB, cfg FakeConfig) *Fake {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "cmfd")
+	dir, err := os.MkdirTemp("", "tpfd")
 	if err != nil {
 		t.Fatalf("make the fake daemon directory: %v", err)
 	}

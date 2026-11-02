@@ -605,7 +605,7 @@ type ContainerList struct {
 }
 
 // Containers lists the containers of an environment. query is a raw query
-// string without the question mark, such as "node=cm-w1".
+// string without the question mark, such as "node=tp-w1".
 func (s *Server) Containers(id, query string) (ContainerList, int, []byte) {
 	s.t.Helper()
 	path := "/api/env/" + id + "/containers"

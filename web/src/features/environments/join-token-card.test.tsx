@@ -30,7 +30,7 @@ function install() {
     agentUrl: "wss://tierplan.example.com/agent/connect",
     generation: 4,
     image: "ghcr.io/ianglennon/tierplan-agent:0.1.0",
-    joinToken: "cmjt_E1_s3cr3tvalue",
+    joinToken: "tpjt_E1_s3cr3tvalue",
     manualCleanup: { standalone: " docker rm -f tierplan-agent", swarm: " docker service rm x" },
     secretName: "tierplan-agent-token-g4",
     standalone: { command: " docker run x", composeFile: "services: {}\n" },

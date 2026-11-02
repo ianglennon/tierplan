@@ -37,11 +37,11 @@ func TestImageRemoveAndUntag(t *testing.T) {
 	pullImage(t, ctx, raw, "busybox:1")
 
 	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
-	repo := "cm-rm-" + suffix + "/app"
+	repo := "tp-rm-" + suffix + "/app"
 	tags := []string{repo + ":1", repo + ":2", repo + ":3"}
 	// An image of the test's own, made by committing a container, so that removing every
 	// name of it never touches busybox:1, which an engine that is not the test's may keep.
-	seed := "cm-imgseed-" + suffix
+	seed := "tp-imgseed-" + suffix
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: seed, Config: &container.Config{Image: "busybox:1", Cmd: []string{"true"}},
 	}); err != nil {
@@ -98,7 +98,7 @@ func TestImageRemoveAndUntag(t *testing.T) {
 
 	// A container that was created and never started still uses the image: the remove is
 	// refused as a conflict and the image keeps every name.
-	ctr := "cm-imguser-" + suffix
+	ctr := "tp-imguser-" + suffix
 	if _, err := raw.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: ctr, Config: &container.Config{Image: tags[0], Cmd: []string{"true"}},
 	}); err != nil {

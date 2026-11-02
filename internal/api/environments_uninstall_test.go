@@ -292,7 +292,7 @@ func TestTheAgentListGivesTheManualCleanupCommandsWithTheCurrentSecretName(t *te
 	if !strings.Contains(standalone, "docker rm -f tierplan-agent") || !strings.Contains(standalone, "docker volume rm tierplan-agent") {
 		t.Errorf("the standalone cleanup = %q", standalone)
 	}
-	if strings.Contains(swarm+standalone, "cmjt_") {
+	if strings.Contains(swarm+standalone, "tpjt_") {
 		t.Fatal("a cleanup command carries a join token")
 	}
 

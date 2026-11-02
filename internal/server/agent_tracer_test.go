@@ -145,8 +145,8 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 	if created.Kind != "agent" || created.ID == "" {
 		t.Fatalf("created = %+v", created)
 	}
-	if !strings.HasPrefix(created.Install.JoinToken, "cmjt_"+created.ID+"_") {
-		t.Fatalf("join token %q is not cmjt_<envId>_<secret>", created.Install.JoinToken)
+	if !strings.HasPrefix(created.Install.JoinToken, "tpjt_"+created.ID+"_") {
+		t.Fatalf("join token %q is not tpjt_<envId>_<secret>", created.Install.JoinToken)
 	}
 	if want := "wss://" + ts.Listener.Addr().String() + "/agent/connect"; created.Install.AgentURL != want {
 		t.Fatalf("agent URL = %q, want %q", created.Install.AgentURL, want)
@@ -393,7 +393,7 @@ func TestAgentTracerWrongTokenIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Right environment, wrong secret.
-	wrong := "cmjt_" + created.EnvID + "_" + strings.Repeat("A", 43)
+	wrong := "tpjt_" + created.EnvID + "_" + strings.Repeat("A", 43)
 
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{})
 	var out lockedBuffer

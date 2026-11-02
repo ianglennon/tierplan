@@ -460,7 +460,7 @@ func sharedConstraintsMatchPlacement(t *testing.T, f *swarmFix) {
 		for _, c := range tc.constraints {
 			args += " --constraint '" + c + "'"
 		}
-		id := strings.TrimSpace(sh(t, mgr, "docker service create --name cm-"+tc.name+" --mode global --no-resolve-image --detach --stop-grace-period 1s"+args+" "+dockertest.ServiceTestImage+" sleep 3600"))
+		id := strings.TrimSpace(sh(t, mgr, "docker service create --name tp-"+tc.name+" --mode global --no-resolve-image --detach --stop-grace-period 1s"+args+" "+dockertest.ServiceTestImage+" sleep 3600"))
 		expectNames := make([]string, 0, len(tc.want))
 		for _, n := range tc.want {
 			expectNames = append(expectNames, n.Hostname)
@@ -511,7 +511,7 @@ func sharedConstraintsMatchPlacement(t *testing.T, f *swarmFix) {
 	// A constraint nothing meets: the label's name is case sensitive, so Zone is not zone. A replicated task has no
 	// suitable node, and the evaluator agrees that no node meets it.
 	none := []string{"node.labels.Zone==east"}
-	id := strings.TrimSpace(sh(t, mgr, "docker service create --name cm-none --replicas 1 --no-resolve-image --detach --constraint 'node.labels.Zone==east' "+dockertest.ServiceTestImage+" sleep 3600"))
+	id := strings.TrimSpace(sh(t, mgr, "docker service create --name tp-none --replicas 1 --no-resolve-image --detach --constraint 'node.labels.Zone==east' "+dockertest.ServiceTestImage+" sleep 3600"))
 	code, body := f.srv.Do(http.MethodGet, base+"/placement?serviceId="+id, nil)
 	var pl struct {
 		Nodes []struct {

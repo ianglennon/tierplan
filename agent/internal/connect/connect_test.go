@@ -37,7 +37,7 @@ import (
 
 func fakeEngine(t *testing.T, h http.HandlerFunc) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "cmag")
+	dir, err := os.MkdirTemp("", "tpag")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func fakeEngine(t *testing.T, h http.HandlerFunc) string {
 func TestRunRefusesAnAddressThatIsNotAWebSocketURL(t *testing.T) {
 	for _, bad := range []string{"", "https://tierplan.example/agent/connect", "not a url", "wss://"} {
 		err := Run(context.Background(), Config{URL: bad, JoinToken: "x"})
-		if err == nil || strings.Contains(err.Error(), "cmjt") {
+		if err == nil || strings.Contains(err.Error(), "tpjt") {
 			t.Errorf("Run(%q) = %v, want an error about the address", bad, err)
 		}
 	}
@@ -89,13 +89,13 @@ func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.
 	rt := &recordingTransport{}
 	ctx := testsupport.Context(t)
 	err := Run(ctx, Config{
-		URL: "ws://tierplan.example/agent/connect", JoinToken: "cmjt_tok",
+		URL: "ws://tierplan.example/agent/connect", JoinToken: "tpjt_tok",
 		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_ALLOW_INSECURE") || !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
 		t.Fatalf("Run = %v, want an error naming TIERPLAN_AGENT_URL and TIERPLAN_AGENT_ALLOW_INSECURE", err)
 	}
-	if strings.Contains(err.Error(), "cmjt_tok") {
+	if strings.Contains(err.Error(), "tpjt_tok") {
 		t.Errorf("the error carries the token: %v", err)
 	}
 	if got := rt.seen(); len(got) != 0 {
@@ -450,10 +450,10 @@ func enrolledState(t *testing.T, dir string) state.State {
 func TestFirstStartEnrolsWithTheTokenAndKeepsItsIdentityOnTheVolume(t *testing.T) {
 	dir := t.TempDir()
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{cert: []byte("issued-cert-der")} })
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
 
 	a, _ := srv.authN(t, 1)
-	if a.Mode != wire.ModeEnrol || a.Token != "cmjt_tok" || len(a.Pub) != ed25519.PublicKeySize || len(a.Cert) != 0 {
+	if a.Mode != wire.ModeEnrol || a.Token != "tpjt_tok" || len(a.Pub) != ed25519.PublicKeySize || len(a.Cert) != 0 {
 		t.Fatalf("first handshake = mode %q token %q pub %d cert %d; want enrol with the token and a key", a.Mode, a.Token, len(a.Pub), len(a.Cert))
 	}
 	srv.heartbeatsAfterWelcome(t, 1) // the identity and the connected marker are written before the first heartbeat
@@ -498,7 +498,7 @@ func TestAnAgentThatLosesItsConnectionReconnectsWithoutTheTokenOrANewKey(t *test
 		}
 		return reply{}
 	})
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
 
 	first, _ := srv.authN(t, 1)
 	second, _ := srv.authN(t, 2)
@@ -514,7 +514,7 @@ func TestWithNoStateDirectoryTheIdentityStaysInMemoryForTheLifeOfTheProcess(t *t
 		}
 		return reply{}
 	})
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok"}, fastEnv())
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok"}, fastEnv())
 	srv.authN(t, 1)
 	second, _ := srv.authN(t, 2)
 	if second.Mode != wire.ModeHello {
@@ -532,7 +532,7 @@ func TestAfterTheWelcomeTheAgentOpensOneControlStreamAndHeartbeats(t *testing.T)
 		http.NotFound(w, r)
 	})
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: sock}, runEnv{
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: sock}, runEnv{
 		now: func() time.Time { return time.UnixMilli(1_700_000_000_123) },
 	})
 	var got []wire.Heartbeat
@@ -557,7 +557,7 @@ func TestAHeartbeatSaysTheEngineIsUnreachableWhenPingFails(t *testing.T) {
 	broken := fakeEngine(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusInternalServerError) })
 	for name, sock := range map[string]string{"no socket": filepath.Join(dir, "none.sock"), "ping answers 500": broken} {
 		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{heartbeatMs: 30} })
-		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", SocketPath: sock}, runEnv{})
+		startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", SocketPath: sock}, runEnv{})
 		if h := testsupport.Await(t, name+": a heartbeat", srv.beats); h.EngineReachable {
 			t.Errorf("%s: heartbeat says the engine is reachable", name)
 		}
@@ -568,7 +568,7 @@ func TestTheAgentIgnoresControlMessagesItDoesNotKnow(t *testing.T) {
 	srv := newFakeServer(t, func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{`{"t":"from-the-future","x":1}`, `not json at all`, `{"t":"heartbeat"}`}}
 	})
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok"}, runEnv{})
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok"}, runEnv{})
 	srv.heartbeatsAfterWelcome(t, 3) // the agent goes on heartbeating after the unknown messages
 	if srv.attempts() != 1 {
 		t.Errorf("the agent reconnected %d times; an unknown control message is not an error", srv.attempts())
@@ -647,13 +647,13 @@ func TestARevokedAgentWithAJoinTokenDiscardsItsIdentityAndEnrolsAgain(t *testing
 	})
 	var logs lockedBuffer
 	startAgent(t, Config{
-		URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	}, fastEnv())
 
 	first, _ := srv.authN(t, 1)
 	second, _ := srv.authN(t, 2)
-	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "cmjt_tok" {
+	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "tpjt_tok" {
 		t.Fatalf("modes = %q then %q (token %q); want hello, refused revoked, then enrol with the token", first.Mode, second.Mode, second.Token)
 	}
 	if bytes.Equal(second.Pub, publicOf(saved.Key)) {
@@ -739,13 +739,13 @@ func TestAnUnknownAgentRefusalWithAJoinTokenDiscardsTheIdentityAndEnrolsAgain(t 
 	})
 	var logs lockedBuffer
 	startAgent(t, Config{
-		URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	}, fastEnv())
 
 	first, _ := srv.authN(t, 1)
 	second, _ := srv.authN(t, 2)
-	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "cmjt_tok" {
+	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "tpjt_tok" {
 		t.Fatalf("modes = %q then %q (token %q); want hello, refused unknown_agent, then enrol with the token", first.Mode, second.Mode, second.Token)
 	}
 	if bytes.Equal(second.Pub, publicOf(saved.Key)) {
@@ -839,7 +839,7 @@ func TestAnEnrolledAgentRefusedAuthRejectedIsToldToStartWithTheNewAddressAndKeep
 // A blocked host is on an administrator's list: its identity is still good and a
 // join token does not help, so the agent keeps both and waits.
 func TestABlockedAgentWaitsTheMaximumLogsTheCodeOnceAndKeepsItsIdentity(t *testing.T) {
-	for _, token := range []string{"", "cmjt_tok"} {
+	for _, token := range []string{"", "tpjt_tok"} {
 		t.Run("token="+token, func(t *testing.T) {
 			dir := t.TempDir()
 			saved := enrolledState(t, dir)
@@ -888,7 +888,7 @@ func TestARevokedAgentWhoseHostIsBlockedEnrolsOnceThenWaitsTheMaximum(t *testing
 	})
 	var logs lockedBuffer
 	sl, err := runUntilSleeps(t, Config{
-		URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
 		SocketPath: filepath.Join(dir, "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
 	}, 4)
 	if err != nil {
@@ -912,7 +912,7 @@ func TestARevokedAgentWhoseHostIsBlockedEnrolsOnceThenWaitsTheMaximum(t *testing
 		t.Errorf("attempt 1 used mode %q, want hello", a.Mode)
 	}
 	for n := 2; n <= 4; n++ {
-		if a, _ := srv.authN(t, n); a.Mode != wire.ModeEnrol || a.Token != "cmjt_tok" {
+		if a, _ := srv.authN(t, n); a.Mode != wire.ModeEnrol || a.Token != "tpjt_tok" {
 			t.Errorf("attempt %d used mode %q, want enrol with the token", n, a.Mode)
 		}
 	}
@@ -937,7 +937,7 @@ func TestAnAgentRevokedRightAfterRejoiningWaitsBeforeEnrollingAgain(t *testing.T
 		return reply{refuse: wire.ReasonRevoked}
 	})
 	sl, err := runUntilSleeps(t, Config{
-		URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
+		URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock"),
 		BackoffMin: time.Second, BackoffMax: 60 * time.Second,
 	}, 5)
 	if err != nil {
@@ -967,11 +967,11 @@ func TestAnExpiredCertificateEnrolsAgainWhenAJoinTokenIsAvailable(t *testing.T) 
 		}
 		return reply{cert: []byte("renewed-cert-der")}
 	})
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", StateDir: dir, SocketPath: filepath.Join(dir, "none.sock")}, fastEnv())
 
 	first, _ := srv.authN(t, 1)
 	second, _ := srv.authN(t, 2)
-	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "cmjt_tok" {
+	if first.Mode != wire.ModeHello || second.Mode != wire.ModeEnrol || second.Token != "tpjt_tok" {
 		t.Fatalf("modes = %q then %q (token %q); want hello, then enrol with the token", first.Mode, second.Mode, second.Token)
 	}
 	srv.heartbeatsAfterWelcome(t, 1)
@@ -1098,7 +1098,7 @@ func TestARefusalOfTheVeryFirstEnrolmentEndsTheAgentSoAWrongTokenIsVisible(t *te
 	srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{refuse: wire.ReasonAuthRejected} })
 	ctx := testsupport.Context(t)
 	err := runWith(ctx, Config{
-		URL: srv.url(), JoinToken: "cmjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
+		URL: srv.url(), JoinToken: "tpjt_wrong", SocketPath: filepath.Join(t.TempDir(), "none.sock"), Log: slog.New(slog.DiscardHandler),
 	}, fastEnv())
 	var re *RefusedError
 	if !errors.As(err, &re) || re.Code != wire.ReasonAuthRejected {
@@ -1117,7 +1117,7 @@ func TestATransientRefusalOfTheFirstEnrolmentIsRetried(t *testing.T) {
 			}
 			return reply{}
 		})
-		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok"}, fastEnv())
+		startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok"}, fastEnv())
 		if a, _ := srv.authN(t, 3); a.Mode != wire.ModeEnrol {
 			t.Errorf("%s: third attempt used mode %q", code, a.Mode)
 		}
@@ -1143,7 +1143,7 @@ func TestARefusalInPlaceOfTheChallengeIsReadAndItsRetryAfterIsHonoured(t *testin
 	}))
 	defer ts.Close()
 	sl, err := runUntilSleeps(t, Config{
-		URL: "ws" + strings.TrimPrefix(ts.URL, "http") + "/agent/connect", JoinToken: "cmjt_tok",
+		URL: "ws" + strings.TrimPrefix(ts.URL, "http") + "/agent/connect", JoinToken: "tpjt_tok",
 		SocketPath: filepath.Join(t.TempDir(), "none.sock"), BackoffMin: time.Second, BackoffMax: 60 * time.Second,
 	}, 2)
 	if err != nil {
@@ -1168,7 +1168,7 @@ func TestTheHandshakeCarriesTheAgentsOwnClockAndTheExporterOfItsDial(t *testing.
 	fixed := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	env := fastEnv()
 	env.now = func() time.Time { return fixed }
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok"}, env)
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok"}, env)
 	a, _ := srv.authN(t, 1)
 	if a.TS != fixed.UnixMilli() {
 		t.Errorf("ts = %d, want the agent's clock %d", a.TS, fixed.UnixMilli())
@@ -1184,7 +1184,7 @@ func TestTheHandshakeReportsTheHostPolicyInTheFacts(t *testing.T) {
 		"read-write, self update":   {false, true},
 	} {
 		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
-		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", ReadOnly: tc.readOnly, SelfUpdate: tc.selfUpdate}, fastEnv())
+		startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", ReadOnly: tc.readOnly, SelfUpdate: tc.selfUpdate}, fastEnv())
 		a, _ := srv.authN(t, 1)
 		if a.Facts.Policy.ReadOnly != tc.readOnly || a.Facts.Policy.SelfUpdate != tc.selfUpdate {
 			t.Errorf("%s: facts.policy = %+v", name, a.Facts.Policy)
@@ -1195,7 +1195,7 @@ func TestTheHandshakeReportsTheHostPolicyInTheFacts(t *testing.T) {
 func TestTheHandshakeReportsThePrivilegedServicesOptIn(t *testing.T) {
 	for name, allow := range map[string]bool{"opted in": true, "not opted in": false} {
 		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
-		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", AllowPrivilegedServices: allow}, fastEnv())
+		startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", AllowPrivilegedServices: allow}, fastEnv())
 		a, _ := srv.authN(t, 1)
 		if a.Facts.Policy.PrivilegedServices != allow {
 			t.Errorf("%s: facts.policy = %+v", name, a.Facts.Policy)
@@ -1210,7 +1210,7 @@ func TestHandshakeReportsHostNet(t *testing.T) {
 		"the route file is a dir":   {t.TempDir(), wire.HostNetUnmounted},
 	} {
 		srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{} })
-		startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", HostRouteFile: tc.path}, fastEnv())
+		startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", HostRouteFile: tc.path}, fastEnv())
 		a, _ := srv.authN(t, 1)
 		if a.Facts.HostNet != tc.want {
 			t.Errorf("%s: facts.hostNet = %q, want %q", name, a.Facts.HostNet, tc.want)
@@ -1236,7 +1236,7 @@ func TestARefusedDockerRequestIsReportedOnTheControlStream(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := newFakeServer(t, func(int, wire.Auth) reply { return reply{dockerRequests: []string{tc.raw}} })
-			startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", SocketPath: sock, ReadOnly: tc.readOnly}, fastEnv())
+			startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", SocketPath: sock, ReadOnly: tc.readOnly}, fastEnv())
 			if got := testsupport.Await(t, "a denied message", srv.denied); got != tc.want {
 				t.Fatalf("denied = %+v, want %+v", got, tc.want)
 			}
@@ -1257,7 +1257,7 @@ func TestAnAllowedRequestSendsNoDeniedMessage(t *testing.T) {
 	srv := newFakeServer(t, func(int, wire.Auth) reply {
 		return reply{dockerRequests: []string{"GET /_ping HTTP/1.1\r\nHost: docker\r\n\r\n"}}
 	})
-	startAgent(t, Config{URL: srv.url(), JoinToken: "cmjt_tok", SocketPath: sock, ReadOnly: true}, fastEnv())
+	startAgent(t, Config{URL: srv.url(), JoinToken: "tpjt_tok", SocketPath: sock, ReadOnly: true}, fastEnv())
 	testsupport.Await(t, "the agent's answer to the Docker request", srv.answered)
 	srv.heartbeatsAfterWelcome(t, 2)
 	select {

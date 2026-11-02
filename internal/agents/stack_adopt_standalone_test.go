@@ -218,7 +218,7 @@ func (f *saFix) networkID(t *testing.T, name string) string {
 //   - reviewed again: nothing is left to change, and a second deploy would touch no container.
 func TestStandaloneAdoptThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const project, volume, network = "legacy", "legacy_data", "legacy_back"
@@ -532,7 +532,7 @@ func (f *saFix) driftNow(t *testing.T, stackID string) (saDrift, string) {
 // TierPlan lists that container, waits for it and leaves no container of the project.
 func TestStandaloneDriftThroughAnAgent(t *testing.T) {
 	f := startSAFix(t, dockertest.RegistryOptions{})
-	image := f.registry + "/cm/app:1"
+	image := f.registry + "/tp/app:1"
 	f.pushBusybox(t, image, nil)
 
 	const name = "sdr"

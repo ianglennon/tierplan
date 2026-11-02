@@ -154,14 +154,14 @@ ${listing}"
 }
 
 # --- standalone: token in the environment, the engine asked for no-new-privileges.
-TOKEN_ENV="cmjt_smoke_ENVSECRET_$$"
+TOKEN_ENV="tpjt_smoke_ENVSECRET_$$"
 run_case standalone "${TOKEN_ENV}" \
   --security-opt no-new-privileges \
   -e "TIERPLAN_AGENT_JOIN_TOKEN=${TOKEN_ENV}"
 
 # --- swarm-like: the token is a root-owned 0400 file on a volume (a Docker
 # secret is mounted that way), and the engine is NOT asked for no-new-privileges.
-TOKEN_FILE="cmjt_smoke_FILESECRET_$$"
+TOKEN_FILE="tpjt_smoke_FILESECRET_$$"
 SECVOL="${NAME}-secret"
 SECBOX="${NAME}-secretbox"
 VOLUMES+=("${SECVOL}")

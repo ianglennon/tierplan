@@ -273,7 +273,7 @@ func (f *fixture) dial(t *testing.T, h hs) *agentConn {
 	tr := authn.Transcript(mode, proto, ch.Nonce, nonce, aud, pubBytes, ekm)
 	auth := wire.Auth{
 		T: wire.TypeAuth, Mode: mode, Proto: proto, AgentVersion: "0.2.0", Aud: aud, Nonce: nonce, TS: time.Now().UnixMilli(),
-		Pub: pubBytes, Token: "cmjt_test", EKM: ekm, Sig: authn.Sign(priv, tr),
+		Pub: pubBytes, Token: "tpjt_test", EKM: ekm, Sig: authn.Sign(priv, tr),
 		Facts: wire.Facts{Hostname: strings.Repeat("h", h.hostBytes), EngineReachable: true},
 	}
 	b, _ := json.Marshal(auth)
@@ -336,7 +336,7 @@ func TestAHandshakeWelcomesTheAgentAndTheServerOpensStreamsToIt(t *testing.T) {
 	}
 
 	// What the verifier saw: the transcript the handler built, never one the agent chose.
-	if got := f.v.last; got.Token != "cmjt_test" || len(got.Transcript) != 32 || got.AgentVersion != "0.2.0" || got.Facts.Hostname != "hhhhh" {
+	if got := f.v.last; got.Token != "tpjt_test" || len(got.Transcript) != 32 || got.AgentVersion != "0.2.0" || got.Facts.Hostname != "hhhhh" {
 		t.Errorf("verifier saw %+v", got)
 	}
 	if !authn.Verify(f.v.last.Pub, f.v.last.Transcript, f.v.last.Sig) {

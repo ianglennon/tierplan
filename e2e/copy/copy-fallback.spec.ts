@@ -10,7 +10,7 @@
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 
 // Copied from web/harness/copy/main.tsx.
-const TOKEN = "cmjt_harness_S3CRET";
+const TOKEN = "tpjt_harness_S3CRET";
 const COMMAND = ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e TIERPLAN_AGENT_URL='wss://tierplan.test/agent/connect' ghcr.io/ianglennon/tierplan-agent:edge`;
 const SENTINEL = "SENTINEL-not-the-command";
 const COPY = "Copy the install command";

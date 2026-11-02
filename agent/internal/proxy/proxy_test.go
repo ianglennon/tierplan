@@ -53,7 +53,7 @@ type fakeSocket struct {
 
 func newFakeSocket(t *testing.T) *fakeSocket {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "cmag")
+	dir, err := os.MkdirTemp("", "tpag")
 	if err != nil {
 		t.Fatal(err)
 	}

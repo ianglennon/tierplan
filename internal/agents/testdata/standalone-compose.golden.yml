@@ -17,7 +17,7 @@ services:
     environment:
       TIERPLAN_AGENT_URL: "wss://example.com/tierplan/agent/connect"
       TIERPLAN_AGENT_PIN: "sha256/P"
-      TIERPLAN_AGENT_JOIN_TOKEN: "cmjt_E_S"
+      TIERPLAN_AGENT_JOIN_TOKEN: "tpjt_E_S"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - tierplan-agent:/var/lib/tierplan-agent
