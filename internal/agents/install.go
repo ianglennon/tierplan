@@ -25,11 +25,11 @@ const (
 	// VolumeName is the named volume that keeps the agent's key, certificate and pins.
 	VolumeName = "tierplan-agent"
 	// SecretPrefix starts the name of every generation of the join token secret.
-	SecretPrefix = "tierplan-agent-token-g"
+	SecretPrefix = "tierplan-agent-token-g" //nolint:gosec // G101: a secret name, not a credential
 
 	stateDir      = "/var/lib/tierplan-agent"
 	dockerSock    = "/var/run/docker.sock"
-	secretTarget  = "tierplan-agent-token"
+	secretTarget  = "tierplan-agent-token" //nolint:gosec // G101: a secret name, not a credential
 	tokenFilePath = "/run/secrets/" + secretTarget
 	labelPair     = "tierplan.agent=true"
 

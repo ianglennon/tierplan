@@ -191,10 +191,10 @@ func TestDropChownsRootOwnedDataEntriesAndLeavesOwnedOnesAlone(t *testing.T) {
 		".=1000:1000",
 		"backups/pre-0003.db=1000:1000",
 		"backups=1000:1000",
-		"tierplan.db-wal=1000:1000",
-		"tierplan.db=1000:1000",
 		"other=1000:1000",
 		"setup-token=1000:1000",
+		"tierplan.db-wal=1000:1000",
+		"tierplan.db=1000:1000",
 		"tls/selfsigned.key=1000:1000",
 	}
 	got := slices.Sorted(slices.Values(r.chowns))

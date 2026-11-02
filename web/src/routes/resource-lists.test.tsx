@@ -290,16 +290,17 @@ describe("containers list", () => {
     expect(headers).toEqual(["", "Name", "State", "Image", "Ports", "Created", "Actions"]);
     const rows = (await screen.findAllByRole("row")).slice(1);
     expect(rows).toHaveLength(3);
-    const first = cellsOf(rows[0] as HTMLElement).slice(1);
+    // The rows sort by name: db, old-job, then tierplan (TierPlan's own container).
+    const first = cellsOf(rows[2] as HTMLElement).slice(1);
     expect(first[0]).toContain("tierplan");
     expect(first[1]).toBe("Running");
     expect(first[2]).toBe("ghcr.io/ianglennon/tierplan:latest");
     expect(first[3]).toBe("0.0.0.0:7480->7480/tcp");
     expect(first[4]).toBe("3 h ago");
     const names = rows.map((r) => cellsOf(r as HTMLElement)[1]);
-    expect(names[0]).toContain("tierplan");
-    expect(names[1]).toContain("db");
-    expect(names[2]).toContain("old-job");
+    expect(names[0]).toContain("db");
+    expect(names[1]).toContain("old-job");
+    expect(names[2]).toContain("tierplan");
     expect(screen.getByText("3 containers")).toBeTruthy();
   });
 
@@ -307,7 +308,8 @@ describe("containers list", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).toContain("TierPlan (this instance)");
+    expect(cellsOf(rows[2] as HTMLElement).slice(1)[0]).toContain("TierPlan (this instance)");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[0]).not.toContain("TierPlan (this instance)");
     expect(cellsOf(rows[1] as HTMLElement).slice(1)[0]).not.toContain("TierPlan (this instance)");
   });
 
@@ -315,12 +317,12 @@ describe("containers list", () => {
     renderAt("/env/e1/containers?group=none");
     await screen.findByText("old-job");
     const rows = screen.getAllByRole("row").slice(1);
-    expect(cellsOf(rows[1] as HTMLElement).slice(1)[1]).toBe("Restarting");
-    const last = cellsOf(rows[2] as HTMLElement).slice(1);
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[1]).toBe("Restarting");
+    const last = cellsOf(rows[1] as HTMLElement).slice(1);
     expect(last[1]).toBe("Exited");
     expect(last[4]).toBe("—");
     expect(last[3]).toBe("—");
-    expect(cellsOf(rows[1] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
+    expect(cellsOf(rows[0] as HTMLElement).slice(1)[3]).toBe("5432/tcp, 5433/tcp");
   });
 
   it("has a checkbox for each row and one for all, a link for each name, and its only other buttons are the closed row action menus (D-56, plan 04-08, 04-10)", async () => {

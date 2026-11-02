@@ -23,7 +23,7 @@ import (
 // tokenSecretPrefix starts the name of every generation of the join token secret the
 // install creates (tierplan-agent-token-g1, g2, ...). Only a secret with this name, in
 // the agent's own service, is removed with it.
-const tokenSecretPrefix = "tierplan-agent-token-g"
+const tokenSecretPrefix = "tierplan-agent-token-g" //nolint:gosec // G101: a secret name, not a credential
 
 // Uninstall removes the agent from its host (D-30). Like an update it only ever acts
 // on what the agent itself is: its own container, the swarm service that container
