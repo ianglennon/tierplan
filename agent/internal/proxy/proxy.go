@@ -144,6 +144,7 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 	lookup := networkLookupOver(transport)
 	volumes := volumeLookupOver(transport)
 	containers := containerLookupOver(transport)
+	swarmInfo := swarmLookupOver(transport)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// Rewrite, unlike Director, drops any X-Forwarded-* the server
@@ -202,13 +203,19 @@ func Handler(socketPath string, policy Policy, onDenied func(method, path, reaso
 		}
 		if kind != BodyNone {
 			// What is forwarded is the rebuilt body, never the bytes the server sent.
-			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, volumes: volumes, ctx: r.Context()})
+			rebuilt, err := validateBody(kind, http.MaxBytesReader(w, r.Body, bodyCap(kind)), bodyEnv{policy: policy, lookup: lookup, volumes: volumes, swarm: swarmInfo, ctx: r.Context()})
 			if err != nil {
 				if errors.Is(err, errVolumeLookup) {
 					// The engine did not answer a volume lookup. That is an engine fault,
 					// not a policy refusal, so it is not reported to onDenied and nothing
 					// is forwarded.
 					writeJSON(w, http.StatusBadGateway, "agent_engine_unreachable: the Docker engine did not answer a volume lookup", false)
+					return
+				}
+				if errors.Is(err, errSwarmLookup) {
+					// The engine did not answer the swarm lookup. An engine fault is never read as
+					// permission: nothing is forwarded.
+					writeJSON(w, http.StatusBadGateway, "agent_engine_unreachable: the Docker engine did not answer a swarm lookup", false)
 					return
 				}
 				if errors.Is(err, errHostPolicy) {
