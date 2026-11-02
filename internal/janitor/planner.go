@@ -185,10 +185,12 @@ func (p Plan) Summary() (containers, networks, images int, estBytes int64, known
 }
 
 // Input is everything Build decides on. Ends are the inspect facts of the containers Candidates
-// named, by container ID.
+// named, by container ID. Networks is the orphan check's judgement of every network, nil when
+// networks were not read: Build then lists none and withholds none.
 type Input struct {
 	Snapshot Snapshot
 	Ends     map[string]ContainerEnd
+	Networks *NetworkReport
 }
 
 // Build says what the janitor would remove at now, and why it leaves the rest. It is pure: the
@@ -208,6 +210,8 @@ type Input struct {
 //  8. finished less than the grace period ago: grace (at exactly the grace period it is removable)
 //  9. its service is gone, and a manager said so: removable (task_service_gone)
 //  10. otherwise: removable (task_beyond_keep)
+//
+// A network is judged by ClassifyNetwork from the orphan check's report.
 //
 // The nodes that did not report are named in the plan and none of their objects is judged.
 func Build(in Input, p Policy, now time.Time) Plan {
@@ -233,9 +237,35 @@ func Build(in Input, p Policy, now time.Time) Plan {
 			plan.NotRemoved = append(plan.NotRemoved, item)
 		}
 	}
+	if in.Networks != nil {
+		addNetworks(&plan, *in.Networks, p, now)
+	}
 	sortItems(plan.Items)
 	sortItems(plan.NotRemoved)
 	return plan
+}
+
+// addNetworks adds the networks of the orphan check to the plan. A report that is not complete
+// withholds every network: the plan says so and names the nodes the check could not read, and no
+// network in it is removable.
+func addNetworks(plan *Plan, rep NetworkReport, p Policy, now time.Time) {
+	for _, row := range rep.Rows {
+		item, listed := ClassifyNetwork(row, rep.Complete, p, now)
+		switch {
+		case !listed:
+		case item.Class == ClassRemovable:
+			plan.Items = append(plan.Items, item)
+		default:
+			plan.NotRemoved = append(plan.NotRemoved, item)
+		}
+	}
+	if rep.Complete {
+		return
+	}
+	plan.NetworksWithheld = true
+	plan.WithheldNodes = append(plan.WithheldNodes, rep.WithheldNodes...)
+	slices.Sort(plan.WithheldNodes)
+	plan.WithheldNodes = slices.Compact(plan.WithheldNodes)
 }
 
 // sortItems puts items in the order a plan promises: kind (containers, networks, images), then

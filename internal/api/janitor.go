@@ -40,6 +40,9 @@ type JanitorDeps struct {
 	Runner *janitor.Runner
 	// Runs reads the record of the runs. The server gives the Runner and the routes the same store.
 	Runs janitor.RunStore
+	// AddressSpaces is the orphan check the preview judges networks by, the one the Address space
+	// page lists them with. Nil means the preview lists no network.
+	AddressSpaces *envs.AddressSpaces
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -52,6 +55,17 @@ func (d JanitorDeps) now() time.Time {
 		return d.Now()
 	}
 	return time.Now()
+}
+
+// networks is the janitor's way to judge networks, nil when the deps have no orphan check.
+func (d JanitorDeps) networks() janitor.Networks {
+	if d.AddressSpaces == nil {
+		return nil
+	}
+	return NewJanitorNetworks(AddressSpaceDeps{
+		AddressSpaces: d.AddressSpaces, Aggregator: d.Aggregator, Clusters: d.Clusters, Store: d.Store, Audit: d.Audit,
+		Checker: d.Checker, Now: d.Now, Log: d.log(),
+	})
 }
 
 // log is the deps' logger.

@@ -439,3 +439,113 @@ func TestRecheckIsFresh(t *testing.T) {
 	as.ForgetOrphans(envID)
 	wantRows(t, orphans(t, as, envID))
 }
+
+// Judge (plan 11-08, JAN-04): every network of the environment, whatever its class, from a fresh read.
+
+func judgeLines(rep JudgeReport) []string {
+	out := []string{}
+	for _, r := range rep.Rows {
+		line := fmt.Sprintf("%s@%s=%s", r.Name, r.Node, r.Class)
+		if r.KeptByLabel {
+			line += "+label"
+		}
+		if r.KeptByRow {
+			line += "+row"
+		}
+		out = append(out, line)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestJudgeReportsEveryClass(t *testing.T) {
+	r, envID, as := standaloneOrphans(t, func(now time.Time) []dockertest.FakeNetwork {
+		return []dockertest.FakeNetwork{
+			oldNet(dockertest.FakeNetwork{ID: "br0", Name: "bridge", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "k1", Name: "kept_label", Driver: "bridge", Scope: "local", Labels: map[string]string{"tierplan.keep": "true"}}),
+			oldNet(dockertest.FakeNetwork{ID: "k2", Name: "kept_row", Driver: "bridge", Scope: "local"}),
+			oldNet(dockertest.FakeNetwork{ID: "o1", Name: "shop_default", Driver: "bridge", Scope: "local", Labels: map[string]string{"com.docker.compose.project": "shop"}}),
+			oldNet(dockertest.FakeNetwork{ID: "u1", Name: "loose", Driver: "bridge", Scope: "local"}),
+			{ID: "g1", Name: "new", Driver: "bridge", Scope: "local", Created: now.Add(-time.Hour)},
+		}
+	})
+	agg, _, err := r.agg.Snapshot(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Q.InsertNetworkKeep(testsupport.Context(t), sqlc.InsertNetworkKeepParams{
+		EnvID: envID, NodeID: agg.Networks[0].NodeID, Name: "kept_row", KeptBy: "u1", KeptAt: orphanEpoch.UnixNano(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := as.Judge(testsupport.Context(t), envID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	want := []string{
+		"bridge@edge-1=excluded", "kept_label@edge-1=kept+label", "kept_row@edge-1=kept+row", "loose@edge-1=unused",
+		"new@edge-1=grace", "shop_default@edge-1=orphaned",
+	}
+	if got := judgeLines(rep); !slices.Equal(got, want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+	if !rep.Complete || len(rep.WithheldNodes) != 0 || len(rep.WithheldStacks) != 0 || rep.ManagerMissing {
+		t.Errorf("report = %+v, want a complete check with nothing withheld", rep)
+	}
+	for _, row := range rep.Rows {
+		if row.Name == "shop_default" && (row.FormerOwner != "shop" || row.FormerOwnerKind != "project" || row.IdleSince.IsZero()) {
+			t.Errorf("orphaned row = %+v, want the former project shop and when it went idle", row.OrphanRow)
+		}
+	}
+	// Judging is not listing: it neither reads nor fills the report Orphans keeps.
+	e := as.entry(envID)
+	e.omu.Lock()
+	cached := e.haveOrphans
+	e.omu.Unlock()
+	if cached {
+		t.Error("Judge filled the cache of the orphan list")
+	}
+}
+
+func TestJudgeWithheldWhileANodeIsOut(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i != 4 {
+			c.Networks = []dockertest.FakeNetwork{
+				oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"}),
+				oldNet(dockertest.FakeNetwork{ID: "br", Name: "bridge", Driver: "bridge", Scope: "local"}),
+			}
+		}
+	})
+	f.kick(t, f.w)
+	if err := f.c.Refresh(testsupport.Context(t), f.env.ID); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := as.Judge(testsupport.Context(t), f.env.ID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	if rep.Complete || !slices.Equal(rep.WithheldNodes, []string{"wrk-1"}) {
+		t.Fatalf("report = %+v, want the check incomplete and wrk-1 named", rep)
+	}
+	if got := judgeLines(rep); !slices.Contains(got, "loose@Cluster=cant_tell") || slices.Contains(got, "loose@Cluster=unused") {
+		t.Errorf("rows = %v, want the swarm network held back as cant_tell", got)
+	}
+}
+
+func TestJudgeManagerMissing(t *testing.T) {
+	f, as := fanOrphans(t, func(i int, c *dockertest.FakeConfig) {
+		if i != 4 {
+			c.Networks = []dockertest.FakeNetwork{oldNet(dockertest.FakeNetwork{ID: "n-loose", Name: "loose", Driver: "overlay", Scope: "swarm"})}
+		}
+	})
+	for _, m := range f.m {
+		m.fake.LoseQuorum()
+	}
+	rep, err := as.Judge(testsupport.Context(t), f.env.ID)
+	if err != nil {
+		t.Fatalf("Judge: %v", err)
+	}
+	if rep.Complete || !rep.ManagerMissing || len(rep.WithheldNodes) != 0 {
+		t.Errorf("report = %+v, want a missing manager and no node named", rep)
+	}
+}

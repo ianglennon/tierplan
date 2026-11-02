@@ -102,7 +102,7 @@ func (s *AddressSpaces) Orphans(ctx context.Context, envID string) (OrphanReport
 	}
 	e.omu.Unlock()
 
-	rep, err := s.judge(ctx, envID, now, nil)
+	rep, _, err := s.judge(ctx, envID, now, nil)
 	if err != nil {
 		return OrphanReport{}, err
 	}
@@ -119,16 +119,74 @@ func (s *AddressSpaces) Orphans(ctx context.Context, envID string) (OrphanReport
 	return cloneReport(rep), nil
 }
 
+// JudgedRow is one network the orphan check judged, whatever its class, with why a kept network
+// is kept: by the label on it, by a keep row a person made, or both.
+type JudgedRow struct {
+	OrphanRow
+	KeptByLabel, KeptByRow bool
+}
+
+// JudgeReport is every network of an environment judged afresh: all of them, whatever the class,
+// where an OrphanReport lists only the three a person is shown.
+type JudgeReport struct {
+	// Rows are all the networks judged, in the order the engines listed them.
+	Rows []JudgedRow
+	// WithheldNodes names the nodes that did not report and WithheldStacks the stacks that did not
+	// load. ManagerMissing is true when a swarm's managers did not answer, or its services could not
+	// be read. All are empty when Complete is true.
+	WithheldNodes, WithheldStacks []string
+	ManagerMissing                bool
+	// Complete is true when every node reported, on a swarm a manager answered and its services were
+	// read: the check saw everything a verdict on a network needs.
+	Complete bool
+}
+
+// judgeMeta is what a check learned beyond the report it lists: the reasons a verdict could be
+// withheld, whether or not a listed network was withheld by them.
+type judgeMeta struct {
+	missing        []string
+	managerMissing bool
+	workComplete   bool
+}
+
+// Judge judges every network of an environment from a fresh read and answers all of them. It
+// never reads or fills the cache of Orphans, so it is what a caller that must not act on an old
+// picture asks. It stamps the networks it sees in use, as every check does, so the grace clock
+// keeps running.
+func (s *AddressSpaces) Judge(ctx context.Context, envID string) (JudgeReport, error) {
+	e := s.entry(envID)
+	e.oread.Lock()
+	defer e.oread.Unlock()
+
+	var rows []JudgedRow
+	rep, meta, err := s.judge(ctx, envID, s.now(), func(r JudgedRow) { rows = append(rows, r) })
+	if err != nil {
+		return JudgeReport{}, err
+	}
+	out := JudgeReport{
+		Rows: rows, WithheldNodes: []string{}, WithheldStacks: slices.Clone(rep.WithheldStacks),
+		Complete: rep.Complete && meta.workComplete,
+	}
+	if out.Rows == nil {
+		out.Rows = []JudgedRow{}
+	}
+	if !out.Complete {
+		out.WithheldNodes = slices.Clone(meta.missing)
+		out.ManagerMissing = meta.managerMissing
+	}
+	return out, nil
+}
+
 // judge makes one orphan check. observe, when set, is called for every network the check judged
 // whatever its class, so a caller can ask about one network that Orphans would not list.
-func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, observe func(OrphanRow, netspace.Class)) (OrphanReport, error) {
+func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, observe func(JudgedRow)) (OrphanReport, judgeMeta, error) {
 	usage, agg, err := ResolveUsage(ctx, s.agg, s.clusters, envID)
 	if err != nil {
-		return OrphanReport{}, err
+		return OrphanReport{}, judgeMeta{}, err
 	}
 	seenRows, err := s.svc.st.RQ.ListNetworkSeen(ctx, envID)
 	if err != nil {
-		return OrphanReport{}, fmt.Errorf("read when networks were last in use: %w", err)
+		return OrphanReport{}, judgeMeta{}, fmt.Errorf("read when networks were last in use: %w", err)
 	}
 	seen := make(map[NetKey]sqlc.NetworkSeen, len(seenRows))
 	for _, r := range seenRows {
@@ -137,7 +195,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 
 	keepRows, err := s.svc.st.RQ.ListNetworkKeeps(ctx, envID)
 	if err != nil {
-		return OrphanReport{}, fmt.Errorf("read the networks kept from the orphan list: %w", err)
+		return OrphanReport{}, judgeMeta{}, fmt.Errorf("read the networks kept from the orphan list: %w", err)
 	}
 	keeps := make(map[NetKey]bool, len(keepRows))
 	for _, k := range keepRows {
@@ -145,7 +203,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 	}
 	sf, err := s.stackFacts(ctx, envID)
 	if err != nil {
-		return OrphanReport{}, err
+		return OrphanReport{}, judgeMeta{}, err
 	}
 	work := s.workloads(ctx, envID, agg, usage)
 	targets := map[string]bool{}
@@ -213,7 +271,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 			IdleSince: idle, IdleFromSeen: in.LastInUse.After(in.Created),
 		}
 		if observe != nil {
-			observe(orow, class)
+			observe(JudgedRow{OrphanRow: orow, KeptByLabel: in.KeepLabel, KeptByRow: in.KeepRow})
 		}
 		switch class {
 		case netspace.ClassOrphaned, netspace.ClassUnused, netspace.ClassCantTell:
@@ -238,7 +296,11 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 	}
 	sortOrphans(rep.Rows)
 	s.noteSeen(ctx, envID, now, stamps, seen, complete)
-	return rep, nil
+	meta := judgeMeta{
+		missing: slices.Clone(usage.Missing), workComplete: work.complete,
+		managerMissing: usage.Swarm && (!usage.ManagerRead || !work.complete),
+	}
+	return rep, meta, nil
 }
 
 // ErrNetworkGone is Recheck's answer for a network no node that reported holds, when every node
@@ -265,14 +327,14 @@ func (s *AddressSpaces) Recheck(ctx context.Context, envID, networkID, nodeID st
 	defer e.oread.Unlock()
 
 	var found []OrphanRow
-	rep, err := s.judge(ctx, envID, s.now(), func(r OrphanRow, _ netspace.Class) {
+	rep, _, err := s.judge(ctx, envID, s.now(), func(r JudgedRow) {
 		if r.NetworkID != networkID {
 			return
 		}
 		if r.Scope != dockerx.ScopeSwarm && nodeID != "" && r.NodeID != nodeID {
 			return
 		}
-		found = append(found, r)
+		found = append(found, r.OrphanRow)
 	})
 	if err != nil {
 		return OrphanRow{}, "", err

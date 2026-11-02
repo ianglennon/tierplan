@@ -46,6 +46,9 @@ type Runner struct {
 	// Store keeps the record of the runs. It is required: a run is on record before it removes
 	// anything, so a Runner with no Store starts nothing.
 	Store RunStore
+	// Networks judges and removes networks, after the run's containers are gone. Nil means the run
+	// removes no network.
+	Networks Networks
 	// Audit receives the one summary row of each finished run. Nil writes none.
 	Audit AuditSink
 	// Log receives what a run could not tell its job. Nil means slog.Default().
@@ -84,6 +87,9 @@ type RunRequest struct {
 	// Owner owns the job: the person for Clean now, system:janitor:{envID} for a scheduled run,
 	// so the cap of running jobs of one owner never blocks the instance.
 	Owner string
+	// Principal is who the run removes networks as, which is whose name the network audit rows
+	// carry: the user for Clean now, rbac.System(SystemActor) for the schedule. Nil means the system.
+	Principal *rbac.Principal
 	// Ticked are the items a person ticked in the preview. Only those that are removable on the
 	// fresh plan are removed.
 	Ticked []ItemRef
@@ -240,6 +246,13 @@ type runState struct {
 	noNode        bool
 	reachedTheEnd bool
 	cut           bool
+	// pol is the policy the run judged by, nodeNames the names of the nodes the first read saw, by
+	// ID, and netRows the networks the run may remove, by the ID of their item.
+	pol       Policy
+	nodeNames map[string]string
+	netRows   map[string]NetworkRow
+	// netsUnread is true when the networks could not be judged, which leaves the run partial.
+	netsUnread bool
 }
 
 // begin is the one place a run starts. It gives the run on record its job.
@@ -291,7 +304,7 @@ func (s *runState) end(r *Runner, req RunRequest) {
 		run.State, run.Reason = StateFailed, ReasonRunFailed
 	case s.noNode:
 		run.State, run.Reason = StateSkipped, ReasonNoNodeReporting
-	case s.counts.Failed > 0 || s.counts.SkippedOffline > 0 || s.cut:
+	case s.counts.Failed > 0 || s.counts.SkippedOffline > 0 || s.cut || s.netsUnread:
 		run.State = StatePartial
 	}
 	if s.freedKnown {
@@ -356,23 +369,45 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 	for _, it := range selected {
 		rep.Add(jobs.ItemSpec{ID: planItemID(it), Label: it.Name, Kind: string(it.Type)})
 	}
+	// The last item to end is finished after the lock is freed, so it is held back until the run
+	// knows it has no more items: a run's stages add their items before the last one ends.
 	var tail func()
-	for i, it := range selected {
-		if ctx.Err() != nil {
-			break // the hub ends the items that were never reached as cancelled
+	removeAll := func(items []Item) {
+		for i, it := range items {
+			if ctx.Err() != nil {
+				break // the hub ends the items that were never reached as cancelled
+			}
+			id := planItemID(it)
+			rep.Update(id, func(x *jobs.Item) { x.State = jobs.ItemRunning })
+			out := r.remove(ctx, req, it, run)
+			run.tally(it, out)
+			run.record(r, it, out)
+			result := map[string]string{"nodeId": it.NodeID, "node": it.Node, "ref": it.Ref}
+			fin := func() { rep.Finish(id, out.state, out.code, out.message, result) }
+			if i == len(items)-1 {
+				tail = fin
+				continue
+			}
+			fin()
 		}
-		id := planItemID(it)
-		rep.Update(id, func(x *jobs.Item) { x.State = jobs.ItemRunning })
-		out := r.remove(ctx, req.EnvID, it, run)
-		run.tally(it, out)
-		run.record(r, it, out)
-		result := map[string]string{"nodeId": it.NodeID, "node": it.Node, "ref": it.Ref}
-		fin := func() { rep.Finish(id, out.state, out.code, out.message, result) }
-		if i == len(selected)-1 {
-			tail = fin
-			continue
+	}
+	removeAll(selected)
+	// Networks come after the containers, and are judged afresh then: a network is only orphaned or
+	// unused once the containers that used it are gone (Pitfall 3).
+	if ctx.Err() == nil && !run.noNode {
+		nets, netUnsent := r.planNetworks(ctx, req, run)
+		for _, l := range netUnsent {
+			run.tally(l.item, l.out)
+			run.record(r, l.item, l.out)
 		}
-		fin()
+		for _, it := range nets {
+			rep.Add(jobs.ItemSpec{ID: planItemID(it), Label: it.Name, Kind: string(it.Type)})
+		}
+		if len(nets) > 0 && tail != nil {
+			tail() // the networks' items exist, so the job stays open without it
+			tail = nil
+		}
+		removeAll(nets)
 	}
 	run.reachedTheEnd = true
 	run.cut = ctx.Err() != nil
@@ -402,13 +437,19 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 		}
 		pol = p
 	}
+	run.pol = pol
 	snap, err := r.Engine.Snapshot(ctx, req.EnvID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read the environment: %w", err)
 	}
 	run.offline = make(map[string]string, len(snap.Unreachable))
+	run.nodeNames = make(map[string]string, len(snap.Nodes)+len(snap.Unreachable))
 	for _, n := range snap.Unreachable {
 		run.offline[n.ID] = n.Name
+		run.nodeNames[n.ID] = n.Name
+	}
+	for _, n := range snap.Nodes {
+		run.nodeNames[n.ID] = n.Name
 	}
 	if len(snap.Nodes) == 0 {
 		// Not one node reported, so nothing can be judged and nothing is removed.
@@ -420,9 +461,12 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 	if req.All {
 		return plan.Items, nil, nil
 	}
+	// This stage is the containers'; the networks are the next stage's.
 	ticked := make(map[string]bool, len(req.Ticked))
 	for _, t := range req.Ticked {
-		ticked[t.key()] = true
+		if t.Type != KindNetwork {
+			ticked[t.key()] = true
+		}
 	}
 	var out []Item
 	for _, it := range plan.Items {
@@ -439,7 +483,7 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 		}
 		ticked[t.key()] = false
 		it := absentItem(snap, plan, t)
-		o := outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone.", recorded: OutcomeSkippedProtected}
+		o := noLongerStaleOutcome(t.Type)
 		if _, down := run.offline[t.NodeID]; down {
 			o = offlineOutcome()
 		}
@@ -484,16 +528,27 @@ func offlineOutcome() outcome {
 	return outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "Its node is not connected, so nothing was sent.", recorded: OutcomeSkippedNodeOffline}
 }
 
+// noLongerStaleOutcome is an item that is not what the janitor removes any more: nothing was sent.
+func noLongerStaleOutcome(k Kind) outcome {
+	msg := "It is no longer a stale container, so it was left alone."
+	if k == KindNetwork {
+		msg = "It is no longer an orphaned or unused network, so it was left alone."
+	}
+	return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: msg, recorded: OutcomeSkippedProtected}
+}
+
 // remove removes one item of the plan, once, and says how it ended. An item on a node the run
 // already found not answering is not sent at all.
-func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runState) outcome {
+func (r *Runner) remove(ctx context.Context, req RunRequest, it Item, run *runState) outcome {
 	if _, down := run.offline[it.NodeID]; down {
 		return offlineOutcome()
 	}
 	var err error
 	switch it.Type {
 	case KindContainer:
-		err = r.Engine.RemoveContainer(ctx, envID, it.NodeID, it.Ref)
+		err = r.Engine.RemoveContainer(ctx, req.EnvID, it.NodeID, it.Ref)
+	case KindNetwork:
+		err = r.Networks.Remove(ctx, req.EnvID, run.principal(req), run.netRows[planItemID(it)])
 	default:
 		err = errUnsupported
 	}
@@ -504,7 +559,7 @@ func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runStat
 	case errors.Is(err, ErrGone):
 		return outcome{state: jobs.ItemDone, code: codeGone, message: "It was already gone.", recorded: OutcomeSkippedProtected}
 	case errors.Is(err, ErrNoLongerStale):
-		return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone.", recorded: OutcomeSkippedProtected}
+		return noLongerStaleOutcome(it.Type)
 	case errors.Is(err, ErrInUse):
 		return outcome{state: jobs.ItemFailed, code: codeInUse, message: "The engine says it is in use, so it was left alone.", recorded: OutcomeRefusedInUse}
 	case errors.Is(err, ErrNodeOffline):
@@ -516,8 +571,120 @@ func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runStat
 	if errors.As(err, &coded) && coded.Code != "" {
 		code = coded.Code
 	}
-	r.log().Warn("a janitor run could not remove an item", "environment", envID, "type", it.Type, "node", it.NodeID, "ref", it.Ref, "code", code, "error", err)
-	return outcome{state: jobs.ItemFailed, code: code, message: "It could not be removed.", recorded: OutcomeError}
+	r.log().Warn("a janitor run could not remove an item", "environment", req.EnvID, "type", it.Type, "node", it.NodeID, "ref", it.Ref, "code", code, "error", err)
+	msg := "It could not be removed."
+	if code == CodeInspectTooLarge {
+		msg = "Its details are over 64 KB, too large to save in the audit log first, so it was not removed."
+	}
+	return outcome{state: jobs.ItemFailed, code: code, message: msg, recorded: OutcomeError}
+}
+
+// principal is who the run's network removals are recorded as.
+func (s *runState) principal(req RunRequest) *rbac.Principal {
+	if req.Principal != nil {
+		return req.Principal
+	}
+	return rbac.System(SystemActor)
+}
+
+// planNetworks is the run's second stage: it judges the networks afresh, now that the run's
+// containers are gone, and returns the networks to remove, the ticked ones that are removable now
+// or all of them for a run that was not ticked, in the plan's order and each once. A ticked network
+// that is not removable now is returned as unsent, and nothing is sent for it. The networks are not
+// read at all by a run that ticked none and was not asked for everything.
+func (r *Runner) planNetworks(ctx context.Context, req RunRequest, run *runState) ([]Item, []unsentItem) {
+	if r.Networks == nil {
+		return nil, nil
+	}
+	var tickedNets []ItemRef
+	seen := map[string]bool{}
+	for _, t := range req.Ticked {
+		if t.Type == KindNetwork && !seen[t.key()] {
+			seen[t.key()] = true
+			tickedNets = append(tickedNets, t)
+		}
+	}
+	if !req.All && len(tickedNets) == 0 {
+		return nil, nil
+	}
+	report, err := r.Networks.Report(ctx, req.EnvID)
+	if err != nil {
+		// Nothing can be said of any network, so none is removed and the run says it was cut short.
+		r.log().Warn("a janitor run could not judge the networks", "environment", req.EnvID, "run", run.runID, "error", err)
+		run.netsUnread = true
+		var unsent []unsentItem
+		for _, t := range tickedNets {
+			unsent = append(unsent, unsentItem{
+				item: networkRef(t, run.nodeNames[t.NodeID]),
+				out:  outcome{state: jobs.ItemFailed, code: codePlanFailed, message: "TierPlan could not read the networks, so none was removed.", recorded: OutcomeError},
+			})
+		}
+		return nil, unsent
+	}
+	var plan Plan
+	addNetworks(&plan, report, run.pol, r.clock().Now().UTC())
+	sortItems(plan.Items)
+	sortItems(plan.NotRemoved)
+
+	run.netRows = make(map[string]NetworkRow, len(report.Rows))
+	byRef := make(map[string]NetworkRow, len(report.Rows))
+	for _, row := range report.Rows {
+		byRef[ItemRef{Type: KindNetwork, NodeID: row.NodeID, Ref: row.ID}.key()] = row
+	}
+	withheld := make(map[string]bool, len(report.WithheldNodes))
+	for _, n := range report.WithheldNodes {
+		withheld[n] = true
+	}
+
+	var selected []Item
+	if req.All {
+		selected = plan.Items
+	} else {
+		for _, t := range tickedNets {
+			for _, it := range plan.Items {
+				if (ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}) == t {
+					selected = append(selected, it)
+					seen[t.key()] = false
+				}
+			}
+		}
+		sortItems(selected)
+	}
+	for _, it := range selected {
+		run.netRows[planItemID(it)] = byRef[ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}.key()]
+	}
+
+	var unsent []unsentItem
+	for _, t := range tickedNets {
+		if !seen[t.key()] {
+			continue
+		}
+		item := networkRef(t, run.nodeNames[t.NodeID])
+		for _, it := range plan.NotRemoved {
+			if (ItemRef{Type: it.Type, NodeID: it.NodeID, Ref: it.Ref}) == t {
+				item = it
+			}
+		}
+		if row, ok := byRef[t.key()]; ok {
+			item.Name, item.Node = row.Name, row.Node
+		}
+		out := noLongerStaleOutcome(KindNetwork)
+		_, down := run.offline[t.NodeID]
+		switch {
+		case down, withheld[run.nodeNames[t.NodeID]] && t.NodeID != "":
+			out = offlineOutcome()
+		case item.Reason.Code == ReasonNetworksWithheld:
+			// A node does not answer, so whether anything uses this network is not known.
+			out = outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "A node is not connected, so TierPlan could not tell whether the network is in use. Nothing was sent.", recorded: OutcomeSkippedNodeOffline}
+		}
+		unsent = append(unsent, unsentItem{item: item, out: out})
+	}
+	return selected, unsent
+}
+
+// networkRef is the item a reference to a network stands for when nothing else is known of it.
+func networkRef(ref ItemRef, node string) Item {
+	return Item{Type: KindNetwork, NodeID: ref.NodeID, Node: node, Ref: ref.Ref, Name: ref.Ref, Size: -1}
 }
 
 // tally counts how an item ended.

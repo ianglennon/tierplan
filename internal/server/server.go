@@ -818,9 +818,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
 	// The janitor's Clean now: a run takes the lock the stack operations share and is a job in the same hub.
 	// The policy is the default until the policy store arrives behind the same function.
+	// Networks are judged by the orphan check the Address space page lists with and removed by the code its delete route
+	// calls, so the janitor has one way to judge a network and one way to remove it.
+	addressSpaceDeps := api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log}
 	janitorDeps := api.JanitorDeps{
 		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
-		Clock: bo.janitorClock, Now: time.Now, Log: log,
+		AddressSpaces: addressSpaces, Clock: bo.janitorClock, Now: time.Now, Log: log,
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
 	janitorRuns := &janitor.SQLStore{St: st}
@@ -828,6 +831,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
 		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Store: janitorRuns, Audit: aud, Log: log,
+		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
@@ -894,7 +898,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Agents:        api.AgentsDeps{Agents: agentSvc, Local: envSvc, Live: tunnelHub, Cluster: clusters, Instance: inst, TLSPin: tlsPin, AgentAllowInsecure: cfg.AgentAllowInsecure, Updater: updater, Log: log},
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
-		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
+		AddressSpace:  addressSpaceDeps,
 		Janitor:       janitorDeps,
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},

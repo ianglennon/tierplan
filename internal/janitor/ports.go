@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // The ports of the janitor. Nothing here is a Docker type: the server fills these from the
@@ -183,3 +186,49 @@ func InspectCandidates(ctx context.Context, eng Engine, envID string, refs []Con
 	_ = g.Wait()
 	return out
 }
+
+// NetworkRow is one network the orphan check judged, as the janitor reads it.
+type NetworkRow struct {
+	// ID is the engine's ID of the network and Name its name. NodeID and Node are the node a local
+	// network is on; a swarm-wide network has no node, so NodeID is empty and Node says Cluster.
+	ID, Name, NodeID, Node string
+	// Scope is the engine's scope: local or swarm.
+	Scope string
+	// Class is what the orphan check made of the network.
+	Class netspace.Class
+	// FormerOwner is the stack or compose project the network's labels name, FormerOwnerKind
+	// "stack" or "project"; both are empty for a network with no owner label.
+	FormerOwner, FormerOwnerKind string
+	// KeptByLabel and KeptByRow say why a network of class kept is kept.
+	KeptByLabel, KeptByRow bool
+	// IdleSince is when the network's idle time started.
+	IdleSince time.Time
+}
+
+// NetworkReport is every network of an environment, judged afresh.
+type NetworkReport struct {
+	// Rows are all the networks judged, whatever the class.
+	Rows []NetworkRow
+	// Complete is true when every node reported and, on a swarm, a manager answered: the picture a
+	// verdict on a network needs. While it is false no network is removable.
+	Complete bool
+	// WithheldNodes names the nodes that did not report, WithheldStacks the stacks that did not load.
+	WithheldNodes, WithheldStacks []string
+}
+
+// Networks is how the janitor judges and removes networks. The server implements it with the
+// Address space page's own code, so a network is judged by one check and removed by one path.
+type Networks interface {
+	// Report judges every network of the environment from a fresh read, never from a cache.
+	Report(ctx context.Context, envID string) (NetworkReport, error)
+	// Remove removes one network once, as by: it judges the network again, saves its whole masked
+	// inspect to the audit log, sends one remove and audits it. It answers ErrInUse when the engine
+	// or the fresh judgement finds the network in use, ErrNoLongerStale when it is no longer
+	// orphaned or unused, ErrNodeOffline when a node it needs does not answer, ErrGone when it is not
+	// there, and a *CodedError for any other failure.
+	Remove(ctx context.Context, envID string, by *rbac.Principal, row NetworkRow) error
+}
+
+// CodeInspectTooLarge is the code of a network whose inspect document is too large to save in the
+// audit log first, so it is not removed.
+const CodeInspectTooLarge = "inspect_too_large"

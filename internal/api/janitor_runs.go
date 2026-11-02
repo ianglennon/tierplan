@@ -121,6 +121,9 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 			"an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone and the run records it. " +
 			"An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. " +
 			"A container is removed through the agent of its node, without force and without its volumes. " +
+			"Networks are removed after the containers, each judged again from a fresh read made then and removed by the very code the Address space page's delete uses: " +
+			"the network's whole inspect is saved in the audit log first, one remove is sent, and the audit rows carry the source janitor and the person who started the run. " +
+			"A network the engine says is in use is kept; one that is no longer orphaned or unused is left alone; while a node is not reporting no network is removed. " +
 			"The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxJanitorRunBody,
 	}, rbac.Requirement{Perm: rbac.PermJanitorRun, Scope: rbac.ScopeEnvironment},
@@ -136,7 +139,7 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 			}
 			started, err := d.Runner.Start(ctx, janitor.RunRequest{
 				EnvID: env.ID, EnvName: env.Name, Trigger: janitor.TriggerManual, Actor: p.Name, ActorID: p.ID,
-				Owner: stackJobOwner(p), Ticked: ticked,
+				Owner: stackJobOwner(p), Principal: p, Ticked: ticked,
 			})
 			var locked *janitor.LockedError
 			switch {

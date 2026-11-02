@@ -80,8 +80,10 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 		Description: "Answers which objects the janitor would remove from the environment now, and why it leaves the rest. " +
 			"It reads every node fresh through the agents, judges with the environment's policy, and never writes: nothing is removed, nothing is audited, " +
 			"and it neither takes nor waits for the environment's operation lock, so a deploy is never blocked by a preview. " +
-			"Today it lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) " +
-			"and past the grace period, measured from when the container stopped. A container labelled tierplan.keep=true, one whose task the swarm wants running, " +
+			"It lists the exited swarm task containers beyond the newest the policy keeps for their service slot (their node, for a global service) " +
+			"and past the grace period, measured from when the container stopped, and the networks the Address space page would list as orphaned, whose stack is gone, once they have been idle for the grace period. " +
+			"A network no stack ever owned is listed under notRemoved with the reason opt_in_off_networks until the environment opts in to removing unused networks. " +
+			"While a node is not reporting, or no manager answered, no network is judged: networksWithheld is true, the nodes are named in withheldNodes, and no network is listed as removable. A container labelled tierplan.keep=true, one whose task the swarm wants running, " +
 			"one the planner cannot place, and one it could not inspect are listed under notRemoved with the reason. The nodes that did not report are named in withheldNodes " +
 			"and none of their objects is listed. The server decides what is removable; the client only shows it. " +
 			"Needs environments.read on the environment.",
@@ -92,7 +94,7 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 			if env == nil || d.Aggregator == nil {
 				return nil, huma.Error500InternalServerError("internal error")
 			}
-			body, err := previewJanitor(ctx, d, eng, env.ID)
+			body, err := previewJanitor(ctx, d, eng, d.networks(), env.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -100,17 +102,28 @@ func registerJanitorPreview(r *httpx.Router, d JanitorDeps) {
 		})
 }
 
-// previewJanitor reads the environment, inspects the few containers that need it and builds the
-// plan. The policy is the default until the policy store arrives behind the same call.
-func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, envID string) (JanitorPreviewBody, error) {
+// previewJanitor reads the environment, inspects the few containers that need it, judges the
+// networks and builds the plan. The policy is the default until the policy store arrives behind the
+// same call. nets may be nil, and then no network is listed. A network check that fails withholds
+// every network, as a node that does not answer does.
+func previewJanitor(ctx context.Context, d JanitorDeps, eng janitor.Engine, nets janitor.Networks, envID string) (JanitorPreviewBody, error) {
 	snap, err := eng.Snapshot(ctx, envID)
 	if err != nil {
 		return JanitorPreviewBody{}, snapshotProblem(d.log(), envID, err)
 	}
 	pol := janitor.DefaultPolicy()
 	ends := janitor.InspectCandidates(ctx, eng, envID, janitor.Candidates(snap, pol))
+	in := janitor.Input{Snapshot: snap, Ends: ends}
+	if nets != nil {
+		rep, err := nets.Report(ctx, envID)
+		if err != nil {
+			d.log().Warn("the janitor could not judge the networks of an environment", "environment", envID, "error", err)
+			rep = janitor.NetworkReport{}
+		}
+		in.Networks = &rep
+	}
 	now := d.now()
-	plan := janitor.Build(janitor.Input{Snapshot: snap, Ends: ends}, pol, now)
+	plan := janitor.Build(in, pol, now)
 	return previewBody(plan, now), nil
 }
 
