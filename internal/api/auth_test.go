@@ -415,7 +415,7 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		api.RegisterJanitor(r, api.JanitorDeps{
 			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
 			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns,
-			Runner: &janitor.Runner{Engine: api.NewJanitorEngine(f.agg, addrClusters, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Log: log},
+			Runner: &janitor.Runner{Engine: api.NewJanitorEngine(f.agg, addrClusters, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log},
 		})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{

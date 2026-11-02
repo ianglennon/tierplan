@@ -4,8 +4,10 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
@@ -529,5 +532,193 @@ func TestJanitorRunInUseIsKeptOnce(t *testing.T) {
 	if len(run.Items) != 2 || run.Items[0].Ref != "web-x1" || run.Items[0].Outcome != "refused_in_use" || run.Items[0].Code != "in_use" ||
 		run.Items[1].Ref != "web-x2" || run.Items[1].Outcome != "removed" {
 		t.Fatalf("items = %+v, want web-x1 refused_in_use and web-x2 removed", run.Items)
+	}
+}
+
+// startOn starts the container on the daemon of the node, as someone does at the command line between the preview
+// and the run.
+func startOn(t *testing.T, a *agentConn, id string) {
+	t.Helper()
+	cli := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", a.fake.SocketPath())
+	}}}
+	t.Cleanup(cli.CloseIdleConnections)
+	req, err := http.NewRequestWithContext(testsupport.Context(t), http.MethodPost, "http://docker/containers/"+id+"/start", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		t.Fatalf("starting %s on the daemon: %d", id, resp.StatusCode)
+	}
+}
+
+// runItems summarises a run's items as ref, outcome and code.
+func runItems(run janitorRunRead) []string {
+	var out []string
+	for _, it := range run.Items {
+		out = append(out, it.Ref+" "+it.Outcome+" "+it.Code)
+	}
+	return out
+}
+
+// D-14: a ticked container that was started after the preview is not stale any more. The run does not
+// ask any engine to remove it, records it as skipped_protected no_longer_stale and goes on.
+func TestJanitorRunNoLongerStale(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	startOn(t, s.w, "web-x1")
+	rec, started := s.runJanitor(t, tick(preview.Items[0], preview.Items[1]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	s.awaitRun(t, started.JobID)
+	if n := s.deletesOf("web-x1"); n != 0 {
+		t.Fatalf("the daemon saw %d deletes of web-x1, want none: it runs again", n)
+	}
+	_, run := s.getRun(t, started.RunID)
+	if want := []string{"web-x1 skipped_protected no_longer_stale", "web-x2 removed "}; !slices.Equal(runItems(run), want) {
+		t.Fatalf("items = %v, want %v", runItems(run), want)
+	}
+	if run.Items[0].Name == "" || run.Items[0].Name == "web-x1" {
+		t.Errorf("the skipped item's name = %q, want the container's name from the fresh read", run.Items[0].Name)
+	}
+	if run.State != "completed" || run.Counts.Kept != 1 || run.Counts.RemovedContainers != 1 || run.Counts.Failed != 0 {
+		t.Fatalf("run = %+v, want completed with 1 kept and 1 removed", run)
+	}
+}
+
+// D-16: a container someone else removed in the meantime is not a failure of the run's: the engine says
+// it is not there, and the run records it as gone and counts it as neither a removal nor a failure.
+func TestJanitorRunGone(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), refusing(map[string]dockertest.FakeRefusal{
+		"web-x1": {Status: http.StatusNotFound, Message: "No such container: web-x1"},
+	}))
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0], preview.Items[1]))
+	s.awaitRun(t, started.JobID)
+	_, run := s.getRun(t, started.RunID)
+	if want := []string{"web-x1 skipped_protected gone", "web-x2 removed "}; !slices.Equal(runItems(run), want) {
+		t.Fatalf("items = %v, want %v", runItems(run), want)
+	}
+	if run.State != "completed" || run.Counts.RemovedContainers != 1 || run.Counts.Kept != 0 || run.Counts.Failed != 0 {
+		t.Fatalf("run = %+v, want completed with 1 removed and nothing kept or failed", run)
+	}
+	if n := s.deletesOf("web-x1"); n != 1 {
+		t.Fatalf("the daemon saw %d deletes of web-x1, want one", n)
+	}
+}
+
+// D-08: a node that stops reporting between the preview and the run has its items skipped and named; the other
+// nodes' items are removed, and the run is partial.
+func TestJanitorRunNodeOffline(t *testing.T) {
+	t.Parallel()
+	var y []taskBox
+	for i := range 5 {
+		y = append(y, taskBox{id: "web-y" + string(rune('1'+i)), service: "web", serviceID: "svc-web", slot: "2", state: "exited", ageIdx: i, finishedAgo: 48 * time.Hour})
+	}
+	s := janitorSwarm(t, map[string][]taskBox{"wrk-1": exitedSlot(5), "mgr-1": y}, nil)
+	_, preview := s.previewJanitor(t)
+	if len(preview.Items) != 6 {
+		t.Fatalf("preview items = %+v, want three on each of two nodes", preview.Items)
+	}
+	s.kickWorker(t)
+	rec, started := s.runJanitor(t, tick(preview.Items...))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	s.awaitRun(t, started.JobID)
+	_, run := s.getRun(t, started.RunID)
+	if run.State != "partial" || run.Counts.RemovedContainers != 3 || run.Counts.SkippedOffline != 3 || run.Counts.Failed != 0 {
+		t.Fatalf("run = %+v, want partial with 3 removed and 3 skipped offline", run)
+	}
+	for _, it := range run.Items {
+		onWorker := strings.HasPrefix(it.Ref, "web-x")
+		if onWorker && (it.Outcome != "skipped_node_offline" || it.Code != "node_offline" || it.Node != "wrk-1") {
+			t.Errorf("%s = %+v, want skipped_node_offline on wrk-1", it.Ref, it)
+		}
+		if !onWorker && it.Outcome != "removed" {
+			t.Errorf("%s = %+v, want removed: the other node answered", it.Ref, it)
+		}
+	}
+	if got := s.deletesOf("web-x1") + s.deletesOf("web-x2") + s.deletesOf("web-x3"); got != 0 {
+		t.Fatalf("%d deletes reached the node that did not report, want none", got)
+	}
+}
+
+// janitorAudits are the janitor.cleaned rows of the audit log with the ID of the actor of each.
+func (s *swarmFix) janitorAudits(t *testing.T) ([]auditRowFull, []string) {
+	t.Helper()
+	rows := queryAudits(t, s.st.Read, audit.ActionJanitorCleaned)
+	var actors []string
+	q, err := s.st.Read.QueryContext(testsupport.Context(t), `SELECT actor_type || ':' || actor_id FROM audit_log WHERE action = ? ORDER BY seq`, audit.ActionJanitorCleaned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = q.Close() }()
+	for q.Next() {
+		var a string
+		if err := q.Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		actors = append(actors, a)
+	}
+	if err := q.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return rows, actors
+}
+
+// JAN-06, D-16: a removal that fails is recorded with a code, asked of the engine once and never again, and the run
+// goes on to the next item. The run is partial and its audit row says so.
+func TestJanitorRunErrorNotRetried(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), refusing(map[string]dockertest.FakeRefusal{
+		"web-x1": {Status: http.StatusForbidden, Message: "agent_policy_denied: DELETE /containers/web-x1"},
+		"web-x2": {Status: http.StatusInternalServerError, Message: "the engine could not remove web-x2"},
+	}))
+	_, preview := s.previewJanitor(t)
+	rec, started := s.runJanitor(t, tick(preview.Items...))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	job := s.awaitRun(t, started.JobID)
+	for _, id := range []string{"web-x1", "web-x2", "web-x3"} {
+		if n := s.deletesOf(id); n != 1 {
+			t.Errorf("the daemon saw %d deletes of %s, want exactly one: nothing is retried", n, id)
+		}
+	}
+	_, run := s.getRun(t, started.RunID)
+	want := []string{"web-x1 error agent_policy_denied", "web-x2 error action_failed", "web-x3 removed "}
+	if !slices.Equal(runItems(run), want) {
+		t.Fatalf("items = %v, want %v", runItems(run), want)
+	}
+	if run.State != "partial" || run.Counts.Failed != 2 || run.Counts.RemovedContainers != 1 || run.Counts.Kept != 0 {
+		t.Fatalf("run = %+v, want partial with 2 failed and 1 removed", run)
+	}
+	if job.State != jobs.JobPartial {
+		t.Errorf("job = %s, want partial", job.State)
+	}
+	rows, actors := s.janitorAudits(t)
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %+v, want exactly one janitor.cleaned for one run", rows)
+	}
+	r := rows[0]
+	if r.TargetType != "environment" || r.TargetID != s.env.ID || r.Result != "failure" || actors[0] != "user:id-admin" ||
+		r.Details["run"] != started.RunID || r.Details["trigger"] != "manual" || r.Details["outcome"] != "partial" ||
+		r.Details["failed"] != "2" || r.Details["removed_containers"] != "1" || r.Details["kept"] != "0" {
+		t.Fatalf("audit = %+v actor %v, want the admin's janitor.cleaned on the environment: partial, 2 failed, 1 removed", r, actors)
+	}
+	for k, v := range r.Details {
+		if strings.Contains(k+v, "web-x") {
+			t.Errorf("audit details %s=%s name an item", k, v)
+		}
 	}
 }

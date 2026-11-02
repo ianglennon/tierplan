@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/testsupport"
@@ -34,6 +36,9 @@ type fakeEngine struct {
 	gate    chan struct{}
 	entered chan struct{}
 	once    sync.Once
+
+	// snapErr, when set, is what Snapshot answers.
+	snapErr error
 
 	mu        sync.Mutex
 	removeErr map[string]error
@@ -61,6 +66,9 @@ func (e *fakeEngine) Snapshot(ctx context.Context, _ string) (Snapshot, error) {
 		case <-ctx.Done():
 			return Snapshot{}, ctx.Err()
 		}
+	}
+	if e.snapErr != nil {
+		return Snapshot{}, e.snapErr
 	}
 	return e.snap, nil
 }
@@ -584,5 +592,225 @@ func TestRunnerItemsBatched(t *testing.T) {
 	rs.mu.Unlock()
 	if !slices.Equal(sizes, []int{50, 50, 20}) {
 		t.Fatalf("items were written in batches of %v, want 50, 50 and 20", sizes)
+	}
+}
+
+// auditLog is an AuditSink that keeps what it was given.
+type auditLog struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+}
+
+func (a *auditLog) Record(_ context.Context, e audit.Entry) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.entries = append(a.entries, e)
+	return nil
+}
+
+func (a *auditLog) rows() []audit.Entry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.entries)
+}
+
+// audited gives the runner an audit log it can be asked about.
+func audited(r *Runner) *auditLog {
+	a := &auditLog{}
+	r.Audit = a
+	return a
+}
+
+// finished starts a run, waits for its job and answers the run on record and its items.
+func finished(t *testing.T, run *Runner, hub *jobs.Hub, req RunRequest) (Run, []RunItem) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, items, err := recordOf(run).GetRun(ctx, req.EnvID, started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got, items
+}
+
+// A run that cannot read the environment at all ends failed with the reason failed, removes nothing
+// and has no item, and says so in the audit log (D-16).
+func TestRunnerSnapshotFailure(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	eng.snapErr = errors.New("no manager answered")
+	run, locks, hub := newRunner(t, eng)
+	log := audited(run)
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c1")})
+	if got.State != StateFailed || got.Reason != ReasonRunFailed || got.Counts != (Counts{}) || got.EstBytes != -1 || got.FinishedAt.IsZero() {
+		t.Fatalf("run = %+v, want failed with the reason failed, no counts and an end", got)
+	}
+	if len(items) != 0 || len(eng.removeCalls()) != 0 {
+		t.Fatalf("items = %+v, removals asked = %v, want none of either", items, eng.removeCalls())
+	}
+	if _, held := locks.Held("env-1"); held {
+		t.Fatal("the lock is still held")
+	}
+	rows := log.rows()
+	if len(rows) != 1 || rows[0].Result != audit.ResultFailure || rows[0].Details["outcome"] != StateFailed || rows[0].Details["reason"] != ReasonRunFailed {
+		t.Fatalf("audit = %+v, want one failure row for the failed run", rows)
+	}
+}
+
+// When no node reported there is nothing to judge: the run is skipped with the reason
+// no_node_reporting, which is not a failure (D-16).
+func TestRunnerNoNodeReporting(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	eng.snap = Snapshot{Swarm: true, NotReporting: []string{"n1", "n2"}, Unreachable: []Node{{ID: "n1-id", Name: "n1"}, {ID: "n2-id", Name: "n2"}}, ReadAt: t0}
+	run, locks, hub := newRunner(t, eng)
+	log := audited(run)
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	if got.State != StateSkipped || got.Reason != ReasonNoNodeReporting || got.Counts != (Counts{}) || got.FinishedAt.IsZero() {
+		t.Fatalf("run = %+v, want skipped with the reason no_node_reporting", got)
+	}
+	if len(items) != 0 || len(eng.removeCalls()) != 0 {
+		t.Fatalf("items = %+v, removals asked = %v, want none of either", items, eng.removeCalls())
+	}
+	if _, held := locks.Held("env-1"); held {
+		t.Fatal("the lock is still held")
+	}
+	if rows := log.rows(); len(rows) != 1 || rows[0].Result != audit.ResultSuccess || rows[0].Details["outcome"] != StateSkipped {
+		t.Fatalf("audit = %+v, want one success row for the skipped run", rows)
+	}
+}
+
+// Each finished run leaves exactly one row in the audit log with the keys the audit package pins:
+// the user for Clean now, the system for the schedule, the environment as its target, the counts
+// and no name of any item (AUTH-08, D-16).
+func TestRunnerSummaryAudit(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(7)
+	eng.removeErr["c2"] = ErrInUse
+	run, _, hub := newRunner(t, eng)
+	log := audited(run)
+
+	got, _ := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c1", "c2", "c3")})
+	rows := log.rows()
+	if len(rows) != 1 {
+		t.Fatalf("audit rows = %d, want exactly one for one run", len(rows))
+	}
+	e := rows[0]
+	if e.Action != audit.ActionJanitorCleaned || e.Actor != (audit.Actor{Type: audit.ActorUser, ID: "u1", Name: "Ada"}) ||
+		e.TargetType != "environment" || e.TargetID != "env-1" || e.EnvID != "env-1" || e.Result != audit.ResultSuccess {
+		t.Fatalf("entry = %+v, want janitor.cleaned by the user, on the environment, a success", e)
+	}
+	want := map[string]string{
+		"run": got.ID, "trigger": TriggerManual, "outcome": StateCompleted, "reason": "", "removed_containers": "2", "removed_images": "0",
+		"removed_networks": "0", "kept": "1", "failed": "0", "skipped_offline": "0", "est_bytes": "unknown",
+	}
+	if len(e.Details) != len(want) {
+		t.Errorf("details = %v, want exactly the keys %v", e.Details, want)
+	}
+	for k, v := range want {
+		if e.Details[k] != v {
+			t.Errorf("details[%s] = %q, want %q", k, e.Details[k], v)
+		}
+	}
+	for k, v := range e.Details {
+		if k != "run" && (v == "c1" || v == "c2" || v == "c3" || strings.Contains(v, "task-c") || strings.Contains(v, "web.")) {
+			t.Errorf("details[%s] = %q names an item", k, v)
+		}
+	}
+
+	// The schedule's own run is the system's, and a run that ends partial is a failure row.
+	eng.removeErr["c4"] = errors.New("boom")
+	got, _ = finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	rows = log.rows()
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %d, want one more for the second run", len(rows))
+	}
+	e = rows[1]
+	if e.Actor != (audit.Actor{Type: audit.ActorSystem, ID: "system:janitor", Name: "system:janitor"}) || e.Result != audit.ResultFailure ||
+		e.Details["outcome"] != StatePartial || e.Details["trigger"] != TriggerSchedule || e.Details["failed"] != "1" || e.Details["run"] != got.ID {
+		t.Fatalf("entry = %+v, want the system's janitor.cleaned, a failure, partial with 1 failed", e)
+	}
+}
+
+// A run that is cancelled while it works still writes its final state and its audit row, and frees the
+// lock (Pitfall 7).
+func TestRunnerFinalStateOnCancel(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(7)
+	run, locks, hub := newRunner(t, eng)
+	log := audited(run)
+	jobIDs := make(chan string, 1)
+	eng.onRemove = func(id string) {
+		if id == "c1" {
+			_ = hub.Cancel(<-jobIDs)
+		}
+	}
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c1", "c2", "c3")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobIDs <- started.JobID
+	if _, err := hub.Wait(ctx, started.JobID); err != nil {
+		t.Fatal(err)
+	}
+	got, items, err := recordOf(run).GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StatePartial || got.FinishedAt.IsZero() || got.Counts.RemovedContainers != 1 {
+		t.Fatalf("run = %+v, want partial, ended, with the one removal that happened", got)
+	}
+	if len(items) != 1 || items[0].Ref != "c1" || !slices.Equal(eng.removeCalls(), []string{"c1"}) {
+		t.Fatalf("items = %+v calls = %v, want only c1 attempted", items, eng.removeCalls())
+	}
+	if _, held := locks.Held("env-1"); held {
+		t.Fatal("the lock is still held after a cancelled run")
+	}
+	if rows := log.rows(); len(rows) != 1 || rows[0].Details["outcome"] != StatePartial {
+		t.Fatalf("audit = %+v, want one row for the cancelled run", rows)
+	}
+}
+
+// A ticked item the fresh plan does not remove is on record as skipped_protected no_longer_stale and
+// nothing is sent for it; one on a node that did not report is skipped_node_offline (D-14, D-08).
+func TestRunnerTickedItemsNotOnThePlan(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5) // c4 and c5 are the two newest
+	eng.snap.Unreachable = []Node{{ID: "n2-id", Name: "n2"}}
+	eng.snap.NotReporting = []string{"n2"}
+	run, _, hub := newRunner(t, eng)
+	req := ticked("c1", "c5", "nope")
+	req = append(req, ItemRef{Type: KindContainer, NodeID: "n2-id", Ref: "d1"}, ItemRef{Type: KindContainer, NodeID: "n2-id", Ref: "d1"})
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: req})
+	if !slices.Equal(eng.removeCalls(), []string{"c1"}) {
+		t.Fatalf("the engine was asked to remove %v, want c1 only", eng.removeCalls())
+	}
+	type row struct {
+		ref, name, node string
+		outcome         Outcome
+		code            string
+	}
+	var have []row
+	for _, it := range items {
+		have = append(have, row{it.Ref, it.Name, it.Node, it.Outcome, it.Code})
+	}
+	want := []row{
+		{"c5", "web.1.task-c5", "n1", OutcomeSkippedProtected, codeNoLongerStale},
+		{"nope", "nope", "n1", OutcomeSkippedProtected, codeNoLongerStale},
+		{"d1", "d1", "n2", OutcomeSkippedNodeOffline, codeNodeOffline},
+		{"c1", "web.1.task-c1", "n1", OutcomeRemoved, ""},
+	}
+	if !slices.Equal(have, want) {
+		t.Fatalf("items = %+v, want %+v", have, want)
+	}
+	if got.State != StatePartial || got.Counts != (Counts{RemovedContainers: 1, Kept: 2, SkippedOffline: 1}) {
+		t.Fatalf("run = %+v, want partial with 1 removed, 2 kept and 1 skipped offline", got)
 	}
 }

@@ -119,7 +119,7 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 			"The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. " +
 			"With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: " +
 			"an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone and the run records it. " +
-				"An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. " +
+			"An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. " +
 			"A container is removed through the agent of its node, without force and without its volumes. " +
 			"The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusAccepted, MaxBodyBytes: maxJanitorRunBody,

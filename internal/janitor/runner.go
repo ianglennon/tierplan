@@ -8,11 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
 
+	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
@@ -42,9 +46,19 @@ type Runner struct {
 	// Store keeps the record of the runs. It is required: a run is on record before it removes
 	// anything, so a Runner with no Store starts nothing.
 	Store RunStore
+	// Audit receives the one summary row of each finished run. Nil writes none.
+	Audit AuditSink
 	// Log receives what a run could not tell its job. Nil means slog.Default().
 	Log *slog.Logger
 }
+
+// AuditSink is where a finished run's summary row goes: the audit log's writer.
+type AuditSink interface {
+	Record(ctx context.Context, e audit.Entry) error
+}
+
+// SystemActor is who a scheduled run is in the audit log.
+const SystemActor = "system:janitor"
 
 // ItemRef names an item of a plan by its type, the node it is on and the engine's ID of it. A
 // reference only selects: whether the item is removed is decided again by the run, so a
@@ -133,19 +147,58 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 	})
 	if err != nil {
 		// The job never started, so the run never worked: it is on record as failed.
-		r.endRecord(ctx, Run{ID: runID, State: StateFailed, Reason: ReasonRunFailed, EstBytes: -1})
+		r.endRecord(ctx, req, Run{ID: runID, State: StateFailed, Reason: ReasonRunFailed, EstBytes: -1})
 		release()
 		return Started{}, err
 	}
 	return Started{RunID: runID, JobID: job.ID}, nil
 }
 
-// endRecord finishes a run's record at the current time. A store that fails is logged: whatever the
-// run did has been done by then.
-func (r *Runner) endRecord(ctx context.Context, run Run) {
+// endRecord finishes a run's record at the current time and writes the run's one audit row. A store
+// or an audit log that fails is logged: whatever the run did has been done by then.
+func (r *Runner) endRecord(ctx context.Context, req RunRequest, run Run) {
+	ctx = context.WithoutCancel(ctx)
 	run.FinishedAt = r.clock().Now().UTC()
-	if err := r.Store.FinishRun(context.WithoutCancel(ctx), run); err != nil {
+	if err := r.Store.FinishRun(ctx, run); err != nil {
 		r.log().Error("a janitor run could not be finished on record", "run", run.ID, "error", err)
+	}
+	r.auditRun(ctx, req, run)
+}
+
+// auditRun writes the summary row of a finished run (AUTH-08, D-16): who started it, what it
+// counted and how it ended, and no name of any item. A scheduled run is the system's.
+func (r *Runner) auditRun(ctx context.Context, req RunRequest, run Run) {
+	if r.Audit == nil {
+		return
+	}
+	actor := audit.Actor{Type: audit.ActorUser, ID: req.ActorID, Name: req.Actor}
+	if actor.ID == "" {
+		actor.ID = req.Actor
+	}
+	if req.Trigger == TriggerSchedule {
+		actor = rbac.System(SystemActor).AuditActor()
+	}
+	result := audit.ResultSuccess
+	if run.State == StatePartial || run.State == StateFailed {
+		result = audit.ResultFailure
+	}
+	est := "unknown"
+	if run.EstBytes >= 0 {
+		est = strconv.FormatInt(run.EstBytes, 10)
+	}
+	c := run.Counts
+	err := r.Audit.Record(ctx, audit.Entry{
+		Actor: actor, Action: audit.ActionJanitorCleaned, TargetType: "environment", TargetID: req.EnvID, EnvID: req.EnvID,
+		Result: result, Reason: run.Reason,
+		Details: map[string]string{
+			"run": run.ID, "trigger": req.Trigger, "outcome": run.State, "reason": run.Reason,
+			"removed_containers": strconv.Itoa(c.RemovedContainers), "removed_images": strconv.Itoa(c.RemovedImages),
+			"removed_networks": strconv.Itoa(c.RemovedNetworks), "kept": strconv.Itoa(c.Kept), "failed": strconv.Itoa(c.Failed),
+			"skipped_offline": strconv.Itoa(c.SkippedOffline), "est_bytes": est,
+		},
+	})
+	if err != nil {
+		r.log().Error("a janitor run could not be written to the audit log", "run", run.ID, "error", err)
 	}
 }
 
@@ -185,6 +238,7 @@ type runState struct {
 	seq           int
 	buf           []RunItem
 	planFailed    bool
+	noNode        bool
 	reachedTheEnd bool
 	cut           bool
 }
@@ -228,20 +282,23 @@ func (s *runState) flush(r *Runner) {
 
 // end is the one place a run ends, deferred so that it runs however the run ends. It records the
 // items still waiting and the run's final state: completed, partial when an item errored, a node's
-// items were skipped or the run was cut short, or failed when it could not do its work.
+// items were skipped or the run was cut short, skipped when no node reported, or failed when it could
+// not do its work.
 func (s *runState) end(r *Runner, req RunRequest) {
 	s.flush(r)
 	run := Run{ID: s.runID, State: StateCompleted, Counts: s.counts, EstBytes: -1}
 	switch {
 	case s.planFailed || !s.reachedTheEnd:
 		run.State, run.Reason = StateFailed, ReasonRunFailed
+	case s.noNode:
+		run.State, run.Reason = StateSkipped, ReasonNoNodeReporting
 	case s.counts.Failed > 0 || s.counts.SkippedOffline > 0 || s.cut:
 		run.State = StatePartial
 	}
 	if s.freedKnown {
 		run.EstBytes = s.freed
 	}
-	r.endRecord(s.ctx, run)
+	r.endRecord(s.ctx, req, run)
 	r.log().Info("a janitor run ended", "environment", req.EnvID, "run", s.runID, "state", run.State,
 		"removed", s.counts.RemovedContainers+s.counts.RemovedImages+s.counts.RemovedNetworks, "gone", s.gone,
 		"kept", s.counts.Kept, "skipped_offline", s.counts.SkippedOffline, "failed", s.counts.Failed)
@@ -354,6 +411,11 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 	for _, n := range snap.Unreachable {
 		run.offline[n.ID] = n.Name
 	}
+	if len(snap.Nodes) == 0 {
+		// Not one node reported, so nothing can be judged and nothing is removed.
+		run.noNode = true
+		return nil, nil, nil
+	}
 	ends := InspectCandidates(ctx, r.Engine, req.EnvID, Candidates(snap, pol))
 	plan := Build(Input{Snapshot: snap, Ends: ends}, pol, r.clock().Now().UTC())
 	if req.All {
@@ -400,7 +462,7 @@ func absentItem(snap Snapshot, plan Plan, ref ItemRef) Item {
 	if ref.Type == KindContainer {
 		for _, c := range snap.Containers {
 			if c.ID == ref.Ref && c.NodeID == ref.NodeID {
-				it.Name, it.Node = c.Name, c.Node
+				it.Name, it.Node = strings.TrimPrefix(c.Name, "/"), c.Node
 				return it
 			}
 		}
