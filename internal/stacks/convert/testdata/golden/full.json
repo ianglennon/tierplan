@@ -8,8 +8,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-full",
-        "com.docker.stack.namespace": "full"
+        "com.docker.stack.namespace": "full",
+        "tierplan.stack.id": "id-full"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -23,8 +23,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-full",
-        "com.docker.stack.namespace": "full"
+        "com.docker.stack.namespace": "full",
+        "tierplan.stack.id": "id-full"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -51,16 +51,16 @@
       "Spec": {
         "Name": "full_plain",
         "Labels": {
-          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "busybox:1",
-          "com.docker.stack.namespace": "full"
+          "com.docker.stack.namespace": "full",
+          "tierplan.stack.id": "id-full"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "busybox:1",
             "Labels": {
-              "tierplan.stack.id": "id-full",
-              "com.docker.stack.namespace": "full"
+              "com.docker.stack.namespace": "full",
+              "tierplan.stack.id": "id-full"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -95,18 +95,18 @@
       "Spec": {
         "Name": "full_web",
         "Labels": {
-          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "nginx:1.27-alpine",
           "com.docker.stack.namespace": "full",
-          "team": "web"
+          "team": "web",
+          "tierplan.stack.id": "id-full"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "nginx:1.27-alpine",
             "Labels": {
-              "tierplan.stack.id": "id-full",
               "com.docker.stack.namespace": "full",
-              "tier": "front"
+              "tier": "front",
+              "tierplan.stack.id": "id-full"
             },
             "Command": [
               "/docker-entrypoint.sh"
@@ -187,16 +187,16 @@
       "Spec": {
         "Name": "full_worker",
         "Labels": {
-          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "registry.example.com/worker:3",
-          "com.docker.stack.namespace": "full"
+          "com.docker.stack.namespace": "full",
+          "tierplan.stack.id": "id-full"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "registry.example.com/worker:3",
             "Labels": {
-              "tierplan.stack.id": "id-full",
-              "com.docker.stack.namespace": "full"
+              "com.docker.stack.namespace": "full",
+              "tierplan.stack.id": "id-full"
             },
             "Env": [
               "KEEP=1",

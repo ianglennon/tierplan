@@ -73,7 +73,7 @@ import { RollbackDialog } from "@/features/services/rollback-dialog";
 import { RollbackMenuItem } from "@/features/services/rollback-menu-item";
 import { ScaleDialog, type ScaledService } from "@/features/services/scale-dialog";
 import { ServiceStateCell } from "@/features/services/service-state-cell";
-import { tierplanStackIdOf, StackLink } from "@/features/stacks/stack-link";
+import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";

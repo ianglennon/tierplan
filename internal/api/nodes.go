@@ -71,7 +71,7 @@ type NodeItem struct {
 	Hostname        string  `json:"hostname" doc:"The node's host name"`
 	Role            string  `json:"role" enum:"manager,worker" doc:"The node's role"`
 	Leader          bool    `json:"leader" doc:"True for the manager that leads the swarm"`
-	RunsTierPlan     bool    `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
+	RunsTierPlan    bool    `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
 	State           string  `json:"state" doc:"The swarm's word for the node: ready, down, disconnected or unknown"`
 	Availability    string  `json:"availability" enum:"active,pause,drain" doc:"What the node's spec lets the swarm do with it"`
 	Reachability    string  `json:"reachability" doc:"A manager's reachability (reachable, unreachable or unknown); empty for a worker"`
@@ -139,7 +139,7 @@ type NodeDetailBody struct {
 	Hostname      string            `json:"hostname" doc:"The node's host name"`
 	Role          string            `json:"role" enum:"manager,worker" doc:"The node's role"`
 	Leader        bool              `json:"leader" doc:"True for the manager that leads the swarm"`
-	RunsTierPlan   bool              `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
+	RunsTierPlan  bool              `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
 	State         string            `json:"state" doc:"The swarm's word for the node: ready, down, disconnected or unknown"`
 	Availability  string            `json:"availability" enum:"active,pause,drain" doc:"What the node's spec lets the swarm do with it"`
 	Reachability  string            `json:"reachability" doc:"A manager's reachability (reachable, unreachable or unknown); empty for a worker"`
@@ -543,7 +543,7 @@ func getNode(ctx context.Context, d NodesDeps, envID, nodeID string) (NodeDetail
 	b := NodeDetailBody{
 		ID: n.ID, Version: n.Version, Hostname: cleanTaskText(n.Hostname), Role: n.Role, Leader: n.Leader,
 		RunsTierPlan: n.ID == tierplanNode(ctx, d, envID, targets),
-		State:       n.State, Availability: n.Availability, Reachability: n.Reachability, Address: n.Address, ManagerAddr: n.ManagerAddr,
+		State:        n.State, Availability: n.Availability, Reachability: n.Reachability, Address: n.Address, ManagerAddr: n.ManagerAddr,
 		EngineVersion: n.EngineVersion, OS: n.OS, Arch: n.Arch, Cpus: float64(n.NanoCPUs) / 1e9, MemoryBytes: n.MemoryBytes,
 		Labels: n.Labels, EngineLabels: n.EngineLabels, CreatedAt: rfc3339(n.CreatedAt), UpdatedAt: rfc3339(n.UpdatedAt),
 		Agent: NodeAgentBody{Reporting: reporting}, TargetNodeID: ref.ID,

@@ -8,8 +8,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-jobs",
-        "com.docker.stack.namespace": "jobs"
+        "com.docker.stack.namespace": "jobs",
+        "tierplan.stack.id": "id-jobs"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -24,16 +24,16 @@
       "Spec": {
         "Name": "jobs_agent",
         "Labels": {
-          "tierplan.stack.id": "id-jobs",
           "com.docker.stack.image": "agent:2",
-          "com.docker.stack.namespace": "jobs"
+          "com.docker.stack.namespace": "jobs",
+          "tierplan.stack.id": "id-jobs"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "agent:2",
             "Labels": {
-              "tierplan.stack.id": "id-jobs",
-              "com.docker.stack.namespace": "jobs"
+              "com.docker.stack.namespace": "jobs",
+              "tierplan.stack.id": "id-jobs"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -66,16 +66,16 @@
       "Spec": {
         "Name": "jobs_migrate",
         "Labels": {
-          "tierplan.stack.id": "id-jobs",
           "com.docker.stack.image": "app:1",
-          "com.docker.stack.namespace": "jobs"
+          "com.docker.stack.namespace": "jobs",
+          "tierplan.stack.id": "id-jobs"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "app:1",
             "Labels": {
-              "tierplan.stack.id": "id-jobs",
-              "com.docker.stack.namespace": "jobs"
+              "com.docker.stack.namespace": "jobs",
+              "tierplan.stack.id": "id-jobs"
             },
             "Args": [
               "migrate",
@@ -118,16 +118,16 @@
       "Spec": {
         "Name": "jobs_scan",
         "Labels": {
-          "tierplan.stack.id": "id-jobs",
           "com.docker.stack.image": "scanner:1",
-          "com.docker.stack.namespace": "jobs"
+          "com.docker.stack.namespace": "jobs",
+          "tierplan.stack.id": "id-jobs"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "scanner:1",
             "Labels": {
-              "tierplan.stack.id": "id-jobs",
-              "com.docker.stack.namespace": "jobs"
+              "com.docker.stack.namespace": "jobs",
+              "tierplan.stack.id": "id-jobs"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -163,16 +163,16 @@
       "Spec": {
         "Name": "jobs_web",
         "Labels": {
-          "tierplan.stack.id": "id-jobs",
           "com.docker.stack.image": "web:3",
-          "com.docker.stack.namespace": "jobs"
+          "com.docker.stack.namespace": "jobs",
+          "tierplan.stack.id": "id-jobs"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "web:3",
             "Labels": {
-              "tierplan.stack.id": "id-jobs",
-              "com.docker.stack.namespace": "jobs"
+              "com.docker.stack.namespace": "jobs",
+              "tierplan.stack.id": "id-jobs"
             },
             "Privileges": {
               "CredentialSpec": null,

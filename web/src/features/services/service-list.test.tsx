@@ -855,7 +855,9 @@ describe("the services list: columns", () => {
     mount();
     await screen.findByText("web");
     expect(
-      within(screen.getByRole("row", { name: /^Select tierplan-agent/ })).getByText("TierPlan agent"),
+      within(screen.getByRole("row", { name: /^Select tierplan-agent/ })).getByText(
+        "TierPlan agent",
+      ),
     ).toBeTruthy();
     expect(
       within(screen.getByRole("row", { name: /^Select web/ })).queryByText("TierPlan agent"),

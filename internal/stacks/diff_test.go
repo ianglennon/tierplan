@@ -205,10 +205,10 @@ func TestOwnershipOnlyPathsKnowsTheLabelOfANamedVolumeMount(t *testing.T) {
 		paths []string
 		want  bool
 	}{
-		"only the mount label":                    {[]string{mountLabel}, true},
-		"the mount label and the service label":   {[]string{mountLabel, "Labels.tierplan.stack.id"}, true},
-		"the mount label and its source":          {[]string{mountLabel, "TaskTemplate.ContainerSpec.Mounts[/data].Source"}, false},
-		"another label of the mount":              {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.com.docker.stack.namespace"}, false},
+		"only the mount label":                     {[]string{mountLabel}, true},
+		"the mount label and the service label":    {[]string{mountLabel, "Labels.tierplan.stack.id"}, true},
+		"the mount label and its source":           {[]string{mountLabel, "TaskTemplate.ContainerSpec.Mounts[/data].Source"}, false},
+		"another label of the mount":               {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.com.docker.stack.namespace"}, false},
 		"a label of the mount named like TierPlan": {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].VolumeOptions.Labels.tierplanx"}, false},
 		"a tierplan key elsewhere in a mount":      {[]string{"TaskTemplate.ContainerSpec.Mounts[/data].Source.tierplan.x"}, false},
 	} {
@@ -236,7 +236,7 @@ func TestMarkOwnershipOnlyAcceptsTheLabelOfANamedVolumeMount(t *testing.T) {
 		want    bool
 	}{
 		"TierPlan's ID on service, containers and mount": {desired, true},
-		"the same and another source":                   {moved, false},
+		"the same and another source":                    {moved, false},
 	} {
 		d := map[string]swarm.ServiceSpec{"shop_api": tc.desired}
 		l := map[string]swarm.ServiceSpec{"shop_api": running}

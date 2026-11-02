@@ -28,7 +28,11 @@ function stub(who: Who) {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (path === "/api/instance") {
-        return Response.json({ instanceName: "TierPlan Home", needsSetup: false, rememberDays: 30 });
+        return Response.json({
+          instanceName: "TierPlan Home",
+          needsSetup: false,
+          rememberDays: 30,
+        });
       }
       if (path === "/api/me") {
         if (who === "signed-out") return Response.json({ status: 401 }, { status: 401 });

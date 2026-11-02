@@ -5512,8 +5512,6 @@ export interface components {
             templating?: string;
         };
         ConfigDetailBody: {
-            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -5548,6 +5546,8 @@ export interface components {
             templating: "none" | "golang";
             /** @description The content as text; null when it is not valid UTF-8, which the page shows as a file to download */
             text: string | null;
+            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was last updated
@@ -5568,8 +5568,6 @@ export interface components {
             };
         };
         ConfigItem: {
-            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was created
@@ -5595,6 +5593,8 @@ export interface components {
              * @enum {string}
              */
             templating: "none" | "golang";
+            /** @description The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the config was last updated
@@ -5719,8 +5719,6 @@ export interface components {
             nodeId: string;
         };
         ContainerDetailBody: {
-            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
-            tierplanStackId: string;
             /** @description The command (Cmd). Withheld, as the single entry <hidden>, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token */
             command: string[] | null;
             /** @description True when command or entrypoint was withheld because the caller may not reveal secrets on this environment */
@@ -5817,6 +5815,8 @@ export interface components {
              * @description Seconds the container's own setting waits before a kill; absent when it sets none
              */
             stopTimeout?: number;
+            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
+            tierplanStackId: string;
             user?: string;
             workingDir?: string;
         };
@@ -5829,8 +5829,6 @@ export interface components {
             masked: boolean;
         };
         ContainerItem: {
-            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
-            tierplanStackId: string;
             /** Format: date-time */
             created?: string;
             /**
@@ -5874,6 +5872,8 @@ export interface components {
             state: "created" | "running" | "paused" | "restarting" | "removing" | "exited" | "dead";
             /** @description The engine's status text, for example Up 3 hours */
             status: string;
+            /** @description The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage */
+            tierplanStackId: string;
         };
         ContainerListBody: {
             /** @description At most 500 rows */
@@ -9486,8 +9486,6 @@ export interface components {
             source?: "typed" | "file" | "rotate" | "apply";
         };
         SecretDetailBody: {
-            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -9508,6 +9506,8 @@ export interface components {
              * @enum {string}
              */
             ownerKind: "stack" | "";
+            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was last updated
@@ -9528,8 +9528,6 @@ export interface components {
             };
         };
         SecretItem: {
-            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was created
@@ -9550,6 +9548,8 @@ export interface components {
              * @enum {string}
              */
             ownerKind: "stack" | "";
+            /** @description The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the secret was last updated
@@ -9687,8 +9687,6 @@ export interface components {
         ServiceDetailBody: {
             /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /** @description The swarm configs the service uses, by reference */
             configs: components["schemas"]["ServiceFileRefBody"][] | null;
             /**
@@ -9747,6 +9745,8 @@ export interface components {
             secrets: components["schemas"]["ServiceFileRefBody"][] | null;
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The update policy; absent when the spec sets none (the engine's defaults) */
@@ -9848,8 +9848,6 @@ export interface components {
         ServiceItem: {
             /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /**
              * Format: date-time
              * @description When the service was created
@@ -9884,6 +9882,8 @@ export interface components {
             running: number;
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /** @description The swarm's message about the last update; empty when it has none */
             updateMessage: string;
             /** @description The state of the service's last update or rollback (updating, paused, completed, rollback_started, rollback_paused, rollback_completed); empty when it has none */
@@ -10152,8 +10152,6 @@ export interface components {
         ServiceSpecBody: {
             /** @description True for a TierPlan agent service */
             agent: boolean;
-            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
-            tierplanStackId: string;
             /** @description True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment */
             masked: boolean;
             /**
@@ -10173,6 +10171,8 @@ export interface components {
             };
             /** @description The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own */
             stack: string;
+            /** @description The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage */
+            tierplanStackId: string;
             /**
              * Format: int64
              * @description The service's version: what an update or a rollback must send back to be accepted

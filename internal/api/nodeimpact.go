@@ -41,7 +41,7 @@ const (
 const (
 	warnQuorumAtRisk     = "quorum_at_risk"
 	warnEvenCount        = "even_count"
-	warnRunsTierPlan      = "runs_tierplan"
+	warnRunsTierPlan     = "runs_tierplan"
 	warnOnlyManagerAgent = "only_manager_agent"
 	warnFactsUnreadable  = "facts_unreadable"
 )
@@ -84,7 +84,7 @@ type nodeImpactInput struct {
 	// Tasks are the node's tasks whose desired state is running.
 	Tasks []dockerx.TaskRow
 	// Services are the swarm's services by ID.
-	Services                      map[string]dockerx.ServiceRow
+	Services                       map[string]dockerx.ServiceRow
 	RunsTierPlan, OnlyManagerAgent bool
 }
 

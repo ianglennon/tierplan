@@ -246,7 +246,9 @@ describe("the Adopt page: what it says", () => {
     expect(
       await screen.findByText("This stack looks like it was created by Portainer"),
     ).toBeTruthy();
-    expect(screen.getByText("Created by TierPlan (another instance or a lost record)")).toBeTruthy();
+    expect(
+      screen.getByText("Created by TierPlan (another instance or a lost record)"),
+    ).toBeTruthy();
   });
 });
 

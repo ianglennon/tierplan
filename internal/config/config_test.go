@@ -155,10 +155,10 @@ func TestPublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.example.com/":       "https://tierplan.example.com",
 		"HTTPS://TierPlan.Example.com":        "https://tierplan.example.com",
-		"http://localhost:5173":              "http://localhost:5173",
+		"http://localhost:5173":               "http://localhost:5173",
 		"https://example.com/tierplan/":       "https://example.com/tierplan",
-		"https://example.com/sub/path":       "https://example.com/sub/path",
-		"http://192.168.1.10:7480":           "http://192.168.1.10:7480",
+		"https://example.com/sub/path":        "https://example.com/sub/path",
+		"http://192.168.1.10:7480":            "http://192.168.1.10:7480",
 		"https://tierplan.example.com:443///": "https://tierplan.example.com:443",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_PUBLIC_URL": in}, files{})
@@ -265,7 +265,7 @@ func TestTypedValues(t *testing.T) {
 		"TIERPLAN_SKIP_PRE_MIGRATE_BACKUP": "true",
 		"TIERPLAN_DOCKER_GID":              "999",
 		"TIERPLAN_LOG_LEVEL":               "debug",
-		"DOCKER_HOST":                     "unix:///custom.sock",
+		"DOCKER_HOST":                      "unix:///custom.sock",
 	}, files{})
 	if err != nil {
 		t.Fatal(err)
@@ -435,7 +435,7 @@ func TestAgentURLIsNormalisedLikeThePublicURL(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://tierplan.internal:7480":  "https://tierplan.internal:7480",
 		"HTTPS://TierPlan.Internal:7480/": "https://tierplan.internal:7480",
-		"http://192.168.1.10:7480":       "http://192.168.1.10:7480",
+		"http://192.168.1.10:7480":        "http://192.168.1.10:7480",
 		"https://example.com/tierplan/":   "https://example.com/tierplan",
 	} {
 		c, err := load(t, nil, envMap{"TIERPLAN_AGENT_URL": in}, files{})
@@ -469,11 +469,11 @@ func TestAgentURLHasAFlagAndTheEnvironmentWinsOverNothingElse(t *testing.T) {
 
 func TestAgentEndpointIsTheWebSocketAddressAgentsDial(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://example.com":               "wss://example.com/agent/connect",
+		"https://example.com":                "wss://example.com/agent/connect",
 		"https://example.com/tierplan":       "wss://example.com/tierplan/agent/connect",
 		"https://example.com/tierplan/":      "wss://example.com/tierplan/agent/connect",
 		"https://tierplan.lan:7480":          "wss://tierplan.lan:7480/agent/connect",
-		"http://192.168.1.10:7480":          "ws://192.168.1.10:7480/agent/connect",
+		"http://192.168.1.10:7480":           "ws://192.168.1.10:7480/agent/connect",
 		"https://u:p@tierplan.example/x?q=1": "wss://tierplan.example/x/agent/connect",
 	} {
 		got, err := config.AgentEndpoint(in)

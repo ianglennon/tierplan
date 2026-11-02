@@ -8,9 +8,9 @@
       "Internal": true,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-networks",
         "com.docker.stack.namespace": "networks",
-        "tier": "data"
+        "tier": "data",
+        "tierplan.stack.id": "id-networks"
       },
       "DriverOpts": {
         "com.docker.network.driver.mtu": "1400"
@@ -32,8 +32,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-networks",
-        "com.docker.stack.namespace": "networks"
+        "com.docker.stack.namespace": "networks",
+        "tierplan.stack.id": "id-networks"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -72,16 +72,16 @@
       "Spec": {
         "Name": "networks_app",
         "Labels": {
-          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "app:1",
-          "com.docker.stack.namespace": "networks"
+          "com.docker.stack.namespace": "networks",
+          "tierplan.stack.id": "id-networks"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "app:1",
             "Labels": {
-              "tierplan.stack.id": "id-networks",
-              "com.docker.stack.namespace": "networks"
+              "com.docker.stack.namespace": "networks",
+              "tierplan.stack.id": "id-networks"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -127,16 +127,16 @@
       "Spec": {
         "Name": "networks_db",
         "Labels": {
-          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "postgres:16",
-          "com.docker.stack.namespace": "networks"
+          "com.docker.stack.namespace": "networks",
+          "tierplan.stack.id": "id-networks"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "postgres:16",
             "Labels": {
-              "tierplan.stack.id": "id-networks",
-              "com.docker.stack.namespace": "networks"
+              "com.docker.stack.namespace": "networks",
+              "tierplan.stack.id": "id-networks"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -171,16 +171,16 @@
       "Spec": {
         "Name": "networks_edge",
         "Labels": {
-          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "edge:1",
-          "com.docker.stack.namespace": "networks"
+          "com.docker.stack.namespace": "networks",
+          "tierplan.stack.id": "id-networks"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "edge:1",
             "Labels": {
-              "tierplan.stack.id": "id-networks",
-              "com.docker.stack.namespace": "networks"
+              "com.docker.stack.namespace": "networks",
+              "tierplan.stack.id": "id-networks"
             },
             "Privileges": {
               "CredentialSpec": null,

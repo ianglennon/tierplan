@@ -1041,7 +1041,7 @@ func TestServiceRowsAndDetailsLinkOnlyTheStacksTierPlanManages(t *testing.T) {
 	f, e := serviceEnv(t, stackLinkServices()...)
 	f.insertStackRow(t, e.ID, "stk-shop", "shop")
 	type linked struct {
-		Stack          string `json:"stack"`
+		Stack           string `json:"stack"`
 		TierPlanStackID string `json:"tierplanStackId"`
 	}
 	list := decode[struct {
@@ -1181,9 +1181,9 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksTierPlanManages(
 	})
 	f.insertStackRow(t, e.ID, "stk-shop", "shop")
 	type row struct {
-		ID             string `json:"id"`
-		NodeID         string `json:"nodeId"`
-		Name           string `json:"name"`
+		ID              string `json:"id"`
+		NodeID          string `json:"nodeId"`
+		Name            string `json:"name"`
 		TierPlanStackID string `json:"tierplanStackId"`
 	}
 	type rows struct {

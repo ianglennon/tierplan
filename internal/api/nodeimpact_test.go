@@ -251,7 +251,7 @@ func TestNodeImpactDemoteOfTierPlansNodeOrTheOnlyManagerAgentNeedsTheName(t *tes
 	t.Parallel()
 	nodes := niManagers("reachable", "reachable", "reachable", "reachable")
 	for name, in := range map[string]nodeImpactInput{
-		"TierPlan's node":         {RunsTierPlan: true},
+		"TierPlan's node":        {RunsTierPlan: true},
 		"the only manager agent": {OnlyManagerAgent: true},
 	} {
 		in.Action, in.Node, in.Nodes = "demote", nodes[0], nodes

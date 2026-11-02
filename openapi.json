@@ -1695,10 +1695,6 @@
       "ConfigDetailBody": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "createdAt": {
             "description": "When the config was created",
             "format": "date-time",
@@ -1754,6 +1750,10 @@
               "string",
               "null"
             ]
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
+            "type": "string"
           },
           "updatedAt": {
             "description": "When the config was last updated",
@@ -1811,10 +1811,6 @@
       "ConfigItem": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "createdAt": {
             "description": "When the config was created",
             "format": "date-time",
@@ -1853,6 +1849,10 @@
               "none",
               "golang"
             ],
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the config belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "updatedAt": {
@@ -2176,10 +2176,6 @@
       "ContainerDetailBody": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage",
-            "type": "string"
-          },
           "command": {
             "description": "The command (Cmd). Withheld, as the single entry \u003chidden\u003e, unless the caller holds secrets.reveal on this environment: a command line often carries a password or token",
             "items": {
@@ -2393,6 +2389,10 @@
             "format": "int64",
             "type": "integer"
           },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage",
+            "type": "string"
+          },
           "user": {
             "type": "string"
           },
@@ -2456,10 +2456,6 @@
       "ContainerItem": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage",
-            "type": "string"
-          },
           "created": {
             "format": "date-time",
             "type": "string"
@@ -2552,6 +2548,10 @@
           },
           "status": {
             "description": "The engine's status text, for example Up 3 hours",
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage",
             "type": "string"
           }
         },
@@ -11707,10 +11707,6 @@
       "SecretDetailBody": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "createdAt": {
             "description": "When the secret was created",
             "format": "date-time",
@@ -11741,6 +11737,10 @@
               "stack",
               ""
             ],
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "updatedAt": {
@@ -11795,10 +11795,6 @@
       "SecretItem": {
         "additionalProperties": false,
         "properties": {
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "createdAt": {
             "description": "When the secret was created",
             "format": "date-time",
@@ -11829,6 +11825,10 @@
               "stack",
               ""
             ],
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the secret belongs to: set only when this environment holds a stack with that ID under the owner name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "updatedAt": {
@@ -12211,10 +12211,6 @@
             "description": "True for a TierPlan agent service",
             "type": "boolean"
           },
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "configs": {
             "description": "The swarm configs the service uses, by reference",
             "items": {
@@ -12351,6 +12347,10 @@
           },
           "stack": {
             "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "updateMessage": {
@@ -12622,10 +12622,6 @@
             "description": "True for a TierPlan agent service",
             "type": "boolean"
           },
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "createdAt": {
             "description": "When the service was created",
             "format": "date-time",
@@ -12685,6 +12681,10 @@
           },
           "stack": {
             "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "updateMessage": {
@@ -13392,10 +13392,6 @@
             "description": "True for a TierPlan agent service",
             "type": "boolean"
           },
-          "tierplanStackId": {
-            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
-            "type": "string"
-          },
           "masked": {
             "description": "True when a value was replaced by the placeholder \u003chidden\u003e because the caller may not reveal secrets on this environment",
             "type": "boolean"
@@ -13426,6 +13422,10 @@
           },
           "stack": {
             "description": "The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own",
+            "type": "string"
+          },
+          "tierplanStackId": {
+            "description": "The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage",
             "type": "string"
           },
           "version": {

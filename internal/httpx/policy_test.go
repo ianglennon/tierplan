@@ -794,9 +794,9 @@ func TestVerifyAllGuardedAllowsTheSetupPageRoutes(t *testing.T) {
 func TestOriginOf(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://TierPlan.example/base": "https://tierplan.example",
-		"http://localhost:5173":        "http://localhost:5173",
-		"":                             "",
-		"not a url":                    "",
+		"http://localhost:5173":         "http://localhost:5173",
+		"":                              "",
+		"not a url":                     "",
 	} {
 		if got := OriginOf(in); got != want {
 			t.Errorf("OriginOf(%q) = %q, want %q", in, got, want)

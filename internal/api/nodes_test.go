@@ -27,7 +27,7 @@ type ndItem struct {
 	Hostname        string  `json:"hostname"`
 	Role            string  `json:"role"`
 	Leader          bool    `json:"leader"`
-	RunsTierPlan     bool    `json:"runsTierPlan"`
+	RunsTierPlan    bool    `json:"runsTierPlan"`
 	State           string  `json:"state"`
 	Availability    string  `json:"availability"`
 	Reachability    string  `json:"reachability"`
@@ -72,7 +72,7 @@ type ndDetail struct {
 	Hostname      string            `json:"hostname"`
 	Role          string            `json:"role"`
 	Leader        bool              `json:"leader"`
-	RunsTierPlan   bool              `json:"runsTierPlan"`
+	RunsTierPlan  bool              `json:"runsTierPlan"`
 	State         string            `json:"state"`
 	Availability  string            `json:"availability"`
 	Reachability  string            `json:"reachability"`

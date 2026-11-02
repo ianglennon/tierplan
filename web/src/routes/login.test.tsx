@@ -322,7 +322,9 @@ describe("/login under a base path", () => {
     const router = renderAt("/tierplan/login?next=%2Fenv%2Fa%2Fcontainers", "/tierplan");
     await fill("admin", "pw");
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
-    await waitFor(() => expect(router.history.location.pathname).toBe("/tierplan/env/a/containers"));
+    await waitFor(() =>
+      expect(router.history.location.pathname).toBe("/tierplan/env/a/containers"),
+    );
     await waitFor(() => expect(router.state.location.pathname).toBe("/env/a/containers"));
   });
 

@@ -391,7 +391,8 @@ describe("CreateStackDialog: the name check", () => {
     checkAnswer = () =>
       Response.json({
         status: "clash",
-        message: "A stack named legacy already exists on this environment, not managed by TierPlan.",
+        message:
+          "A stack named legacy already exists on this environment, not managed by TierPlan.",
       });
     mount();
     const dialog = await open();
@@ -415,7 +416,8 @@ describe("CreateStackDialog: the name check", () => {
     checkAnswer = () =>
       Response.json({
         status: "clash",
-        message: "A stack named legacy already exists on this environment, not managed by TierPlan.",
+        message:
+          "A stack named legacy already exists on this environment, not managed by TierPlan.",
       });
     mount();
     const dialog = await open();

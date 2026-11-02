@@ -114,16 +114,16 @@ type ServiceUpdatePolicyBody struct {
 // secret has gone through the redact package before it is put here: without secrets.reveal
 // the environment values are withheld (D-39).
 type ServiceDetailBody struct {
-	ID             string `json:"id" doc:"The service ID"`
-	Name           string `json:"name" doc:"The service name"`
-	Mode           string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Running        uint64 `json:"running" doc:"Tasks that are running now, from the last cluster read"`
-	Desired        uint64 `json:"desired" doc:"Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count"`
-	Stack          string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	ID              string `json:"id" doc:"The service ID"`
+	Name            string `json:"name" doc:"The service name"`
+	Mode            string `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Running         uint64 `json:"running" doc:"Tasks that are running now, from the last cluster read"`
+	Desired         uint64 `json:"desired" doc:"Tasks the swarm wants running, from the last cluster read; for a replicated service whose row was not read yet, the spec's replica count"`
+	Stack           string `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
-	Agent          bool   `json:"agent" doc:"True for a TierPlan agent service"`
-	CreatedAt      string `json:"createdAt" format:"date-time" doc:"When the service was created"`
-	UpdatedAt      string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
+	Agent           bool   `json:"agent" doc:"True for a TierPlan agent service"`
+	CreatedAt       string `json:"createdAt" format:"date-time" doc:"When the service was created"`
+	UpdatedAt       string `json:"updatedAt" format:"date-time" doc:"When the service's spec last changed"`
 
 	Image    ServiceImageBody     `json:"image" doc:"The image the spec names"`
 	Ports    []ServicePortBody    `json:"ports" doc:"The ports the service publishes, sorted by published port; empty when it publishes none"`

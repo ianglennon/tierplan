@@ -396,7 +396,9 @@ describe("AgentUpdatesCard", () => {
       await screen.findByText("Self-update is turned off on locked-1. Update it by hand:"),
     ).toBeTruthy();
     expect(
-      screen.getByText(/docker service update --image ghcr\.io\/ianglennon\/tierplan-agent:0\.2\.1/),
+      screen.getByText(
+        /docker service update --image ghcr\.io\/ianglennon\/tierplan-agent:0\.2\.1/,
+      ),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Copy the update command for locked-1" }),

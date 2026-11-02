@@ -80,7 +80,7 @@ import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
-import { tierplanStackIdOf, StackLink } from "@/features/stacks/stack-link";
+import { StackLink, tierplanStackIdOf } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";

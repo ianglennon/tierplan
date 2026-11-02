@@ -1080,7 +1080,9 @@ describe("creating a service", () => {
   it("reviews as Review {name} with the table of what will be created and Create service to confirm", async () => {
     renderAt(NEW);
     await reviewIt();
-    expect(screen.getByText("Check the service TierPlan will create, then create it.")).toBeTruthy();
+    expect(
+      screen.getByText("Check the service TierPlan will create, then create it."),
+    ).toBeTruthy();
     const table = await screen.findByRole("table", { name: "Changes to chat" });
     const heads = within(table).getAllByRole("columnheader");
     expect(heads.map((h) => h.textContent)).toEqual(["Setting", "Value"]);

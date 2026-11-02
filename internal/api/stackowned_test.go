@@ -101,7 +101,7 @@ func TestStackOwnedLinksAPendingAdoptedStacksUnlabelledObject(t *testing.T) {
 		"its own ID, deployed":            {[]stackops.Stack{adopted(false)}, "shop", "stk-adopted", "stk-adopted", "stk-adopted"},
 		"no ID, under another name":       {[]stackops.Stack{adopted(true)}, "blog", "", "", ""},
 		"its ID under another name":       {[]stackops.Stack{adopted(true)}, "blog", "stk-adopted", "", ""},
-		"no ID, a stack TierPlan made":     {[]stackops.Stack{managed}, "web", "", "", ""},
+		"no ID, a stack TierPlan made":    {[]stackops.Stack{managed}, "web", "", "", ""},
 		"the stale ID, a stack it made":   {[]stackops.Stack{managed}, "web", "stale-id", "", ""},
 		"its own ID, a stack it made":     {[]stackops.Stack{managed}, "web", "stk-1", "stk-1", "stk-1"},
 		"no stack of that name at all":    {nil, "shop", "", "", ""},

@@ -8,8 +8,8 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "tierplan.stack.id": "id-deploy",
-        "com.docker.stack.namespace": "deploy"
+        "com.docker.stack.namespace": "deploy",
+        "tierplan.stack.id": "id-deploy"
       },
       "DriverOpts": null,
       "IPAMDriver": "",
@@ -24,17 +24,17 @@
       "Spec": {
         "Name": "deploy_api",
         "Labels": {
-          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "registry.example.com/api:2.1",
           "com.docker.stack.namespace": "deploy",
-          "team": "platform"
+          "team": "platform",
+          "tierplan.stack.id": "id-deploy"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "registry.example.com/api:2.1",
             "Labels": {
-              "tierplan.stack.id": "id-deploy",
-              "com.docker.stack.namespace": "deploy"
+              "com.docker.stack.namespace": "deploy",
+              "tierplan.stack.id": "id-deploy"
             },
             "Hostname": "api-host",
             "Dir": "/srv",
@@ -216,16 +216,16 @@
       "Spec": {
         "Name": "deploy_bare",
         "Labels": {
-          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "busybox:1",
-          "com.docker.stack.namespace": "deploy"
+          "com.docker.stack.namespace": "deploy",
+          "tierplan.stack.id": "id-deploy"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "busybox:1",
             "Labels": {
-              "tierplan.stack.id": "id-deploy",
-              "com.docker.stack.namespace": "deploy"
+              "com.docker.stack.namespace": "deploy",
+              "tierplan.stack.id": "id-deploy"
             },
             "Privileges": {
               "CredentialSpec": null,
@@ -260,16 +260,16 @@
       "Spec": {
         "Name": "deploy_legacy",
         "Labels": {
-          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "img:1",
-          "com.docker.stack.namespace": "deploy"
+          "com.docker.stack.namespace": "deploy",
+          "tierplan.stack.id": "id-deploy"
         },
         "TaskTemplate": {
           "ContainerSpec": {
             "Image": "img:1",
             "Labels": {
-              "tierplan.stack.id": "id-deploy",
-              "com.docker.stack.namespace": "deploy"
+              "com.docker.stack.namespace": "deploy",
+              "tierplan.stack.id": "id-deploy"
             },
             "Privileges": {
               "CredentialSpec": null,

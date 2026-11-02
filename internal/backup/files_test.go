@@ -80,15 +80,15 @@ func TestFilePatternAcceptsOnlyTheNameOfAScheduledBackup(t *testing.T) {
 		"tierplan-backup-20261008-300.tierplan":      false,
 		"tierplan-backup-2026-10-08-0300.tierplan":   false,
 		"TierPlan-backup-20261008-0300.tierplan":     false,
-		"x.tierplan":                                false,
-		"tierplan.db":                               false,
-		"tierplan.key":                              false,
-		"tierplan-20261008T030000Z.db":              false,
-		"prerestore-20261008T030000Z.db":           false,
+		"x.tierplan":                                 false,
+		"tierplan.db":                                false,
+		"tierplan.key":                               false,
+		"tierplan-20261008T030000Z.db":               false,
+		"prerestore-20261008T030000Z.db":             false,
 		"../tierplan-backup-20261008-0300.tierplan":  false,
 		"sub/tierplan-backup-20261008-0300.tierplan": false,
 		"tierplan-backup-20261008-0300.tierplan\n":   false,
-		"":                                         false,
+		"": false,
 	} {
 		if got := backup.IsScheduledName(name); got != want {
 			t.Errorf("IsScheduledName(%q) = %v, want %v", name, got, want)

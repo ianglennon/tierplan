@@ -44,15 +44,15 @@ const (
 // ServiceSpecBody is the spec of one service and the one before its last update, for the
 // editor and the rollback diff.
 type ServiceSpecBody struct {
-	Version        uint64         `json:"version" doc:"The service's version: what an update or a rollback must send back to be accepted"`
-	Name           string         `json:"name" doc:"The service name"`
-	Mode           string         `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
-	Stack          string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
+	Version         uint64         `json:"version" doc:"The service's version: what an update or a rollback must send back to be accepted"`
+	Name            string         `json:"name" doc:"The service name"`
+	Mode            string         `json:"mode" enum:"replicated,global,replicated-job,global-job" doc:"How the swarm runs it"`
+	Stack           string         `json:"stack" doc:"The stack the service belongs to (com.docker.stack.namespace); empty for a service made on its own"`
 	TierPlanStackID string         `json:"tierplanStackId" doc:"The ID of the TierPlan stack the service belongs to: set only when this environment holds a stack with that ID under the stack name above (tierplan.stack.id). Empty for a stack TierPlan does not manage"`
-	Agent          bool           `json:"agent" doc:"True for a TierPlan agent service"`
-	Masked         bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
-	Spec           map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
-	PreviousSpec   map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`
+	Agent           bool           `json:"agent" doc:"True for a TierPlan agent service"`
+	Masked          bool           `json:"masked" doc:"True when a value was replaced by the placeholder <hidden> because the caller may not reveal secrets on this environment"`
+	Spec            map[string]any `json:"spec" doc:"The service's spec as the manager states it (Name, Labels, TaskTemplate, Mode, ...), with the values of the environment variables, the command line, the health check command and the log driver's options replaced by <hidden> unless the caller holds secrets.reveal"`
+	PreviousSpec    map[string]any `json:"previousSpec,omitempty" doc:"The spec before the last update, masked the same way; absent when the service was never updated, so there is nothing to roll back to"`
 }
 
 // ServiceSpecOutput wraps ServiceSpecBody for huma.

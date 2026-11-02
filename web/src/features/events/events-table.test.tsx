@@ -153,7 +153,9 @@ describe("EventsTable", () => {
   });
 
   it("names a row of TierPlan's own by its message, with no link, details or menu", () => {
-    show([ev("1", { type: "tierplan", name: "Manager moved to mgr-2", action: "", node: "mgr-2" })]);
+    show([
+      ev("1", { type: "tierplan", name: "Manager moved to mgr-2", action: "", node: "mgr-2" }),
+    ]);
     expect(screen.getByText("TierPlan")).toBeTruthy();
     expect(screen.getByText("Manager moved to mgr-2")).toBeTruthy();
     expect(screen.queryAllByRole("link")).toHaveLength(0);

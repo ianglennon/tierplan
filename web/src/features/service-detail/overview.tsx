@@ -148,7 +148,11 @@ function ServiceCard({ envId, detail }: { envId: string; detail: ServiceDetail }
           {
             key: t(`${key}.service.stack`),
             value: detail.stack ? (
-              <StackLink envId={envId} name={detail.stack} tierplanStackId={detail.tierplanStackId} />
+              <StackLink
+                envId={envId}
+                name={detail.stack}
+                tierplanStackId={detail.tierplanStackId}
+              />
             ) : (
               missing
             ),

@@ -624,7 +624,9 @@ describe("AdoptedBanner on the Overview of an adopted stack", () => {
     detail = { ...detail, name: "<b>shop</b>" };
     mount();
 
-    const title = await screen.findByText("<b>shop</b> is adopted but not yet deployed by TierPlan");
+    const title = await screen.findByText(
+      "<b>shop</b> is adopted but not yet deployed by TierPlan",
+    );
     expect(title.querySelector("b")).toBeNull();
   });
 });

@@ -161,22 +161,22 @@ type EnvironmentSummaryOutput struct {
 // or labels except the three that group a container: project, stack and service
 // (T-01-77, T-04-29).
 type ContainerItem struct {
-	Node           string   `json:"node" doc:"The node the container runs on"`
-	NodeID         string   `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
-	ID             string   `json:"id" doc:"The full container ID"`
-	Name           string   `json:"name" doc:"The container name without the leading slash"`
-	State          string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
-	Status         string   `json:"status" doc:"The engine's status text, for example Up 3 hours"`
-	Image          string   `json:"image" doc:"The image the container was created from"`
-	Created        string   `json:"created,omitempty" format:"date-time"`
-	Ports          []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
-	IsSelf         bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
-	Health         string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
-	SelfKind       string   `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
-	ReadOnly       bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
-	Project        string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
-	Stack          string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
-	Service        string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+	Node            string   `json:"node" doc:"The node the container runs on"`
+	NodeID          string   `json:"nodeId" doc:"The ID of that node: what a write is routed by, since two hosts can share a display name"`
+	ID              string   `json:"id" doc:"The full container ID"`
+	Name            string   `json:"name" doc:"The container name without the leading slash"`
+	State           string   `json:"state" enum:"created,running,paused,restarting,removing,exited,dead" doc:"The container state"`
+	Status          string   `json:"status" doc:"The engine's status text, for example Up 3 hours"`
+	Image           string   `json:"image" doc:"The image the container was created from"`
+	Created         string   `json:"created,omitempty" format:"date-time"`
+	Ports           []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
+	IsSelf          bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
+	Health          string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
+	SelfKind        string   `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	ReadOnly        bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
+	Project         string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack           string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service         string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
 	TierPlanStackID string   `json:"tierplanStackId" doc:"The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage"`
 	// RestartLoop is present while the container keeps dying and is restarted by its policy.
 	// A task container of a swarm service never has one: the service does.

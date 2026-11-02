@@ -35,9 +35,9 @@ const (
 
 	// parityCLIStack and parityTierPlanStack are the two stack names a parity case deploys under. They
 	// differ, so the two never share an object, and the normaliser maps both onto stackToken.
-	parityCLIStack     = "pcli"
+	parityCLIStack      = "pcli"
 	parityTierPlanStack = "pbp"
-	stackToken         = "STACK"
+	stackToken          = "STACK"
 )
 
 // readCorpus reads a compose file of the parity corpus and puts the values in it. A value goes where

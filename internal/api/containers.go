@@ -255,11 +255,11 @@ type ContainerDetailBody struct {
 	LogConfig ContainerLogConfigBody `json:"logConfig"`
 	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
-	IsSelf         bool   `json:"isSelf" doc:"True for the container TierPlan itself runs in"`
-	SelfKind       string `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise"`
-	Project        string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
-	Stack          string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
-	Service        string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
+	IsSelf          bool   `json:"isSelf" doc:"True for the container TierPlan itself runs in"`
+	SelfKind        string `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise"`
+	Project         string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
+	Stack           string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
+	Service         string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
 	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage"`
 
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`

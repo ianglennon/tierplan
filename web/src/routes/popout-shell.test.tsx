@@ -53,7 +53,11 @@ function stub(who: Who) {
           : undefined;
       sent.push({ method: req.method, path, query: url.search, body });
       if (path === "/api/instance") {
-        return Response.json({ instanceName: "TierPlan Home", needsSetup: false, rememberDays: 30 });
+        return Response.json({
+          instanceName: "TierPlan Home",
+          needsSetup: false,
+          rememberDays: 30,
+        });
       }
       if (path === "/api/me") {
         if (who === "signed-out") return Response.json({ status: 401 }, { status: 401 });

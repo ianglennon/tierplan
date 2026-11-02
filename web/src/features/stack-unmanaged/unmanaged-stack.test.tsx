@@ -266,7 +266,12 @@ describe("the Unmanaged stack page: header and notes", () => {
 
   it("shows Adopt stack off with the reason for TierPlan's own stack, even to an Admin", async () => {
     role = "admin";
-    body = { ...body, owner: "tierplan", adoptable: false, reason: "This is TierPlan's own stack." };
+    body = {
+      ...body,
+      owner: "tierplan",
+      adoptable: false,
+      reason: "This is TierPlan's own stack.",
+    };
     mount();
 
     const adopt = await screen.findByRole("button", { name: "Adopt stack" });
@@ -280,7 +285,9 @@ describe("the Unmanaged stack page: header and notes", () => {
   it("adds the orphan note and the Portainer advice only when they apply", async () => {
     mount();
     await screen.findByText("TierPlan doesn't manage this stack");
-    expect(screen.queryByText("Created by TierPlan (another instance or a lost record)")).toBeNull();
+    expect(
+      screen.queryByText("Created by TierPlan (another instance or a lost record)"),
+    ).toBeNull();
     expect(screen.queryByText("This stack looks like it was created by Portainer")).toBeNull();
     cleanup();
     body = { ...body, orphan: true, portainer: true };
@@ -565,7 +572,9 @@ describe("the Unmanaged stack page: states", () => {
     const db = (await screen.findByRole("link", { name: "db" })).closest("tr") as HTMLElement;
     expect(within(db).getByText("0/1")).toBeTruthy();
     expect(screen.queryByText("This stack looks like it was created by Portainer")).toBeNull();
-    expect(screen.queryByText("Created by TierPlan (another instance or a lost record)")).toBeNull();
+    expect(
+      screen.queryByText("Created by TierPlan (another instance or a lost record)"),
+    ).toBeNull();
   });
 
   it("counts one service in the singular and many in the plural", async () => {

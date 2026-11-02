@@ -225,7 +225,9 @@ describe("Start from", () => {
     expect(rebuild.getAttribute("aria-checked")).toBe("true");
     expect(paste.getAttribute("aria-checked")).toBe("false");
     expect(screen.getByText("TierPlan builds the compose file from what's running.")).toBeTruthy();
-    expect(screen.getByText("Paste it and TierPlan checks it against what's running.")).toBeTruthy();
+    expect(
+      screen.getByText("Paste it and TierPlan checks it against what's running."),
+    ).toBeTruthy();
     expect(screen.queryByLabelText("Original compose file")).toBeNull();
     expect(pasteChecks()).toEqual([]);
   });
