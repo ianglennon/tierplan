@@ -67,7 +67,10 @@ func newFakeEngine(n int) *fakeEngine {
 	for i := range n {
 		cs = append(cs, task(fmt.Sprintf("c%d", i+1), "1", i))
 	}
-	return &fakeEngine{snap: swarmOf(cs...), entered: make(chan struct{}), removeErr: map[string]error{}}
+	return &fakeEngine{
+		snap: swarmOf(cs...), entered: make(chan struct{}), removeErr: map[string]error{},
+		exitCodes: map[string]int{}, sources: map[string]EvidenceSource{},
+	}
 }
 
 func (e *fakeEngine) Snapshot(ctx context.Context, _ string) (Snapshot, error) {

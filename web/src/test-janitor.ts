@@ -43,6 +43,7 @@ export function preview(over: Partial<JanitorPreview> = {}): JanitorPreview {
 export function runItem(over: Partial<JanitorRunItem> = {}): JanitorRunItem {
   return {
     code: "",
+    hasEvidence: false,
     name: "web.1.abc",
     node: "node-1",
     nodeId: "n1",

@@ -4,13 +4,21 @@
 package api_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/ianglennon/tierplan/internal/api"
 	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Crash evidence (plan 11-13, JAN-10, D-06, T-11-35, T-11-38). The engines are fake daemons behind
@@ -138,5 +146,164 @@ func TestJanitorEvidenceSavedBeforeRemove(t *testing.T) {
 	}
 	if strings.Contains(string(rec.body), "hunter2") {
 		t.Fatalf("the answer holds the secret: %s", rec.body)
+	}
+}
+
+// The log driver of the container cannot be read back (the engine answers 501): the evidence says so
+// and the container is removed all the same.
+func TestJanitorEvidenceLogsUnreadable(t *testing.T) {
+	t.Parallel()
+	crash := crashed("web-x1", 1, false, nil)
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), func(host string, cfg *dockertest.FakeConfig) {
+		crash(host, cfg)
+		if host != "wrk-1" {
+			return
+		}
+		for i := range cfg.Containers {
+			if cfg.Containers[i].ID == "web-x1" {
+				cfg.Containers[i].Inspect.LogType = "none"
+			}
+		}
+	})
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0]))
+	s.awaitRun(t, started.JobID)
+	if got := s.containerDeletes(); len(got) != 1 {
+		t.Fatalf("the daemons saw %v, want web-x1 removed although its log could not be read", got)
+	}
+	rec, ev := s.getEvidence(t, started.RunID, 1)
+	if rec.code != http.StatusOK || ev.LogState != "unavailable" || len(ev.LogLines) != 0 || ev.ExitCode != 1 {
+		t.Fatalf("evidence = %d %+v, want the exit code with the log unavailable and no lines (not null)", rec.code, ev)
+	}
+	if !strings.Contains(string(rec.body), `"logLines":[]`) {
+		t.Fatalf("body = %s, want logLines an empty list", rec.body)
+	}
+}
+
+// A container that exited 0 leaves no evidence, and asking for it is a 404 with its own word.
+func TestJanitorEvidenceNotForCleanExit(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0]))
+	s.awaitRun(t, started.JobID)
+	_, run := s.getRun(t, started.RunID)
+	if len(run.Items) != 1 || run.Items[0].Outcome != "removed" || run.Items[0].HasEvidence {
+		t.Fatalf("items = %+v, want web-x1 removed with no evidence", run.Items)
+	}
+	if rec, _ := s.getEvidence(t, started.RunID, 1); rec.code != http.StatusNotFound || rec.ptyp != "janitor_evidence_not_found" {
+		t.Fatalf("GET evidence: %d %s (%s), want 404 janitor_evidence_not_found", rec.code, rec.body, rec.ptyp)
+	}
+	if rec, _ := s.getEvidence(t, "no-such-run", 1); rec.code != http.StatusNotFound || rec.ptyp != "janitor_evidence_not_found" {
+		t.Fatalf("GET evidence of a run nobody has: %d %s (%s), want 404 janitor_evidence_not_found", rec.code, rec.body, rec.ptyp)
+	}
+	if n := s.evidenceRows(t); n != 0 {
+		t.Fatalf("%d evidence rows on record, want none", n)
+	}
+}
+
+// Evidence is a container's log, so whoever may read container logs may read it: a Viewer and an
+// Operator can, and a person with no role on the environment finds nothing there.
+func TestJanitorEvidenceAccess(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), crashed("web-x1", 137, true, nil))
+	s.w.fake.AppendLogs("web-x1", dockertest.FakeLogLine{Text: "going down"})
+	_, preview := s.previewJanitor(t)
+	_, started := s.runJanitor(t, tick(preview.Items[0]))
+	s.awaitRun(t, started.JobID)
+	path := s.evidencePath(started.RunID, 1)
+
+	as := func(user, role string) *httptest.ResponseRecorder {
+		s.addUser(t, user, false)
+		if role != "" {
+			s.addEnvRole(t, user, s.env.ID, role)
+		}
+		cookie, csrf := s.signIn(t, user, false)
+		return s.call(t, authReq{method: http.MethodGet, path: path, cookie: cookie, csrf: csrf})
+	}
+	for _, c := range []struct{ user, role string }{{"vera", "viewer"}, {"olga", "operator"}, {"ada", "admin"}} {
+		rec := as(c.user, c.role)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "going down") {
+			t.Errorf("a %s: %d %s, want 200 with the evidence", c.role, rec.Code, rec.Body)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("a %s: Cache-Control = %q, want no-store", c.role, got)
+		}
+	}
+	if rec := as("nora", ""); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "going down") {
+		t.Errorf("a person with no role here: %d %s, want 404 and nothing of the evidence", rec.Code, rec.Body)
+	}
+	if rec := s.call(t, authReq{method: http.MethodGet, path: path}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("signed out: %d, want 401", rec.Code)
+	}
+}
+
+// maskingFacts are the stack records of an environment that knows one stack, whose deployed
+// revision holds a secret; only the masker is used.
+type maskingFacts struct {
+	envs.StackFacts
+	masker stacks.Masker
+	err    error
+}
+
+func (f maskingFacts) DeployedMasker(_ context.Context, stackID string) (stacks.Masker, error) {
+	if f.err != nil {
+		return stacks.Masker{}, f.err
+	}
+	if stackID != "stk-1" {
+		return stacks.Masker{}, nil
+	}
+	return f.masker, nil
+}
+
+// The engine's evidence for a container of a TierPlan stack hides the stack's secret values, and the
+// container's own secret-looking environment values, in every line of the log.
+func TestJanitorEvidenceMasksTheStacksSecrets(t *testing.T) {
+	t.Parallel()
+	crash := crashed("web-x1", 1, false, []string{"API_TOKEN=tok-abcdef", "PORT=8080"})
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), func(host string, cfg *dockertest.FakeConfig) {
+		crash(host, cfg)
+		if host != "wrk-1" {
+			return
+		}
+		for i := range cfg.Containers {
+			if cfg.Containers[i].ID == "web-x1" {
+				cfg.Containers[i].Labels["tierplan.stack.id"] = "stk-1"
+			}
+		}
+	})
+	s.w.fake.AppendLogs("web-x1",
+		dockertest.FakeLogLine{Text: "db refused STACK-SECRET-VALUE for user"},
+		dockertest.FakeLogLine{Text: "sent tok-abcdef to the gateway"},
+		dockertest.FakeLogLine{Text: "listening on 8080"},
+	)
+	_, preview := s.previewJanitor(t)
+	node := preview.Items[0].NodeID
+	ctx := testsupport.Context(t)
+
+	facts := maskingFacts{masker: stacks.NewMasker([]stacks.Var{{Name: "DB_PASS", Value: "STACK-SECRET-VALUE", Secret: true}}, nil)}
+	src, err := api.NewJanitorEngine(s.agg, s.clusters, facts, nil).Evidence(ctx, s.env.ID, node, "web-x1")
+	if err != nil {
+		t.Fatalf("Evidence: %v", err)
+	}
+	if src.End.ExitCode != 1 || src.LogsUnavailable || len(src.Lines) != 3 || src.Labels["tierplan.stack.id"] != "stk-1" {
+		t.Fatalf("source = %+v, want exit 1, the three lines read and the stack label", src)
+	}
+	ev := janitor.BuildEvidence(src)
+	joined := strings.Join(ev.Lines, "\n")
+	if strings.Contains(joined, "STACK-SECRET-VALUE") || strings.Contains(joined, "tok-abcdef") || !strings.Contains(joined, "listening on 8080") {
+		t.Fatalf("lines = %q, want both secrets hidden and the plain port left", ev.Lines)
+	}
+
+	// While the stack's values cannot be read, no line of the log is kept.
+	bad := maskingFacts{err: errors.New("the record is unreadable")}
+	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, nil).Evidence(ctx, s.env.ID, node, "web-x1")
+	if err != nil || !src.LogsUnavailable || len(src.Lines) != 0 {
+		t.Fatalf("source = %+v, %v; want the log withheld because the stack's secrets could not be read", src, err)
+	}
+	// A container that is not a stack's needs no masker.
+	src, err = api.NewJanitorEngine(s.agg, s.clusters, bad, nil).Evidence(ctx, s.env.ID, node, "web-x2")
+	if err != nil || src.LogsUnavailable {
+		t.Fatalf("source of a container with no stack = %+v, %v; want its log read", src, err)
 	}
 }
