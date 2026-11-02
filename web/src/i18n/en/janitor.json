@@ -1,0 +1,238 @@
+{
+  "janitor": {
+    "page": {
+      "title": "Janitor",
+      "caption": "Removes what's left behind: stale task containers, dangling images and orphaned networks. Never volumes, never anything running.",
+      "cleanNow": "Clean now",
+      "cleanNowHint": "Shows what would be removed first.",
+      "noNode": "No node is reporting, so there is nothing TierPlan can check.",
+      "error": {
+        "title": "Couldn't load the janitor.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading janitor"
+      }
+    },
+    "needsOn": "{{need}} on {{name}}",
+    "lock": {
+      "cleaning": "The janitor is cleaning {{env}}, started",
+      "openIt": "Open it",
+      "waiting": "Waiting for a deploy to finish. {{stack}} is deploying."
+    },
+    "refused": {
+      "deploy": "A deploy is running in {{env}}. Try again when it finishes.",
+      "janitor": "The janitor is already cleaning {{env}}. Try again when it finishes.",
+      "start": {
+        "title": "Couldn't start the cleanup.",
+        "body": "Try again. If it keeps failing, check the Janitor page for a run before you do."
+      }
+    },
+    "age": {
+      "minutes_one": "{{count}} minute",
+      "minutes_other": "{{count}} minutes",
+      "hours_one": "{{count}} hour",
+      "hours_other": "{{count}} hours",
+      "days_one": "{{count}} day",
+      "days_other": "{{count}} days"
+    },
+    "duration": {
+      "seconds_one": "{{count}} second",
+      "seconds_other": "{{count}} seconds"
+    },
+    "rank_ordinal_one": "{{count}}st",
+    "rank_ordinal_two": "{{count}}nd",
+    "rank_ordinal_few": "{{count}}rd",
+    "rank_ordinal_other": "{{count}}th",
+    "size": {
+      "unknown": "—"
+    },
+    "counts": {
+      "containers_one": "{{count}} container",
+      "containers_other": "{{count}} containers",
+      "networks_one": "{{count}} network",
+      "networks_other": "{{count}} networks",
+      "images_one": "{{count}} image",
+      "images_other": "{{count}} images",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items",
+      "size": "~{{size}}"
+    },
+    "type": {
+      "container": "Container",
+      "image": "Image",
+      "network": "Network"
+    },
+    "reason": {
+      "task_beyond_keep": "Exited task, {{rank}} oldest of service {{service}} slot {{slot}}.",
+      "task_beyond_keep_global": "Exited task, {{rank}} oldest of service {{service}} on {{node}}.",
+      "task_service_gone": "Exited task of service {{service}}, which no longer exists.",
+      "stack_gone": "Stack {{stack}} no longer exists.",
+      "compose_project_gone": "Compose project {{project}} no longer exists.",
+      "compose_oneoff": "Exited one-off compose run, {{age}} old.",
+      "stopped_standalone": "Stopped standalone container, {{age}} old.",
+      "dangling_image": "Dangling, {{age}} old.",
+      "network_orphaned": "Orphaned: the stack {{stack}} that created it no longer exists.",
+      "network_unused": "Unused: no stack created it and nothing uses it.",
+      "opt_in_off_containers": "Opt-in off: stopped standalone containers aren't removed until you turn that on.",
+      "opt_in_off_networks": "Opt-in off: unused networks aren't removed until you turn that on.",
+      "lone_compose_container": "Stopped container of compose project {{project}}, which still exists.",
+      "kept_label": "Protected: labelled tierplan.keep=true.",
+      "kept_row": "Protected: you chose Keep on it.",
+      "stack_excluded": "Protected: stack {{stack}} is excluded from the janitor.",
+      "stack_declared_keep": "Protected: stack {{stack}} sets tierplan.keep=true in its compose file.",
+      "younger_than_grace": "Younger than the grace period: {{time}} left.",
+      "node_not_reporting": "Can't tell yet: {{node}} isn't reporting.",
+      "networks_withheld": "Can't tell yet: TierPlan won't judge networks while a node isn't reporting.",
+      "stack_unknown": "Can't tell yet: TierPlan couldn't work out which stack owns it.",
+      "inspect_capped": "Left alone: its details are over 64 KB, too large to save in the audit log first.",
+      "clock_skew": "Can't tell yet: the node's clock is out of step with TierPlan's.",
+      "task_labels_missing": "Can't tell yet: it has no swarm task labels, so TierPlan can't place it.",
+      "services_unread": "Can't tell yet: no manager answered, so TierPlan can't tell which services still exist.",
+      "unknown": "TierPlan left it alone."
+    },
+    "preview": {
+      "title": "Clean up {{env}}",
+      "description": "This is what the janitor would remove now, using this environment's policy. Untick anything you want to leave.",
+      "summary": {
+        "line": "Would remove {{parts}}",
+        "none": "Nothing selected",
+        "note": "{{ticked}} of {{total}} ticked.",
+        "previewed": "Previewed",
+        "sizeTooltip": "An estimate from image sizes and the size of each container's writable layer. The real amount freed can differ.",
+        "refresh": "Refresh preview"
+      },
+      "checking_one": "Checking {{count}} node…",
+      "checking_other": "Checking {{count}} nodes…",
+      "sections": {
+        "container": "Containers ({{count}})",
+        "network": "Networks ({{count}})",
+        "image": "Images ({{count}})"
+      },
+      "nodeGroup": {
+        "items_one": "{{count}} item",
+        "items_other": "{{count}} items"
+      },
+      "columns": {
+        "select": "Select",
+        "name": "Name",
+        "reason": "Reason",
+        "age": "Age",
+        "size": "Size"
+      },
+      "selectItem": "Select {{name}}",
+      "selectAll": "Select all in {{group}}",
+      "withheldNetworks": "TierPlan won't judge networks while {{nodes}} isn't reporting.",
+      "notRemoved": {
+        "title": "Not removed ({{count}})",
+        "caption": "Reported only, or protected. Nothing here is touched.",
+        "optInOff": "Opt-in off",
+        "kept": "Kept",
+        "openPolicy": "Open policy"
+      },
+      "empty": {
+        "title": "Nothing to clean up",
+        "body": "No stale task containers, dangling images or orphaned networks older than the grace period. Anything the policy only reports is listed under Not removed."
+      },
+      "error": {
+        "title": "Couldn't work out what to clean up.",
+        "body": "Check the connection and try again. Nothing was removed.",
+        "retry": "Retry preview"
+      },
+      "footer": {
+        "note": "TierPlan checks each item again just before it removes it, and keeps any that something started using. The details of each network and container are saved first. Volumes are never touched.",
+        "cancel": "Cancel",
+        "remove_one": "Remove {{count}} item",
+        "remove_other": "Remove {{count}} items",
+        "removing": "Removing…",
+        "tickOne": "Tick at least one item to remove.",
+        "needsOn": "{{need}} on {{name}}"
+      }
+    },
+    "run": {
+      "breadcrumb": {
+        "label": "Breadcrumb",
+        "janitor": "Janitor",
+        "run": "Run from {{time}}"
+      },
+      "title": "Cleanup of {{env}}",
+      "subtitle": {
+        "schedule": "Scheduled. Started {{started}}.",
+        "manual": "Clean now by {{user}}. Started {{started}}.",
+        "finished": "Finished {{finished}}, took {{duration}}."
+      },
+      "state": {
+        "waiting": "Waiting for a deploy",
+        "running": "Running",
+        "completed": "Completed",
+        "partial": "Partly done",
+        "skipped": "Skipped",
+        "failed": "Failed"
+      },
+      "reason": {
+        "deploy_in_progress": "A deploy was in progress. TierPlan will try again at the next scheduled run.",
+        "server_restarted": "TierPlan restarted during this run",
+        "no_node_reporting": "No node was reporting, so there was nothing TierPlan could check.",
+        "failed": "TierPlan couldn't read the environment"
+      },
+      "waiting": "Waiting for a deploy to finish. TierPlan tries for about 10 minutes, then skips this run.",
+      "progress": "Removing {{done}} of {{total}}…",
+      "summary": {
+        "removed": "Removed {{parts}}.",
+        "removedNone": "Nothing removed.",
+        "kept": "Kept {{count}}.",
+        "failed": "Failed {{count}}.",
+        "space": "Space freed",
+        "spaceUnknown": "—"
+      },
+      "alert": {
+        "partial": {
+          "title": "Partly done",
+          "body": "Removed {{removed}} of {{total}}. {{failed}} failed and {{kept}} were kept. Open an item to see why."
+        },
+        "skipped": {
+          "title": "Skipped"
+        },
+        "failed": {
+          "title": "The cleanup failed",
+          "body": "{{reason}}. Nothing more was removed. TierPlan will try again at the next scheduled run."
+        }
+      },
+      "columns": {
+        "type": "Type",
+        "name": "Name",
+        "node": "Node",
+        "reason": "Reason",
+        "outcome": "Outcome"
+      },
+      "caption": "Items in this run",
+      "empty": "This run found nothing to remove.",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items",
+      "outcome": {
+        "removed": "Removed",
+        "refused_in_use": "In use, kept",
+        "skipped_protected": "Protected",
+        "skipped_node_offline": "Node not reporting",
+        "error": "Failed"
+      },
+      "itemReason": {
+        "in_use": "{{name}} is in use again, so TierPlan kept it.",
+        "no_longer_stale": "{{name}} is no longer stale, so TierPlan kept it.",
+        "gone": "{{name}} was already gone.",
+        "node_offline": "{{node}} isn't reporting, so TierPlan skipped its containers and images.",
+        "agent_policy_denied": "TierPlan didn't remove {{name}}: the agent on {{node}} is too old to allow it. Update the agent.",
+        "host_read_only": "TierPlan didn't remove {{name}}: the host is read-only.",
+        "node_unreachable": "TierPlan didn't remove {{name}}: {{node}} didn't answer.",
+        "action_failed": "TierPlan didn't remove {{name}}: Docker refused it."
+      },
+      "error": {
+        "title": "Couldn't load this run.",
+        "body": "Check the connection and try again.",
+        "retry": "Retry loading run"
+      },
+      "notFound": {
+        "title": "This run was removed by the history limit.",
+        "link": "Open run history"
+      }
+    }
+  }
+}
