@@ -39,6 +39,9 @@ type Runner struct {
 	Clock stackops.Clock
 	// Policy gives the policy of an environment. Nil means DefaultPolicy.
 	Policy func(ctx context.Context, envID string) (Policy, error)
+	// Store keeps the record of the runs. It is required: a run is on record before it removes
+	// anything, so a Runner with no Store starts nothing.
+	Store RunStore
 	// Log receives what a run could not tell its job. Nil means slog.Default().
 	Log *slog.Logger
 }
@@ -61,6 +64,9 @@ type RunRequest struct {
 	Trigger string
 	// Actor names who started the run, as the lock shows it.
 	Actor string
+	// ActorID is who the record names as having started it: the user's ID. Empty means the record
+	// names Actor, as it does for a scheduled run.
+	ActorID string
 	// Owner owns the job: the person for Clean now, system:janitor:{envID} for a scheduled run,
 	// so the cap of running jobs of one owner never blocks the instance.
 	Owner string
@@ -90,7 +96,10 @@ func (e *LockedError) Error() string {
 // *LockedError at once when the lock is held, and starts nothing. The job holds the lock only
 // while it removes, and has freed it before the job reads finished. jobs.ErrTooMany is passed on
 // when the owner has the most jobs running.
-func (r *Runner) Start(_ context.Context, req RunRequest) (Started, error) {
+func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
+	if r.Store == nil {
+		return Started{}, errors.New("janitor: the runner has no store to record a run in")
+	}
 	release, held, ok := r.Locks.TryAcquire(req.EnvID, stackops.Holder{
 		Kind: stackops.HolderKindJanitor, By: req.Actor, Started: r.clock().Now().UTC(),
 	})
@@ -103,6 +112,19 @@ func (r *Runner) Start(_ context.Context, req RunRequest) (Started, error) {
 		return Started{}, fmt.Errorf("new run id: %w", err)
 	}
 	runID := id.String()
+	// The run is on record before anything can be removed (T-11-12). A run that cannot be
+	// recorded is not started.
+	actor := req.ActorID
+	if actor == "" {
+		actor = req.Actor
+	}
+	started := r.clock().Now().UTC()
+	if err := r.Store.CreateRun(ctx, Run{
+		ID: runID, EnvID: req.EnvID, Trigger: req.Trigger, Actor: actor, State: StateRunning, StartedAt: started, EstBytes: -1,
+	}); err != nil {
+		release()
+		return Started{}, err
+	}
 	job, err := r.Jobs.Start(jobs.Spec{
 		Kind: JobKind, EnvID: req.EnvID, Owner: req.Owner,
 		Meta: map[string]string{"runId": runID, "trigger": req.Trigger},
@@ -110,10 +132,21 @@ func (r *Runner) Start(_ context.Context, req RunRequest) (Started, error) {
 		r.execute(ctx, req, runID, release, rep)
 	})
 	if err != nil {
+		// The job never started, so the run never worked: it is on record as failed.
+		r.endRecord(ctx, Run{ID: runID, State: StateFailed, Reason: ReasonRunFailed, EstBytes: -1})
 		release()
 		return Started{}, err
 	}
 	return Started{RunID: runID, JobID: job.ID}, nil
+}
+
+// endRecord finishes a run's record at the current time. A store that fails is logged: whatever the
+// run did has been done by then.
+func (r *Runner) endRecord(ctx context.Context, run Run) {
+	run.FinishedAt = r.clock().Now().UTC()
+	if err := r.Store.FinishRun(context.WithoutCancel(ctx), run); err != nil {
+		r.log().Error("a janitor run could not be finished on record", "run", run.ID, "error", err)
+	}
 }
 
 func (r *Runner) clock() stackops.Clock {
@@ -130,24 +163,85 @@ func (r *Runner) log() *slog.Logger {
 	return slog.Default()
 }
 
-// runState is what a run counts as it goes, for the record plan 11-06 keeps of it.
+// batchSize is how many items a run records in one transaction: a write never waits on a Docker
+// call, and a long run is on record as it goes (Pitfall 6).
+const batchSize = 50
+
+// runState is what a run counts and records as it goes.
 type runState struct {
 	runID string
-	// removed, gone, refused and failed count the selected items by how their removal ended;
-	// notNow counts the ticked items that were not removable on the fresh plan.
-	removed, gone, refused, failed, notNow int
+	// ctx is the job's context without its cancellation: a run that is cut short still records
+	// what it did.
+	ctx context.Context
+	// counts are the selected items by how their removal ended; gone counts the ones that were
+	// already gone and notNow the ticked items that were not removable on the fresh plan.
+	counts        Counts
+	gone, notNow  int
+	freed         int64
+	freedKnown    bool
+	seq           int
+	buf           []RunItem
+	planFailed    bool
+	reachedTheEnd bool
+	cut           bool
 }
 
-// begin is the one place a run starts.
-func (r *Runner) begin(req RunRequest, runID string) *runState {
+// begin is the one place a run starts. It gives the run on record its job.
+func (r *Runner) begin(ctx context.Context, req RunRequest, runID, jobID string) *runState {
 	r.log().Info("a janitor run started", "environment", req.EnvID, "run", runID, "trigger", req.Trigger, "actor", req.Actor)
-	return &runState{runID: runID}
+	s := &runState{runID: runID, ctx: context.WithoutCancel(ctx)}
+	if err := r.Store.SetState(s.ctx, runID, StateRunning, jobID); err != nil {
+		r.log().Error("a janitor run could not be given its job on record", "run", runID, "error", err)
+	}
+	return s
 }
 
-// end is the one place a run ends, deferred so that it runs however the run ends.
+// record adds an attempted item to the batch, and writes the batch when it holds a batch of items
+// or when the node changes.
+func (s *runState) record(r *Runner, it Item, out outcome) {
+	if len(s.buf) > 0 && s.buf[0].NodeID != it.NodeID {
+		s.flush(r)
+	}
+	s.seq++
+	s.buf = append(s.buf, RunItem{
+		Seq: s.seq, Type: it.Type, NodeID: it.NodeID, Node: it.Node, Ref: it.Ref, Name: it.Name,
+		Reason: it.Reason, Outcome: out.recorded, Code: out.code, Size: it.Size,
+	})
+	if len(s.buf) >= batchSize {
+		s.flush(r)
+	}
+}
+
+// flush writes the items waiting to be recorded.
+func (s *runState) flush(r *Runner) {
+	if len(s.buf) == 0 {
+		return
+	}
+	if err := r.Store.AddItems(s.ctx, s.runID, s.buf); err != nil {
+		r.log().Error("a janitor run could not record its items", "run", s.runID, "items", len(s.buf), "error", err)
+	}
+	s.buf = s.buf[:0]
+}
+
+// end is the one place a run ends, deferred so that it runs however the run ends. It records the
+// items still waiting and the run's final state: completed, partial when an item errored or the run
+// was cut short, or failed when it could not do its work.
 func (s *runState) end(r *Runner, req RunRequest) {
-	r.log().Info("a janitor run ended", "environment", req.EnvID, "run", s.runID,
-		"removed", s.removed, "gone", s.gone, "refused", s.refused, "failed", s.failed, "not_removable_now", s.notNow)
+	s.flush(r)
+	run := Run{ID: s.runID, State: StateCompleted, Counts: s.counts, EstBytes: -1}
+	switch {
+	case s.planFailed || !s.reachedTheEnd:
+		run.State, run.Reason = StateFailed, ReasonRunFailed
+	case s.counts.Failed > 0 || s.cut:
+		run.State = StatePartial
+	}
+	if s.freedKnown {
+		run.EstBytes = s.freed
+	}
+	r.endRecord(s.ctx, run)
+	r.log().Info("a janitor run ended", "environment", req.EnvID, "run", s.runID, "state", run.State,
+		"removed", s.counts.RemovedContainers+s.counts.RemovedImages+s.counts.RemovedNetworks, "gone", s.gone,
+		"kept", s.counts.Kept, "skipped_offline", s.counts.SkippedOffline, "failed", s.counts.Failed, "not_removable_now", s.notNow)
 }
 
 // planItemID is the ID of a plan item in the job: unique across types and nodes.
@@ -166,6 +260,8 @@ const (
 // outcome is how one removal ended, as the job item shows it.
 type outcome struct {
 	state, code, message string
+	// recorded is how the run's record says it ended.
+	recorded Outcome
 }
 
 // execute is the body of the job. The lock is freed once the removals are done and before the last
@@ -175,13 +271,18 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 	free := sync.OnceFunc(release)
 	defer free()
 	r.Locks.Attach(req.EnvID, rep.JobID())
-	run := r.begin(req, runID)
-	defer run.end(r, req)
+	run := r.begin(ctx, req, runID, rep.JobID())
+	// The record is finished before the last job item is, so a reader that sees the job finished
+	// finds the run finished. The deferred call covers a run that panics.
+	finish := sync.OnceFunc(func() { run.end(r, req) })
+	defer finish()
 
 	selected, err := r.plan(ctx, req, run)
 	if err != nil {
 		r.log().Warn("a janitor run could not plan", "environment", req.EnvID, "run", runID, "error", err)
+		run.planFailed = true
 		rep.Add(jobs.ItemSpec{ID: "plan", Label: "Plan the clean-up", Kind: "step"})
+		finish()
 		free()
 		rep.Finish("plan", jobs.ItemFailed, codePlanFailed, "TierPlan could not read the environment, so nothing was removed.", nil)
 		return
@@ -198,14 +299,18 @@ func (r *Runner) execute(ctx context.Context, req RunRequest, runID string, rele
 		id := planItemID(it)
 		rep.Update(id, func(x *jobs.Item) { x.State = jobs.ItemRunning })
 		out := r.remove(ctx, req.EnvID, it, run)
+		run.record(r, it, out)
 		result := map[string]string{"nodeId": it.NodeID, "node": it.Node, "ref": it.Ref}
-		finish := func() { rep.Finish(id, out.state, out.code, out.message, result) }
+		fin := func() { rep.Finish(id, out.state, out.code, out.message, result) }
 		if i == len(selected)-1 {
-			tail = finish
+			tail = fin
 			continue
 		}
-		finish()
+		fin()
 	}
+	run.reachedTheEnd = true
+	run.cut = ctx.Err() != nil
+	finish()
 	free()
 	if tail != nil {
 		tail()
@@ -248,7 +353,7 @@ func (r *Runner) plan(ctx context.Context, req RunRequest, run *runState) ([]Ite
 	return out, nil
 }
 
-// remove removes one item of the plan and says how it ended.
+// remove removes one item of the plan and says how it ended, and counts it.
 func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runState) outcome {
 	var err error
 	switch it.Type {
@@ -259,24 +364,40 @@ func (r *Runner) remove(ctx context.Context, envID string, it Item, run *runStat
 	}
 	switch {
 	case err == nil:
-		run.removed++
-		return outcome{state: jobs.ItemDone, message: "Removed."}
+		run.countRemoved(it)
+		return outcome{state: jobs.ItemDone, message: "Removed.", recorded: OutcomeRemoved}
 	case errors.Is(err, ErrGone):
 		run.gone++
-		return outcome{state: jobs.ItemDone, code: codeGone, message: "It was already gone."}
+		return outcome{state: jobs.ItemDone, code: codeGone, message: "It was already gone.", recorded: OutcomeRemoved}
 	case errors.Is(err, ErrNoLongerStale):
-		run.refused++
-		return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone."}
+		run.counts.Kept++
+		return outcome{state: jobs.ItemFailed, code: codeNoLongerStale, message: "It is no longer a stale container, so it was left alone.", recorded: OutcomeSkippedProtected}
 	case errors.Is(err, ErrInUse):
-		run.refused++
-		return outcome{state: jobs.ItemFailed, code: codeInUse, message: "The engine says it is in use, so it was left alone."}
+		run.counts.Kept++
+		return outcome{state: jobs.ItemFailed, code: codeInUse, message: "The engine says it is in use, so it was left alone.", recorded: OutcomeRefusedInUse}
 	case errors.Is(err, ErrNodeOffline):
-		run.failed++
-		return outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "Its node is not connected, so nothing was sent."}
+		run.counts.SkippedOffline++
+		return outcome{state: jobs.ItemFailed, code: codeNodeOffline, message: "Its node is not connected, so nothing was sent.", recorded: OutcomeSkippedNodeOffline}
 	default:
-		run.failed++
+		run.counts.Failed++
 		r.log().Warn("a janitor run could not remove an item", "environment", envID, "type", it.Type, "node", it.NodeID, "ref", it.Ref, "error", err)
-		return outcome{state: jobs.ItemFailed, code: codeFailed, message: "It could not be removed."}
+		return outcome{state: jobs.ItemFailed, code: codeFailed, message: "It could not be removed.", recorded: OutcomeError}
+	}
+}
+
+// countRemoved counts an item the engine removed, and the bytes it freed when they are known.
+func (s *runState) countRemoved(it Item) {
+	switch it.Type {
+	case KindContainer:
+		s.counts.RemovedContainers++
+	case KindImage:
+		s.counts.RemovedImages++
+	case KindNetwork:
+		s.counts.RemovedNetworks++
+	}
+	if it.Size >= 0 {
+		s.freed += it.Size
+		s.freedKnown = true
 	}
 }
 

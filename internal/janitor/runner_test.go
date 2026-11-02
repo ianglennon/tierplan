@@ -38,6 +38,9 @@ type fakeEngine struct {
 	mu        sync.Mutex
 	removeErr map[string]error
 	removed   []string
+	// onRemove, when set, is called with the ID of each container the engine is asked to remove,
+	// before it answers: a test reads the record of the run there.
+	onRemove func(id string)
 }
 
 func newFakeEngine(n int) *fakeEngine {
@@ -69,6 +72,9 @@ func (e *fakeEngine) Inspect(_ context.Context, _, _ string, ids []string) (map[
 }
 
 func (e *fakeEngine) RemoveContainer(_ context.Context, _, _, id string) error {
+	if e.onRemove != nil {
+		e.onRemove(id)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.removeErr[id]; err != nil {
@@ -89,7 +95,78 @@ func newRunner(t *testing.T, eng Engine) (*Runner, *stackops.Locks, *jobs.Hub) {
 	locks := stackops.NewLocks()
 	hub := jobs.New(jobs.Options{})
 	t.Cleanup(hub.Close)
-	return &Runner{Engine: eng, Locks: locks, Jobs: hub, Clock: fixedClock{}}, locks, hub
+	return &Runner{Engine: eng, Locks: locks, Jobs: hub, Clock: fixedClock{}, Store: newMemStore()}, locks, hub
+}
+
+// memStore is a RunStore in memory that keeps the batches it was given, so a test sees how the
+// items were written.
+type memStore struct {
+	mu      sync.Mutex
+	runs    map[string]Run
+	items   map[string][]RunItem
+	batches [][]RunItem
+}
+
+func newMemStore() *memStore {
+	return &memStore{runs: map[string]Run{}, items: map[string][]RunItem{}}
+}
+
+func (m *memStore) CreateRun(_ context.Context, run Run) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runs[run.ID] = run
+	return nil
+}
+
+func (m *memStore) SetState(_ context.Context, runID, state, jobID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok || !run.FinishedAt.IsZero() {
+		return nil
+	}
+	run.State, run.JobID = state, jobID
+	m.runs[runID] = run
+	return nil
+}
+
+func (m *memStore) AddItems(_ context.Context, runID string, items []RunItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[runID] = append(m.items[runID], items...)
+	m.batches = append(m.batches, slices.Clone(items))
+	return nil
+}
+
+func (m *memStore) FinishRun(_ context.Context, run Run) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	was, ok := m.runs[run.ID]
+	if !ok {
+		return ErrRunNotFound
+	}
+	run.EnvID, run.Trigger, run.Actor, run.JobID, run.StartedAt = was.EnvID, was.Trigger, was.Actor, was.JobID, was.StartedAt
+	m.runs[run.ID] = run
+	return nil
+}
+
+func (m *memStore) GetRun(_ context.Context, envID, runID string) (Run, []RunItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok || run.EnvID != envID {
+		return Run{}, nil, ErrRunNotFound
+	}
+	return run, slices.Clone(m.items[runID]), nil
+}
+
+// recordOf is the store of a runner made by newRunner.
+func recordOf(r *Runner) *memStore {
+	m, ok := r.Store.(*memStore)
+	if !ok {
+		panic("the runner's store is not a memStore")
+	}
+	return m
 }
 
 func ticked(ids ...string) []ItemRef {
@@ -148,7 +225,7 @@ func TestRunnerJobOwner(t *testing.T) {
 	locks := stackops.NewLocks()
 	hub := jobs.New(jobs.Options{MaxRunningPerUser: 1})
 	t.Cleanup(hub.Close)
-	run := &Runner{Engine: eng, Locks: locks, Jobs: hub, Clock: fixedClock{}}
+	run := &Runner{Engine: eng, Locks: locks, Jobs: hub, Clock: fixedClock{}, Store: newMemStore()}
 	ctx := testsupport.Context(t)
 
 	// The person already has the most jobs they may have running.
@@ -256,5 +333,38 @@ func TestRunnerFreesTheLockWhenItCannotPlan(t *testing.T) {
 	}
 	if _, held := locks.Held("env-1"); held {
 		t.Fatal("the lock is still held after a run that could not plan")
+	}
+}
+
+func TestRunnerRecordsTheRunAndItsItems(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, _, hub := newRunner(t, eng)
+	ctx := testsupport.Context(t)
+	started, err := run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Ticked: ticked("c2", "c1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := hub.Wait(ctx, started.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The job reads finished, so the run is finished on record.
+	got, items, err := recordOf(run).GetRun(ctx, "env-1", started.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Trigger != TriggerManual || got.Actor != "u1" || got.State != StateCompleted || got.Reason != "" || got.JobID != job.ID ||
+		got.StartedAt != t0 || got.FinishedAt != t0 || got.Counts != (Counts{RemovedContainers: 2}) || got.EstBytes != -1 {
+		t.Fatalf("run = %+v, want a completed manual run of u1 that removed 2 containers, started and finished at t0, in job %s", got, job.ID)
+	}
+	if len(items) != 2 || items[0].Seq != 1 || items[0].Ref != "c1" || items[1].Seq != 2 || items[1].Ref != "c2" {
+		t.Fatalf("items = %+v, want c1 and c2 in the order they were attempted", items)
+	}
+	for _, it := range items {
+		if it.Outcome != OutcomeRemoved || it.Code != "" || it.Type != KindContainer || it.NodeID != "n1-id" || it.Node != "n1" ||
+			it.Reason.Code != ReasonTaskBeyondKeep || it.Reason.Service != "web" {
+			t.Errorf("item = %+v, want a clean removal of a container of n1 selected as task_beyond_keep of web", it)
+		}
 	}
 }

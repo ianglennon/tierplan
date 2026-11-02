@@ -1468,6 +1468,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/runs/{runId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one janitor run
+         * @description Answers one run of the janitor in this environment: what started it and who, its state, when it began and ended, what it counted, and every item it attempted with why it was selected and how the attempt ended. A run is on record before it removes anything, so a run that is still working answers with state running and the items so far. A run of another environment, or one that does not exist, is 404 janitor_run_not_found. Needs environments.read on the environment.
+         */
+        get: operations["getJanitorRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -7858,6 +7878,108 @@ export interface components {
             slot?: string;
             /** @description The swarm stack the object is labelled with */
             stack?: string;
+        };
+        JanitorRunBody: {
+            /** @description Who started it: the user's ID, or the name of the system for a scheduled run */
+            actor: string;
+            /** @description The display name of the person who started it; for a scheduled run, the name of the system */
+            actorName: string;
+            counts: components["schemas"]["JanitorRunCountsBody"];
+            /**
+             * Format: int64
+             * @description The bytes the removals freed that were known. Null when no size was known, which is not zero
+             */
+            estBytes: number | null;
+            /**
+             * Format: date-time
+             * @description When the run ended; null while it is working
+             */
+            finishedAt: string | null;
+            /** @description The ID of this run */
+            id: string;
+            /** @description Every item the run attempted, in the order it attempted them */
+            items: components["schemas"]["JanitorRunItemBody"][] | null;
+            /** @description The job that did the removing; empty until it exists */
+            jobId: string;
+            /**
+             * @description Why a run did not complete; empty when it did
+             * @enum {string}
+             */
+            reason: "" | "deploy_in_progress" | "server_restarted" | "no_node_reporting" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * @description completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "completed" | "partial" | "skipped" | "failed";
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
+        };
+        JanitorRunCountsBody: {
+            /**
+             * Format: int64
+             * @description Items whose removal errored
+             */
+            failed: number;
+            /**
+             * Format: int64
+             * @description Selected items the run left alone: in use, kept by a label or no longer stale
+             */
+            kept: number;
+            /**
+             * Format: int64
+             * @description Containers the run removed
+             */
+            removedContainers: number;
+            /**
+             * Format: int64
+             * @description Images the run removed
+             */
+            removedImages: number;
+            /**
+             * Format: int64
+             * @description Networks the run removed
+             */
+            removedNetworks: number;
+            /**
+             * Format: int64
+             * @description Items not sent because their node was not connected
+             */
+            skippedOffline: number;
+        };
+        JanitorRunItemBody: {
+            /** @description A stable word for why the attempt did not end as a clean removal, empty for one that did */
+            code: string;
+            name: string;
+            /** @description The node's name */
+            node: string;
+            /** @description The ID of the node the object was on */
+            nodeId: string;
+            /**
+             * @description How the attempt ended. removed with the code already_gone means the object was gone before the run reached it
+             * @enum {string}
+             */
+            outcome: "removed" | "refused_in_use" | "skipped_protected" | "skipped_node_offline" | "error";
+            /** @description Why the run selected it */
+            reason: components["schemas"]["JanitorReasonBody"];
+            /** @description The engine's ID of the object */
+            ref: string;
+            /**
+             * Format: int64
+             * @description 1 for the first item the run attempted, counting up
+             */
+            seq: number;
+            /**
+             * Format: int64
+             * @description The bytes removing the object frees, null when not known
+             */
+            sizeBytes: number | null;
+            /** @enum {string} */
+            type: "container" | "image" | "network";
         };
         JanitorRunRequest: {
             /** @description The items ticked in the preview, 1 to 5000. Only those that are still removable when the run has taken the environment's lock are removed */
@@ -16340,6 +16462,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorRunStartedBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getJanitorRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+                /** @description The ID of the run, as Clean now or the schedule gave it */
+                runId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunBody"];
                 };
             };
             /** @description Error */

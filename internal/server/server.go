@@ -822,9 +822,12 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
 		Clock: bo.janitorClock, Now: time.Now, Log: log,
 	}
+	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
+	janitorRuns := &janitor.SQLStore{St: st}
+	janitorDeps.Runs = janitorRuns
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
-		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Log: log,
+		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Store: janitorRuns, Log: log,
 	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())

@@ -173,6 +173,40 @@ type GitRepo struct {
 	CreatedBy        string
 }
 
+type JanitorRun struct {
+	ID                string
+	EnvID             string
+	Trigger           string
+	Actor             string
+	State             string
+	Reason            string
+	JobID             string
+	StartedAt         int64
+	FinishedAt        int64
+	RemovedContainers int64
+	RemovedImages     int64
+	RemovedNetworks   int64
+	Kept              int64
+	Failed            int64
+	SkippedOffline    int64
+	EstBytes          int64
+}
+
+type JanitorRunItem struct {
+	RunID        string
+	Seq          int64
+	Type         string
+	NodeID       string
+	NodeName     string
+	Ref          string
+	Name         string
+	Reason       string
+	ReasonDetail string
+	Outcome      string
+	Code         string
+	EstBytes     int64
+}
+
 type NetworkKeep struct {
 	EnvID  string
 	NodeID string

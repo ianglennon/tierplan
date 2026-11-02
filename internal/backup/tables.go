@@ -97,6 +97,12 @@ var Tables = map[string]Class{
 	"network_seen":  Included,
 	"network_keeps": Included,
 
+	// The janitor's record (Phase 11): each run and every item it removed or failed to remove, so
+	// what was cleaned up and by whom survives a restore. Both belong to their environment and hold
+	// no secret.
+	"janitor_runs":      Included,
+	"janitor_run_items": Included,
+
 	// Credentials and state that must not travel: a restored instance starts with
 	// no sessions, no outstanding invite or reset links, no agent join tokens and
 	// an empty run history.

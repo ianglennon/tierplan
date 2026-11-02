@@ -54,8 +54,64 @@ type JanitorRunStartedOutput struct {
 	Body         JanitorRunStartedBody
 }
 
-// registerJanitorRuns registers Clean now.
+// problemJanitorRunNotFound is the 404 for a run that does not exist in the environment.
+const problemJanitorRunNotFound = "janitor_run_not_found"
+
+// JanitorRunPathInput is the path of one run of an environment.
+type JanitorRunPathInput struct {
+	EnvironmentPathInput
+	RunID string `path:"runId" maxLength:"64" doc:"The ID of the run, as Clean now or the schedule gave it"`
+}
+
+// JanitorRunCountsBody is what a run counted by how its items ended.
+type JanitorRunCountsBody struct {
+	RemovedContainers int `json:"removedContainers" minimum:"0" doc:"Containers the run removed"`
+	RemovedImages     int `json:"removedImages" minimum:"0" doc:"Images the run removed"`
+	RemovedNetworks   int `json:"removedNetworks" minimum:"0" doc:"Networks the run removed"`
+	Kept              int `json:"kept" minimum:"0" doc:"Selected items the run left alone: in use, kept by a label or no longer stale"`
+	Failed            int `json:"failed" minimum:"0" doc:"Items whose removal errored"`
+	SkippedOffline    int `json:"skippedOffline" minimum:"0" doc:"Items not sent because their node was not connected"`
+}
+
+// JanitorRunItemBody is one item a run attempted.
+type JanitorRunItemBody struct {
+	Seq       int               `json:"seq" minimum:"1" doc:"1 for the first item the run attempted, counting up"`
+	Type      string            `json:"type" enum:"container,image,network"`
+	NodeID    string            `json:"nodeId" doc:"The ID of the node the object was on"`
+	Node      string            `json:"node" doc:"The node's name"`
+	Ref       string            `json:"ref" doc:"The engine's ID of the object"`
+	Name      string            `json:"name"`
+	Reason    JanitorReasonBody `json:"reason" doc:"Why the run selected it"`
+	Outcome   string            `json:"outcome" enum:"removed,refused_in_use,skipped_protected,skipped_node_offline,error" doc:"How the attempt ended. removed with the code already_gone means the object was gone before the run reached it"`
+	Code      string            `json:"code" doc:"A stable word for why the attempt did not end as a clean removal, empty for one that did"`
+	SizeBytes *int64            `json:"sizeBytes" nullable:"true" minimum:"0" doc:"The bytes removing the object frees, null when not known"`
+}
+
+// JanitorRunBody is one run of the janitor and every item it attempted.
+type JanitorRunBody struct {
+	ID         string               `json:"id" doc:"The ID of this run"`
+	Trigger    string               `json:"trigger" enum:"schedule,manual" doc:"schedule for a run the schedule started, manual for Clean now"`
+	Actor      string               `json:"actor" doc:"Who started it: the user's ID, or the name of the system for a scheduled run"`
+	ActorName  string               `json:"actorName" doc:"The display name of the person who started it; for a scheduled run, the name of the system"`
+	State      string               `json:"state" enum:"waiting,running,completed,partial,skipped,failed" doc:"completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work"`
+	Reason     string               `json:"reason" enum:",deploy_in_progress,server_restarted,no_node_reporting,failed" doc:"Why a run did not complete; empty when it did"`
+	StartedAt  string               `json:"startedAt" format:"date-time"`
+	FinishedAt *string              `json:"finishedAt" nullable:"true" format:"date-time" doc:"When the run ended; null while it is working"`
+	Counts     JanitorRunCountsBody `json:"counts"`
+	EstBytes   *int64               `json:"estBytes" nullable:"true" minimum:"0" doc:"The bytes the removals freed that were known. Null when no size was known, which is not zero"`
+	JobID      string               `json:"jobId" doc:"The job that did the removing; empty until it exists"`
+	Items      []JanitorRunItemBody `json:"items" doc:"Every item the run attempted, in the order it attempted them"`
+}
+
+// JanitorRunOutput wraps JanitorRunBody for huma.
+type JanitorRunOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         JanitorRunBody
+}
+
+// registerJanitorRuns registers Clean now and reading a run.
 func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
+	registerJanitorRunRead(r, d)
 	httpx.Register(r, huma.Operation{
 		OperationID: "startJanitorRun", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/runs",
 		Summary: "Clean the environment now",
@@ -78,7 +134,7 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 				ticked = append(ticked, janitor.ItemRef{Type: janitor.Kind(it.Type), NodeID: it.NodeID, Ref: it.Ref})
 			}
 			started, err := d.Runner.Start(ctx, janitor.RunRequest{
-				EnvID: env.ID, EnvName: env.Name, Trigger: janitor.TriggerManual, Actor: p.Name,
+				EnvID: env.ID, EnvName: env.Name, Trigger: janitor.TriggerManual, Actor: p.Name, ActorID: p.ID,
 				Owner: stackJobOwner(p), Ticked: ticked,
 			})
 			var locked *janitor.LockedError
@@ -93,4 +149,85 @@ func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 			}
 			return &JanitorRunStartedOutput{CacheControl: "no-store", Body: JanitorRunStartedBody{RunID: started.RunID, JobID: started.JobID}}, nil
 		})
+}
+
+// registerJanitorRunRead registers the read of one run.
+func registerJanitorRunRead(r *httpx.Router, d JanitorDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "getJanitorRun", Method: http.MethodGet, Path: "/api/env/{envId}/janitor/runs/{runId}",
+		Summary: "Read one janitor run",
+		Description: "Answers one run of the janitor in this environment: what started it and who, its state, when it began and ended, what it counted, " +
+			"and every item it attempted with why it was selected and how the attempt ended. A run is on record before it removes anything, " +
+			"so a run that is still working answers with state running and the items so far. " +
+			"A run of another environment, or one that does not exist, is 404 janitor_run_not_found. Needs environments.read on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *JanitorRunPathInput) (*JanitorRunOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil || d.Runs == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			run, items, err := d.Runs.GetRun(ctx, env.ID, in.RunID)
+			switch {
+			case errors.Is(err, janitor.ErrRunNotFound):
+				return nil, httpx.Problem(http.StatusNotFound, problemJanitorRunNotFound, "This run does not exist in this environment.")
+			case err != nil:
+				d.log().Error("could not read a janitor run", "environment", env.ID, "run", in.RunID, "error", err)
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			return &JanitorRunOutput{CacheControl: "no-store", Body: janitorRunBody(ctx, d, run, items)}, nil
+		})
+}
+
+// janitorRunBody is a run as the API shows it.
+func janitorRunBody(ctx context.Context, d JanitorDeps, run janitor.Run, items []janitor.RunItem) JanitorRunBody {
+	b := JanitorRunBody{
+		ID: run.ID, Trigger: run.Trigger, Actor: run.Actor, ActorName: janitorActorName(ctx, d, run.Actor),
+		State: run.State, Reason: run.Reason, StartedAt: rfc3339(run.StartedAt), JobID: run.JobID,
+		Counts: JanitorRunCountsBody{
+			RemovedContainers: run.Counts.RemovedContainers, RemovedImages: run.Counts.RemovedImages,
+			RemovedNetworks: run.Counts.RemovedNetworks, Kept: run.Counts.Kept, Failed: run.Counts.Failed,
+			SkippedOffline: run.Counts.SkippedOffline,
+		},
+		Items: make([]JanitorRunItemBody, 0, len(items)),
+	}
+	if !run.FinishedAt.IsZero() {
+		finished := rfc3339(run.FinishedAt)
+		b.FinishedAt = &finished
+	}
+	if run.EstBytes >= 0 {
+		est := run.EstBytes
+		b.EstBytes = &est
+	}
+	for _, it := range items {
+		ib := JanitorRunItemBody{
+			Seq: it.Seq, Type: string(it.Type), NodeID: it.NodeID, Node: it.Node, Ref: it.Ref, Name: it.Name,
+			Reason: JanitorReasonBody{
+				Code: string(it.Reason.Code), Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project,
+				Stack: it.Reason.Stack, Node: it.Reason.Node, Rank: it.Reason.Rank,
+				AgeSeconds: int64(it.Reason.Age.Seconds()), RemainingSeconds: int64(it.Reason.Remaining.Seconds()),
+			},
+			Outcome: string(it.Outcome), Code: it.Code,
+		}
+		if it.Size >= 0 {
+			size := it.Size
+			ib.SizeBytes = &size
+		}
+		b.Items = append(b.Items, ib)
+	}
+	return b
+}
+
+// janitorActorName is the display name of whoever started a run: the user's display name, else
+// their username. An actor that is not a user (a scheduled run names the system) is its own name.
+func janitorActorName(ctx context.Context, d JanitorDeps, actor string) string {
+	if d.Store != nil {
+		if u, err := d.Store.RQ.GetUserByID(ctx, actor); err == nil {
+			if u.DisplayName != "" {
+				return u.DisplayName
+			}
+			return u.Username
+		}
+	}
+	return actor
 }

@@ -7641,6 +7641,232 @@
         ],
         "type": "object"
       },
+      "JanitorRunBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "Who started it: the user's ID, or the name of the system for a scheduled run",
+            "type": "string"
+          },
+          "actorName": {
+            "description": "The display name of the person who started it; for a scheduled run, the name of the system",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/JanitorRunCountsBody"
+          },
+          "estBytes": {
+            "description": "The bytes the removals freed that were known. Null when no size was known, which is not zero",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "description": "When the run ended; null while it is working",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The ID of this run",
+            "type": "string"
+          },
+          "items": {
+            "description": "Every item the run attempted, in the order it attempted them",
+            "items": {
+              "$ref": "#/components/schemas/JanitorRunItemBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "jobId": {
+            "description": "The job that did the removing; empty until it exists",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why a run did not complete; empty when it did",
+            "enum": [
+              "",
+              "deploy_in_progress",
+              "server_restarted",
+              "no_node_reporting",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work",
+            "enum": [
+              "waiting",
+              "running",
+              "completed",
+              "partial",
+              "skipped",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "description": "schedule for a run the schedule started, manual for Clean now",
+            "enum": [
+              "schedule",
+              "manual"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "actor",
+          "actorName",
+          "state",
+          "reason",
+          "startedAt",
+          "finishedAt",
+          "counts",
+          "estBytes",
+          "jobId",
+          "items"
+        ],
+        "type": "object"
+      },
+      "JanitorRunCountsBody": {
+        "additionalProperties": false,
+        "properties": {
+          "failed": {
+            "description": "Items whose removal errored",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kept": {
+            "description": "Selected items the run left alone: in use, kept by a label or no longer stale",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removedContainers": {
+            "description": "Containers the run removed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removedImages": {
+            "description": "Images the run removed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removedNetworks": {
+            "description": "Networks the run removed",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "skippedOffline": {
+            "description": "Items not sent because their node was not connected",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "removedContainers",
+          "removedImages",
+          "removedNetworks",
+          "kept",
+          "failed",
+          "skippedOffline"
+        ],
+        "type": "object"
+      },
+      "JanitorRunItemBody": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "A stable word for why the attempt did not end as a clean removal, empty for one that did",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "node": {
+            "description": "The node's name",
+            "type": "string"
+          },
+          "nodeId": {
+            "description": "The ID of the node the object was on",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "How the attempt ended. removed with the code already_gone means the object was gone before the run reached it",
+            "enum": [
+              "removed",
+              "refused_in_use",
+              "skipped_protected",
+              "skipped_node_offline",
+              "error"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/JanitorReasonBody",
+            "description": "Why the run selected it"
+          },
+          "ref": {
+            "description": "The engine's ID of the object",
+            "type": "string"
+          },
+          "seq": {
+            "description": "1 for the first item the run attempted, counting up",
+            "format": "int64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sizeBytes": {
+            "description": "The bytes removing the object frees, null when not known",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "type": {
+            "enum": [
+              "container",
+              "image",
+              "network"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "nodeId",
+          "node",
+          "ref",
+          "name",
+          "reason",
+          "outcome",
+          "code",
+          "sizeBytes"
+        ],
+        "type": "object"
+      },
       "JanitorRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -26152,6 +26378,68 @@
           }
         },
         "summary": "Clean the environment now",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/runs/{runId}": {
+      "get": {
+        "description": "Answers one run of the janitor in this environment: what started it and who, its state, when it began and ended, what it counted, and every item it attempted with why it was selected and how the attempt ended. A run is on record before it removes anything, so a run that is still working answers with state running and the items so far. A run of another environment, or one that does not exist, is 404 janitor_run_not_found. Needs environments.read on the environment.",
+        "operationId": "getJanitorRun",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ID of the run, as Clean now or the schedule gave it",
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "description": "The ID of the run, as Clean now or the schedule gave it",
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorRunBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Read one janitor run",
         "tags": [
           "environments"
         ]

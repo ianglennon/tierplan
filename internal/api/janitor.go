@@ -38,6 +38,8 @@ type JanitorDeps struct {
 	Jobs   *jobs.Hub
 	Clock  stackops.Clock
 	Runner *janitor.Runner
+	// Runs reads the record of the runs. The server gives the Runner and the routes the same store.
+	Runs janitor.RunStore
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().

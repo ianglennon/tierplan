@@ -291,3 +291,88 @@ func TestJanitorEngineRemoveContainerChecksAgain(t *testing.T) {
 		t.Fatalf("RemoveContainer(web-x1) = %v, want it removed", err)
 	}
 }
+
+// janitorRunRead is the answer of GET /api/env/{envId}/janitor/runs/{runId}, as the tests read it.
+type janitorRunRead struct {
+	ID         string  `json:"id"`
+	Trigger    string  `json:"trigger"`
+	Actor      string  `json:"actor"`
+	ActorName  string  `json:"actorName"`
+	State      string  `json:"state"`
+	Reason     string  `json:"reason"`
+	StartedAt  string  `json:"startedAt"`
+	FinishedAt *string `json:"finishedAt"`
+	JobID      string  `json:"jobId"`
+	EstBytes   *int64  `json:"estBytes"`
+	Counts     struct {
+		RemovedContainers int `json:"removedContainers"`
+		RemovedImages     int `json:"removedImages"`
+		RemovedNetworks   int `json:"removedNetworks"`
+		Kept              int `json:"kept"`
+		Failed            int `json:"failed"`
+		SkippedOffline    int `json:"skippedOffline"`
+	} `json:"counts"`
+	Items []struct {
+		Seq     int    `json:"seq"`
+		Type    string `json:"type"`
+		NodeID  string `json:"nodeId"`
+		Node    string `json:"node"`
+		Ref     string `json:"ref"`
+		Name    string `json:"name"`
+		Outcome string `json:"outcome"`
+		Code    string `json:"code"`
+		Reason  struct {
+			Code    string `json:"code"`
+			Service string `json:"service"`
+			Slot    string `json:"slot"`
+			Rank    int    `json:"rank"`
+		} `json:"reason"`
+	} `json:"items"`
+}
+
+// getRun reads a run as the fixture's instance admin.
+func (s *swarmFix) getRun(t *testing.T, runID string) (*envRec, janitorRunRead) {
+	t.Helper()
+	rec := s.req(t, http.MethodGet, "/api/env/"+s.env.ID+"/janitor/runs/"+runID, "")
+	var got janitorRunRead
+	if rec.code == http.StatusOK {
+		got = decode[janitorRunRead](t, rec)
+	}
+	return rec, got
+}
+
+// The tracer of JAN-10: Clean now writes the run and the container it removed, and the run reads
+// back through the API once the job reads finished.
+func TestJanitorRunRecorded(t *testing.T) {
+	t.Parallel()
+	s := janitorSwarm(t, onWorker(exitedSlot(5)), nil)
+	_, preview := s.previewJanitor(t)
+	rec, started := s.runJanitor(t, tick(preview.Items[0]))
+	if rec.code != http.StatusAccepted {
+		t.Fatalf("Clean now: %d %s", rec.code, rec.body)
+	}
+	job := s.awaitRun(t, started.JobID)
+
+	rec, run := s.getRun(t, started.RunID)
+	if rec.code != http.StatusOK {
+		t.Fatalf("GET the run: %d %s, want 200", rec.code, rec.body)
+	}
+	if run.ID != started.RunID || run.Trigger != "manual" || run.Actor != "id-admin" || run.ActorName != "admin" ||
+		run.State != "completed" || run.Reason != "" || run.JobID != job.ID || run.FinishedAt == nil || run.StartedAt == "" {
+		t.Fatalf("run = %+v, want a completed manual run of the admin in job %s", run, job.ID)
+	}
+	if run.Counts.RemovedContainers != 1 || run.Counts.Failed != 0 || run.Counts.Kept != 0 || run.Counts.SkippedOffline != 0 || run.Counts.RemovedImages != 0 || run.Counts.RemovedNetworks != 0 {
+		t.Fatalf("counts = %+v, want one container removed", run.Counts)
+	}
+	if run.EstBytes != nil {
+		t.Errorf("estBytes = %d, want null: the daemon's size was not known", *run.EstBytes)
+	}
+	if len(run.Items) != 1 {
+		t.Fatalf("items = %+v, want the one removal", run.Items)
+	}
+	it := run.Items[0]
+	if it.Seq != 1 || it.Type != "container" || it.Ref != "web-x1" || it.Outcome != "removed" || it.Code != "" || it.Node != "wrk-1" || it.NodeID != preview.Items[0].NodeID ||
+		it.Reason.Code != "task_beyond_keep" || it.Reason.Service != "web" || it.Reason.Slot != "1" || it.Reason.Rank != 1 {
+		t.Fatalf("item = %+v, want web-x1 removed on wrk-1 as task_beyond_keep rank 1 of web slot 1", it)
+	}
+}
