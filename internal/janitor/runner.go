@@ -23,6 +23,14 @@ import (
 // JobKind is the kind of the job a janitor run is in the jobs hub.
 const JobKind = "janitor_run"
 
+// The keys of a run's job Meta: the run the job is, what started it and who, as a name. The jobs list
+// and the run's stream read them, and none of them is a secret.
+const (
+	MetaRunID   = "runId"
+	MetaTrigger = "trigger"
+	MetaBy      = "by"
+)
+
 // What started a run.
 const (
 	// TriggerSchedule is a run the environment's schedule started.
@@ -146,7 +154,7 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 	}
 	job, err := r.Jobs.Start(jobs.Spec{
 		Kind: JobKind, EnvID: req.EnvID, Owner: req.Owner,
-		Meta: map[string]string{"runId": runID, "trigger": req.Trigger},
+		Meta: map[string]string{MetaRunID: runID, MetaTrigger: req.Trigger, MetaBy: req.Actor},
 	}, func(ctx context.Context, rep *jobs.Reporter) {
 		r.execute(ctx, req, runID, release, rep)
 	})

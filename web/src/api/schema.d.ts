@@ -1455,7 +1455,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the janitor runs of an environment
+         * @description The environment's history of clean-ups, newest first: a person's Clean now and the schedule's runs, each with what started it and who, its state and reason, what it counted, the bytes it freed that were known and how long it took, and no items; read one run for those. limit is 25 by default and 25 to 100 at most. A run is kept while it started within the retention days (90 by default) or is among the newest retention runs (100) of the environment, whichever keeps more. A run that was working when the server restarted reads failed with the reason server_restarted. Needs environments.read on the environment.
+         */
+        get: operations["listJanitorRuns"];
         put?: never;
         /**
          * Clean the environment now
@@ -3739,6 +3743,26 @@ export interface paths {
          * @description Public. The token is in the body, never in the address. Every link that cannot be used, whether expired, used, replaced, unknown or belonging to a disabled or deleted user, answers the same 404 invalid_link.
          */
         post: operations["lookupInvite"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/janitor-jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The clean-ups you can follow
+         * @description The janitor runs that are working or ended in the last 10 minutes, newest first, for the header's Jobs list. A run on an environment where you may read (environments.read) is listed, whoever started it, a scheduled one too; a run on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its stream answers 404 janitor_job_not_found; the run is still read from its environment's history.
+         */
+        get: operations["listJanitorJobs"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7906,6 +7930,45 @@ export interface components {
              */
             type: "container" | "image" | "network";
         };
+        JanitorJobListBody: {
+            /** @description The clean-ups running or ended in the last 10 minutes on the environments the caller may read, newest first */
+            jobs: components["schemas"]["JanitorJobSummary"][] | null;
+        };
+        JanitorJobSummary: {
+            /** @description Who started it, as a name: the person for Clean now, TierPlan for a scheduled run */
+            by: string;
+            /**
+             * Format: int64
+             * @description How many removals have ended
+             */
+            done: number;
+            /** @description The environment the clean-up runs on */
+            envId: string;
+            /** @description The job ID: follow it at /api/env/{envId}/janitor/runs/{runId}/stream */
+            jobId: string;
+            /** @description The run this job is: open it at /env/{envId}/janitor/runs/{runId} */
+            runId: string;
+            /**
+             * Format: date-time
+             * @description When the job started
+             */
+            startedAt: string;
+            /**
+             * @description Where the job is. It counts the job's items, so it can read failed or partial for a run whose record says completed, because an item the engine kept in use ends failed in the job. Read the run for how it ended
+             * @enum {string}
+             */
+            state: "running" | "done" | "partial" | "failed" | "cancelled";
+            /**
+             * Format: int64
+             * @description How many removals the run planned, 0 until the plan is known
+             */
+            total: number;
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
+        };
         JanitorPreviewBody: {
             /** @description What the janitor would remove now, ordered by type (container, network, image), then node, name and ID */
             items: components["schemas"]["JanitorItemBody"][] | null;
@@ -8063,6 +8126,15 @@ export interface components {
             /** @enum {string} */
             type: "container" | "image" | "network";
         };
+        JanitorRunListBody: {
+            /** @description The runs, newest first by the time they started and then by ID, at most limit of them, without their items */
+            runs: components["schemas"]["JanitorRunSummaryBody"][] | null;
+            /**
+             * Format: int64
+             * @description How many runs the environment has on record, which is at least the number listed. Old runs are pruned: a run is kept while it started within 90 days or is among the newest 100
+             */
+            total: number;
+        };
         JanitorRunRequest: {
             /** @description The items ticked in the preview, 1 to 5000. Only those that are still removable when the run has taken the environment's lock are removed */
             items: components["schemas"]["JanitorItemRef"][] | null;
@@ -8072,6 +8144,49 @@ export interface components {
             jobId: string;
             /** @description The ID of this run */
             runId: string;
+        };
+        JanitorRunSummaryBody: {
+            /** @description Who started it: the user's ID, or the name of the system for a scheduled run */
+            actor: string;
+            /** @description The display name of the person who started it; TierPlan for a scheduled run */
+            actorName: string;
+            counts: components["schemas"]["JanitorRunCountsBody"];
+            /**
+             * Format: int64
+             * @description How long the run took, from when it started to when it ended; null while it is waiting or working
+             */
+            durationSeconds: number | null;
+            /**
+             * Format: int64
+             * @description The bytes the removals freed that were known. Null when no size was known, which is not zero
+             */
+            estBytes: number | null;
+            /**
+             * Format: date-time
+             * @description When the run ended; null while it is waiting or working
+             */
+            finishedAt: string | null;
+            /** @description The ID of this run */
+            id: string;
+            /** @description The job that did the removing; empty until it exists */
+            jobId: string;
+            /**
+             * @description Why a run did not complete; empty when it did
+             * @enum {string}
+             */
+            reason: "" | "deploy_in_progress" | "server_restarted" | "no_node_reporting" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /**
+             * @description completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "completed" | "partial" | "skipped" | "failed";
+            /**
+             * @description schedule for a run the schedule started, manual for Clean now
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
         };
         JanitorSummaryBody: {
             /**
@@ -16559,6 +16674,42 @@ export interface operations {
             };
         };
     };
+    listJanitorRuns: {
+        parameters: {
+            query?: {
+                /** @description How many runs to answer, 25 to 100. The newest come first */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunListBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     startJanitorRun: {
         parameters: {
             query?: never;
@@ -21449,6 +21600,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LookupInviteBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listJanitorJobs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorJobListBody"];
                 };
             };
             /** @description Error */

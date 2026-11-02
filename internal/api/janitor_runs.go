@@ -16,6 +16,14 @@ import (
 	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
+// janitorRunsDefaultLimit and janitorRunsMaxLimit are the page sizes of the run list: 25 by
+// default, 25 to 100 at most (D-16).
+const (
+	janitorRunsDefaultLimit = 25
+	janitorRunsMinLimit     = 25
+	janitorRunsMaxLimit     = 100
+)
+
 // maxJanitorRunBody bounds the body of a run: the 5000 items its schema allows, of at most a few
 // hundred bytes each.
 const maxJanitorRunBody = 4 << 20
@@ -113,6 +121,7 @@ type JanitorRunOutput struct {
 // registerJanitorRuns registers Clean now and reading a run.
 func registerJanitorRuns(r *httpx.Router, d JanitorDeps) {
 	registerJanitorRunRead(r, d)
+	registerJanitorRunList(r, d)
 	httpx.Register(r, huma.Operation{
 		OperationID: "startJanitorRun", Method: http.MethodPost, Path: "/api/env/{envId}/janitor/runs",
 		Summary: "Clean the environment now",
@@ -184,6 +193,103 @@ func registerJanitorRunRead(r *httpx.Router, d JanitorDeps) {
 		})
 }
 
+// JanitorRunSummaryBody is one run of the janitor as the history lists it: a run without its items.
+type JanitorRunSummaryBody struct {
+	ID              string               `json:"id" doc:"The ID of this run"`
+	Trigger         string               `json:"trigger" enum:"schedule,manual" doc:"schedule for a run the schedule started, manual for Clean now"`
+	Actor           string               `json:"actor" doc:"Who started it: the user's ID, or the name of the system for a scheduled run"`
+	ActorName       string               `json:"actorName" doc:"The display name of the person who started it; TierPlan for a scheduled run"`
+	State           string               `json:"state" enum:"waiting,running,completed,partial,skipped,failed" doc:"completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work"`
+	Reason          string               `json:"reason" enum:",deploy_in_progress,server_restarted,no_node_reporting,failed" doc:"Why a run did not complete; empty when it did"`
+	StartedAt       string               `json:"startedAt" format:"date-time"`
+	FinishedAt      *string              `json:"finishedAt" nullable:"true" format:"date-time" doc:"When the run ended; null while it is waiting or working"`
+	DurationSeconds *int64               `json:"durationSeconds" nullable:"true" minimum:"0" doc:"How long the run took, from when it started to when it ended; null while it is waiting or working"`
+	Counts          JanitorRunCountsBody `json:"counts"`
+	EstBytes        *int64               `json:"estBytes" nullable:"true" minimum:"0" doc:"The bytes the removals freed that were known. Null when no size was known, which is not zero"`
+	JobID           string               `json:"jobId" doc:"The job that did the removing; empty until it exists"`
+}
+
+// JanitorRunListInput is the request of the run history.
+type JanitorRunListInput struct {
+	EnvironmentPathInput
+	Limit int `query:"limit" default:"25" minimum:"25" maximum:"100" doc:"How many runs to answer, 25 to 100. The newest come first"`
+}
+
+// JanitorRunListBody is the run history of an environment.
+type JanitorRunListBody struct {
+	Runs  []JanitorRunSummaryBody `json:"runs" doc:"The runs, newest first by the time they started and then by ID, at most limit of them, without their items"`
+	Total int                     `json:"total" minimum:"0" doc:"How many runs the environment has on record, which is at least the number listed. Old runs are pruned: a run is kept while it started within 90 days or is among the newest 100"`
+}
+
+// JanitorRunListOutput wraps JanitorRunListBody for huma.
+type JanitorRunListOutput struct {
+	CacheControl string `header:"Cache-Control"`
+	Body         JanitorRunListBody
+}
+
+// registerJanitorRunList registers the run history of an environment.
+func registerJanitorRunList(r *httpx.Router, d JanitorDeps) {
+	httpx.Register(r, huma.Operation{
+		OperationID: "listJanitorRuns", Method: http.MethodGet, Path: "/api/env/{envId}/janitor/runs",
+		Summary: "List the janitor runs of an environment",
+		Description: "The environment's history of clean-ups, newest first: a person's Clean now and the schedule's runs, each with what started it and who, its state and reason, " +
+			"what it counted, the bytes it freed that were known and how long it took, and no items; read one run for those. " +
+			"limit is 25 by default and 25 to 100 at most. A run is kept while it started within the retention days (90 by default) or is among the newest retention runs (100) of the environment, whichever keeps more. " +
+			"A run that was working when the server restarted reads failed with the reason server_restarted. Needs environments.read on the environment.",
+		Tags: []string{"environments"},
+	}, rbac.Requirement{Perm: rbac.PermEnvironmentsRead, Scope: rbac.ScopeEnvironment},
+		func(ctx context.Context, in *JanitorRunListInput) (*JanitorRunListOutput, error) {
+			env := httpx.EnvFrom(ctx)
+			if env == nil || d.Runs == nil {
+				return nil, huma.Error500InternalServerError("internal error")
+			}
+			limit := min(max(in.Limit, janitorRunsMinLimit), janitorRunsMaxLimit)
+			runs, err := d.Runs.ListRuns(ctx, env.ID, limit)
+			if err == nil {
+				var total int
+				if total, err = d.Runs.CountRuns(ctx, env.ID); err == nil {
+					names := map[string]string{}
+					body := JanitorRunListBody{Runs: make([]JanitorRunSummaryBody, 0, len(runs)), Total: max(total, len(runs))}
+					for _, run := range runs {
+						body.Runs = append(body.Runs, janitorRunSummary(ctx, d, names, run))
+					}
+					return &JanitorRunListOutput{CacheControl: "no-store", Body: body}, nil
+				}
+			}
+			d.log().Error("could not list the janitor runs", "environment", env.ID, "error", err)
+			return nil, huma.Error500InternalServerError("internal error")
+		})
+}
+
+// janitorRunSummary is a run as the history lists it. names remembers the actors already looked up.
+func janitorRunSummary(ctx context.Context, d JanitorDeps, names map[string]string, run janitor.Run) JanitorRunSummaryBody {
+	name, ok := names[run.Actor]
+	if !ok {
+		name = janitorActorName(ctx, d, run.Actor)
+		names[run.Actor] = name
+	}
+	b := JanitorRunSummaryBody{
+		ID: run.ID, Trigger: run.Trigger, Actor: run.Actor, ActorName: name, State: run.State, Reason: run.Reason,
+		StartedAt: rfc3339(run.StartedAt), JobID: run.JobID,
+		Counts: JanitorRunCountsBody{
+			RemovedContainers: run.Counts.RemovedContainers, RemovedImages: run.Counts.RemovedImages,
+			RemovedNetworks: run.Counts.RemovedNetworks, Kept: run.Counts.Kept, Failed: run.Counts.Failed,
+			SkippedOffline: run.Counts.SkippedOffline,
+		},
+	}
+	if !run.FinishedAt.IsZero() {
+		finished := rfc3339(run.FinishedAt)
+		b.FinishedAt = &finished
+		secs := max(int64(run.FinishedAt.Sub(run.StartedAt).Seconds()), 0)
+		b.DurationSeconds = &secs
+	}
+	if run.EstBytes >= 0 {
+		est := run.EstBytes
+		b.EstBytes = &est
+	}
+	return b
+}
+
 // janitorRunBody is a run as the API shows it.
 func janitorRunBody(ctx context.Context, d JanitorDeps, run janitor.Run, items []janitor.RunItem) JanitorRunBody {
 	b := JanitorRunBody{
@@ -223,9 +329,16 @@ func janitorRunBody(ctx context.Context, d JanitorDeps, run janitor.Run, items [
 	return b
 }
 
+// janitorSystemName is how a scheduled run's actor reads to a person.
+const janitorSystemName = "TierPlan"
+
 // janitorActorName is the display name of whoever started a run: the user's display name, else
-// their username. An actor that is not a user (a scheduled run names the system) is its own name.
+// their username. A scheduled run's actor is the system, which reads as TierPlan; any other actor
+// that is not a user is its own name.
 func janitorActorName(ctx context.Context, d JanitorDeps, actor string) string {
+	if actor == janitor.SystemActor {
+		return janitorSystemName
+	}
 	if d.Store != nil {
 		if u, err := d.Store.RQ.GetUserByID(ctx, actor); err == nil {
 			if u.DisplayName != "" {

@@ -52,3 +52,17 @@ WHERE r.env_id = ? AND e.run_id = ? AND e.seq = ?;
 -- name: ListJanitorEvidenceSeqs :many
 -- The items of a run that have evidence, without reading any log text.
 SELECT seq FROM janitor_evidence WHERE run_id = ? ORDER BY seq;
+
+-- name: ListJanitorRuns :many
+-- The runs of one environment, newest first. The same started_at is ordered by id, the order the
+-- retention's newest N uses too.
+SELECT id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
+       removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes
+FROM janitor_runs
+WHERE env_id = ?
+ORDER BY started_at DESC, id DESC
+LIMIT ?;
+
+-- name: CountJanitorRuns :one
+-- How many runs an environment has on record.
+SELECT COUNT(*) FROM janitor_runs WHERE env_id = ?;

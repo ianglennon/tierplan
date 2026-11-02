@@ -9,6 +9,18 @@ import (
 	"context"
 )
 
+const countJanitorRuns = `-- name: CountJanitorRuns :one
+SELECT COUNT(*) FROM janitor_runs WHERE env_id = ?
+`
+
+// How many runs an environment has on record.
+func (q *Queries) CountJanitorRuns(ctx context.Context, envID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countJanitorRuns, envID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const finishJanitorRun = `-- name: FinishJanitorRun :execrows
 UPDATE janitor_runs
 SET state = ?, reason = ?, finished_at = ?,
@@ -296,6 +308,62 @@ func (q *Queries) ListJanitorRunItems(ctx context.Context, runID string) ([]Jani
 			&i.ReasonDetail,
 			&i.Outcome,
 			&i.Code,
+			&i.EstBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJanitorRuns = `-- name: ListJanitorRuns :many
+SELECT id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
+       removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes
+FROM janitor_runs
+WHERE env_id = ?
+ORDER BY started_at DESC, id DESC
+LIMIT ?
+`
+
+type ListJanitorRunsParams struct {
+	EnvID string
+	Limit int64
+}
+
+// The runs of one environment, newest first. The same started_at is ordered by id, the order the
+// retention's newest N uses too.
+func (q *Queries) ListJanitorRuns(ctx context.Context, arg ListJanitorRunsParams) ([]JanitorRun, error) {
+	rows, err := q.db.QueryContext(ctx, listJanitorRuns, arg.EnvID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JanitorRun
+	for rows.Next() {
+		var i JanitorRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.Trigger,
+			&i.Actor,
+			&i.State,
+			&i.Reason,
+			&i.JobID,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.RemovedContainers,
+			&i.RemovedImages,
+			&i.RemovedNetworks,
+			&i.Kept,
+			&i.Failed,
+			&i.SkippedOffline,
 			&i.EstBytes,
 		); err != nil {
 			return nil, err

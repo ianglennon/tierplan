@@ -257,6 +257,39 @@ func (m *memStore) GetRun(_ context.Context, envID, runID string) (Run, []RunIte
 	return run, slices.Clone(m.items[runID]), nil
 }
 
+func (m *memStore) ListRuns(_ context.Context, envID string, limit int) ([]Run, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Run
+	for _, run := range m.runs {
+		if run.EnvID == envID {
+			out = append(out, run)
+		}
+	}
+	slices.SortFunc(out, func(a, b Run) int {
+		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (m *memStore) CountRuns(_ context.Context, envID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, run := range m.runs {
+		if run.EnvID == envID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // recordOf is the store of a runner made by newRunner.
 func recordOf(r *Runner) *memStore {
 	m, ok := r.Store.(*memStore)
@@ -1017,6 +1050,32 @@ func TestRunnerNetworksAfterContainers(t *testing.T) {
 	}
 	if _, held := locks.Held("env-1"); held {
 		t.Error("the lock is still held once the job reads finished")
+	}
+}
+
+// The job lists one item for every planned removal as soon as the plan is known, before the first
+// removal is sent, so progress reads "Removing {done} of {total}" from the start (D-14, JAN-09). Who
+// started the run is in its Meta for the jobs list.
+func TestRunnerJobListsEveryRemovalBeforeTheFirst(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5) // the newest two of the slot are kept, so three are removable
+	run, _, hub := newRunner(t, eng)
+	var atFirst jobs.Job
+	var once sync.Once
+	eng.onRemove = func(string) {
+		once.Do(func() { atFirst = jobOf(t, hub, "env-1") })
+	}
+	finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "ada", Owner: "user:u1", Ticked: ticked("c1", "c2", "c3")})
+	if len(atFirst.Items) != 3 {
+		t.Fatalf("items at the first removal = %+v, want all 3 already listed", atFirst.Items)
+	}
+	for _, it := range atFirst.Items {
+		if it.Kind != string(KindContainer) || it.Label == "" || (it.State != jobs.ItemWaiting && it.State != jobs.ItemRunning) {
+			t.Errorf("item at the first removal = %+v, want a container that has not ended", it)
+		}
+	}
+	if atFirst.Meta[MetaBy] != "ada" || atFirst.Meta[MetaTrigger] != TriggerManual || atFirst.Meta[MetaRunID] == "" {
+		t.Errorf("meta = %v, want the run, its trigger and who started it", atFirst.Meta)
 	}
 }
 

@@ -7585,6 +7585,94 @@
         ],
         "type": "object"
       },
+      "JanitorJobListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobs": {
+            "description": "The clean-ups running or ended in the last 10 minutes on the environments the caller may read, newest first",
+            "items": {
+              "$ref": "#/components/schemas/JanitorJobSummary"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "jobs"
+        ],
+        "type": "object"
+      },
+      "JanitorJobSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "by": {
+            "description": "Who started it, as a name: the person for Clean now, TierPlan for a scheduled run",
+            "type": "string"
+          },
+          "done": {
+            "description": "How many removals have ended",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "envId": {
+            "description": "The environment the clean-up runs on",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The job ID: follow it at /api/env/{envId}/janitor/runs/{runId}/stream",
+            "type": "string"
+          },
+          "runId": {
+            "description": "The run this job is: open it at /env/{envId}/janitor/runs/{runId}",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "When the job started",
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "Where the job is. It counts the job's items, so it can read failed or partial for a run whose record says completed, because an item the engine kept in use ends failed in the job. Read the run for how it ended",
+            "enum": [
+              "running",
+              "done",
+              "partial",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "total": {
+            "description": "How many removals the run planned, 0 until the plan is known",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trigger": {
+            "description": "schedule for a run the schedule started, manual for Clean now",
+            "enum": [
+              "schedule",
+              "manual"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobId",
+          "runId",
+          "envId",
+          "state",
+          "done",
+          "total",
+          "trigger",
+          "by",
+          "startedAt"
+        ],
+        "type": "object"
+      },
       "JanitorPreviewBody": {
         "additionalProperties": false,
         "properties": {
@@ -7956,6 +8044,32 @@
         ],
         "type": "object"
       },
+      "JanitorRunListBody": {
+        "additionalProperties": false,
+        "properties": {
+          "runs": {
+            "description": "The runs, newest first by the time they started and then by ID, at most limit of them, without their items",
+            "items": {
+              "$ref": "#/components/schemas/JanitorRunSummaryBody"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "How many runs the environment has on record, which is at least the number listed. Old runs are pruned: a run is kept while it started within 90 days or is among the newest 100",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs",
+          "total"
+        ],
+        "type": "object"
+      },
       "JanitorRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -7991,6 +8105,106 @@
         },
         "required": [
           "runId",
+          "jobId"
+        ],
+        "type": "object"
+      },
+      "JanitorRunSummaryBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "description": "Who started it: the user's ID, or the name of the system for a scheduled run",
+            "type": "string"
+          },
+          "actorName": {
+            "description": "The display name of the person who started it; TierPlan for a scheduled run",
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/JanitorRunCountsBody"
+          },
+          "durationSeconds": {
+            "description": "How long the run took, from when it started to when it ended; null while it is waiting or working",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "estBytes": {
+            "description": "The bytes the removals freed that were known. Null when no size was known, which is not zero",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "finishedAt": {
+            "description": "When the run ended; null while it is waiting or working",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "The ID of this run",
+            "type": "string"
+          },
+          "jobId": {
+            "description": "The job that did the removing; empty until it exists",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why a run did not complete; empty when it did",
+            "enum": [
+              "",
+              "deploy_in_progress",
+              "server_restarted",
+              "no_node_reporting",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "state": {
+            "description": "completed: every item ended as it should. partial: an item errored or the run was cut short. skipped: the run did not run. failed: the run could not do its work",
+            "enum": [
+              "waiting",
+              "running",
+              "completed",
+              "partial",
+              "skipped",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "description": "schedule for a run the schedule started, manual for Clean now",
+            "enum": [
+              "schedule",
+              "manual"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "trigger",
+          "actor",
+          "actorName",
+          "state",
+          "reason",
+          "startedAt",
+          "finishedAt",
+          "durationSeconds",
+          "counts",
+          "estBytes",
           "jobId"
         ],
         "type": "object"
@@ -26491,6 +26705,69 @@
       }
     },
     "/api/env/{envId}/janitor/runs": {
+      "get": {
+        "description": "The environment's history of clean-ups, newest first: a person's Clean now and the schedule's runs, each with what started it and who, its state and reason, what it counted, the bytes it freed that were known and how long it took, and no items; read one run for those. limit is 25 by default and 25 to 100 at most. A run is kept while it started within the retention days (90 by default) or is among the newest retention runs (100) of the environment, whichever keeps more. A run that was working when the server restarted reads failed with the reason server_restarted. Needs environments.read on the environment.",
+        "operationId": "listJanitorRuns",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many runs to answer, 25 to 100. The newest come first",
+            "explode": false,
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 25,
+              "description": "How many runs to answer, 25 to 100. The newest come first",
+              "format": "int64",
+              "maximum": 100,
+              "minimum": 25,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorRunListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "List the janitor runs of an environment",
+        "tags": [
+          "environments"
+        ]
+      },
       "post": {
         "description": "Removes the items ticked in a preview, and answers 202 with the run and its job at once; the clean-up goes on if the browser closes. The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone and the run records it. An item the engine refuses because something uses it is kept, recorded as such and not tried again; one that fails is recorded with a code and not tried again either. A container is removed through the agent of its node, without force and without its volumes. Networks are removed after the containers, each judged again from a fresh read made then and removed by the very code the Address space page's delete uses: the network's whole inspect is saved in the audit log first, one remove is sent, and the audit rows carry the source janitor and the person who started the run. A network the engine says is in use is kept; one that is no longer orphaned or unused is left alone; while a node is not reporting no network is removed. The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.",
         "operationId": "startJanitorRun",
@@ -34901,6 +35178,45 @@
         "summary": "Say what a one-time link is for",
         "tags": [
           "users"
+        ]
+      }
+    },
+    "/api/janitor-jobs": {
+      "get": {
+        "description": "The janitor runs that are working or ended in the last 10 minutes, newest first, for the header's Jobs list. A run on an environment where you may read (environments.read) is listed, whoever started it, a scheduled one too; a run on any other environment is left out, as if it did not exist. A job that has left the server's history is not listed, and its stream answers 404 janitor_job_not_found; the run is still read from its environment's history.",
+        "operationId": "listJanitorJobs",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorJobListBody"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "The clean-ups you can follow",
+        "tags": [
+          "environments"
         ]
       }
     },

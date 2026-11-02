@@ -47,6 +47,11 @@ type JanitorDeps struct {
 	// asks them which stacks and projects of an environment still exist before it removes a compose
 	// container. Nil means they are not read, and no compose container is removable.
 	StackFacts envs.StackFacts
+	// Heartbeat is how often an idle run stream gets a ping, MaxStreamsPerUser how many run streams
+	// one person may hold open and MaxLifetime how long one stream may live. Zero takes the defaults
+	// every other stream has.
+	Heartbeat, MaxLifetime time.Duration
+	MaxStreamsPerUser      int
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -84,5 +89,6 @@ func (d JanitorDeps) log() *slog.Logger {
 func RegisterJanitor(r *httpx.Router, d JanitorDeps) {
 	registerJanitorPreview(r, d)
 	registerJanitorRuns(r, d)
+	registerJanitorStream(r, d)
 	registerJanitorEvidence(r, d)
 }

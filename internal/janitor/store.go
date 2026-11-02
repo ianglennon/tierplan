@@ -124,6 +124,11 @@ type RunStore interface {
 	// GetRun answers a run of an environment and its items in the order they were attempted.
 	// A run of another environment is ErrRunNotFound.
 	GetRun(ctx context.Context, envID, runID string) (Run, []RunItem, error)
+	// ListRuns answers the runs of an environment, newest first by start time and then by ID, without
+	// their items, at most limit of them.
+	ListRuns(ctx context.Context, envID string, limit int) ([]Run, error)
+	// CountRuns answers how many runs an environment has on record.
+	CountRuns(ctx context.Context, envID string) (int, error)
 	// SaveEvidence records the crash evidence of the item seq of a run, in a transaction of its own.
 	// It is called before the container is removed, which is not removed if it fails.
 	SaveEvidence(ctx context.Context, runID string, seq int, ev Evidence) error
@@ -243,18 +248,7 @@ func (s *SQLStore) GetRun(ctx context.Context, envID, runID string) (Run, []RunI
 	for _, seq := range withEvidence {
 		has[seq] = true
 	}
-	run := Run{
-		ID: row.ID, EnvID: row.EnvID, Trigger: row.Trigger, Actor: row.Actor, State: row.State, Reason: row.Reason,
-		JobID: row.JobID, StartedAt: time.Unix(0, row.StartedAt).UTC(), EstBytes: row.EstBytes,
-		Counts: Counts{
-			RemovedContainers: int(row.RemovedContainers), RemovedImages: int(row.RemovedImages),
-			RemovedNetworks: int(row.RemovedNetworks), Kept: int(row.Kept), Failed: int(row.Failed),
-			SkippedOffline: int(row.SkippedOffline),
-		},
-	}
-	if row.FinishedAt != 0 {
-		run.FinishedAt = time.Unix(0, row.FinishedAt).UTC()
-	}
+	run := runOf(row)
 	items := make([]RunItem, 0, len(rows))
 	for _, r := range rows {
 		var d reasonDetail
@@ -273,6 +267,45 @@ func (s *SQLStore) GetRun(ctx context.Context, envID, runID string) (Run, []RunI
 		})
 	}
 	return run, items, nil
+}
+
+// runOf is a run as the record has it.
+func runOf(row sqlc.JanitorRun) Run {
+	run := Run{
+		ID: row.ID, EnvID: row.EnvID, Trigger: row.Trigger, Actor: row.Actor, State: row.State, Reason: row.Reason,
+		JobID: row.JobID, StartedAt: time.Unix(0, row.StartedAt).UTC(), EstBytes: row.EstBytes,
+		Counts: Counts{
+			RemovedContainers: int(row.RemovedContainers), RemovedImages: int(row.RemovedImages),
+			RemovedNetworks: int(row.RemovedNetworks), Kept: int(row.Kept), Failed: int(row.Failed),
+			SkippedOffline: int(row.SkippedOffline),
+		},
+	}
+	if row.FinishedAt != 0 {
+		run.FinishedAt = time.Unix(0, row.FinishedAt).UTC()
+	}
+	return run
+}
+
+// ListRuns implements RunStore.
+func (s *SQLStore) ListRuns(ctx context.Context, envID string, limit int) ([]Run, error) {
+	rows, err := s.St.RQ.ListJanitorRuns(ctx, sqlc.ListJanitorRunsParams{EnvID: envID, Limit: int64(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("list the janitor runs: %w", err)
+	}
+	runs := make([]Run, 0, len(rows))
+	for _, r := range rows {
+		runs = append(runs, runOf(r))
+	}
+	return runs, nil
+}
+
+// CountRuns implements RunStore.
+func (s *SQLStore) CountRuns(ctx context.Context, envID string) (int, error) {
+	n, err := s.St.RQ.CountJanitorRuns(ctx, envID)
+	if err != nil {
+		return 0, fmt.Errorf("count the janitor runs: %w", err)
+	}
+	return int(n), nil
 }
 
 // SaveEvidence implements RunStore.
