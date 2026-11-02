@@ -325,7 +325,7 @@ type StackLockBody struct {
 	StackID   string `json:"stackId" doc:"The stack the running operation is on"`
 	StackName string `json:"stackName" doc:"Its name"`
 	JobID     string `json:"jobId" doc:"The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting"`
-	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt" doc:"What the operation is"`
+	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt,janitor" doc:"What the operation is. janitor is a clean-up of the environment, which names no stack"`
 	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
 	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
 }

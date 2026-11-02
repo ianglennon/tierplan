@@ -35,6 +35,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
@@ -269,6 +270,7 @@ type buildOptions struct {
 	selfContainerID string
 	refusalClock    func() time.Time
 	addressClock    func() time.Time
+	janitorClock    stackops.Clock
 }
 
 // WithRefusalClock replaces the clock of the refusal coalescer, which decides
@@ -285,6 +287,14 @@ func WithRefusalClock(now func() time.Time) Option {
 // sessions, tokens and every other clock keep real time. A nil clock keeps time.Now.
 func WithAddressSpaceClock(now func() time.Time) Option {
 	return func(o *buildOptions) { o.addressClock = now }
+}
+
+// WithJanitorClock replaces the clock a janitor run judges the age of what it removes by. It exists
+// for tests that need containers to be past the grace period at once instead of waiting for it. It
+// is a Go option only, like WithAddressSpaceClock: a production build calls Build without it and
+// always reads the real time. A nil clock keeps the wall clock.
+func WithJanitorClock(c stackops.Clock) Option {
+	return func(o *buildOptions) { o.janitorClock = c }
 }
 
 // WithSelfContainerID supplies the ID of the container TierPlan runs in. The
@@ -806,6 +816,16 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The deploys a git stack makes by itself (auto-deploy) go through the very code the Deploy button does, on the same
 	// operation lock and environment lookup as the stack routes. The service that starts them is made before the
 	// routes' dependencies (which hold its hooks), so it is given the deployer once both exist.
+	// The janitor's Clean now: a run takes the lock the stack operations share and is a job in the same hub.
+	// The policy is the default until the policy store arrives behind the same function.
+	janitorDeps := api.JanitorDeps{
+		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
+		Clock: bo.janitorClock, Now: time.Now, Log: log,
+	}
+	janitorDeps.Runner = &janitor.Runner{
+		Engine: api.NewJanitorEngine(aggregator, clusters, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
+		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Log: log,
+	}
 	stacksDeps := api.StacksDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Platforms: stackops.NewPlatformMemo(), Audit: aud, Checker: checker, Jobs: jobHub, Store: st, Vault: vlt, ConvergeTimeout: cfg.StackConvergeTimeout, Locks: stackLocks, AddressSpaces: addressSpaces, Drift: driftStore, DriftRecheck: driftMonitor.Recheck, RevisionsKept: inst.StackRevisionsKept, SelfContainerID: selfID, SelfNamespace: selfNamespace, GitConns: gitConns, GitSync: gitDeps.Sync, GitDeployed: gitDeps.Sync.Deployed, GitRolledBack: gitDeps.Sync.RolledBack, GitDeployFailed: gitDeps.Sync.DeployFailed, Envs: envSvc, Log: log}
 	gitDeps.Sync.SetDeployer(api.NewStackDeployer(stacksDeps).GitDeployer())
 	router := NewRouter(RouterDeps{
@@ -872,7 +892,7 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		Dashboard:     api.DashboardDeps{Aggregator: aggregator, Clusters: clusters, Checker: checker, SelfContainerID: selfID, Store: st, AddressSpaces: addressSpaces, Log: log},
 		Networks:      api.NetworksDeps{Aggregator: aggregator, Clusters: clusters, AddressSpaces: addressSpaces, Audit: aud, SelfContainerID: selfID, Log: log},
 		AddressSpace:  api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log},
-		Janitor:       api.JanitorDeps{Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Now: time.Now, Log: log},
+		Janitor:       janitorDeps,
 		Services:      api.ServicesDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, AddressSpaces: addressSpaces, Audit: aud, Checker: checker, Store: st, Log: log},
 		RestartLoop:   api.RestartLoopDeps{Store: st, Clusters: clusters, Aggregator: aggregator, Audit: aud, Log: log},
 		Secrets:       api.SecretsDeps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Audit: aud, Checker: checker, Store: st, Log: log},

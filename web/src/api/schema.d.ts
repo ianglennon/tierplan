@@ -1448,6 +1448,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/env/{envId}/janitor/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clean the environment now
+         * @description Removes the items ticked in a preview, and answers 202 with the run and its job at once; the clean-up goes on if the browser closes. The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone, and the job shows it. A container is removed through the agent of its node, without force and without its volumes. The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.
+         */
+        post: operations["startJanitorRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/env/{envId}/networks": {
         parameters: {
             query?: never;
@@ -7775,6 +7795,17 @@ export interface components {
             /** @enum {string} */
             type: "container" | "image" | "network";
         };
+        JanitorItemRef: {
+            /** @description The ID of the node the object is on, as the preview lists it. Empty for an object that belongs to the whole swarm */
+            nodeId: string;
+            /** @description The engine's ID of the object, as the preview lists it */
+            ref: string;
+            /**
+             * @description The type of the object, as the preview lists it
+             * @enum {string}
+             */
+            type: "container" | "image" | "network";
+        };
         JanitorPreviewBody: {
             /** @description What the janitor would remove now, ordered by type (container, network, image), then node, name and ID */
             items: components["schemas"]["JanitorItemBody"][] | null;
@@ -7827,6 +7858,16 @@ export interface components {
             slot?: string;
             /** @description The swarm stack the object is labelled with */
             stack?: string;
+        };
+        JanitorRunRequest: {
+            /** @description The items ticked in the preview, 1 to 5000. Only those that are still removable when the run has taken the environment's lock are removed */
+            items: components["schemas"]["JanitorItemRef"][] | null;
+        };
+        JanitorRunStartedBody: {
+            /** @description The job that does the removing: follow it in the jobs list, one item for each removal */
+            jobId: string;
+            /** @description The ID of this run */
+            runId: string;
         };
         JanitorSummaryBody: {
             /**
@@ -11593,10 +11634,10 @@ export interface components {
             /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
             jobId: string;
             /**
-             * @description What the operation is
+             * @description What the operation is. janitor is a clean-up of the environment, which names no stack
              * @enum {string}
              */
-            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt";
+            kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt" | "janitor";
             /** @description The stack the running operation is on */
             stackId: string;
             /** @description Its name */
@@ -16262,6 +16303,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JanitorPreviewBody"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    startJanitorRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The environment ID */
+                envId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JanitorRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JanitorRunStartedBody"];
                 };
             };
             /** @description Error */

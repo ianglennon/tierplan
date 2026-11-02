@@ -7470,6 +7470,37 @@
         ],
         "type": "object"
       },
+      "JanitorItemRef": {
+        "additionalProperties": false,
+        "properties": {
+          "nodeId": {
+            "description": "The ID of the node the object is on, as the preview lists it. Empty for an object that belongs to the whole swarm",
+            "maxLength": 128,
+            "type": "string"
+          },
+          "ref": {
+            "description": "The engine's ID of the object, as the preview lists it",
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$",
+            "type": "string"
+          },
+          "type": {
+            "description": "The type of the object, as the preview lists it",
+            "enum": [
+              "container",
+              "image",
+              "network"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "nodeId",
+          "ref"
+        ],
+        "type": "object"
+      },
       "JanitorPreviewBody": {
         "additionalProperties": false,
         "properties": {
@@ -7607,6 +7638,45 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "JanitorRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "The items ticked in the preview, 1 to 5000. Only those that are still removable when the run has taken the environment's lock are removed",
+            "items": {
+              "$ref": "#/components/schemas/JanitorItemRef"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "JanitorRunStartedBody": {
+        "additionalProperties": false,
+        "properties": {
+          "jobId": {
+            "description": "The job that does the removing: follow it in the jobs list, one item for each removal",
+            "type": "string"
+          },
+          "runId": {
+            "description": "The ID of this run",
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "jobId"
         ],
         "type": "object"
       },
@@ -16758,7 +16828,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "What the operation is",
+            "description": "What the operation is. janitor is a clean-up of the environment, which names no stack",
             "enum": [
               "deploy",
               "update",
@@ -16766,7 +16836,8 @@
               "start",
               "stop",
               "remove",
-              "adopt"
+              "adopt",
+              "janitor"
             ],
             "type": "string"
           },
@@ -26020,6 +26091,67 @@
           }
         },
         "summary": "Preview what the janitor would remove",
+        "tags": [
+          "environments"
+        ]
+      }
+    },
+    "/api/env/{envId}/janitor/runs": {
+      "post": {
+        "description": "Removes the items ticked in a preview, and answers 202 with the run and its job at once; the clean-up goes on if the browser closes. The run takes the environment's operation lock, the one a deploy takes, and only while it removes. While a stack operation holds it this answers 409 operation_locked and starts nothing. With the lock held it plans again from a fresh read of every node and removes the ticked items that are removable now, each once and never more: an item that is not on the fresh plan, or whose container is no longer exited or has gained the tierplan.keep label, is left alone, and the job shows it. A container is removed through the agent of its node, without force and without its volumes. The job has one item for each removal. Needs janitor.run (Env Admin) on the environment.",
+        "operationId": "startJanitorRun",
+        "parameters": [
+          {
+            "description": "The environment ID",
+            "in": "path",
+            "name": "envId",
+            "required": true,
+            "schema": {
+              "description": "The environment ID",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JanitorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JanitorRunStartedBody"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorModel"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "summary": "Clean the environment now",
         "tags": [
           "environments"
         ]

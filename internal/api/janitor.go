@@ -10,6 +10,8 @@ import (
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store"
@@ -30,6 +32,12 @@ type JanitorDeps struct {
 	// Locks is the environment's operation lock, which a janitor run takes beside a deploy. A
 	// preview never takes it.
 	Locks stackops.OperationLock
+	// Jobs is the hub a janitor run is a job in, and Clock the time a run judges ages at (nil
+	// means the wall clock). Runner starts the runs: the server builds it from the three above
+	// and the engines, so a test can hand in one with its own engine.
+	Jobs   *jobs.Hub
+	Clock  stackops.Clock
+	Runner *janitor.Runner
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().
@@ -55,4 +63,5 @@ func (d JanitorDeps) log() *slog.Logger {
 // RegisterJanitor registers the janitor routes.
 func RegisterJanitor(r *httpx.Router, d JanitorDeps) {
 	registerJanitorPreview(r, d)
+	registerJanitorRuns(r, d)
 }

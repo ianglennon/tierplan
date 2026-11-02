@@ -1178,13 +1178,23 @@ func servicesProblem(e *stackops.ServicesInvalidError) error {
 	}
 }
 
+// holderSentence says what holds an environment's operation lock, without a stop: a stack operation
+// names its stack, and a clean-up of the environment (which names none) says the environment is
+// being cleaned.
+func holderSentence(envName string, h stackops.Holder) string {
+	if h.Kind == stackops.HolderKindJanitor {
+		return "TierPlan is cleaning up " + envName
+	}
+	return "Another stack operation is running on " + envName + ": " + h.StackName
+}
+
 // operationLocked is the 409 for an operation asked for while another holds the environment: it names
 // the stack, the job and when it started, so the page can say who to wait for and open it.
 func operationLocked(envName string, h stackops.Holder) error {
 	started := rfc3339(h.Started)
 	return &huma.ErrorModel{
 		Type: problemOperationLocked, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-		Detail: "Another stack operation is running on " + envName + ": " + h.StackName + ", started " + started + ". Try again when it finishes.",
+		Detail: holderSentence(envName, h) + ", started " + started + ". Try again when it finishes.",
 		Errors: []*huma.ErrorDetail{
 			{Location: "stack", Message: h.StackName},
 			{Location: "job", Message: h.JobID},

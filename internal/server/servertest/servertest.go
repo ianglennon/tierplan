@@ -35,6 +35,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/config"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/server"
+	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -60,6 +61,10 @@ type Options struct {
 	// needs networks to be past the orphan grace period at once (server.WithAddressSpaceClock).
 	// Nil keeps real time. It is kept across Restart.
 	AddressSpaceClock func() time.Time
+	// JanitorClock moves the clock a janitor run judges ages by, for a test that needs containers to
+	// be past the grace period at once (server.WithJanitorClock). Nil keeps real time. It is kept
+	// across Restart.
+	JanitorClock stackops.Clock
 }
 
 // Server is a running TierPlan with an admin signed in.
@@ -105,6 +110,9 @@ func Start(t testing.TB, o Options) *Server {
 	s := &Server{DataDir: dataDir, t: t}
 	if o.AddressSpaceClock != nil {
 		s.opts = append(s.opts, server.WithAddressSpaceClock(o.AddressSpaceClock))
+	}
+	if o.JanitorClock != nil {
+		s.opts = append(s.opts, server.WithJanitorClock(o.JanitorClock))
 	}
 	// The port has to be known before Build (it is in the public URL), so one is
 	// picked by binding and releasing it. The window is small; a taken port makes

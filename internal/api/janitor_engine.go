@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
 	"github.com/ianglennon/tierplan/internal/janitor"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // inspectNodeTimeout is how long the inspects of one node may take before the node's containers
@@ -27,6 +30,16 @@ type janitorEngine struct {
 }
 
 var _ janitor.Engine = (*janitorEngine)(nil)
+
+// NewJanitorEngine is the janitor's engine over the server's aggregator and cluster reader, for
+// the Runner the server builds. clusters may be nil on a server with no swarm reader; log nil
+// means slog.Default().
+func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, log *slog.Logger) janitor.Engine {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &janitorEngine{agg: agg, clusters: clusters, log: log}
+}
 
 // Snapshot implements janitor.Engine.
 func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Snapshot, error) {
@@ -118,4 +131,38 @@ func (e *janitorEngine) Inspect(ctx context.Context, envID, nodeID string, ids [
 		return nil
 	})
 	return out, err
+}
+
+// removeContainerTimeout is how long inspecting and removing one container may take.
+const removeContainerTimeout = time.Minute
+
+// RemoveContainer implements janitor.Engine. On the container's node, through its agent, it
+// inspects the container again (its state and labels) and removes it only if it is still exited and is not labelled
+// tierplan.keep; the removal is neither forced nor takes the container's volumes (JAN-06). Nothing
+// is retried: a removal whose answer was lost may have happened, and a second one would be wrong.
+func (e *janitorEngine) RemoveContainer(ctx context.Context, envID, nodeID, id string) error {
+	ctx, cancel := context.WithTimeout(ctx, removeContainerTimeout)
+	defer cancel()
+	err := e.agg.WriteOnNode(ctx, envID, nodeID, func(c *dockerx.Client) error {
+		d, _, err := c.ContainerDetail(ctx, id)
+		if err != nil {
+			return err
+		}
+		// The engine's own word for the state: only a container that ran and stopped is stale.
+		if d.Status != "exited" || d.Labels[stacks.LabelKeep] == "true" {
+			return janitor.ErrNoLongerStale
+		}
+		return c.ContainerRemove(ctx, id, dockerx.RemoveOptions{})
+	})
+	switch {
+	case err == nil, errors.Is(err, janitor.ErrNoLongerStale):
+		return err
+	case errors.Is(err, envs.ErrNodeUnavailable):
+		return fmt.Errorf("%w: %w", janitor.ErrNodeOffline, err)
+	case dockerx.IsNotFound(err):
+		return fmt.Errorf("%w: %w", janitor.ErrGone, err)
+	case dockerx.IsConflict(err):
+		return fmt.Errorf("%w: %w", janitor.ErrInUse, err)
+	}
+	return err
 }

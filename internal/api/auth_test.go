@@ -34,6 +34,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/gitx"
 	"github.com/ianglennon/tierplan/internal/httpx"
 	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/janitor"
 	"github.com/ianglennon/tierplan/internal/jobs"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/registry"
@@ -404,7 +405,17 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		if f.stackLocks == nil {
 			f.stackLocks = stackops.NewLocks()
 		}
-		api.RegisterJanitor(r, api.JanitorDeps{Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Now: f.clk.now, Log: log})
+		if f.jobHub == nil {
+			f.jobHub = jobs.New(jobs.Options{})
+			t.Cleanup(f.jobHub.Close)
+		}
+		// The clock of a janitor run is the fixture's, so containers dated against it are past grace.
+		janitorClock := nowClock(f.clk.now)
+		api.RegisterJanitor(r, api.JanitorDeps{
+			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
+			Clock: janitorClock, Now: f.clk.now, Log: log,
+			Runner: &janitor.Runner{Engine: api.NewJanitorEngine(f.agg, addrClusters, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Log: log},
+		})
 		api.RegisterNetworks(r, api.NetworksDeps{Aggregator: f.agg, Clusters: f.clusters, AddressSpaces: addressSpaces, Audit: f.aud, SelfContainerID: f.envSvc.SelfContainerID(), AllocationWait: atOnceWait(), Log: log})
 		api.RegisterServices(r, api.ServicesDeps{
 			Aggregator: f.agg, Clusters: f.clusters, Resolver: registry.NewResolver(registry.NewStore(f.st, f.v, f.clk.now)),

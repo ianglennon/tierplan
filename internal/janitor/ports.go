@@ -5,6 +5,7 @@ package janitor
 
 import (
 	"context"
+	"errors"
 	"maps"
 	"sync"
 	"time"
@@ -93,7 +94,25 @@ type Engine interface {
 	// Inspect reads the end of the containers ids on one node. A container that could not be
 	// inspected is left out of the answer.
 	Inspect(ctx context.Context, envID, nodeID string, ids []string) (map[string]ContainerEnd, error)
+	// RemoveContainer removes one container through the agent of its node, once and never retried,
+	// without force and without its volumes. It inspects the container on that node first and
+	// refuses one that is no longer exited or is labelled tierplan.keep, so what the planner
+	// judged a moment ago is judged again at the engine that will do the removing.
+	RemoveContainer(ctx context.Context, envID, nodeID, id string) error
 }
+
+// What RemoveContainer answers when it does not remove the container. The runner reads them with
+// errors.Is; any other error is a failure of the removal itself.
+var (
+	// ErrNoLongerStale: the container is not exited any more, or is labelled tierplan.keep.
+	ErrNoLongerStale = errors.New("janitor: the container is no longer stale")
+	// ErrInUse: the engine refused the removal because the container is in use.
+	ErrInUse = errors.New("janitor: the container is in use")
+	// ErrGone: the container no longer exists on its node.
+	ErrGone = errors.New("janitor: the container is already gone")
+	// ErrNodeOffline: the node is not connected, so nothing was sent.
+	ErrNodeOffline = errors.New("janitor: the node is not connected")
+)
 
 // inspectNodes is how many nodes are inspected at once. A node is asked one container at a time.
 const inspectNodes = 4
