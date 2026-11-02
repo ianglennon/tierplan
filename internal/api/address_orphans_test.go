@@ -536,3 +536,40 @@ func TestDeleteOrphanNeedsEnvAdmin(t *testing.T) {
 		t.Fatalf("a refused request wrote %v or audited %d rows", f.fake.Writes(), len(f.networkAudits(t)))
 	}
 }
+
+// The refactor that lets the janitor remove a network by the same code changed nothing for the
+// Address space page: the route answers as before and every audit row still says orphan_cleanup.
+func TestDeleteOrphanSourceUnchanged(t *testing.T) {
+	t.Parallel()
+	cfg := orphanEngine(idleNet("idle1", "idle"), idleNet("idle2", "busy"))
+	f, e := dashEnv(t, cfg)
+	if got := orphanNames(f.space(t, e)); !slices.Equal(got, []string{"busy", "idle"}) {
+		t.Fatalf("orphans = %v", got)
+	}
+	rec := f.delOrphan(t, e, "idle1", "")
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.code, rec.body)
+	}
+	if got := decode[orphanDeleteBody](t, rec); got.Outcome != "deleted" || got.Reason != "" || got.Name != "idle" {
+		t.Fatalf("body = %+v, want deleted idle", got)
+	}
+	// Something attached to the other after the list was read: kept, with the same body as ever.
+	cfg.Containers = []dockertest.FakeContainer{{ID: "c1", Names: []string{"/late"}, State: "running", Networks: map[string]dockertest.FakeEndpoint{"busy": {NetworkID: "idle2"}}}}
+	f.fake.Reconfigure(cfg)
+	wantKept(t, f.delOrphan(t, e, "idle2", ""), "in_use_again", "busy")
+
+	rows := f.networkAudits(t)
+	var actions []string
+	for _, r := range rows {
+		actions = append(actions, r.Action+" "+r.Result)
+		if r.Details["source"] != "orphan_cleanup" {
+			t.Errorf("%s of %s has source %q, want orphan_cleanup", r.Action, r.Details["name"], r.Details["source"])
+		}
+	}
+	want := []string{
+		audit.ActionNetworkInspectSaved + " success", audit.ActionNetworkRemoved + " success", audit.ActionNetworkRemoved + " failure",
+	}
+	if !slices.Equal(actions, want) {
+		t.Fatalf("audit = %v, want %v", actions, want)
+	}
+}

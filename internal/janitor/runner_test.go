@@ -15,6 +15,8 @@ import (
 
 	"github.com/ianglennon/tierplan/internal/audit"
 	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/stackops"
 	"github.com/ianglennon/tierplan/proto/testsupport"
 )
@@ -813,4 +815,307 @@ func TestRunnerTickedItemsNotOnThePlan(t *testing.T) {
 	if got.State != StatePartial || got.Counts != (Counts{RemovedContainers: 1, Kept: 2, SkippedOffline: 1}) {
 		t.Fatalf("run = %+v, want partial with 1 removed, 2 kept and 1 skipped offline", got)
 	}
+}
+
+// The networks stage (plan 11-08, JAN-04, Pitfall 3): after the containers, from a fresh check, and
+// each network by the one removal path behind the Networks port.
+
+// stage records the order in which the engine and the networks were asked, across both.
+type stage struct {
+	mu  sync.Mutex
+	log []string
+}
+
+func (s *stage) add(what string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.log = append(s.log, what)
+}
+
+func (s *stage) events() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.log)
+}
+
+// fakeNetworks serves one report and records what it is asked.
+type fakeNetworks struct {
+	st        *stage
+	rep       NetworkReport
+	repErr    error
+	removeErr map[string]error
+
+	mu         sync.Mutex
+	reports    int
+	removed    []string
+	principals []string
+}
+
+func (n *fakeNetworks) Report(context.Context, string) (NetworkReport, error) {
+	n.st.add("report")
+	n.mu.Lock()
+	n.reports++
+	n.mu.Unlock()
+	return n.rep, n.repErr
+}
+
+func (n *fakeNetworks) Remove(_ context.Context, _ string, by *rbac.Principal, row NetworkRow) error {
+	n.st.add("network:" + row.ID)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.removed = append(n.removed, row.ID)
+	n.principals = append(n.principals, string(by.Type)+":"+by.ID)
+	return n.removeErr[row.ID]
+}
+
+func (n *fakeNetworks) removeCalls() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.removed)
+}
+
+// withNetworks gives the runner a Networks that serves rows from one node, with a report that is
+// complete, and the engine a hook that records its removals in the same log.
+func withNetworks(run *Runner, eng *fakeEngine, rows ...NetworkRow) *fakeNetworks {
+	st := &stage{}
+	eng.onRemove = func(id string) { st.add("container:" + id) }
+	n := &fakeNetworks{st: st, rep: NetworkReport{Complete: true, Rows: rows}, removeErr: map[string]error{}}
+	run.Networks = n
+	return n
+}
+
+// oldNetwork is a network of the node n1 that its stack left behind.
+func oldNetwork(id string) NetworkRow {
+	return NetworkRow{
+		ID: id, Name: "net-" + id, NodeID: "n1-id", Node: "n1", Scope: "local", Class: netspace.ClassOrphaned,
+		FormerOwner: "shop", FormerOwnerKind: "stack", IdleSince: t0.Add(-48 * time.Hour),
+	}
+}
+
+func tickedNetworks(ids ...string) []ItemRef {
+	var out []ItemRef
+	for _, id := range ids {
+		out = append(out, ItemRef{Type: KindNetwork, NodeID: "n1-id", Ref: id})
+	}
+	return out
+}
+
+func itemOutcomes(items []RunItem) []string {
+	var out []string
+	for _, it := range items {
+		out = append(out, string(it.Type)+" "+it.Ref+" "+string(it.Outcome)+" "+it.Code)
+	}
+	return out
+}
+
+// A network is judged only once the run's own containers are gone: the report is read after the
+// last container removal, and the network is removed after the report.
+func TestRunnerNetworksAfterContainers(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5) // c1..c3 are beyond the two newest
+	run, locks, hub := newRunner(t, eng)
+	nets := withNetworks(run, eng, oldNetwork("a"))
+	by := &rbac.Principal{Type: rbac.PrincipalUser, ID: "u1", Name: "Ada"}
+	req := RunRequest{
+		EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", ActorID: "u1", Owner: "user:u1", Principal: by,
+		Ticked: append(ticked("c1", "c2"), tickedNetworks("a")...),
+	}
+	got, items := finished(t, run, hub, req)
+	if want := []string{"container:c1", "container:c2", "report", "network:a"}; !slices.Equal(nets.st.events(), want) {
+		t.Fatalf("events = %v, want %v: the containers, then a fresh report, then the network", nets.st.events(), want)
+	}
+	if nets.reports != 1 || !slices.Equal(nets.principals, []string{"user:u1"}) {
+		t.Errorf("reports = %d principals = %v, want one report and the removal as the user who pressed Clean now", nets.reports, nets.principals)
+	}
+	if got.State != StateCompleted || got.Counts != (Counts{RemovedContainers: 2, RemovedNetworks: 1}) {
+		t.Fatalf("run = %+v, want completed with 2 containers and 1 network removed", got)
+	}
+	if want := []string{"container c1 removed ", "container c2 removed ", "network a removed "}; !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	job := jobOf(t, hub, "env-1")
+	if job.State != jobs.JobDone || len(job.Items) != 3 || job.Items[2].Kind != "network" || job.Items[2].State != jobs.ItemDone {
+		t.Fatalf("job = %s items %+v, want a done job whose third item is the done network", job.State, job.Items)
+	}
+	if _, held := locks.Held("env-1"); held {
+		t.Error("the lock is still held once the job reads finished")
+	}
+}
+
+// jobOf is the one job of the environment the hub holds.
+func jobOf(t *testing.T, hub *jobs.Hub, envID string) jobs.Job {
+	t.Helper()
+	found := hub.List(func(j jobs.Job) bool { return j.EnvID == envID })
+	if len(found) != 1 {
+		t.Fatalf("jobs of %s = %+v, want exactly one", envID, found)
+	}
+	return found[0]
+}
+
+// A run that ticked no network reads none, and one whose snapshot found no node reads none either.
+func TestRunnerNetworksReadOnlyWhenWanted(t *testing.T) {
+	t.Parallel()
+	t.Run("no network ticked", func(t *testing.T) {
+		t.Parallel()
+		eng := newFakeEngine(5)
+		run, _, hub := newRunner(t, eng)
+		nets := withNetworks(run, eng, oldNetwork("a"))
+		finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: ticked("c1")})
+		if nets.reports != 0 || len(nets.removeCalls()) != 0 {
+			t.Fatalf("reports = %d removals = %v, want the networks left unread", nets.reports, nets.removeCalls())
+		}
+	})
+	t.Run("no node reported", func(t *testing.T) {
+		t.Parallel()
+		eng := newFakeEngine(5)
+		eng.snap = Snapshot{Swarm: true, NotReporting: []string{"n1"}, Unreachable: []Node{{ID: "n1-id", Name: "n1"}}, ReadAt: t0}
+		run, _, hub := newRunner(t, eng)
+		nets := withNetworks(run, eng, oldNetwork("a"))
+		got, _ := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+		if got.State != StateSkipped || nets.reports != 0 {
+			t.Fatalf("run = %+v reports = %d, want a skipped run that judged no network", got, nets.reports)
+		}
+	})
+	t.Run("all, as the system", func(t *testing.T) {
+		t.Parallel()
+		eng := newFakeEngine(2) // nothing beyond keep-N
+		run, _, hub := newRunner(t, eng)
+		nets := withNetworks(run, eng, oldNetwork("a"), oldNetwork("b"))
+		got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+		if !slices.Equal(nets.removeCalls(), []string{"a", "b"}) || !slices.Equal(nets.principals, []string{"system:system:janitor", "system:system:janitor"}) {
+			t.Fatalf("removed = %v as %v, want both networks as system:janitor", nets.removeCalls(), nets.principals)
+		}
+		if got.State != StateCompleted || got.Counts.RemovedNetworks != 2 || len(items) != 2 {
+			t.Fatalf("run = %+v items = %v, want 2 networks removed", got, itemOutcomes(items))
+		}
+	})
+}
+
+// A ticked network the fresh check no longer finds orphaned or unused is left, with nothing sent.
+func TestRunnerNetworkNoLongerOrphaned(t *testing.T) {
+	t.Parallel()
+	inUse := oldNetwork("a")
+	inUse.Class = netspace.ClassInUse
+	owned := oldNetwork("b")
+	owned.Class = netspace.ClassOwned
+	kept := oldNetwork("c")
+	kept.Class, kept.KeptByRow = netspace.ClassKept, true
+	eng := newFakeEngine(2)
+	run, _, hub := newRunner(t, eng)
+	nets := withNetworks(run, eng, inUse, owned, kept, oldNetwork("d"))
+	got, items := finished(t, run, hub, RunRequest{
+		EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: tickedNetworks("a", "b", "c", "d", "gone"),
+	})
+	if !slices.Equal(nets.removeCalls(), []string{"d"}) {
+		t.Fatalf("removed = %v, want only d: the others are not orphaned or unused any more", nets.removeCalls())
+	}
+	want := []string{
+		"network a skipped_protected no_longer_stale", "network b skipped_protected no_longer_stale",
+		"network c skipped_protected no_longer_stale", "network gone skipped_protected no_longer_stale", "network d removed ",
+	}
+	if !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	if got.State != StateCompleted || got.Counts != (Counts{RemovedNetworks: 1, Kept: 4}) {
+		t.Fatalf("run = %+v, want completed with 1 removed and 4 kept", got)
+	}
+}
+
+// Each answer of the removal path is a recorded outcome, and none is tried again.
+func TestRunnerNetworkOutcomes(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err     error
+		want    string
+		counts  Counts
+		partial bool
+	}{
+		"in use again":      {ErrInUse, "network a refused_in_use in_use", Counts{Kept: 1}, false},
+		"not orphaned":      {ErrNoLongerStale, "network a skipped_protected no_longer_stale", Counts{Kept: 1}, false},
+		"gone":              {ErrGone, "network a skipped_protected gone", Counts{}, false},
+		"node offline":      {ErrNodeOffline, "network a skipped_node_offline node_offline", Counts{SkippedOffline: 1}, true},
+		"inspect too large": {&CodedError{Code: CodeInspectTooLarge, Err: errors.New("over 64 KB")}, "network a error inspect_too_large", Counts{Failed: 1}, true},
+		"other failure":     {errors.New("boom"), "network a error action_failed", Counts{Failed: 1}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			eng := newFakeEngine(2)
+			run, _, hub := newRunner(t, eng)
+			nets := withNetworks(run, eng, oldNetwork("a"))
+			nets.removeErr["a"] = tc.err
+			got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: tickedNetworks("a")})
+			if !slices.Equal(itemOutcomes(items), []string{tc.want}) || got.Counts != tc.counts {
+				t.Fatalf("items = %v counts = %+v, want %q and %+v", itemOutcomes(items), got.Counts, tc.want, tc.counts)
+			}
+			if !slices.Equal(nets.removeCalls(), []string{"a"}) {
+				t.Errorf("removals = %v, want one and only one", nets.removeCalls())
+			}
+			if wantState := map[bool]string{true: StatePartial, false: StateCompleted}[tc.partial]; got.State != wantState {
+				t.Errorf("state = %s, want %s", got.State, wantState)
+			}
+		})
+	}
+}
+
+// A node that stops answering after the run began: no network is removable, and a ticked network of
+// that node, like a swarm-wide one, is skipped with nothing sent.
+func TestRunnerNetworksWhenANodeIsMissing(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(2)
+	eng.snap.Nodes = append(eng.snap.Nodes, Node{ID: "n2-id", Name: "n2"})
+	run, _, hub := newRunner(t, eng)
+	swarmWide := NetworkRow{ID: "s", Name: "shared", Node: "Cluster", Scope: "swarm", Class: netspace.ClassCantTell}
+	nets := withNetworks(run, eng, swarmWide, oldNetwork("a"))
+	nets.rep.Complete, nets.rep.WithheldNodes = false, []string{"n2"}
+	// The network of n2 is not in the report at all: n2 did not answer.
+	refs := append(tickedNetworks("a"), ItemRef{Type: KindNetwork, NodeID: "n2-id", Ref: "b"}, ItemRef{Type: KindNetwork, Ref: "s"})
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: refs})
+	if len(nets.removeCalls()) != 0 {
+		t.Fatalf("removed = %v, want nothing: a node is not reporting", nets.removeCalls())
+	}
+	want := []string{
+		"network a skipped_node_offline node_offline", "network b skipped_node_offline node_offline", "network s skipped_node_offline node_offline",
+	}
+	if !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	if items[1].Node != "n2" || items[2].Name != "shared" {
+		t.Errorf("items = %+v, want the missing node and the swarm network named", items)
+	}
+	if got.State != StatePartial || got.Counts.SkippedOffline != 3 {
+		t.Fatalf("run = %+v, want partial with 3 skipped offline", got)
+	}
+}
+
+// A check that fails leaves the ticked networks unremoved and the run partial, but the containers
+// it already removed stay removed.
+func TestRunnerNetworkReportFails(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5)
+	run, _, hub := newRunner(t, eng)
+	nets := withNetworks(run, eng, oldNetwork("a"))
+	nets.repErr = errors.New("the orphan check failed")
+	got, items := finished(t, run, hub, RunRequest{
+		EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1", Ticked: append(ticked("c1"), tickedNetworks("a")...),
+	})
+	if len(nets.removeCalls()) != 0 || !slices.Equal(eng.removedIDs(), []string{"c1"}) {
+		t.Fatalf("network removals = %v container removals = %v, want only c1", nets.removeCalls(), eng.removedIDs())
+	}
+	if want := []string{"container c1 removed ", "network a error plan_failed"}; !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	if got.State != StatePartial || got.Counts != (Counts{RemovedContainers: 1, Failed: 1}) {
+		t.Fatalf("run = %+v, want partial with 1 removed and 1 failed", got)
+	}
+	t.Run("a run for everything says it was cut short", func(t *testing.T) {
+		t.Parallel()
+		eng := newFakeEngine(2)
+		run, _, hub := newRunner(t, eng)
+		nets := withNetworks(run, eng)
+		nets.repErr = errors.New("the orphan check failed")
+		got, _ := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+		if got.State != StatePartial {
+			t.Fatalf("run = %+v, want partial: the networks were never judged", got)
+		}
+	})
 }
