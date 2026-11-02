@@ -50,6 +50,8 @@ type fakeEngine struct {
 	// onRemove, when set, is called with the ID of each container the engine is asked to remove,
 	// before it answers: a test reads the record of the run there.
 	onRemove func(id string)
+	// onRemoveImage is the same for images.
+	onRemoveImage func(id string)
 }
 
 func newFakeEngine(n int) *fakeEngine {
@@ -99,6 +101,9 @@ func (e *fakeEngine) RemoveContainer(_ context.Context, _, _, id string) error {
 
 // RemoveImage records the removal in the same order as RemoveContainer, as "image:"+id.
 func (e *fakeEngine) RemoveImage(_ context.Context, _, _, id string) error {
+	if e.onRemoveImage != nil {
+		e.onRemoveImage(id)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, "image:"+id)
@@ -1130,4 +1135,86 @@ func TestRunnerNetworkReportFails(t *testing.T) {
 			t.Fatalf("run = %+v, want partial: the networks were never judged", got)
 		}
 	})
+}
+
+// A run removes its containers first, then its images, then its networks (D-07). The images were
+// judged with the run's first read, so one the run's own container removals free is judged by the
+// next run, never by this run's stale answer.
+func TestRunnerOrderContainersImagesNetworks(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(5) // c1..c3 are beyond the two newest
+	eng.snap.ServicesRead = true
+	eng.snap.Images = []Image{
+		{ID: "sha256:aa", NodeID: "n1-id", Node: "n1", Size: 10, Created: t0.Add(-72 * time.Hour)},
+		{ID: "sha256:bb", NodeID: "n1-id", Node: "n1", Size: 20, Created: t0.Add(-96 * time.Hour)},
+	}
+	run, _, hub := newRunner(t, eng)
+	nets := withNetworks(run, eng, oldNetwork("a"))
+	eng.onRemoveImage = func(id string) { nets.st.add("image:" + id) }
+	req := RunRequest{
+		EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true,
+	}
+	got, items := finished(t, run, hub, req)
+	want := []string{"container:c1", "container:c2", "container:c3", "image:sha256:bb", "image:sha256:aa", "report", "network:a"}
+	if !slices.Equal(nets.st.events(), want) {
+		t.Fatalf("events = %v, want %v: containers, then images (the older first), then a fresh report and the network", nets.st.events(), want)
+	}
+	if got.State != StateCompleted || got.Counts != (Counts{RemovedContainers: 3, RemovedImages: 2, RemovedNetworks: 1}) {
+		t.Fatalf("run = %+v, want completed with 3 containers, 2 images and 1 network removed", got)
+	}
+	if got.EstBytes != 30 {
+		t.Errorf("estimate = %d, want the 30 bytes of the two images", got.EstBytes)
+	}
+	if len(items) != 6 || items[3].Type != KindImage || items[4].Type != KindImage || items[5].Type != KindNetwork {
+		t.Fatalf("items = %v, want three containers, two images, then the network", itemOutcomes(items))
+	}
+}
+
+// A ticked image the fresh plan no longer removes is left with nothing sent, and says so in words
+// about an image.
+func TestRunnerTickedImageNoLongerDangling(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(2)
+	eng.snap.ServicesRead = true
+	eng.snap.Images = []Image{{ID: "sha256:aa", NodeID: "n1-id", Node: "n1", RepoTags: []string{"app:1"}, Created: t0.Add(-72 * time.Hour)}}
+	run, _, hub := newRunner(t, eng)
+	got, items := finished(t, run, hub, RunRequest{
+		EnvID: "env-1", Trigger: TriggerManual, Actor: "Ada", Owner: "user:u1",
+		Ticked: []ItemRef{{Type: KindImage, NodeID: "n1-id", Ref: "sha256:aa"}},
+	})
+	if len(eng.removeCalls()) != 0 {
+		t.Fatalf("calls = %v, want nothing sent for an image that has a tag", eng.removeCalls())
+	}
+	if want := []string{"image sha256:aa skipped_protected no_longer_stale"}; !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	if items[0].Node != "n1" || items[0].Name != "aa" || got.Counts.Kept != 1 {
+		t.Errorf("item = %+v counts = %+v, want the image named on its node and counted as kept", items[0], got.Counts)
+	}
+}
+
+// The words of an image the engine refused: in use is kept, and a failure is an error with a code.
+func TestRunnerImageRefusals(t *testing.T) {
+	t.Parallel()
+	eng := newFakeEngine(2)
+	eng.snap.ServicesRead = true
+	eng.snap.Images = []Image{
+		{ID: "sha256:aa", NodeID: "n1-id", Node: "n1", Created: t0.Add(-72 * time.Hour)},
+		{ID: "sha256:bb", NodeID: "n1-id", Node: "n1", Created: t0.Add(-71 * time.Hour)},
+		{ID: "sha256:cc", NodeID: "n1-id", Node: "n1", Created: t0.Add(-70 * time.Hour)},
+	}
+	eng.removeErr["image:sha256:aa"] = ErrInUse
+	eng.removeErr["image:sha256:bb"] = ErrGone
+	eng.removeErr["image:sha256:cc"] = &CodedError{Code: "action_failed", Err: errors.New("boom")}
+	run, _, hub := newRunner(t, eng)
+	got, items := finished(t, run, hub, RunRequest{EnvID: "env-1", Trigger: TriggerSchedule, Actor: "TierPlan", Owner: "system:janitor:env-1", All: true})
+	want := []string{
+		"image sha256:aa refused_in_use in_use", "image sha256:bb skipped_protected gone", "image sha256:cc error action_failed",
+	}
+	if !slices.Equal(itemOutcomes(items), want) {
+		t.Fatalf("items = %v, want %v", itemOutcomes(items), want)
+	}
+	if got.State != StatePartial {
+		t.Errorf("state = %s, want partial: one image failed", got.State)
+	}
 }
