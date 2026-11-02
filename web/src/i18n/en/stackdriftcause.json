@@ -1,20 +1,20 @@
 {
   "stackDriftCause": {
-    "scaled": "{{service}} was scaled from {{from}} to {{to}} by {{user}} in Coaming, <time/>.",
-    "scaledTo": "{{service}} was scaled to {{to}} by {{user}} in Coaming, <time/>.",
-    "rolled_back": "{{service}} was rolled back by {{user}} in Coaming, <time/>.",
-    "edited": "{{service}} was edited by {{user}} in Coaming, <time/>.",
+    "scaled": "{{service}} was scaled from {{from}} to {{to}} by {{user}} in TierPlan, <time/>.",
+    "scaledTo": "{{service}} was scaled to {{to}} by {{user}} in TierPlan, <time/>.",
+    "rolled_back": "{{service}} was rolled back by {{user}} in TierPlan, <time/>.",
+    "edited": "{{service}} was edited by {{user}} in TierPlan, <time/>.",
     "adopted": "Differed from the rebuilt definition when {{name}} was adopted.",
     "adoptedStack": "Differed from the rebuilt definition when the stack was adopted.",
-    "multiple_one": "{{count}} change, the latest by {{user}} in Coaming, <time/>.",
-    "multiple_other": "{{count}} changes, the latest by {{user}} in Coaming, <time/>.",
-    "outside": "Changed outside Coaming.",
+    "multiple_one": "{{count}} change, the latest by {{user}} in TierPlan, <time/>.",
+    "multiple_other": "{{count}} changes, the latest by {{user}} in TierPlan, <time/>.",
+    "outside": "Changed outside TierPlan.",
     "short": {
-      "scaled": "{{service}} was scaled by {{user}} in Coaming.",
-      "rolled_back": "{{service}} was rolled back by {{user}} in Coaming.",
-      "edited": "{{service}} was edited by {{user}} in Coaming.",
-      "multiple_one": "{{count}} change, the latest by {{user}} in Coaming.",
-      "multiple_other": "{{count}} changes, the latest by {{user}} in Coaming."
+      "scaled": "{{service}} was scaled by {{user}} in TierPlan.",
+      "rolled_back": "{{service}} was rolled back by {{user}} in TierPlan.",
+      "edited": "{{service}} was edited by {{user}} in TierPlan.",
+      "multiple_one": "{{count}} change, the latest by {{user}} in TierPlan.",
+      "multiple_other": "{{count}} changes, the latest by {{user}} in TierPlan."
     }
   }
 }

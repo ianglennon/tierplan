@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // seedDataDir creates a migrated database and a generated key file in a new
@@ -51,9 +51,9 @@ func seedDataDir(t *testing.T, n int) (string, *store.Store) {
 
 func runCLI(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	t.Setenv("COAMING_DATA_DIR", dir)
-	t.Setenv("COAMING_ENCRYPTION_KEY", "")
-	t.Setenv("COAMING_ENCRYPTION_KEY_FILE", "")
+	t.Setenv("TIERPLAN_DATA_DIR", dir)
+	t.Setenv("TIERPLAN_ENCRYPTION_KEY", "")
+	t.Setenv("TIERPLAN_ENCRYPTION_KEY_FILE", "")
 	var out, errb bytes.Buffer
 	root := newRoot()
 	root.SetOut(&out)
@@ -110,7 +110,7 @@ func TestAuditVerifyNeverGeneratesAKey(t *testing.T) {
 	if _, _, err := runCLI(t, other, "audit", "verify"); err == nil {
 		t.Fatal("still no key on the second try")
 	}
-	if matches, _ := coamingKeyFiles(other); len(matches) != 0 {
+	if matches, _ := tierplanKeyFiles(other); len(matches) != 0 {
 		t.Fatalf("verify created a key file: %v", matches)
 	}
 }
@@ -126,7 +126,7 @@ func TestAuditVerifyWithoutADatabaseSaysSo(t *testing.T) {
 	}
 }
 
-func coamingKeyFiles(dir string) ([]string, error) {
+func tierplanKeyFiles(dir string) ([]string, error) {
 	return filepath.Glob(filepath.Join(dir, vault.KeyFile))
 }
 

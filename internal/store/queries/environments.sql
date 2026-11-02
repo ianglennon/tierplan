@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 -- name: ListEnvironments :many
 SELECT * FROM environments ORDER BY created_at, id;

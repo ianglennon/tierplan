@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,11 +16,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The first endpoint that changes Docker state (plan 04-01, RES-01, D-06, D-11, D-14,
@@ -38,11 +38,11 @@ func actionEngine() dockertest.FakeConfig {
 	return dockertest.FakeConfig{
 		Hostname: "node-1", Version: "29.1.0",
 		Containers: []dockertest.FakeContainer{
-			{ID: selfCtr, Names: []string{"/coaming"}, Image: "coaming:edge", State: "running", Status: "Up 1 hour"},
+			{ID: selfCtr, Names: []string{"/tierplan"}, Image: "tierplan:edge", State: "running", Status: "Up 1 hour"},
 			{ID: webID, Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
 			{ID: dbID, Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 3 hours ago"},
-			{ID: agentID, Names: []string{"/coaming-agent"}, Image: "coaming-agent:edge", State: "running", Status: "Up 1 hour",
-				Labels: map[string]string{"coaming.agent": "true"}},
+			{ID: agentID, Names: []string{"/tierplan-agent"}, Image: "tierplan-agent:edge", State: "running", Status: "Up 1 hour",
+				Labels: map[string]string{"tierplan.agent": "true"}},
 		},
 	}
 }
@@ -199,12 +199,12 @@ func TestContainerActionAnUnknownNodeIsNodeUnreachableAndNothingIsSent(t *testin
 	}
 }
 
-func TestContainerActionCoamingsOwnContainersAreSkippedInABulkFromAFreshInspect(t *testing.T) {
+func TestContainerActionTierPlansOwnContainersAreSkippedInABulkFromAFreshInspect(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
 	// The server's own container, named by a short prefix of its ID, and an agent
 	// container, found by its label: neither the list nor the client is trusted.
-	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, selfID}, [2]string{e.ID, "coaming-agent"}, [2]string{e.ID, selfCtr}))
+	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, selfID}, [2]string{e.ID, "tierplan-agent"}, [2]string{e.ID, selfCtr}))
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
@@ -239,9 +239,9 @@ func TestContainerActionAnUnknownContainerIsNotFound(t *testing.T) {
 func TestContainerActionEachTargetIsAnsweredInOrderAndOneFailureDoesNotStopTheRest(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
-	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, "ghost"}, [2]string{e.ID, webID}, [2]string{e.ID, "coaming-agent"}))
+	rec := f.act(t, e, actionJSON("stop", [2]string{e.ID, "ghost"}, [2]string{e.ID, webID}, [2]string{e.ID, "tierplan-agent"}))
 	got := decode[actionBody](t, rec).Results
-	if len(got) != 3 || got[0].ID != "ghost" || got[1].ID != webID || got[2].ID != "coaming-agent" {
+	if len(got) != 3 || got[0].ID != "ghost" || got[1].ID != webID || got[2].ID != "tierplan-agent" {
 		t.Fatalf("results are not in request order: %+v", got)
 	}
 	want := []string{"failed/not_found", "done/", "skipped/own_container"}
@@ -842,8 +842,8 @@ func TestContainerActionsOnTwoNodesWithSameNamedContainersActOnExactlyTheNodeNam
 	}
 }
 
-// Coaming's own containers (plan 04-05, D-11, D-12, RESEARCH Pitfall 10): stopping the
-// server or an agent cuts Coaming off from a host, so one at a time it needs the name
+// TierPlan's own containers (plan 04-05, D-11, D-12, RESEARCH Pitfall 10): stopping the
+// server or an agent cuts TierPlan off from a host, so one at a time it needs the name
 // typed, in a bulk it is never reached, and the attempt is recorded before the call.
 
 func withConfirm(body, confirm string) string {
@@ -853,8 +853,8 @@ func withConfirm(body, confirm string) string {
 func TestOwnContainerSingleTargetNeedsItsNameTypedAndNothingIsSentWithout(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, ref, container string }{
-		{"the server", selfID, "coaming"},
-		{"an agent", "coaming-agent", "coaming-agent"},
+		{"the server", selfID, "tierplan"},
+		{"an agent", "tierplan-agent", "tierplan-agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, e := dashEnv(t, actionEngine())
@@ -890,7 +890,7 @@ func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *t
 	t.Parallel()
 	for _, verb := range []string{"stop", "kill", "restart", "pause"} {
 		f, e := dashEnv(t, actionEngine())
-		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "coaming-agent"}))
+		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "tierplan-agent"}))
 		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
 			t.Errorf("%s: %d %q, want 422 confirmation_required", verb, rec.code, rec.ptyp)
 		}
@@ -900,7 +900,7 @@ func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *t
 	}
 	rec := func() *envRec {
 		f, e := dashEnv(t, actionEngine())
-		r := f.remove(t, e, removeJSON(true, false, [2]string{e.ID, "coaming-agent"}))
+		r := f.remove(t, e, removeJSON(true, false, [2]string{e.ID, "tierplan-agent"}))
 		if w := f.fake.Writes(); len(w) != 0 {
 			t.Errorf("remove sent %v", w)
 		}
@@ -912,7 +912,7 @@ func TestOwnContainerEveryDisruptiveVerbNeedsTheNameAndStartAndUnpauseDoNot(t *t
 
 	for _, verb := range []string{"start", "unpause"} {
 		f, e := dashEnv(t, actionEngine())
-		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "coaming-agent"}))
+		rec := f.act(t, e, actionJSON(verb, [2]string{e.ID, "tierplan-agent"}))
 		if rec.code != http.StatusOK {
 			t.Fatalf("%s: status = %d: %s", verb, rec.code, rec.body)
 		}
@@ -930,10 +930,10 @@ func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t
 		rec  func() *envRec
 	}{
 		{"stop", func() *envRec {
-			return f.act(t, e, actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}, [2]string{e.ID, "coaming-agent"}))
+			return f.act(t, e, actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}, [2]string{e.ID, "tierplan-agent"}))
 		}},
 		{"remove", func() *envRec {
-			return f.remove(t, e, removeJSON(true, false, [2]string{e.ID, selfID}, [2]string{e.ID, "db"}, [2]string{e.ID, "coaming-agent"}))
+			return f.remove(t, e, removeJSON(true, false, [2]string{e.ID, selfID}, [2]string{e.ID, "db"}, [2]string{e.ID, "tierplan-agent"}))
 		}},
 	} {
 		got := decode[actionBody](t, tc.rec()).Results
@@ -963,7 +963,7 @@ func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t
 	if len(rows) != 6 {
 		t.Fatalf("%d audit rows for 6 targets: %+v", len(rows), rows)
 	}
-	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}), "coaming"))
+	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "web"}, [2]string{e.ID, selfID}), "tierplan"))
 	if rec.code != http.StatusUnprocessableEntity {
 		t.Fatalf("confirm with two targets: status = %d, want 422: %s", rec.code, rec.body)
 	}
@@ -972,7 +972,7 @@ func TestOwnContainerInAMultiTargetRequestIsSkippedNeverActedOnAndTheOthersRun(t
 func TestOwnContainerAnAttemptIsRecordedAsInitiatedBeforeTheCallAndCompletedAfter(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, actionEngine())
-	rec := f.act(t, e, withConfirm(actionJSON("restart", [2]string{e.ID, "coaming-agent"}), "coaming-agent"))
+	rec := f.act(t, e, withConfirm(actionJSON("restart", [2]string{e.ID, "tierplan-agent"}), "tierplan-agent"))
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
@@ -999,7 +999,7 @@ func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSucce
 	cfg := actionEngine()
 	cfg.DropWrites = true
 	f, e := dashEnv(t, cfg)
-	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "coaming-agent"}), "coaming-agent"))
+	rec := f.act(t, e, withConfirm(actionJSON("stop", [2]string{e.ID, "tierplan-agent"}), "tierplan-agent"))
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
@@ -1014,7 +1014,7 @@ func TestOwnContainerADroppedConnectionIsRecordedAsConnectionLostWithResultSucce
 		t.Fatalf("audit = %+v, want initiated then connection_lost with result success", rows)
 	}
 
-	// The same dropped connection on a container that is not Coaming's is a failure: the
+	// The same dropped connection on a container that is not TierPlan's is a failure: the
 	// action may not have happened and the caller must see that.
 	rec = f.act(t, e, actionJSON("stop", [2]string{e.ID, "web"}))
 	if res := decode[actionBody](t, rec).Results[0]; res.Result != "failed" {
@@ -1032,7 +1032,7 @@ func TestOwnContainerADroppedAgentConnectionIsRecordedAsConnectionLost(t *testin
 	f.whenState(t, env.ID, "online")
 	f.whenProbed(t, envs.AgentTarget(a.id))
 
-	rec := f.actOn(t, env.ID, withConfirm(actionJSON("stop", [2]string{a.id, "coaming-agent"}), "coaming-agent"))
+	rec := f.actOn(t, env.ID, withConfirm(actionJSON("stop", [2]string{a.id, "tierplan-agent"}), "tierplan-agent"))
 	if rec.code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
@@ -1263,14 +1263,14 @@ func TestContainerDetailOnASwarmWithoutANodeIDIs422NodeRequired(t *testing.T) {
 	}
 }
 
-func TestContainerDetailMarksCoamingsOwnContainers(t *testing.T) {
+func TestContainerDetailMarksTierPlansOwnContainers(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, detailEngine())
 	own := decode[detailBody](t, f.detail(t, f.cookie, e, selfCtr, "?nodeId="+e.ID))
 	if !own.IsSelf || own.SelfKind != "server" {
 		t.Errorf("own server = %+v", own)
 	}
-	agent := decode[detailBody](t, f.detail(t, f.cookie, e, "coaming-agent", "?nodeId="+e.ID))
+	agent := decode[detailBody](t, f.detail(t, f.cookie, e, "tierplan-agent", "?nodeId="+e.ID))
 	if agent.IsSelf || agent.SelfKind != "agent" {
 		t.Errorf("agent = %+v", agent)
 	}

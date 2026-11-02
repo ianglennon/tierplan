@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //
 // Third-party notices generator (D-60, PLAT-05). Writes
 // web/public/third-party-notices.json, the list the About page shows:
@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(root, "web", "public", "third-party-notices.json");
 const GO_LICENSES = "github.com/google/go-licenses/v2@v2.0.1";
-const OWN_MODULE = "github.com/ianglennon/coaming";
+const OWN_MODULE = "github.com/ianglennon/tierplan";
 
 // Material that is copied into the repository, so no package manager lists it.
 const STATIC_ENTRIES = [
@@ -82,7 +82,7 @@ function parseGoCsv(text) {
 
 function goEntries() {
   const modules = goModuleVersions();
-  const tools = mkdtempSync(join(tmpdir(), "coaming-notices-"));
+  const tools = mkdtempSync(join(tmpdir(), "tierplan-notices-"));
   try {
     // Built for the host once: `go run` with GOARCH set would compile the tool for
     // the target and fail to execute it (see scripts/licences-check.sh).
@@ -90,7 +90,7 @@ function goEntries() {
     // module -> set of licences, over both release architectures.
     const found = new Map();
     for (const arch of ["amd64", "arm64"]) {
-      const csv = run(join(tools, "go-licenses"), ["report", "./cmd/coaming", "--ignore", OWN_MODULE], {
+      const csv = run(join(tools, "go-licenses"), ["report", "./cmd/tierplan", "--ignore", OWN_MODULE], {
         env: { ...process.env, CGO_ENABLED: "0", GOOS: "linux", GOARCH: arch },
         stdio: ["ignore", "pipe", "ignore"],
       });

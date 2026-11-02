@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitsync_test
 
@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // Pulling a git stack's newest commit into its draft and learning that it was deployed (plan 09-19, GIT-04, D-17): a

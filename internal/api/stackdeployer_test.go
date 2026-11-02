@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The StackDeployer starts a deploy for a principal that is not on a request (plan 09-03, D-20, RESEARCH

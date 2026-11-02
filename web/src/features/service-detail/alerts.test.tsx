@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -239,7 +239,7 @@ describe("the order of the alerts", () => {
     // The restart-loop alert hides replicas-short, so check the two pairs in turn.
     const loop = screen.getByText("api is in a restart loop");
     const stack = screen.getByText("Managed by stack shop");
-    const agent = screen.getByText(/This is Coaming's agent service/);
+    const agent = screen.getByText(/This is TierPlan's agent service/);
     expect(loop.compareDocumentPosition(stack) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(stack.compareDocumentPosition(agent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -261,8 +261,8 @@ describe("the order of the alerts", () => {
 });
 
 describe("the stack-owned notice", () => {
-  it("offers Open stack and Edit in stack for a stack Coaming manages", async () => {
-    await mount(bareServiceDetail({ stack: "shop", coamingStackId: "stk-1" }));
+  it("offers Open stack and Edit in stack for a stack TierPlan manages", async () => {
+    await mount(bareServiceDetail({ stack: "shop", tierplanStackId: "stk-1" }));
     expect(screen.getByText("Managed by stack shop")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
       `/env/${SERVICE_ENV}/stacks/stk-1`,
@@ -272,8 +272,8 @@ describe("the stack-owned notice", () => {
     );
   });
 
-  it("keeps a stack Coaming does not manage as text, with no link", async () => {
-    await mount(bareServiceDetail({ stack: "legacy", coamingStackId: "" }));
+  it("keeps a stack TierPlan does not manage as text, with no link", async () => {
+    await mount(bareServiceDetail({ stack: "legacy", tierplanStackId: "" }));
     expect(screen.getByText("Managed by stack legacy")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Edit in stack" })).toBeNull();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -17,14 +17,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 const (
@@ -91,7 +91,7 @@ type KeptRowBody struct {
 	Node       string   `json:"node" doc:"The node a local network is on, Cluster for a swarm-wide network, empty for a keep whose network is gone and whose node is not known"`
 	NodeID     string   `json:"nodeId" doc:"The node the keep is for: the node's ID for a local network, empty for a swarm-wide one"`
 	Subnets    []string `json:"subnets" doc:"The network's subnets in CIDR notation; empty when it is not present or has none"`
-	KeptBy     string   `json:"keptBy" enum:"label,user" doc:"label: the network carries the coaming.keep=true label, which only its owner can remove. user: a person kept it"`
+	KeptBy     string   `json:"keptBy" enum:"label,user" doc:"label: the network carries the tierplan.keep=true label, which only its owner can remove. user: a person kept it"`
 	KeptByName string   `json:"keptByName" doc:"The display name of the person who kept it; empty when kept by label or when that person is not known"`
 	KeptAt     string   `json:"keptAt,omitempty" format:"date-time" doc:"When it was kept; absent when kept by label alone"`
 	Present    bool     `json:"present" doc:"True when a network of this name (and node) exists now. A keep outlives its network, so it holds when one of that name is made again"`
@@ -108,8 +108,8 @@ type OrphanDeleteInput struct {
 
 // OrphanDeleteBody is the answer of the orphan delete.
 type OrphanDeleteBody struct {
-	Outcome string `json:"outcome" enum:"deleted,kept" doc:"deleted: the network was removed. kept: Coaming checked again just before and left it alone, which is a safe answer and not an error"`
-	Reason  string `json:"reason" enum:"in_use_again,not_orphaned,node_missing," doc:"Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so Coaming could not be sure"`
+	Outcome string `json:"outcome" enum:"deleted,kept" doc:"deleted: the network was removed. kept: TierPlan checked again just before and left it alone, which is a safe answer and not an error"`
+	Reason  string `json:"reason" enum:"in_use_again,not_orphaned,node_missing," doc:"Why a network was kept, empty when it was deleted. in_use_again: something uses it now, or the engine refused the remove as in use. not_orphaned: its stack exists again, it was kept, or it is inside the grace period. node_missing: a node or the manager stopped answering, so TierPlan could not be sure"`
 	Name    string `json:"name" doc:"The network's name"`
 }
 
@@ -124,7 +124,7 @@ func registerAddressOrphans(r *httpx.Router, d AddressSpaceDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "deleteOrphanNetwork", Method: http.MethodDelete, Path: "/api/env/{envId}/address-space/orphans/{networkId}",
 		Summary: "Delete an orphaned or unused network",
-		Description: "Removes one network from the orphan list, once and never retried. Coaming first reads the environment again and judges this one network from that fresh read, " +
+		Description: "Removes one network from the orphan list, once and never retried. TierPlan first reads the environment again and judges this one network from that fresh read, " +
 			"so a network that something started using, whose stack exists again, that was kept, or that sits on a node or manager that stopped answering is kept and not removed: " +
 			"200 with outcome kept and the reason (in_use_again, not_orphaned or node_missing). The engine refusing the remove because the network is in use is also kept (in_use_again), not an error. " +
 			"Before the remove, the network's whole inspect document as the engine returned it, with secret-like values in its labels and options masked, is written to the audit log as network.inspect_saved. " +
@@ -171,7 +171,7 @@ func registerAddressOrphans(r *httpx.Router, d AddressSpaceDeps) {
 		OperationID: "unkeepNetwork", Method: http.MethodDelete, Path: "/api/env/{envId}/address-space/keeps/{name}",
 		Summary: "Stop keeping a network out of the orphan list",
 		Description: "Removes the keep of one network, audited as network.unkept. " +
-			"404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the coaming.keep=true label on it, which only its owner can remove. " +
+			"404 keep_not_found when the network is not kept by a person. 409 kept_by_label when the network is kept by the tierplan.keep=true label on it, which only its owner can remove. " +
 			"422 node_required when a local network of that name is on more than one node and no nodeId is given. " +
 			"Needs networks.keep (Admin) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -195,7 +195,7 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 			continue
 		}
 		if n.Scope == dockerx.ScopeSwarm {
-			return "", n.Labels["coaming.keep"] == "true", nil
+			return "", n.Labels["tierplan.keep"] == "true", nil
 		}
 		if nodeID == "" || n.NodeID == nodeID {
 			local = append(local, n)
@@ -203,9 +203,9 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 	}
 	switch {
 	case nodeID != "":
-		return nodeID, len(local) > 0 && local[0].Labels["coaming.keep"] == "true", nil
+		return nodeID, len(local) > 0 && local[0].Labels["tierplan.keep"] == "true", nil
 	case len(local) == 1:
-		return local[0].NodeID, local[0].Labels["coaming.keep"] == "true", nil
+		return local[0].NodeID, local[0].Labels["tierplan.keep"] == "true", nil
 	case len(local) > 1:
 		return "", false, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
 			"More than one node has a network named "+name+". Say which one (nodeId).")
@@ -324,7 +324,7 @@ func unkeepNetwork(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, e
 	if n == 0 {
 		if labelKept {
 			return httpx.Problem(http.StatusConflict, problemKeptByLabel,
-				"Kept by the coaming.keep label on the network. Remove the label to stop keeping it.")
+				"Kept by the tierplan.keep label on the network. Remove the label to stop keeping it.")
 		}
 		return httpx.Problem(http.StatusNotFound, problemKeepNotFound, in.Name+" is not kept.")
 	}
@@ -417,7 +417,7 @@ func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, en
 		// Something attached after the list was read: kept, which is the check doing its job.
 		return o.kept(ctx, reasonInUseAgain, reasonInUseAgain), nil
 	case netspace.ClassCantTell:
-		// A node or the manager stopped answering, so Coaming cannot be sure nothing uses it.
+		// A node or the manager stopped answering, so TierPlan cannot be sure nothing uses it.
 		return o.kept(ctx, reasonNodeMissing, reasonNodeMissing), nil
 	default:
 		// Its stack exists again, it was kept, it is declared external, its stack is busy, or it is
@@ -439,7 +439,7 @@ func deleteOrphan(ctx context.Context, d AddressSpaceDeps, p *rbac.Principal, en
 		if errors.Is(err, audit.ErrEvidenceTooLarge) {
 			o.record(ctx, audit.ActionNetworkRemoved, problemInspectTooLarge, "")
 			return OrphanDeleteBody{}, httpx.Problem(http.StatusConflict, problemInspectTooLarge,
-				"Coaming didn't delete "+row.Name+": its details are over 64 KB, too large to save in the audit log first.")
+				"TierPlan didn't delete "+row.Name+": its details are over 64 KB, too large to save in the audit log first.")
 		}
 		d.Log.Error("the inspect document of a network could not be saved in the audit log, so the network was not removed", "environment", envID, "network", row.Name, "error", err)
 		o.record(ctx, audit.ActionNetworkRemoved, codeActionFailed, "")
@@ -520,7 +520,7 @@ func (o orphanAttempt) readInspect(ctx context.Context) ([]byte, error) {
 		return nil, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, o.row.Name+" is already gone.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
 		o.record(ctx, audit.ActionNetworkRemoved, problemNodeUnavailable, "")
-		return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
 	}
 	o.record(ctx, audit.ActionNetworkRemoved, codeActionFailed, "")
 	return nil, snapshotProblem(o.d.Log, o.envID, err)

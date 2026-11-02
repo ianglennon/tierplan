@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package vault_test
 
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 func newVaultFor(t *testing.T, fill byte) *vault.Vault {

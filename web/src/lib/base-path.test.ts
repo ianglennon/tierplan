@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -7,11 +7,11 @@ import { apiUrl, basePath, resetBasePathForTests, stripBase, withBase } from "@/
 
 // The server writes this tag into the index.html it serves (plan 02-03).
 function setBaseMeta(content: string | null): void {
-  for (const el of document.head.querySelectorAll('meta[name="coaming-base"]')) el.remove();
+  for (const el of document.head.querySelectorAll('meta[name="tierplan-base"]')) el.remove();
   resetBasePathForTests();
   if (content === null) return;
   const meta = document.createElement("meta");
-  meta.name = "coaming-base";
+  meta.name = "tierplan-base";
   meta.content = content;
   document.head.append(meta);
 }
@@ -22,8 +22,8 @@ afterEach(() => {
 
 describe("basePath", () => {
   it("is the meta content when the server announces a base", () => {
-    setBaseMeta("/coaming");
-    expect(basePath()).toBe("/coaming");
+    setBaseMeta("/tierplan");
+    expect(basePath()).toBe("/tierplan");
   });
 
   it("is empty without the meta tag (Vite dev server, tests)", () => {
@@ -37,8 +37,8 @@ describe("basePath", () => {
   });
 
   it("strips one trailing slash", () => {
-    setBaseMeta("/coaming/");
-    expect(basePath()).toBe("/coaming");
+    setBaseMeta("/tierplan/");
+    expect(basePath()).toBe("/tierplan");
   });
 
   it("treats a lone slash as no base", () => {
@@ -47,18 +47,18 @@ describe("basePath", () => {
   });
 
   it("is read once and then remembered", () => {
-    setBaseMeta("/coaming");
-    expect(basePath()).toBe("/coaming");
-    document.head.querySelector('meta[name="coaming-base"]')?.setAttribute("content", "/other");
-    expect(basePath()).toBe("/coaming");
+    setBaseMeta("/tierplan");
+    expect(basePath()).toBe("/tierplan");
+    document.head.querySelector('meta[name="tierplan-base"]')?.setAttribute("content", "/other");
+    expect(basePath()).toBe("/tierplan");
   });
 });
 
 describe("withBase", () => {
   it("prefixes the base", () => {
-    setBaseMeta("/coaming");
-    expect(withBase("/env/a")).toBe("/coaming/env/a");
-    expect(withBase("/")).toBe("/coaming/");
+    setBaseMeta("/tierplan");
+    expect(withBase("/env/a")).toBe("/tierplan/env/a");
+    expect(withBase("/")).toBe("/tierplan/");
   });
 
   it("leaves the path alone under no base", () => {
@@ -69,24 +69,24 @@ describe("withBase", () => {
 
 describe("stripBase", () => {
   it("removes the base from a path under it", () => {
-    setBaseMeta("/coaming");
-    expect(stripBase("/coaming/env/a")).toBe("/env/a");
+    setBaseMeta("/tierplan");
+    expect(stripBase("/tierplan/env/a")).toBe("/env/a");
   });
 
   it("maps the base itself to the root", () => {
-    setBaseMeta("/coaming");
-    expect(stripBase("/coaming")).toBe("/");
-    expect(stripBase("/coaming/")).toBe("/");
+    setBaseMeta("/tierplan");
+    expect(stripBase("/tierplan")).toBe("/");
+    expect(stripBase("/tierplan/")).toBe("/");
   });
 
   it("leaves a path that only shares the prefix unchanged", () => {
-    setBaseMeta("/coaming");
-    expect(stripBase("/coamingx")).toBe("/coamingx");
-    expect(stripBase("/coamingx/env")).toBe("/coamingx/env");
+    setBaseMeta("/tierplan");
+    expect(stripBase("/tierplanx")).toBe("/tierplanx");
+    expect(stripBase("/tierplanx/env")).toBe("/tierplanx/env");
   });
 
   it("leaves a path outside the base unchanged", () => {
-    setBaseMeta("/coaming");
+    setBaseMeta("/tierplan");
     expect(stripBase("/env/a")).toBe("/env/a");
   });
 
@@ -98,9 +98,9 @@ describe("stripBase", () => {
 
 describe("apiUrl", () => {
   it("prefixes API and stream URLs with the base", () => {
-    setBaseMeta("/coaming");
-    expect(apiUrl("/api/env/a/events/stream")).toBe("/coaming/api/env/a/events/stream");
-    expect(apiUrl("/api/audit/export?format=csv")).toBe("/coaming/api/audit/export?format=csv");
+    setBaseMeta("/tierplan");
+    expect(apiUrl("/api/env/a/events/stream")).toBe("/tierplan/api/env/a/events/stream");
+    expect(apiUrl("/api/audit/export?format=csv")).toBe("/tierplan/api/audit/export?format=csv");
   });
 
   it("is the identity under no base", () => {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -80,7 +80,7 @@ import { STATUS_CHIP_ROW } from "@/features/resources/status-chips";
 import { nodeRowKey, useEnvIsSwarm, useNodeColumn } from "@/features/resources/swarm-lists";
 import { useEnvName } from "@/features/resources/use-env-name";
 import { RestartLoopBadge } from "@/features/restart-loop/restart-loop-badge";
-import { coamingStackIdOf, StackLink } from "@/features/stacks/stack-link";
+import { tierplanStackIdOf, StackLink } from "@/features/stacks/stack-link";
 import { MAX_LIST_STATS, useListStats } from "@/features/stats/list-stats";
 import { CpuCell, MemoryCell, NetworkCell } from "@/features/stats/stats-cells";
 import { StatsToggle } from "@/features/stats/stats-toggle";
@@ -325,7 +325,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
                     <StackLink
                       envId={envId}
                       name={g.name}
-                      coamingStackId={coamingStackIdOf(g.rows)}
+                      tierplanStackId={tierplanStackIdOf(g.rows)}
                     />
                   ) : undefined,
                 summary: t("containers.list.group.running", {
@@ -341,7 +341,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     [shownRows, by, t, envId],
   );
 
-  // Which rows can be chosen: not Coaming's own, not gone, not waiting on an
+  // Which rows can be chosen: not TierPlan's own, not gone, not waiting on an
   // action (D-05, D-12). The order a Shift range follows is the order on screen,
   // folded groups left out.
   const byKey = useMemo(() => new Map(shownRows.map((r) => [rowKeyOf(r), r])), [shownRows]);
@@ -539,7 +539,7 @@ export function ContainerList({ envId, search, onSearchChange }: ContainerListPr
     },
   ];
 
-  // The checkbox column. A container of Coaming's own keeps a checkbox that
+  // The checkbox column. A container of TierPlan's own keeps a checkbox that
   // cannot be ticked and says why; a gone row or one waiting on an action has
   // none to tick (D-05, D-12).
   const select: TableSelect<ContainerRow> = {

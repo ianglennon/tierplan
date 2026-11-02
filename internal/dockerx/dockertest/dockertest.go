@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package dockertest holds the test helpers for code that talks to Docker
 // through internal/dockerx: a fake daemon that speaks just enough of the Engine
@@ -42,15 +42,15 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/tierplan/internal/engine"
 )
 
 const (
 	// EnvDockerHost names the variable that points the integration tests at an
 	// engine that is already running, such as the CI dind service.
-	EnvDockerHost = "COAMING_TEST_DOCKER_HOST"
+	EnvDockerHost = "TIERPLAN_TEST_DOCKER_HOST"
 	// EnvEngine names the variable that picks the dind major version.
-	EnvEngine = "COAMING_TEST_ENGINE"
+	EnvEngine = "TIERPLAN_TEST_ENGINE"
 
 	defaultEngine = "29"
 	dindPort      = "2375/tcp"
@@ -107,7 +107,7 @@ type FakeConfig struct {
 	SwarmDefaultAddrPool []string
 	SwarmSubnetSize      uint32
 	// OverlapSubnets are subnets the daemon refuses a network create for, as a real one does when the pool overlaps a
-	// network or route it holds that Coaming cannot see: nothing is created and the answer is 403 "Pool overlaps with
+	// network or route it holds that TierPlan cannot see: nothing is created and the answer is 403 "Pool overlaps with
 	// other one on this address space".
 	OverlapSubnets []string
 	// SwarmUnallocated are subnets of swarm-scoped networks the managers accept but their allocator refuses (UAT G-10-8: the
@@ -162,7 +162,7 @@ type FakeConfig struct {
 	WriteDelay time.Duration
 	// DropWrites makes every container write close its connection without answering,
 	// as the engine does when the container it is stopping is the one that serves the
-	// caller (Coaming's own server or an agent). The write is still recorded.
+	// caller (TierPlan's own server or an agent). The write is still recorded.
 	DropWrites bool
 	// WriteError makes every container write answer 500 with this message, as an engine
 	// does when it refuses one.
@@ -267,7 +267,7 @@ type FakeConfig struct {
 	// one is still unknown).
 	ProbeHold <-chan struct{}
 	// ProbeDelay answers every /_ping that much later (deliberate fake latency, not
-	// synchronisation). NewFake reads COAMING_TEST_PROBE_DELAY, a time.ParseDuration value,
+	// synchronisation). NewFake reads TIERPLAN_TEST_PROBE_DELAY, a time.ParseDuration value,
 	// and uses it as the delay of every fake whose ProbeDelay is zero, so a whole package can
 	// be swept with slow first probes to find a test that treats "online" as "ready".
 	ProbeDelay time.Duration
@@ -399,7 +399,7 @@ type FakeServiceMount struct {
 type FakeAgentTask struct {
 	NodeID, State, Error string
 	// Service is the ID or name of the service the task belongs to. Empty means the
-	// service named coaming-agent.
+	// service named tierplan-agent.
 	Service string
 	// ID and Created order the tasks of one node: the newest is the current one.
 	ID      string
@@ -414,7 +414,7 @@ type FakeEvent struct {
 	ActorID string
 	// Scope is local or swarm; empty means local.
 	Scope string
-	// Attributes are sent as they are, so a test can prove which ones Coaming
+	// Attributes are sent as they are, so a test can prove which ones TierPlan
 	// drops.
 	Attributes map[string]string
 	TimeNano   int64
@@ -432,7 +432,7 @@ type eventSub struct {
 }
 
 // FakeContainer is one entry of /containers/json. Labels and Mounts exist so a
-// test can prove they never reach a Coaming response.
+// test can prove they never reach a TierPlan response.
 type FakeContainer struct {
 	ID    string
 	Names []string
@@ -858,20 +858,20 @@ func (f *Fake) Reconfigure(cfg FakeConfig) {
 	f.await.notify()
 }
 
-// withEnvProbeDelay gives cfg the COAMING_TEST_PROBE_DELAY delay (a time.ParseDuration value)
+// withEnvProbeDelay gives cfg the TIERPLAN_TEST_PROBE_DELAY delay (a time.ParseDuration value)
 // when its own ProbeDelay is zero. NewFake and Reconfigure both apply it, so a sweep with slow
 // first probes keeps applying after a test reconfigures the fake.
 func withEnvProbeDelay(cfg FakeConfig) (FakeConfig, error) {
 	if cfg.ProbeDelay != 0 {
 		return cfg, nil
 	}
-	v := os.Getenv("COAMING_TEST_PROBE_DELAY")
+	v := os.Getenv("TIERPLAN_TEST_PROBE_DELAY")
 	if v == "" {
 		return cfg, nil
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return cfg, fmt.Errorf("COAMING_TEST_PROBE_DELAY=%q is not a duration: %w", v, err)
+		return cfg, fmt.Errorf("TIERPLAN_TEST_PROBE_DELAY=%q is not a duration: %w", v, err)
 	}
 	cfg.ProbeDelay = d
 	return cfg, nil
@@ -1240,8 +1240,8 @@ func splitAPI(v string) [2]int {
 }
 
 // DockerHost returns the address of a real engine for the integration tests:
-// COAMING_TEST_DOCKER_HOST when it is set (CI points it at the dind service),
-// otherwise a docker:<COAMING_TEST_ENGINE or 29>-dind container started with
+// TIERPLAN_TEST_DOCKER_HOST when it is set (CI points it at the dind service),
+// otherwise a docker:<TIERPLAN_TEST_ENGINE or 29>-dind container started with
 // testcontainers and removed when the test ends. It waits for the daemon by
 // polling /_ping, never by sleeping (RESEARCH Pitfall 23).
 func DockerHost(t testing.TB) string {

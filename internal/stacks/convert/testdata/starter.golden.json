@@ -8,7 +8,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-tracer",
+        "tierplan.stack.id": "id-tracer",
         "com.docker.stack.namespace": "tracer"
       },
       "DriverOpts": null,
@@ -24,7 +24,7 @@
       "Spec": {
         "Name": "tracer_web",
         "Labels": {
-          "coaming.stack.id": "id-tracer",
+          "tierplan.stack.id": "id-tracer",
           "com.docker.stack.image": "nginx:1.27-alpine",
           "com.docker.stack.namespace": "tracer"
         },
@@ -32,7 +32,7 @@
           "ContainerSpec": {
             "Image": "nginx:1.27-alpine",
             "Labels": {
-              "coaming.stack.id": "id-tracer",
+              "tierplan.stack.id": "id-tracer",
               "com.docker.stack.namespace": "tracer"
             },
             "Privileges": {

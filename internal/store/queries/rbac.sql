@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 -- name: InsertRoleAssignment :exec
 INSERT INTO role_assignments (id, principal_type, principal_id, role_id, env_id, created_at)

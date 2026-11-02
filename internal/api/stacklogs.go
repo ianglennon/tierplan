@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -18,14 +18,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // The merged log of a stack (plan 07-29, STK-10, D-22): every service of a swarm stack, or every
@@ -258,7 +258,7 @@ func registerStackLogs(r *httpx.Router, d StacksDeps) *stackLogMount {
 // answer to send.
 type stackLogSubject func(ctx context.Context, d StacksDeps, envID string, req *http.Request) (stackops.Stack, stacks.Masker, error)
 
-// managedLogSubject is the stack of Coaming's the address names by its ID, with the masker of the secrets it knows.
+// managedLogSubject is the stack of TierPlan's the address names by its ID, with the masker of the secrets it knows.
 func managedLogSubject(ctx context.Context, d StacksDeps, envID string, req *http.Request) (stackops.Stack, stacks.Masker, error) {
 	st, err := d.repo().Stack(ctx, envID, chi.URLParam(req, "stackId"))
 	if err != nil {
@@ -271,7 +271,7 @@ func managedLogSubject(ctx context.Context, d StacksDeps, envID string, req *htt
 	return st, masker, nil
 }
 
-// logSubjectID is what a stack's log is audited and limited under: the stack's ID, or for a stack Coaming did not make,
+// logSubjectID is what a stack's log is audited and limited under: the stack's ID, or for a stack TierPlan did not make,
 // which has none, its environment and name.
 func logSubjectID(st stackops.Stack) string {
 	if st.Discovered {
@@ -280,7 +280,7 @@ func logSubjectID(st stackops.Stack) string {
 	return st.ID
 }
 
-// logMasker builds the masker of a stack's log from the secrets Coaming knows of it: those of the
+// logMasker builds the masker of a stack's log from the secrets TierPlan knows of it: those of the
 // version that runs and those of the draft, so a value that was just changed is hidden whichever
 // version a container still has. Only known values are hidden; a secret the application made up
 // itself is not, and the UI never says logs are private.
@@ -311,7 +311,7 @@ func (d StacksDeps) logMasker(ctx context.Context, st stackops.Stack) (stacks.Ma
 // stackLogsMaskerProblem is the answer when the masker cannot be built.
 func stackLogsMaskerProblem(d StacksDeps, envID string, err error) error {
 	d.Log.Error("could not read a stack's secrets to mask its log", "environment", envID, "error", err)
-	return httpx.Problem(http.StatusServiceUnavailable, problemStackLogsMasker, "Coaming could not read this stack's secrets to hide them from its logs, so it did not open them. Try again.")
+	return httpx.Problem(http.StatusServiceUnavailable, problemStackLogsMasker, "TierPlan could not read this stack's secrets to hide them from its logs, so it did not open them. Try again.")
 }
 
 // serveStackLogs is the SSE handler of a stack's merged log. The policy has already run when it
@@ -326,7 +326,7 @@ func stackLogsMaskerProblem(d StacksDeps, envID string, err error) error {
 // sent in time order. Every line is masked with the stack's known secrets before it leaves. Every
 // heartbeat re-checks access, and the stream never outlives MaxLifetime.
 //
-// No line of the log is stored, audited or written to Coaming's own log; only the fact that a
+// No line of the log is stored, audited or written to TierPlan's own log; only the fact that a
 // stream was opened is recorded (D-35, P4 D-24).
 func serveStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, lim *streamLimiter, mem *logAuditMemory, subject stackLogSubject) {
 	ctx := req.Context()
@@ -590,7 +590,7 @@ func auditStackLogsViewed(ctx context.Context, d StacksDeps, mem *logAuditMemory
 	}
 	details := map[string]string{"stack": st.Name, "sid": params.sid, "tail": params.tail}
 	if st.Discovered {
-		// A stack Coaming did not make has no ID: the row names it, and says Coaming does not manage it.
+		// A stack TierPlan did not make has no ID: the row names it, and says TierPlan does not manage it.
 		details["managed"] = "false"
 	}
 	if params.since != "" {
@@ -924,7 +924,7 @@ func downloadStackLogs(w http.ResponseWriter, req *http.Request, d StacksDeps, u
 	releaseServer, ok := serverLim.acquire("server")
 	if !ok {
 		writeJSONProblem(w, http.StatusTooManyRequests, problemStreamBusy,
-			"Coaming is already preparing as many log downloads as it can. Try again in a moment.")
+			"TierPlan is already preparing as many log downloads as it can. Try again in a moment.")
 		return
 	}
 	defer releaseServer()

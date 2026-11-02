@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 const (
@@ -95,7 +95,7 @@ func registerStackRemove(r *httpx.Router, d StacksDeps) {
 		OperationID: "removalPreview", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/removal-preview",
 		Summary: "What removing a stack would delete",
 		Description: "Lists the services (or containers), networks, secrets and configs that carry the stack's own labels, the stack's volumes one for each node that holds one, and the external objects the compose file names, which a removal never touches. " +
-			"An object is the stack's only when it carries both its namespace and its Coaming stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).",
+			"An object is the stack's only when it carries both its namespace and its TierPlan stack ID. Each volume says how many containers outside the stack mount it. It is a read. Needs stacks.delete (Env Admin).",
 		Tags: []string{"stacks"},
 	}, rbac.Requirement{Perm: rbac.PermStacksDelete, Scope: rbac.ScopeEnvironment},
 		func(ctx context.Context, in *RemovalPreviewInput) (*RemovalPreviewOutput, error) {

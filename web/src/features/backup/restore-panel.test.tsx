@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -47,7 +47,7 @@ beforeEach(() => {
   setCsrfToken("csrf-1");
   answers = {
     "/api/backup/info": () =>
-      Response.json({ minPassphraseLength: 16, fileExtension: ".coaming", maxUploadBytes: 1e9 }),
+      Response.json({ minPassphraseLength: 16, fileExtension: ".tierplan", maxUploadBytes: 1e9 }),
     "/api/instance": () =>
       Response.json({ instanceName: "Home lab", needsSetup: false, rememberDays: 30 }),
     "/api/backup/restore/upload": () =>
@@ -108,7 +108,7 @@ function renderPage() {
 
 const card = () => within(screen.getByRole("region", { name: "Restore from a backup" }));
 const calls = (path: string) => sent.filter((s) => s.path === path);
-const FILE = () => new File(["backup-bytes"], "lab.coaming", { type: "application/octet-stream" });
+const FILE = () => new File(["backup-bytes"], "lab.tierplan", { type: "application/octet-stream" });
 
 function chooseAndCheck() {
   fireEvent.change(card().getByLabelText("Backup file"), { target: { files: [FILE()] } });
@@ -138,10 +138,10 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
       "Restore from a backup",
     ]);
     expect(
-      card().getByText("Replace everything in this Coaming with the contents of a backup file."),
+      card().getByText("Replace everything in this TierPlan with the contents of a backup file."),
     ).toBeTruthy();
     expect(card().getByLabelText("Backup file")).toBeTruthy();
-    expect(card().getByText("A .coaming file.")).toBeTruthy();
+    expect(card().getByText("A .tierplan file.")).toBeTruthy();
   });
 
   it("uploads nothing until Check backup is pressed, then uploads the file and checks it with the passphrase in the body", async () => {
@@ -159,7 +159,7 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
     expect(upload[0]?.contentType).toBe("application/octet-stream");
     expect(upload[0]?.csrf).toBe("csrf-1");
     expect(upload[0]?.body).toBeInstanceOf(File);
-    expect((upload[0]?.body as File | undefined)?.name).toBe("lab.coaming");
+    expect((upload[0]?.body as File | undefined)?.name).toBe("lab.tierplan");
     expect(calls("/api/backup/restore/check")[0]?.body).toEqual({
       uploadId: "up-1",
       passphrase: PASS,
@@ -172,7 +172,7 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
     chooseAndCheck();
     await card().findByText("What's in this backup");
     expect(card().getByText("From Old lab")).toBeTruthy();
-    expect(card().getByText("Coaming v0.1.0")).toBeTruthy();
+    expect(card().getByText("TierPlan v0.1.0")).toBeTruthy();
     expect(card().getByText(/^Made /)).toBeTruthy();
     expect(card().getByText("3 users, 2 teams, 4 environments, 120 audit entries")).toBeTruthy();
     expect(card().queryByLabelText("Backup file")).toBeNull();
@@ -202,7 +202,7 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
     expect(calls("/api/backup/restore/apply")[0]?.csrf).toBe("csrf-1");
   });
 
-  it("shows the Restoring status while Coaming restarts, then Backup restored with the cache cleared and the CSRF token dropped", async () => {
+  it("shows the Restoring status while TierPlan restarts, then Backup restored with the cache cleared and the CSRF token dropped", async () => {
     let settle: (o: outcome.RestoreOutcome) => void = () => {};
     vi.mocked(outcome.waitForRestoreOutcome).mockImplementation(
       () => new Promise((resolve) => (settle = resolve)),
@@ -232,7 +232,7 @@ describe("Restore card (tracer): Settings > Backup to Backup restored", () => {
   });
 });
 
-describe("leaving the Backup page while Coaming restarts (WR-C-04)", () => {
+describe("leaving the Backup page while TierPlan restarts (WR-C-04)", () => {
   async function startRestore() {
     const view = renderPage();
     await screen.findByRole("heading", { name: "Restore from a backup" });
@@ -274,7 +274,7 @@ describe("leaving the Backup page while Coaming restarts (WR-C-04)", () => {
     }
   });
 
-  it("holds the rest of the page inert and puts focus on the status while Coaming restarts", async () => {
+  it("holds the rest of the page inert and puts focus on the status while TierPlan restarts", async () => {
     let settle: (o: outcome.RestoreOutcome) => void = () => {};
     vi.mocked(outcome.waitForRestoreOutcome).mockImplementation(
       () => new Promise((resolve) => (settle = resolve)),
@@ -294,9 +294,9 @@ describe("leaving the Backup page while Coaming restarts (WR-C-04)", () => {
 // The documented message of each way a check can end (UI-SPEC "Restore card").
 const UNREADABLE =
   "Couldn't open this backup. Check the passphrase, and that the file isn't damaged.";
-const NOT_A_BACKUP = "That isn't a Coaming backup file.";
+const NOT_A_BACKUP = "That isn't a TierPlan backup file.";
 const CUT_OFF =
-  "The upload was cut off. If Coaming runs behind a reverse proxy, check its upload size limit.";
+  "The upload was cut off. If TierPlan runs behind a reverse proxy, check its upload size limit.";
 const BUSY = "Another restore is being prepared. Try again in a few minutes.";
 const RATE = "Too many attempts. Wait a minute and try again.";
 
@@ -308,21 +308,21 @@ describe("Restore card errors on the check", () => {
     ["a wrong passphrase or damage", "check", () => problem(422, "backup_unreadable"), UNREADABLE],
     ["not a backup", "check", () => problem(422, "not_a_backup"), NOT_A_BACKUP],
     [
-      "a newer Coaming, naming its version",
+      "a newer TierPlan, naming its version",
       "check",
       () =>
         problem(
           409,
           "backup_newer",
-          "This backup was made by a newer Coaming (v9.9.9). Upgrade this Coaming to v9.9.9 or newer, then try again.",
+          "This backup was made by a newer TierPlan (v9.9.9). Upgrade this TierPlan to v9.9.9 or newer, then try again.",
         ),
-      "This backup is from a newer Coaming (v9.9.9). Upgrade this Coaming, then try again.",
+      "This backup is from a newer TierPlan (v9.9.9). Upgrade this TierPlan, then try again.",
     ],
     [
-      "a newer Coaming that did not name its version",
+      "a newer TierPlan that did not name its version",
       "check",
-      () => problem(409, "backup_newer", "This backup was made by a newer Coaming."),
-      "This backup is from a newer Coaming. Upgrade this Coaming, then try again.",
+      () => problem(409, "backup_newer", "This backup was made by a newer TierPlan."),
+      "This backup is from a newer TierPlan. Upgrade this TierPlan, then try again.",
     ],
     [
       "an upload cut off (400 upload_incomplete)",
@@ -360,7 +360,7 @@ describe("Restore card errors on the check", () => {
     },
   );
 
-  it("says Coaming could not be reached when the connection fails, not that the backup is bad", async () => {
+  it("says TierPlan could not be reached when the connection fails, not that the backup is bad", async () => {
     answers["/api/backup/restore/upload"] = () => {
       throw new TypeError("Failed to fetch");
     };
@@ -489,12 +489,12 @@ describe("Restore card failures", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says Coaming went back to the snapshot when it came back and still accepts the session", async () => {
+  it("says TierPlan went back to the snapshot when it came back and still accepts the session", async () => {
     vi.mocked(outcome.waitForRestoreOutcome).mockResolvedValue("rolled_back");
     await confirmRestore();
     const alert = await screen.findByRole("alert");
     const dialog = screen.getByRole("alertdialog");
-    expect(alert.textContent).toBe("The restore failed and Coaming went back to the snapshot.");
+    expect(alert.textContent).toBe("The restore failed and TierPlan went back to the snapshot.");
     // Reopened for another go, the name has to be typed again.
     expect(
       within(dialog).getByRole("button", { name: "Restore backup" }).getAttribute("aria-disabled"),
@@ -503,12 +503,12 @@ describe("Restore card failures", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("says Coaming has not come back when nothing answers in time, without claiming a result", async () => {
+  it("says TierPlan has not come back when nothing answers in time, without claiming a result", async () => {
     vi.mocked(outcome.waitForRestoreOutcome).mockResolvedValue("timeout");
     await confirmRestore();
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Coaming hasn't come back yet. Reload this page in a minute. If it doesn't load, check the container logs.",
+      "TierPlan hasn't come back yet. Reload this page in a minute. If it doesn't load, check the container logs.",
     );
     expect(screen.queryByRole("heading", { name: "Backup restored" })).toBeNull();
   });
@@ -555,7 +555,7 @@ describe("Restore card summary", () => {
     chooseAndCheck();
     expect(
       await card().findByText(
-        "This backup is from an older Coaming and is upgraded while restoring.",
+        "This backup is from an older TierPlan and is upgraded while restoring.",
       ),
     ).toBeTruthy();
   });
@@ -564,7 +564,7 @@ describe("Restore card summary", () => {
     renderPage();
     chooseAndCheck();
     await card().findByText("What's in this backup");
-    expect(card().queryByText(/older Coaming/)).toBeNull();
+    expect(card().queryByText(/older TierPlan/)).toBeNull();
   });
 
   it("shows the restored public URL, and no warning while it matches the address in use", async () => {
@@ -581,7 +581,7 @@ describe("Restore card summary", () => {
     chooseAndCheck();
     expect(
       await card().findByText(
-        "This isn't the address you're using now. After you sign in, check Settings → General, or set COAMING_PUBLIC_URL.",
+        "This isn't the address you're using now. After you sign in, check Settings → General, or set TIERPLAN_PUBLIC_URL.",
       ),
     ).toBeTruthy();
   });
@@ -599,7 +599,7 @@ describe("Restore card file and passphrase", () => {
   it("shows the chosen file name in mono, truncated, with the whole name in a tooltip", async () => {
     renderPage();
     expect(card().getByText("No file chosen")).toBeTruthy();
-    const long = `${"a-very-long-backup-name-".repeat(6)}.coaming`;
+    const long = `${"a-very-long-backup-name-".repeat(6)}.tierplan`;
     fireEvent.change(card().getByLabelText("Backup file"), {
       target: { files: [new File(["x"], long)] },
     });
@@ -623,9 +623,9 @@ describe("Restore card file and passphrase", () => {
     expect(input.type).toBe("password");
   });
 
-  it("only takes .coaming files in the picker", () => {
+  it("only takes .tierplan files in the picker", () => {
     renderPage();
-    expect(card().getByLabelText("Backup file").getAttribute("accept")).toBe(".coaming");
+    expect(card().getByLabelText("Backup file").getAttribute("accept")).toBe(".tierplan");
   });
 
   it("clears the file and the passphrase on Choose another file", async () => {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -50,7 +50,7 @@ const config = (name: string, extra: Partial<ConfigItem> = {}): ConfigItem => ({
   labels: {},
   owner: "",
   ownerKind: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   templating: "none",
   createdAt: "2026-10-01T10:00:00Z",
   updatedAt: "2026-10-02T10:00:00Z",
@@ -197,9 +197,9 @@ describe("ConfigList columns", () => {
     expect(within(single).getByRole("button", { name: "Used by 1 service" })).toBeTruthy();
   });
 
-  it("links the owner's name to the Coaming stack, and leaves a foreign stack as text", async () => {
+  it("links the owner's name to the TierPlan stack, and leaves a foreign stack as text", async () => {
     items = [
-      config("own", { owner: "shop", ownerKind: "stack", coamingStackId: "stk-shop" }),
+      config("own", { owner: "shop", ownerKind: "stack", tierplanStackId: "stk-shop" }),
       config("old", { owner: "legacy", ownerKind: "stack" }),
     ];
     mount();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -13,13 +13,13 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // Stable problem types of the environment routes. The SPA maps each to copy.
@@ -60,11 +60,11 @@ type EnvironmentsDeps struct {
 	// URL, with its base path (D-18). Nil, or neither URL set, means no agent
 	// environment can be added.
 	Instance *instance.Instance
-	// TLSPin returns the SPKI pin of the self-signed certificate Coaming serves, or
+	// TLSPin returns the SPKI pin of the self-signed certificate TierPlan serves, or
 	// "" when it serves a supplied certificate or plain HTTP, and then the install
 	// carries no pin (D-06). Nil means none.
 	TLSPin func() string
-	// AgentAllowInsecure is the server's COAMING_AGENT_ALLOW_INSECURE, a development
+	// AgentAllowInsecure is the server's TIERPLAN_AGENT_ALLOW_INSECURE, a development
 	// switch. A plain ws:// address for a host that is not this machine is handed out
 	// only while it is on, and then the install also tells the agent to accept it
 	// (T-02-31); otherwise adding an environment is refused (insecure_agent_url).
@@ -95,7 +95,7 @@ type EnvironmentIssueBody struct {
 // for an agent environment (D-33), what the health monitor believes for the local
 // socket.
 type EnvironmentStatusBody struct {
-	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but Coaming does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
+	State       string                 `json:"state" enum:"unknown,online,offline,unsupported,pending,reconnecting,degraded,revoked,cluster_changed" doc:"online: working. degraded: working, but see issues. offline: no agent can be reached, or the host's engine does not answer. unsupported: the engine answers but TierPlan does not manage it. pending: no agent has enrolled yet. reconnecting: the server has just started and is waiting for its agents. revoked: every agent was revoked. cluster_changed: the swarm was re-initialised. unknown: the local socket has not been probed yet"`
 	Since       string                 `json:"since,omitempty" format:"date-time" doc:"When the environment entered this state; for offline, when contact was lost"`
 	Reason      string                 `json:"reason,omitempty" doc:"Why it is not online, as a stable code. An agent environment uses agent_offline, timeout, engine_unreachable, unsupported_engine, revoked, cluster_changed, not_a_manager, no_quorum, cert_expiring or address_space_full (a swarm whose pool or overlay is 90% full or more); the local socket uses unreachable, api_too_old, podman, rootless or docker_desktop, or address_space_full for a swarm"`
 	LastAttempt string                 `json:"lastAttempt,omitempty" format:"date-time" doc:"When the most recent probe of the environment's engine finished"`
@@ -119,7 +119,7 @@ type EnvironmentEngineBody struct {
 	Name          string `json:"name,omitempty" doc:"For example Docker Engine"`
 	Version       string `json:"version,omitempty" doc:"The engine version"`
 	APIVersion    string `json:"apiVersion,omitempty" doc:"The newest Engine API version the daemon speaks"`
-	NegotiatedAPI string `json:"negotiatedApi,omitempty" doc:"The API version Coaming uses with it"`
+	NegotiatedAPI string `json:"negotiatedApi,omitempty" doc:"The API version TierPlan uses with it"`
 }
 
 // EnvironmentNodesBody is how many of an environment's nodes are ready of how many it has.
@@ -159,27 +159,27 @@ type EnvironmentAddressSpaceBody struct {
 type EnvironmentBody struct {
 	ID         string                `json:"id" doc:"The environment ID, used in /api/env/{envId}/..."`
 	Name       string                `json:"name" doc:"The display name; defaults to the daemon's hostname"`
-	Kind       string                `json:"kind" enum:"local,agent" doc:"local: the Docker socket on the host Coaming runs on. agent: one or more hosts that dial in through an agent"`
+	Kind       string                `json:"kind" enum:"local,agent" doc:"local: the Docker socket on the host TierPlan runs on. agent: one or more hosts that dial in through an agent"`
 	Type       string                `json:"type,omitempty" enum:"swarm-manager,swarm-worker,standalone" doc:"What the engine is; absent until it has answered"`
-	IsSelfHost bool                  `json:"isSelfHost" doc:"True for the Docker host Coaming itself runs on"`
+	IsSelfHost bool                  `json:"isSelfHost" doc:"True for the Docker host TierPlan itself runs on"`
 	Enabled    bool                  `json:"enabled"`
 	CreatedAt  string                `json:"createdAt" format:"date-time"`
 	Status     EnvironmentStatusBody `json:"status"`
 	Engine     EnvironmentEngineBody `json:"engine"`
 
 	EnvType          string                                `json:"envType,omitempty" enum:"swarm,standalone" doc:"What the environment is; absent until it is known. An agent environment gets it from its first agent"`
-	IsLocalSocket    bool                                  `json:"isLocalSocket" doc:"True for the Docker socket on the host Coaming runs on, as opposed to hosts that dial in through an agent"`
+	IsLocalSocket    bool                                  `json:"isLocalSocket" doc:"True for the Docker socket on the host TierPlan runs on, as opposed to hosts that dial in through an agent"`
 	Nodes            Nullable[EnvironmentNodesBody]        `json:"nodes" doc:"Ready and total nodes; null while no agent has enrolled and for a local swarm, whose nodes are read from the cluster"`
 	FailingServices  Nullable[EnvironmentFailingBody]      `json:"failingServices" doc:"Failing and total services; null until service data is known"`
 	Agents           Nullable[EnvironmentAgentsBody]       `json:"agents" doc:"Connected and expected agents; null except on a swarm"`
 	AgentVersion     *string                               `json:"agentVersion" nullable:"true" doc:"The oldest agent version in the environment; null when it has no agent, and for the local socket"`
 	UpdateAvailable  bool                                  `json:"updateAvailable" doc:"True when an agent is older than this server by a minor or a patch version"`
-	AutoUpdate       *bool                                 `json:"autoUpdate,omitempty" doc:"Whether Coaming updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
+	AutoUpdate       *bool                                 `json:"autoUpdate,omitempty" doc:"Whether TierPlan updates this environment's agents itself after the server was upgraded. On by default; absent for the local socket, which has no agent"`
 	EngineVersion    *string                               `json:"engineVersion" nullable:"true" doc:"The Docker engine version, as the engine reported it; null until it has answered"`
 	LastSeen         *string                               `json:"lastSeen" nullable:"true" format:"date-time" doc:"The last sign of life of any agent, or for the local socket the last probe that found the engine online; null when never seen"`
 	PendingClusterID string                                `json:"pendingClusterId,omitempty" doc:"Present only while the environment is cluster_changed: the swarm cluster ID a manager now reports, which POST /api/env/{envId}/adopt-cluster binds the environment to"`
 	AddressSpace     Nullable[EnvironmentAddressSpaceBody] `json:"addressSpace" doc:"The fullest pool or network for the overview's Address space column and the dashboard card; null until measured, and while the environment is offline"`
-	FoldOffered      bool                                  `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this Coaming host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
+	FoldOffered      bool                                  `json:"foldOffered,omitempty" doc:"True on both the local socket environment and the swarm environment while this TierPlan host is a manager of that swarm and could be folded into it with POST /api/environments/{envId}/fold-local, so the host is not listed twice"`
 }
 
 // InstallSwarmBody is the swarm install: one command for a manager, or a stack file.
@@ -207,10 +207,10 @@ type InstallCleanupBody struct {
 // agents.BuildInstall.
 type InstallBody struct {
 	JoinToken     string                `json:"joinToken" doc:"The join token the agent presents once to enrol. Shown only in this answer; it is inside the commands and files below"`
-	AgentURL      string                `json:"agentUrl" doc:"The address the agent dials, for example wss://coaming.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request"`
+	AgentURL      string                `json:"agentUrl" doc:"The address the agent dials, for example wss://tierplan.example.com/agent/connect. It comes from the agent URL setting, else the public URL, never from the request"`
 	Image         string                `json:"image" doc:"The agent image. Its tag is this server's exact version, or edge for a development or edge server"`
-	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate Coaming serves, which the agent trusts instead of system roots. Present only when Coaming serves its own self-signed certificate"`
-	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, coaming-agent-token-g followed by the generation"`
+	Pin           string                `json:"pin,omitempty" doc:"The SPKI pin of the self-signed certificate TierPlan serves, which the agent trusts instead of system roots. Present only when TierPlan serves its own self-signed certificate"`
+	SecretName    string                `json:"secretName" doc:"The Docker secret the swarm install creates for this token, tierplan-agent-token-g followed by the generation"`
 	Generation    int                   `json:"generation" doc:"Which token this is for the environment, from 1; each rotation adds one"`
 	Swarm         InstallSwarmBody      `json:"swarm" doc:"The install for a swarm"`
 	Standalone    InstallStandaloneBody `json:"standalone" doc:"The install for a standalone host"`
@@ -252,7 +252,7 @@ type AddEnvironmentInput struct {
 	// UserAgent is read only to record it in the audit log; it is not part of the contract.
 	UserAgent string `header:"User-Agent" hidden:"true"`
 	Body      struct {
-		Kind             string `json:"kind" enum:"local,agent" doc:"local: the Docker socket on this server's own host. agent: a new environment whose hosts run the Coaming agent and dial in; the answer carries the join token"`
+		Kind             string `json:"kind" enum:"local,agent" doc:"local: the Docker socket on this server's own host. agent: a new environment whose hosts run the TierPlan agent and dial in; the answer carries the join token"`
 		Name             string `json:"name,omitempty" maxLength:"1024" doc:"1 to 64 characters; defaults to the hostname the daemon reports, or for an agent environment the hostname of its first agent"`
 		AllowUnsupported bool   `json:"allowUnsupported,omitempty" doc:"Local only: add the host even though its engine is not supported; it is stored and shown as unsupported"`
 	}
@@ -370,15 +370,15 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		case errors.Is(err, envs.ErrSocketNotFound):
 			return httpx.Problem(http.StatusConflict, problemSocketNotFound, "No Docker socket was found on this host.")
 		case errors.Is(err, envs.ErrEngineUnreachable):
-			return httpx.Problem(http.StatusConflict, problemEngineUnreachable, "A Docker socket exists but the engine did not answer. Check that Coaming may open it.")
+			return httpx.Problem(http.StatusConflict, problemEngineUnreachable, "A Docker socket exists but the engine did not answer. Check that TierPlan may open it.")
 		case errors.Is(err, envs.ErrUnsupportedEngine):
-			return httpx.Problem(http.StatusConflict, problemUnsupportedEngine, "Coaming does not support the Docker engine on this host. Add it anyway to see it as unsupported.")
+			return httpx.Problem(http.StatusConflict, problemUnsupportedEngine, "TierPlan does not support the Docker engine on this host. Add it anyway to see it as unsupported.")
 		case errors.Is(err, envs.ErrInvalidName), errors.Is(err, agents.ErrInvalidName):
 			return httpx.Problem(http.StatusUnprocessableEntity, problemInvalidName, "The name must be 1 to 64 characters.")
 		case errors.Is(err, envs.ErrNotFound), errors.Is(err, agents.ErrEnvironmentNotFound):
 			return httpx.Problem(http.StatusNotFound, problemEnvironmentNotFound, "environment not found")
 		case errors.Is(err, envs.ErrFoldNotOffered):
-			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This Coaming host is not a manager of that swarm, or it was folded into it a moment ago.")
+			return httpx.Problem(http.StatusConflict, problemFoldNotOffered, "This TierPlan host is not a manager of that swarm, or it was folded into it a moment ago.")
 		}
 		d.Log.Error("environment request failed", "step", what, "error", err)
 		return huma.Error500InternalServerError("internal error")
@@ -423,13 +423,13 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		Path:          "/api/environments",
 		Summary:       "Add an environment",
 		DefaultStatus: http.StatusCreated,
-		Description: "kind local is the admin's explicit opt-in to managing the Docker host Coaming runs on (D-19): nothing is " +
+		Description: "kind local is the admin's explicit opt-in to managing the Docker host TierPlan runs on (D-19): nothing is " +
 			"added at startup. Needs a Docker socket that answers. 409 socket_not_found, engine_unreachable, unsupported_engine " +
 			"(unless allowUnsupported) or local_environment_exists. kind agent creates an environment for hosts that run the " +
-			"Coaming agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
+			"TierPlan agent, with its own certificate authority and a join token, and answers install with the token (shown once) " +
 			"and the swarm and standalone install commands and files, built from the address agents dial (the agent URL, else the public URL, " +
-			"with its base path); 409 " + problemPublicURLRequired + " when Coaming has neither, and 409 " + problemInsecureAgentURL +
-			" when that address is plain ws:// for a host that is not this machine and COAMING_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. " +
+			"with its base path); 409 " + problemPublicURLRequired + " when TierPlan has neither, and 409 " + problemInsecureAgentURL +
+			" when that address is plain ws:// for a host that is not this machine and TIERPLAN_AGENT_ALLOW_INSECURE is off. Nothing is created in either case. 422 invalid_name. " +
 			"The name defaults to the hostname the daemon, or the first agent, reports. Needs environments.create. Audited as environment.added.",
 		Tags: []string{"environments"},
 	}, rbac.Requirement{Perm: rbac.PermEnvironmentsCreate, Scope: rbac.ScopeGlobal}, func(ctx context.Context, in *AddEnvironmentInput) (*AddEnvironmentOutput, error) {
@@ -527,8 +527,8 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		OperationID: "foldLocalHost",
 		Method:      http.MethodPost,
 		Path:        "/api/environments/{envId}/fold-local",
-		Summary:     "Fold this Coaming host into a swarm environment",
-		Description: "Offered when the Docker host Coaming runs on is a manager of a swarm that is enrolled through agents: the local socket's own " +
+		Summary:     "Fold this TierPlan host into a swarm environment",
+		Description: "Offered when the Docker host TierPlan runs on is a manager of a swarm that is enrolled through agents: the local socket's own " +
 			"/info must report the cluster ID that the swarm environment is bound to (foldOffered is true on both environments). The swarm environment " +
 			"then reaches that node through the Docker socket and expects no agent on it, the node counts once however it is reached, and the separate " +
 			"local socket environment is retired, in one transaction. Nothing changes on the host or in Docker. Answers the swarm environment. " +
@@ -550,7 +550,7 @@ func RegisterEnvironments(r *httpx.Router, d EnvironmentsDeps) {
 		return one(e), nil
 	})
 
-	// Reconnect is deliberately not audited: it changes no Coaming or Docker
+	// Reconnect is deliberately not audited: it changes no TierPlan or Docker
 	// state, it only asks the monitor to probe now. The environment is resolved
 	// by the policy before this runs, so an unknown or disabled one never gets here.
 	httpx.Register(r, huma.Operation{
@@ -584,7 +584,7 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 	}
 	if endpoint == "" {
 		return nil, httpx.Problem(http.StatusConflict, problemPublicURLRequired,
-			"Coaming has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with COAMING_PUBLIC_URL or COAMING_AGENT_URL.")
+			"TierPlan has no public URL or agent URL, so it cannot tell an agent where to connect. Set one in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL.")
 	}
 	if tunnel.PlainAddressRefused(endpoint, d.AgentAllowInsecure) {
 		return nil, insecureAgentURLProblem()
@@ -622,9 +622,9 @@ func addAgentEnvironment(ctx context.Context, d EnvironmentsDeps, fail func(stri
 // fixed and does not repeat the address.
 func insecureAgentURLProblem() error {
 	return httpx.Problem(http.StatusConflict, problemInsecureAgentURL,
-		"The address agents are given is plain ws:// for a host that is not this machine. Agents refuse it, and so does Coaming. "+
-			"Set an https public URL or agent URL in Settings, or with COAMING_PUBLIC_URL or COAMING_AGENT_URL. "+
-			"COAMING_AGENT_ALLOW_INSECURE=true on Coaming allows it for development only.")
+		"The address agents are given is plain ws:// for a host that is not this machine. Agents refuse it, and so does TierPlan. "+
+			"Set an https public URL or agent URL in Settings, or with TIERPLAN_PUBLIC_URL or TIERPLAN_AGENT_URL. "+
+			"TIERPLAN_AGENT_ALLOW_INSECURE=true on TierPlan allows it for development only.")
 }
 
 // installBody maps the built install to its API shape.

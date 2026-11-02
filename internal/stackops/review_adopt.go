@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -10,14 +10,14 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // ReviewModeAdopt reviews the definition rebuilt from what runs against what runs, before the stack is adopted
 // (plan 08-14, D-16, D-20). It answers what the first deploy of the adopted stack would change. A difference that is
-// only Coaming's ownership labels is the change the first deploy makes by itself, so it is marked
+// only TierPlan's ownership labels is the change the first deploy makes by itself, so it is marked
 // stacks.ServiceChange.OwnershipOnly and counted apart in Summary.OwnershipOnly; every other difference is a gap.
 //
 // The definition reviewed is ReviewInput.Copy: the rebuild's file, or (plan 08-15, D-12) a pasted file that has already
@@ -113,7 +113,7 @@ func (d Deps) reviewAdoptPlan(ctx context.Context, in ReviewInput, rv *Review) (
 // reviewAdoptStandalone is reviewAdoptPlan for a Compose project on a standalone host: the rebuilt project is
 // prepared as a deploy prepares it, with the images that run, and compared with the host's containers by config hash
 // and field diff (compareStandalone). A service whose containers carry another config hash than the rebuilt service
-// has now, with no field that differs, differs in what Coaming's own labels change in the hash, and nothing the
+// has now, with no field that differs, differs in what TierPlan's own labels change in the hash, and nothing the
 // person wrote: it is ownership-only.
 func (d Deps) reviewAdoptStandalone(ctx context.Context, in ReviewInput, loaded *stacks.Loaded, rv *Review) error {
 	project := loaded.Project

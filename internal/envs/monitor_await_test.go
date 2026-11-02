@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // awaitMonitor is a monitor that probes only at start and when kicked, so the

@@ -1,9 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Makes the throwaway certificate (it is its own certificate authority, as the test
-# fixtures' is: the spec gives its PEM to Coaming under Advanced) and the bare
+# fixtures' is: the spec gives its PEM to TierPlan under Advanced) and the bare
 # repository with one commit, then serves it. Everything is made afresh each time the
 # container starts, so a run never sees the repository an earlier run left.
 set -eu
@@ -13,7 +13,7 @@ mkdir -p /certs /srv/git /srv/www /work
 # The names the run reaches it by: the compose service name, and the fixed address the
 # compose file gives it.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 \
-  -subj "/CN=gitserver/O=Coaming end-to-end git server" \
+  -subj "/CN=gitserver/O=TierPlan end-to-end git server" \
   -addext "subjectAltName=DNS:gitserver,DNS:localhost,IP:172.30.0.11,IP:127.0.0.1" \
   -addext "basicConstraints=critical,CA:TRUE" \
   -addext "keyUsage=critical,digitalSignature,keyCertSign" \
@@ -23,8 +23,8 @@ cat /certs/key.pem /certs/cert.pem > /certs/server.pem
 chmod 0600 /certs/key.pem /certs/server.pem
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HOME=/work
-export GIT_AUTHOR_NAME="Coaming E2E" GIT_AUTHOR_EMAIL=e2e@coaming.invalid
-export GIT_COMMITTER_NAME="Coaming E2E" GIT_COMMITTER_EMAIL=e2e@coaming.invalid
+export GIT_AUTHOR_NAME="TierPlan E2E" GIT_AUTHOR_EMAIL=e2e@tierplan.invalid
+export GIT_COMMITTER_NAME="TierPlan E2E" GIT_COMMITTER_EMAIL=e2e@tierplan.invalid
 
 git init --quiet --bare -b main /srv/git/stacks.git
 git init --quiet -b main /work/stacks

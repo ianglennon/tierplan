@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -15,11 +15,11 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Reverts drift (plan 08-25, STK-14, D-25): a deploy review lists, apart from the draft's own changes, every outside
@@ -183,7 +183,7 @@ func TestRevertsDriftCause(t *testing.T) {
 		t.Errorf("web cause = %+v, want %+v", web.Cause, want)
 	}
 	if api.Cause != nil {
-		t.Errorf("api cause = %+v, want none: nothing in the audit log explains it, which reads as changed outside Coaming", api.Cause)
+		t.Errorf("api cause = %+v, want none: nothing in the audit log explains it, which reads as changed outside TierPlan", api.Cause)
 	}
 }
 
@@ -339,7 +339,7 @@ func TestThreeWayRules(t *testing.T) {
 }
 
 // TestRevertsDriftListsAPlatformsChangeMadeOutside (G-08-4, D-25, T-08-112): the platforms the deployed revision recorded
-// come from the pins of its last good revision, so a deploy that would put back platforms changed outside Coaming lists
+// come from the pins of its last good revision, so a deploy that would put back platforms changed outside TierPlan lists
 // them as it lists any other outside change.
 func TestRevertsDriftListsAPlatformsChangeMadeOutside(t *testing.T) {
 	t.Parallel()

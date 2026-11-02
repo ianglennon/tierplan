@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // TestStandaloneUninstallOnRemove removes an environment with uninstallAgents on a real
@@ -77,13 +77,13 @@ func TestStandaloneRemoveWithoutUninstallLeavesTheAgentRunning(t *testing.T) {
 	// The agent is cut off when the environment goes. Its own refusal is the causally
 	// later event: an uninstall nobody asked for would have been acted on before it.
 	srv.WaitFor("the agent to say the server refused it after the removal", 120*time.Second, func() (bool, string) {
-		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs coaming-agent 2>&1")
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs tierplan-agent 2>&1")
 		return strings.Contains(out, "the server refused this agent"), out
 	})
-	if got := strings.TrimSpace(sh(t, host, "docker ps --format '{{.Names}}' --filter name=coaming-agent")); got != "coaming-agent" {
+	if got := strings.TrimSpace(sh(t, host, "docker ps --format '{{.Names}}' --filter name=tierplan-agent")); got != "tierplan-agent" {
 		t.Errorf("running containers = %q, want the agent left alone", got)
 	}
-	if got := strings.Fields(sh(t, host, "docker volume ls -q")); len(got) != 1 || got[0] != "coaming-agent" {
+	if got := strings.Fields(sh(t, host, "docker volume ls -q")); len(got) != 1 || got[0] != "tierplan-agent" {
 		t.Errorf("volumes = %v, want the agent's volume kept", got)
 	}
 	if rows := srv.AuditRows("agent.uninstalled"); len(rows) != 0 {

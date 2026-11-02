@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -18,8 +18,8 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // facadeFix is one dind engine that is a one-node swarm, with a registry on it and a dockerx client
@@ -34,7 +34,7 @@ type facadeFix struct {
 }
 
 // startFacadeFix starts the engine the tests of the swarm facades run against: a one-node swarm, the
-// busybox image the services run and a registry holding nothing yet. The engine is COAMING_TEST_ENGINE.
+// busybox image the services run and a registry holding nothing yet. The engine is TIERPLAN_TEST_ENGINE.
 func startFacadeFix(t *testing.T) *facadeFix {
 	t.Helper()
 	node := dockertest.StartHost(t, "")

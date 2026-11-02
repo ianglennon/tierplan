@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -12,11 +12,11 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // CodeNoFreeSubnet is the code of a deploy or review that cannot give a new network the block of the
@@ -87,7 +87,7 @@ func (p SubnetPlan) Message(network string) string {
 // give a subnet to, the plan is empty and nothing is read.
 //
 // A deploy (deploy true) holds the environment's allocation lock from here until the plan's Release,
-// reads every node's networks afresh and so cannot give a block a network made through Coaming a
+// reads every node's networks afresh and so cannot give a block a network made through TierPlan a
 // moment ago holds. A review (deploy false) holds nothing and reads the cached view.
 func (d Deps) planSmallSubnets(ctx context.Context, envID string, planned []convert.NetworkPlan, live []dockerx.NetworkRow, recorded map[string]string, deploy bool) (SubnetPlan, error) {
 	if d.AddressSpaces == nil {
@@ -269,7 +269,7 @@ func subnetProblems(plan convert.Plan, sub SubnetPlan) stacks.Problems {
 }
 
 // standaloneSubnetEligible reports whether small stack subnets may give a project network a subnet: a network
-// Coaming's deploy creates, on the default bridge driver, with no address configuration of its own (D-20, P7 D-18).
+// TierPlan's deploy creates, on the default bridge driver, with no address configuration of its own (D-20, P7 D-18).
 func standaloneSubnetEligible(n types.NetworkConfig) bool {
 	if bool(n.External) || n.Name == "" || len(n.Ipam.Config) > 0 || (n.Ipam.Driver != "" && n.Ipam.Driver != "default") {
 		return false

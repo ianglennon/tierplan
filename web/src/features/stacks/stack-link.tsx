@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import { Fragment } from "react";
@@ -13,9 +13,9 @@ interface StackLinkProps {
   envId: string;
   // The stack's name. Text from Docker, drawn as text.
   name: string;
-  // The ID of the Coaming stack the name belongs to. The server sets it only when this environment
-  // holds a stack with that ID under that name (T-07-146), so a stack Coaming does not manage has none.
-  coamingStackId?: string;
+  // The ID of the TierPlan stack the name belongs to. The server sets it only when this environment
+  // holds a stack with that ID under that name (T-07-146), so a stack TierPlan does not manage has none.
+  tierplanStackId?: string;
   className?: string;
 }
 
@@ -23,19 +23,19 @@ const linkClass =
   "rounded-sm text-accent-ink hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
 
 // StackLink draws a stack's name on a page that is not the stack's own (UI-SPEC "Links on other
-// pages"): a link to the stack when the server says Coaming manages it. For a stack it does not manage (a
+// pages"): a link to the stack when the server says TierPlan manages it. For a stack it does not manage (a
 // swarm namespace or Compose project that docker stack deploy, docker compose or Portainer made) it is a link to
-// the stack's read-only page, with the Tooltip "Not managed by Coaming.", and plain text only for a user who cannot
+// the stack's read-only page, with the Tooltip "Not managed by TierPlan.", and plain text only for a user who cannot
 // read stacks on the environment. The address is built by the router from the confirmed ID, or from the name for
 // a stack that has none, never from the label's text joined into a path.
-export function StackLink({ envId, name, coamingStackId, className }: StackLinkProps) {
+export function StackLink({ envId, name, tierplanStackId, className }: StackLinkProps) {
   const t = useT();
   const canRead = usePermission("stacks.read", envId);
-  if (coamingStackId) {
+  if (tierplanStackId) {
     return (
       <Link
         to="/env/$envId/stacks/$stackId"
-        params={{ envId, stackId: coamingStackId }}
+        params={{ envId, stackId: tierplanStackId }}
         className={cn(linkClass, className)}
       >
         {name}
@@ -59,10 +59,10 @@ export function StackLink({ envId, name, coamingStackId, className }: StackLinkP
   );
 }
 
-// coamingStackIdOf is the Coaming stack a group of rows is: the ID its rows carry. The server confirms
+// tierplanStackIdOf is the TierPlan stack a group of rows is: the ID its rows carry. The server confirms
 // an ID against the stack's name, so every row of a group that carries one carries the same.
-export function coamingStackIdOf(rows: readonly { coamingStackId?: string }[]): string {
-  return rows.find((r) => r.coamingStackId)?.coamingStackId ?? "";
+export function tierplanStackIdOf(rows: readonly { tierplanStackId?: string }[]): string {
+  return rows.find((r) => r.tierplanStackId)?.tierplanStackId ?? "";
 }
 
 // A character no translation holds, put where the stack's name goes so the sentence can be split there.
@@ -81,7 +81,7 @@ interface StackSentenceProps extends Omit<StackLinkProps, "name" | "className"> 
 
 // StackSentence is a translated sentence that names a stack, with the name a StackLink: the words stay
 // exactly as they were, and only the name becomes a link (UI-SPEC "Links on other pages": "Unchanged text; the
-// stack name inside them is a link"), to the stack when Coaming manages it and to its read-only page when it
+// stack name inside them is a link"), to the stack when TierPlan manages it and to its read-only page when it
 // does not. For a user who cannot read stacks it is the plain sentence.
 export function StackSentence({
   i18nKey,
@@ -89,7 +89,7 @@ export function StackSentence({
   stack,
   variable = "stack",
   envId,
-  coamingStackId,
+  tierplanStackId,
 }: StackSentenceProps) {
   const t = useT();
   const parts = t(i18nKey, { ...values, [variable]: MARK }).split(MARK);
@@ -100,7 +100,7 @@ export function StackSentence({
       {parts[0]}
       {parts.slice(1).map((rest) => (
         <Fragment key={`name-${n++}`}>
-          <StackLink envId={envId} name={stack} coamingStackId={coamingStackId} />
+          <StackLink envId={envId} name={stack} tierplanStackId={tierplanStackId} />
           {rest}
         </Fragment>
       ))}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package audit_test
 
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 // phase3DetailKeys maps every Phase 3 action to the detail keys the plans that
@@ -173,7 +173,7 @@ var phase5DetailKeys = map[string][]string{
 // once and the node the manager answered on (plan 06-01, RES-02). A force update records the image
 // the service was left with, its digest, whether it was pinned, whether it was a retry and the
 // code; a rollback records the version it was asked at and the code (plan 06-08, RES-02). A remove records the name, the stack the service belonged to, whether it was
-// Coaming's agent service, whether its name was typed to confirm, and the code (plan 06-10, RES-02).
+// TierPlan's agent service, whether its name was typed to confirm, and the code (plan 06-10, RES-02).
 var phase6DetailKeys = map[string][]string{
 	audit.ActionServiceScaled:       {"name", "replicas", "previous", "code", "bulk", "node"},
 	audit.ActionServiceForceUpdated: {"name", "image", "digest", "retry", "pinned", "code"},

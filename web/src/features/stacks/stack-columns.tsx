@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import { Ellipsis } from "lucide-react";
@@ -46,11 +46,11 @@ export interface StackRow extends StackItem {
   envName: string;
 }
 
-// isUnmanaged says whether a row is a stack Coaming found on the engine and does not manage: it has no ID
+// isUnmanaged says whether a row is a stack TierPlan found on the engine and does not manage: it has no ID
 // and none of the managed row's actions.
 export const isUnmanaged = (s: StackItem) => s.managed === false;
 
-// The sources a managed stack's definition comes from, which the Source cell words: made in Coaming, taken over from
+// The sources a managed stack's definition comes from, which the Source cell words: made in TierPlan, taken over from
 // the engine (Adopted, plan 08-13) or read from git. A source the server names that this build has no word for reads
 // as a dash and not as a raw key.
 const MANAGED_SOURCES = ["inline", "adopted", "git"] as const;
@@ -237,7 +237,7 @@ function RowActions({ row, onOpenChange, disabled }: RowActionsProps) {
 }
 
 // UnmanagedName is the Name cell of a stack found on the engine: the name as a link to its read-only page, then the
-// Unmanaged badge and, for Coaming's own stack or an agent's, the badge that says so. The badges stay after a
+// Unmanaged badge and, for TierPlan's own stack or an agent's, the badge that says so. The badges stay after a
 // truncated name. The address is built by the router from the name, never concatenated.
 function UnmanagedName({ row }: { row: StackRow }) {
   const t = useT();
@@ -252,7 +252,7 @@ function UnmanagedName({ row }: { row: StackRow }) {
         <TruncatedText>{row.name}</TruncatedText>
       </Link>
       <UnmanagedBadge orphan={row.unmanaged?.orphan} />
-      {owner === "coaming" || owner === "agent" ? (
+      {owner === "tierplan" || owner === "agent" ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <Badge variant="outline" className="shrink-0">
@@ -268,7 +268,7 @@ function UnmanagedName({ row }: { row: StackRow }) {
 
 // UnmanagedRowActions is the row menu of a stack found on the engine: Open stack, and Adopt stack…, which opens the
 // Adopt page and changes nothing by itself. For anyone below Env Admin it is off with the role it takes, and for a
-// stack that cannot be adopted with the server's reason. Coaming offers no Deploy, Update images, Stop, Start or
+// stack that cannot be adopted with the server's reason. TierPlan offers no Deploy, Update images, Stop, Start or
 // Remove on a stack it does not manage.
 function UnmanagedRowActions({ row }: { row: StackRow }) {
   const t = useT();
@@ -435,7 +435,7 @@ export function stackColumns(
       id: "actions",
       header: <span className="sr-only">{t("actions.column")}</span>,
       className: "w-11 px-1 text-end",
-      // An unmanaged stack offers no Deploy, Update images, Stop, Start or Remove: Coaming changes nothing
+      // An unmanaged stack offers no Deploy, Update images, Stop, Start or Remove: TierPlan changes nothing
       // on a stack it does not manage. It can be opened.
       cell: (s) =>
         isUnmanaged(s) ? (

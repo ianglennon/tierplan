@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package vault holds Coaming's master key and derives everything from it
+// Package vault holds TierPlan's master key and derives everything from it
 // (D-13, D-14).
 //
 // The master key is 32 random bytes, written as one line of standard base64.
-// It comes from COAMING_ENCRYPTION_KEY (or the _FILE variant, which config
-// resolves first) or from <data dir>/coaming.key, which is generated on first
+// It comes from TIERPLAN_ENCRYPTION_KEY (or the _FILE variant, which config
+// resolves first) or from <data dir>/tierplan.key, which is generated on first
 // start. Every ciphertext and every audit HMAC records the ID of the key that
 // produced it, so a later rotation needs no format change.
 //
 // Formats (confirmed at plan 01-07 Task 1, and one-way once data exists):
 //
-//	key ID      "k1-" + hex(first 8 bytes of SHA-256("coaming/key-id/v1" || key))
+//	key ID      "k1-" + hex(first 8 bytes of SHA-256("tierplan/key-id/v1" || key))
 //	subkey      HKDF-SHA256(key, no salt, info = label), 32 bytes
 //	envelope    "v1." + keyID + "." + base64url(nonce(12) || GCM ciphertext+tag),
-//	            AAD = "coaming/v1/" + caller context
+//	            AAD = "tierplan/v1/" + caller context
 //
 // The key is never logged and is only reachable through derived subkeys.
 package vault
@@ -40,13 +40,13 @@ import (
 
 const (
 	// KeyFile is the generated key's file name inside the data directory.
-	KeyFile = "coaming.key"
+	KeyFile = "tierplan.key"
 
 	// Subkey labels. They are part of the on-disk format: changing one
 	// invalidates everything derived with it.
-	LabelAuditHMAC = "coaming/audit-hmac/v1"
-	LabelVaultAEAD = "coaming/vault-aead/v1"
-	LabelCSRF      = "coaming/csrf/v1"
+	LabelAuditHMAC = "tierplan/audit-hmac/v1"
+	LabelVaultAEAD = "tierplan/vault-aead/v1"
+	LabelCSRF      = "tierplan/csrf/v1"
 
 	// Sealing contexts that more than one package must agree on. The CA key
 	// context is followed by the environment ID, the registry credential one by
@@ -68,11 +68,11 @@ const (
 	ContextGitWebhook = "git-webhook/v1/" //nolint:gosec // G101: a sealing context label, not a credential
 
 	keyLen         = 32
-	keyIDDomain    = "coaming/key-id/v1"
+	keyIDDomain    = "tierplan/key-id/v1"
 	keyIDPrefix    = "k1-"
 	envelopeV1     = "v1"
-	aadPrefix      = "coaming/v1/"
-	envKeyName     = "COAMING_ENCRYPTION_KEY"
+	aadPrefix      = "tierplan/v1/"
+	envKeyName     = "TIERPLAN_ENCRYPTION_KEY"
 	sourceEnv      = "env"
 	sourceFile     = "file"
 	keyFileMode    = 0o600
@@ -106,8 +106,8 @@ type Vault struct {
 }
 
 // LoadOrCreate returns the vault for configKey (the resolved
-// COAMING_ENCRYPTION_KEY, empty when unset). A set configKey always wins and
-// creates no file. Otherwise it reads <dataDir>/coaming.key, generating it
+// TIERPLAN_ENCRYPTION_KEY, empty when unset). A set configKey always wins and
+// creates no file. Otherwise it reads <dataDir>/tierplan.key, generating it
 // (0600, written atomically) on first start and warning to back it up.
 func LoadOrCreate(configKey, dataDir string, log *slog.Logger) (*Vault, error) {
 	return load(configKey, dataDir, log, true)
@@ -132,7 +132,7 @@ func load(configKey, dataDir string, log *slog.Logger, create bool) (*Vault, err
 	return v, nil
 }
 
-// addOldKey makes the key a rotation kept as coaming.key.old readable, so
+// addOldKey makes the key a rotation kept as tierplan.key.old readable, so
 // values and audit attestations it produced still open and verify (D-33). The
 // file is a convenience, never a requirement: one that is missing, unreadable
 // or not a key is logged and skipped, and never stops a start.
@@ -158,7 +158,7 @@ func loadActive(configKey, dataDir string, log *slog.Logger, create bool) (*Vaul
 	}
 
 	path := filepath.Join(dataDir, KeyFile)
-	raw, err := os.ReadFile(path) //nolint:gosec // path is <data dir>/coaming.key
+	raw, err := os.ReadFile(path) //nolint:gosec // path is <data dir>/tierplan.key
 	switch {
 	case err == nil:
 		key, derr := decodeKey(string(raw))
@@ -219,7 +219,7 @@ func writeKeyFile(path string, key []byte) (created bool, err error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("create data directory %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".coaming.key-*")
+	tmp, err := os.CreateTemp(dir, ".tierplan.key-*")
 	if err != nil {
 		return false, fmt.Errorf("write key file: %w", err)
 	}
@@ -367,8 +367,8 @@ func keyID(key []byte) string {
 // KeyID is the active key's ID, recorded on every ciphertext and audit entry.
 func (v *Vault) KeyID() string { return v.active }
 
-// KeySource reports where the key came from: "env" (COAMING_ENCRYPTION_KEY or
-// its _FILE variant) or "file" (<data dir>/coaming.key).
+// KeySource reports where the key came from: "env" (TIERPLAN_ENCRYPTION_KEY or
+// its _FILE variant) or "file" (<data dir>/tierplan.key).
 func (v *Vault) KeySource() string { return v.source }
 
 // Subkey derives the 32-byte subkey for label from the active key.

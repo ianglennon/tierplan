@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -11,9 +11,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // ReviewModeRollback reviews a roll back to a revision: the revision's own converted stack, with the digests it
@@ -298,7 +298,7 @@ func notDeployableMessage(seq int64, pe *PrepareError) string {
 			reason = "it has no recorded image for " + invalid.Service
 		}
 	}
-	return "Coaming can't restore revision #" + strconv.FormatInt(seq, 10) + ": " + reason + ". Nothing was changed."
+	return "TierPlan can't restore revision #" + strconv.FormatInt(seq, 10) + ": " + reason + ". Nothing was changed."
 }
 
 // rollbackImageRows is one row for each service with an image, ordered by the service's name in the compose

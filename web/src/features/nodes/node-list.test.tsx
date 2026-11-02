@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -32,7 +32,7 @@ const node = (extra: Partial<NodeItem> = {}): NodeItem => ({
   hostname: "mgr-1",
   role: "manager",
   leader: true,
-  runsCoaming: true,
+  runsTierPlan: true,
   state: "ready",
   availability: "active",
   reachability: "reachable",
@@ -55,7 +55,7 @@ const NODES: NodeItem[] = [
     id: "n2",
     hostname: "mgr-2",
     leader: false,
-    runsCoaming: false,
+    runsTierPlan: false,
     state: "down",
     reachability: "unreachable",
     address: "10.0.0.2",
@@ -69,7 +69,7 @@ const NODES: NodeItem[] = [
     hostname: "wkr-1",
     role: "worker",
     leader: false,
-    runsCoaming: false,
+    runsTierPlan: false,
     availability: "drain",
     reachability: "",
     address: "10.0.0.3",
@@ -87,7 +87,7 @@ const NODES: NodeItem[] = [
     hostname: "wkr-2",
     role: "worker",
     leader: false,
-    runsCoaming: false,
+    runsTierPlan: false,
     availability: "pause",
     reachability: "",
     address: "10.0.0.4",
@@ -235,12 +235,12 @@ describe("NodeList", () => {
     }
   });
 
-  it("shows a manager's name with Leader and Runs Coaming, its status, role, address, engine, platform, resources and agent", async () => {
+  it("shows a manager's name with Leader and Runs TierPlan, its status, role, address, engine, platform, resources and agent", async () => {
     mount();
     await screen.findByRole("link", { name: "mgr-1" });
     const row = rowOf("mgr-1");
     expect(within(row).getByText("Leader")).toBeTruthy();
-    expect(within(row).getByText("Runs Coaming")).toBeTruthy();
+    expect(within(row).getByText("Runs TierPlan")).toBeTruthy();
     expect(within(row).getByText("Ready")).toBeTruthy();
     expect(within(row).getByText("Active")).toBeTruthy();
     expect(within(row).getByText("Manager")).toBeTruthy();

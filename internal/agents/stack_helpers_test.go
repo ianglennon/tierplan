@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -17,26 +17,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The helpers of the stack suites (plan 07-11). The parity oracle deploys one compose file twice on
 // the same swarm, once with the real `docker stack deploy --resolve-image=never` on a manager and
-// once through Coaming's API and a real agent, and compares what the engine holds afterwards. A
+// once through TierPlan's API and a real agent, and compares what the engine holds afterwards. A
 // difference is a converter fix, never a wider normaliser: normaliseSpec removes only what two
 // correct deploys of one file must differ in, and says so in its list.
 
 const (
-	// stackDeployWait is how long a Coaming deploy job gets to end, pulls and network creation included.
+	// stackDeployWait is how long a TierPlan deploy job gets to end, pulls and network creation included.
 	stackDeployWait = 5 * time.Minute
 	// stackGoneWait is how long a removed stack gets to leave services, containers and networks behind.
 	stackGoneWait = 3 * time.Minute
 
-	// parityCLIStack and parityCoamingStack are the two stack names a parity case deploys under. They
+	// parityCLIStack and parityTierPlanStack are the two stack names a parity case deploys under. They
 	// differ, so the two never share an object, and the normaliser maps both onto stackToken.
 	parityCLIStack     = "pcli"
-	parityCoamingStack = "pbp"
+	parityTierPlanStack = "pbp"
 	stackToken         = "STACK"
 )
 
@@ -126,8 +126,8 @@ func (f *swarmFix) draftVersion(t *testing.T, stackID string) int64 {
 	return d.Version
 }
 
-// createStackCoaming creates the stack with its first compose file and returns its ID.
-func (f *swarmFix) createStackCoaming(t *testing.T, name, compose string) string {
+// createStackTierPlan creates the stack with its first compose file and returns its ID.
+func (f *swarmFix) createStackTierPlan(t *testing.T, name, compose string) string {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, f.stackAPI(), map[string]any{"name": name, "compose": compose})
 	var st struct {
@@ -139,8 +139,8 @@ func (f *swarmFix) createStackCoaming(t *testing.T, name, compose string) string
 	return st.ID
 }
 
-// saveStackCoaming replaces the draft of a stack: its compose file and the files beside it.
-func (f *swarmFix) saveStackCoaming(t *testing.T, stackID string, src paritySource) {
+// saveStackTierPlan replaces the draft of a stack: its compose file and the files beside it.
+func (f *swarmFix) saveStackTierPlan(t *testing.T, stackID string, src paritySource) {
 	t.Helper()
 	files := []map[string]any{{"path": "compose.yaml", "content": src.Compose, "secret": false}}
 	for _, sf := range src.Files {
@@ -165,9 +165,9 @@ type stackJob struct {
 	} `json:"items"`
 }
 
-// deployStackCoaming deploys the stack's draft, waits until the job ends and fails the test unless
+// deployStackTierPlan deploys the stack's draft, waits until the job ends and fails the test unless
 // every step is done. It returns the job as it ended.
-func (f *swarmFix) deployStackCoaming(t *testing.T, stackID string) stackJob {
+func (f *swarmFix) deployStackTierPlan(t *testing.T, stackID string) stackJob {
 	t.Helper()
 	code, body := f.srv.Do(http.MethodPost, f.stackAPI()+"/"+stackID+"/deploys", map[string]any{"draftVersion": f.draftVersion(t, stackID)})
 	var started struct {
@@ -195,15 +195,15 @@ func (f *swarmFix) deployStackCoaming(t *testing.T, stackID string) stackJob {
 	return job
 }
 
-// deployWithCoaming creates a stack, saves the files beside its compose file, deploys it through the
+// deployWithTierPlan creates a stack, saves the files beside its compose file, deploys it through the
 // API and returns the stack ID once the job is done.
-func deployWithCoaming(t *testing.T, f *swarmFix, name string, src paritySource) string {
+func deployWithTierPlan(t *testing.T, f *swarmFix, name string, src paritySource) string {
 	t.Helper()
-	id := f.createStackCoaming(t, name, src.Compose)
+	id := f.createStackTierPlan(t, name, src.Compose)
 	if len(src.Files) > 0 {
-		f.saveStackCoaming(t, id, src)
+		f.saveStackTierPlan(t, id, src)
 	}
-	f.deployStackCoaming(t, id)
+	f.deployStackTierPlan(t, id)
 	return id
 }
 
@@ -246,7 +246,7 @@ func engineNames(ctx context.Context, node *dockertest.Node) (map[string]string,
 	return ids, nil
 }
 
-// hashedSuffix is the short hash Coaming puts at the end of a secret's or a config's name; the
+// hashedSuffix is the short hash TierPlan puts at the end of a secret's or a config's name; the
 // docker CLI names them <stack>_<name> alone.
 var hashedSuffix = regexp.MustCompile(`_[0-9a-f]{8}$`)
 
@@ -257,7 +257,7 @@ var hashedSuffix = regexp.MustCompile(`_[0-9a-f]{8}$`)
 //   - the stack's name, which becomes STACK (in a name, STACK_ and a prefix of one);
 //   - the ID of a network, secret or config, which becomes its name;
 //   - the hash at the end of a secret's or a config's name (and so of the name its ID became);
-//   - every label whose key starts with coaming., which are Coaming's own;
+//   - every label whose key starts with tierplan., which are TierPlan's own;
 //   - the order of the networks, which both converters give by ID and which therefore follows the
 //     IDs of two different deploys; they are put in order by name instead.
 func normaliseSpec(raw json.RawMessage, stack string, ids map[string]string) map[string]any {
@@ -309,7 +309,7 @@ func (n normaliser) walk(key string, v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, e := range x {
-			if strings.HasPrefix(k, "coaming.") {
+			if strings.HasPrefix(k, "tierplan.") {
 				continue
 			}
 			out[n.name(k)] = n.walk(k, e)
@@ -380,11 +380,11 @@ func stackSpecDiff(a, b map[string]any) string {
 		vb, okb := fb[p]
 		switch {
 		case !oka:
-			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has nothing, Coaming has %s", p, vb))
+			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has nothing, TierPlan has %s", p, vb))
 		case !okb:
-			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has %s, Coaming has nothing", p, va))
+			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has %s, TierPlan has nothing", p, va))
 		case va != vb:
-			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has %s, Coaming has %s", p, va, vb))
+			lines = append(lines, fmt.Sprintf("  %s: docker stack deploy has %s, TierPlan has %s", p, va, vb))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -407,7 +407,7 @@ const vxlanOption = "com.docker.network.driver.overlay.vxlanid_list"
 
 // normaliseNetwork is `docker network inspect` of a network the stack made, with what the engine
 // fills in as it runs removed (runtimeNetworkKeys), the overlay's own VXLAN number removed from its
-// options (it is numbered by the engine, not asked for) and the stack's name, Coaming's labels
+// options (it is numbered by the engine, not asked for) and the stack's name, TierPlan's labels
 // replaced as normaliseSpec does. When the file asks for no address pool (askedPools false) the
 // subnet and gateway are the engine's choice, which follows what other networks it holds or has just
 // freed, so they are replaced by a word.
@@ -528,7 +528,7 @@ func snapshotStack(ctx context.Context, node *dockertest.Node, stack string, ask
 }
 
 // compareGroup fails the test with the field-level differences between the docker CLI's objects of
-// one kind and Coaming's. An empty group on both sides is fine (a file with no secrets has none).
+// one kind and TierPlan's. An empty group on both sides is fine (a file with no secrets has none).
 func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) {
 	t.Helper()
 	seen := map[string]bool{}
@@ -548,7 +548,7 @@ func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) 
 		b, okB := cm[n]
 		switch {
 		case !okA:
-			t.Errorf("%s %s: only Coaming made it", kind, n)
+			t.Errorf("%s %s: only TierPlan made it", kind, n)
 		case !okB:
 			t.Errorf("%s %s: only docker stack deploy made it", kind, n)
 		default:
@@ -556,14 +556,14 @@ func compareGroup(t *testing.T, kind string, cli, cm map[string]map[string]any) 
 			flattenJSON("", a, fields)
 			t.Logf("%s %s: %d fields compared", kind, n, len(fields))
 			if d := stackSpecDiff(a, b); d != "" {
-				t.Errorf("%s %s differs between docker stack deploy and Coaming:\n%s", kind, n, d)
+				t.Errorf("%s %s differs between docker stack deploy and TierPlan:\n%s", kind, n, d)
 			}
 		}
 	}
 }
 
 // compareSnapshots fails the test with every difference between the docker CLI's deploy and
-// Coaming's, and when neither made a service, because then it would prove nothing.
+// TierPlan's, and when neither made a service, because then it would prove nothing.
 func compareSnapshots(t *testing.T, cli, cm stackSnapshot) {
 	t.Helper()
 	if len(cli.Services) == 0 && len(cm.Services) == 0 {
@@ -576,7 +576,7 @@ func compareSnapshots(t *testing.T, cli, cm stackSnapshot) {
 }
 
 // removeStackCLI removes the stack with the docker CLI and waits until no service, no container and
-// no network of it is left on any node, and, when Coaming's own reads are given, until the
+// no network of it is left on any node, and, when TierPlan's own reads are given, until the
 // environment's services list no longer shows it either.
 func removeStackCLI(t *testing.T, f *swarmFix, stack string) {
 	t.Helper()
@@ -620,7 +620,7 @@ func removeStackCLI(t *testing.T, f *swarmFix, stack string) {
 		}
 		return len(left) == 0, strings.Join(left, "; ")
 	})
-	testsupport.Poll(t, stackGoneWait, "Coaming's services list to show no service of "+stack, func() (bool, string) {
+	testsupport.Poll(t, stackGoneWait, "TierPlan's services list to show no service of "+stack, func() (bool, string) {
 		f.srv.RefreshCluster(f.env.ID)
 		var left []string
 		for _, it := range f.services(t) {

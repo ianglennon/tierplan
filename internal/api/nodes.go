@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -15,12 +15,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 const (
@@ -42,7 +42,7 @@ var nodeStatuses = []string{nodeStatusManagers, nodeStatusWorkers, nodeStatusDra
 
 // NodesDeps are the dependencies of the swarm node routes.
 type NodesDeps struct {
-	// Aggregator finds the node Coaming's own container is on, and maps swarm nodes to the
+	// Aggregator finds the node TierPlan's own container is on, and maps swarm nodes to the
 	// agents that reach them.
 	Aggregator *envs.Aggregator
 	// Clusters is the cluster reader the routes are served from.
@@ -54,7 +54,7 @@ type NodesDeps struct {
 	// Live is where an agent's version and last sign of life are read. Nil means none is
 	// known.
 	Live AgentSessions
-	// SelfContainerID is Coaming's own container ID; empty when it cannot tell.
+	// SelfContainerID is TierPlan's own container ID; empty when it cannot tell.
 	SelfContainerID string
 	// Log receives server-side failures. Nil means slog.Default().
 	Log *slog.Logger
@@ -71,7 +71,7 @@ type NodeItem struct {
 	Hostname        string  `json:"hostname" doc:"The node's host name"`
 	Role            string  `json:"role" enum:"manager,worker" doc:"The node's role"`
 	Leader          bool    `json:"leader" doc:"True for the manager that leads the swarm"`
-	RunsCoaming     bool    `json:"runsCoaming" doc:"True for the node whose engine hosts Coaming's own container (or, on the local socket, the node the socket is)"`
+	RunsTierPlan     bool    `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
 	State           string  `json:"state" doc:"The swarm's word for the node: ready, down, disconnected or unknown"`
 	Availability    string  `json:"availability" enum:"active,pause,drain" doc:"What the node's spec lets the swarm do with it"`
 	Reachability    string  `json:"reachability" doc:"A manager's reachability (reachable, unreachable or unknown); empty for a worker"`
@@ -83,7 +83,7 @@ type NodeItem struct {
 	MemoryBytes     int64   `json:"memoryBytes" doc:"The memory the node reports, in bytes; 0 when it reports none"`
 	TasksRunning    int     `json:"tasksRunning" doc:"Tasks whose desired state is running that are running on the node. 0 when tasksKnown is false"`
 	TasksNotRunning int     `json:"tasksNotRunning" doc:"Tasks whose desired state is running that are not: still starting, failed to place, or on a node that is not ready and so cannot say. 0 when tasksKnown is false"`
-	AgentReporting  bool    `json:"agentReporting" doc:"True when Coaming reaches the node now: a connected agent runs on it, or it is the local socket's own node"`
+	AgentReporting  bool    `json:"agentReporting" doc:"True when TierPlan reaches the node now: a connected agent runs on it, or it is the local socket's own node"`
 	TargetNodeID    string  `json:"targetNodeId" doc:"The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now"`
 }
 
@@ -125,9 +125,9 @@ type NodeInput struct {
 	NodeID string `path:"nodeId" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$" maxLength:"128" doc:"The swarm node ID: the id of a row of the nodes list"`
 }
 
-// NodeAgentBody is what Coaming knows of the agent that runs on a node.
+// NodeAgentBody is what TierPlan knows of the agent that runs on a node.
 type NodeAgentBody struct {
-	Reporting bool   `json:"reporting" doc:"True when Coaming reaches the node now: a connected agent runs on it, or it is the local socket's own node"`
+	Reporting bool   `json:"reporting" doc:"True when TierPlan reaches the node now: a connected agent runs on it, or it is the local socket's own node"`
 	Version   string `json:"version" doc:"The agent's version; empty when no agent is connected there and for the local socket's node"`
 	LastSeen  string `json:"lastSeen" format:"date-time" doc:"The agent's last sign of life this server run; empty when none"`
 }
@@ -139,7 +139,7 @@ type NodeDetailBody struct {
 	Hostname      string            `json:"hostname" doc:"The node's host name"`
 	Role          string            `json:"role" enum:"manager,worker" doc:"The node's role"`
 	Leader        bool              `json:"leader" doc:"True for the manager that leads the swarm"`
-	RunsCoaming   bool              `json:"runsCoaming" doc:"True for the node whose engine hosts Coaming's own container (or, on the local socket, the node the socket is)"`
+	RunsTierPlan   bool              `json:"runsTierPlan" doc:"True for the node whose engine hosts TierPlan's own container (or, on the local socket, the node the socket is)"`
 	State         string            `json:"state" doc:"The swarm's word for the node: ready, down, disconnected or unknown"`
 	Availability  string            `json:"availability" enum:"active,pause,drain" doc:"What the node's spec lets the swarm do with it"`
 	Reachability  string            `json:"reachability" doc:"A manager's reachability (reachable, unreachable or unknown); empty for a worker"`
@@ -154,7 +154,7 @@ type NodeDetailBody struct {
 	EngineLabels  map[string]string `json:"engineLabels" doc:"The labels of the node's engine (engine.labels.*), set in its daemon settings; an empty object when it has none"`
 	CreatedAt     string            `json:"createdAt" format:"date-time" doc:"When the node joined the swarm"`
 	UpdatedAt     string            `json:"updatedAt" format:"date-time" doc:"When the node last changed"`
-	Agent         NodeAgentBody     `json:"agent" doc:"The Coaming agent on the node"`
+	Agent         NodeAgentBody     `json:"agent" doc:"The TierPlan agent on the node"`
 	TargetNodeID  string            `json:"targetNodeId" doc:"The node ID the container routes of this environment take (?node= of the container page) for this node; empty when nothing reaches it now"`
 }
 
@@ -207,8 +207,8 @@ func RegisterNodes(r *httpx.Router, d NodesDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listNodes", Method: http.MethodGet, Path: "/api/env/{envId}/nodes",
 		Summary: "List the nodes of a swarm",
-		Description: "Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a Coaming agent reports from it, " +
-			"read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsCoaming marks the node whose engine hosts Coaming's own container. " +
+		Description: "Every node of a swarm with the facts the Nodes list shows: role, leader, state, availability, address, engine, platform, CPUs, memory, how many tasks run there and whether a TierPlan agent reports from it, " +
+			"read through a manager's agent or through the local socket of a swarm manager, sorted by host name then ID. runsTierPlan marks the node whose engine hosts TierPlan's own container. " +
 			"Optionally a search (q) and a status filter (status: managers, workers, drained, down); counts are the chip numbers before them. When no manager is connected the answer is 200 with noManager true and the rows last read, or none. " +
 			"A task counts as running only on a node that is ready. " + swarmErrors,
 		Tags: []string{"environments"},
@@ -227,7 +227,7 @@ func RegisterNodes(r *httpx.Router, d NodesDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "getNode", Method: http.MethodGet, Path: "/api/env/{envId}/nodes/{nodeId}",
 		Summary: "One swarm node",
-		Description: "The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the Coaming agent on it (whether it reports, its version, when it was last seen). " +
+		Description: "The facts of one node read live from a manager: its object version, role, state, availability, manager status, platform, resources, labels and engine labels, when it was created and last changed, and the TierPlan agent on it (whether it reports, its version, when it was last seen). " +
 			"404 node_not_found when the swarm has no such node. " + swarmErrors,
 		Tags: []string{"environments"},
 	}, need, func(ctx context.Context, in *NodeInput) (*NodeDetailOutput, error) {
@@ -381,11 +381,11 @@ func filterNodes(rows []dockerx.NodeRow, q string, statuses []string) []dockerx.
 	return out
 }
 
-// coamingNode is the swarm node ID of the node whose engine hosts Coaming, or empty when
+// tierplanNode is the swarm node ID of the node whose engine hosts TierPlan, or empty when
 // that is not known. The local socket, and the host folded into a swarm environment, are
-// Coaming's own host, so the node they reach is it. Otherwise it is the node of the
-// container that is Coaming's own, found in the environment's containers.
-func coamingNode(ctx context.Context, d NodesDeps, envID string, targets map[string]envs.NodeRef) string {
+// TierPlan's own host, so the node they reach is it. Otherwise it is the node of the
+// container that is TierPlan's own, found in the environment's containers.
+func tierplanNode(ctx context.Context, d NodesDeps, envID string, targets map[string]envs.NodeRef) string {
 	for swarmID, ref := range targets {
 		if ref.ID == envID || ref.ID == envs.SocketTarget(envID) {
 			return swarmID
@@ -398,7 +398,7 @@ func coamingNode(ctx context.Context, d NodesDeps, envID string, targets map[str
 	defer cancel()
 	agg, _, err := d.Aggregator.Snapshot(readCtx, envID)
 	if err != nil {
-		d.Log.Debug("looking for Coaming's own container failed", "environment", envID, "error", err)
+		d.Log.Debug("looking for TierPlan's own container failed", "environment", envID, "error", err)
 		return ""
 	}
 	for _, c := range agg.Containers {
@@ -484,11 +484,11 @@ func listNodes(ctx context.Context, d NodesDeps, envID string, in *NodesListInpu
 		running, notRunning, body.TasksKnown = nodeTaskCounts(ctx, d, envID, all)
 	}
 	targets := swarmNodeTargets(ctx, d.services(), envID)
-	runs := coamingNode(ctx, d, envID, targets)
+	runs := tierplanNode(ctx, d, envID, targets)
 	for _, n := range rows {
 		ref, reporting := targets[n.ID]
 		body.Items = append(body.Items, NodeItem{
-			ID: n.ID, Hostname: cleanTaskText(n.Hostname), Role: n.Role, Leader: n.Leader, RunsCoaming: n.ID == runs,
+			ID: n.ID, Hostname: cleanTaskText(n.Hostname), Role: n.Role, Leader: n.Leader, RunsTierPlan: n.ID == runs,
 			State: n.State, Availability: n.Availability, Reachability: n.Reachability, Address: n.Address,
 			EngineVersion: n.EngineVersion, OS: n.OS, Arch: n.Arch, Cpus: float64(n.NanoCPUs) / 1e9, MemoryBytes: n.MemoryBytes,
 			TasksRunning: running[n.ID], TasksNotRunning: notRunning[n.ID], AgentReporting: reporting, TargetNodeID: ref.ID,
@@ -542,7 +542,7 @@ func getNode(ctx context.Context, d NodesDeps, envID, nodeID string) (NodeDetail
 	ref, reporting := targets[n.ID]
 	b := NodeDetailBody{
 		ID: n.ID, Version: n.Version, Hostname: cleanTaskText(n.Hostname), Role: n.Role, Leader: n.Leader,
-		RunsCoaming: n.ID == coamingNode(ctx, d, envID, targets),
+		RunsTierPlan: n.ID == tierplanNode(ctx, d, envID, targets),
 		State:       n.State, Availability: n.Availability, Reachability: n.Reachability, Address: n.Address, ManagerAddr: n.ManagerAddr,
 		EngineVersion: n.EngineVersion, OS: n.OS, Arch: n.Arch, Cpus: float64(n.NanoCPUs) / 1e9, MemoryBytes: n.MemoryBytes,
 		Labels: n.Labels, EngineLabels: n.EngineLabels, CreatedAt: rfc3339(n.CreatedAt), UpdatedAt: rfc3339(n.UpdatedAt),

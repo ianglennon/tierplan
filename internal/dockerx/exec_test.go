@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx_test
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 func execFake(t *testing.T, missing ...string) (*dockerx.Client, *dockertest.Fake) {
@@ -79,10 +79,10 @@ func TestExecRoundTripsBytesAndResizeReachesTheDaemon(t *testing.T) {
 	if s.ID() == "" {
 		t.Error("the session has no exec ID")
 	}
-	if _, err := s.Write([]byte("hello-coaming\n")); err != nil {
+	if _, err := s.Write([]byte("hello-tierplan\n")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	readUntil(t, s, "hello-coaming")
+	readUntil(t, s, "hello-tierplan")
 
 	if err := s.Resize(ctx, 100, 30); err != nil {
 		t.Fatalf("Resize: %v", err)

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Volume create (plan 04-16, RES-07, D-44, D-51, P2 D-42). Docker is a fake daemon
@@ -139,8 +139,8 @@ func TestCreateVolumeTheAgentsHostPolicyRefusalIs409AgentHostPolicyAndAudited(t 
 	if !strings.HasSuffix(problem.Type, "agent_host_policy") {
 		t.Errorf("problem type = %q, want agent_host_policy", problem.Type)
 	}
-	if !strings.Contains(problem.Detail, "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES") {
-		t.Errorf("detail = %q, want it to name COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES", problem.Detail)
+	if !strings.Contains(problem.Detail, "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+		t.Errorf("detail = %q, want it to name TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES", problem.Detail)
 	}
 	if c := f.fake.VolumeCreates(); len(c) != 0 {
 		t.Errorf("the engine created %+v, want nothing", c)

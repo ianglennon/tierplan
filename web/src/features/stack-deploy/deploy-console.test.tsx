@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -966,7 +966,7 @@ describe("a standalone deploy (plan 07-20, D-13)", () => {
       expect(await screen.findByRole("heading", { name: "Roll back complete" })).toBeTruthy();
       expect(
         screen.getByText(
-          "web is running the content of revision #5. Coaming recorded it as revision #9.",
+          "web is running the content of revision #5. TierPlan recorded it as revision #9.",
         ),
       ).toBeTruthy();
       expect(screen.getByRole("link", { name: "Open history" }).getAttribute("href")).toBe(
@@ -995,7 +995,7 @@ describe("a standalone deploy (plan 07-20, D-13)", () => {
       const alert = await screen.findByRole("alert");
       expect(within(alert).getByText("Roll back failed")).toBeTruthy();
       expect(
-        within(alert).getByText("Coaming recorded the failed attempt as revision #9."),
+        within(alert).getByText("TierPlan recorded the failed attempt as revision #9."),
       ).toBeTruthy();
       fireEvent.click(within(alert).getByRole("button", { name: "Retry roll back" }));
       await waitFor(() => expect(rollbacks).toHaveLength(1));
@@ -1206,7 +1206,7 @@ describe("a standalone deploy that stops (plan 07-21, D-14)", () => {
           ...check,
           state: "failed",
           code: "host_read_only",
-          message: "This host is read-only, so Coaming cannot change it.",
+          message: "This host is read-only, so TierPlan cannot change it.",
         },
         {
           ...lookup,
@@ -1224,7 +1224,7 @@ describe("a standalone deploy that stops (plan 07-21, D-14)", () => {
     expect(
       (await screen.findAllByText("This host is read-only (set on the host)")).length,
     ).toBeGreaterThan(0);
-    expect(screen.queryByText("This host is read-only, so Coaming cannot change it.")).toBeNull();
+    expect(screen.queryByText("This host is read-only, so TierPlan cannot change it.")).toBeNull();
     // Nothing was asked of the host, so the notice about an old agent is not shown.
     expect(screen.queryByText("This host's agent needs an update")).toBeNull();
   });
@@ -1433,7 +1433,7 @@ describe("a deploy that ended", () => {
   it("names the step it stopped at when the server gave no sentence", async () => {
     job = { state: "failed", items: [{ ...lookup, state: "failed" }] };
     mount();
-    expect(await screen.findByText("Coaming stopped at Look up images.")).toBeTruthy();
+    expect(await screen.findByText("TierPlan stopped at Look up images.")).toBeTruthy();
   });
 
   it("reads a partly done job as failed", async () => {
@@ -1714,7 +1714,7 @@ describe("the result", () => {
     expect(within(alert).getByText("Deploy failed")).toBeTruthy();
     expect(
       within(alert).getByText(
-        "Coaming stopped at web. 1 of 2 services were updated before it stopped, and nothing was rolled back.",
+        "TierPlan stopped at web. 1 of 2 services were updated before it stopped, and nothing was rolled back.",
       ),
     ).toBeTruthy();
     expect(within(alert).getByRole("link", { name: "Back to editing" })).toBeTruthy();
@@ -1756,7 +1756,7 @@ describe("the result of a deploy that stopped", () => {
     const alert = await screen.findByRole("alert");
     expect(
       within(alert).getByText(
-        "Coaming stopped at web. 1 of 3 services were updated before it stopped, and nothing was rolled back.",
+        "TierPlan stopped at web. 1 of 3 services were updated before it stopped, and nothing was rolled back.",
       ),
     ).toBeTruthy();
     expect(
@@ -1800,7 +1800,7 @@ describe("the result of a deploy that stopped", () => {
     const alert = await screen.findByRole("alert");
     expect(
       within(alert).getByText(
-        "Coaming couldn't remove network s1_front, config s1_conf_cd34. Remove them under Networks, Secrets or Configs.",
+        "TierPlan couldn't remove network s1_front, config s1_conf_cd34. Remove them under Networks, Secrets or Configs.",
       ),
     ).toBeTruthy();
   });
@@ -1843,7 +1843,7 @@ describe("the result of a deploy that stopped", () => {
     ).toBeTruthy();
     expect(
       within(alert).getByText(
-        "Coaming stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
+        "TierPlan stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
       ),
     ).toBeTruthy();
   });
@@ -1870,7 +1870,7 @@ describe("the result of a deploy that stopped", () => {
     ).toBeTruthy();
     expect(
       within(alert).getByText(
-        "Coaming stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
+        "TierPlan stopped at web. 1 of 1 service was updated before it stopped, and nothing was rolled back.",
       ),
     ).toBeTruthy();
   });
@@ -1911,7 +1911,7 @@ describe("the result of a deploy that stopped", () => {
     expect(await screen.findByText("Deploy cancelled")).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming stopped at Deploy services. 1 of 2 services were already updated. Objects created for this deploy that nothing uses were removed.",
+        "TierPlan stopped at Deploy services. 1 of 2 services were already updated. Objects created for this deploy that nothing uses were removed.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to editing" })).toBeTruthy();
@@ -1929,7 +1929,7 @@ describe("the result of a deploy that stopped", () => {
     mount();
     await screen.findByText("Deploy cancelled");
     expect(
-      screen.getByText("Coaming stopped at Deploy services. 0 of 1 service was already updated."),
+      screen.getByText("TierPlan stopped at Deploy services. 0 of 1 service was already updated."),
     ).toBeTruthy();
     expect(screen.queryByText(/nothing uses were removed/)).toBeNull();
   });
@@ -1974,7 +1974,7 @@ describe("cancelling a deploy", () => {
     expect(within(dialog()).getByText("Cancel this deploy?")).toBeTruthy();
     expect(
       within(dialog()).getByText(
-        "Coaming stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
+        "TierPlan stops at the step it has reached. Services already updated stay updated, and objects created for this deploy that nothing uses are removed.",
       ),
     ).toBeTruthy();
     expect(document.activeElement).toBe(
@@ -2378,7 +2378,7 @@ describe("a roll back to a chosen revision", () => {
     expect(await screen.findByRole("heading", { name: "Rolling back web to #5" })).toBeTruthy();
   });
 
-  it("says Roll back complete, which revision is running and which one Coaming recorded", async () => {
+  it("says Roll back complete, which revision is running and which one TierPlan recorded", async () => {
     jobMode = "rollback";
     jobRevision = 5;
     jobRecorded = 9;
@@ -2387,7 +2387,7 @@ describe("a roll back to a chosen revision", () => {
     expect(await screen.findByRole("heading", { name: "Roll back complete" })).toBeTruthy();
     expect(
       screen.getByText(
-        "web is running the content of revision #5. Coaming recorded it as revision #9.",
+        "web is running the content of revision #5. TierPlan recorded it as revision #9.",
       ),
     ).toBeTruthy();
     const stack = screen.getByRole("link", { name: "Open stack" });
@@ -2408,7 +2408,7 @@ describe("a roll back to a chosen revision", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Roll back failed")).toBeTruthy();
     expect(
-      within(alert).getByText("Coaming recorded the failed attempt as revision #9."),
+      within(alert).getByText("TierPlan recorded the failed attempt as revision #9."),
     ).toBeTruthy();
     const retry = within(alert).getByRole("button", { name: "Retry roll back" });
     fireEvent.click(retry);
@@ -2421,7 +2421,7 @@ describe("a roll back to a chosen revision", () => {
     job = { state: "done", items: [check, { ...services, state: "done" }, row("web", "done")] };
     mount();
     expect(await screen.findByText("Deploy complete")).toBeTruthy();
-    expect(screen.queryByText(/Coaming recorded it as revision/)).toBeNull();
+    expect(screen.queryByText(/TierPlan recorded it as revision/)).toBeNull();
     expect(screen.queryByRole("link", { name: "Open history" })).toBeNull();
   });
 });
@@ -2453,7 +2453,7 @@ describe("a restore of the deployed revision", () => {
     expect(history.getAttribute("href")).toBe("/env/e1/stacks/s1/history?rev=9");
     expect(history.getAttribute("data-variant")).toBe("outline");
     expect(screen.queryByText("Roll back complete")).toBeNull();
-    expect(screen.queryByText(/Coaming recorded it as revision/)).toBeNull();
+    expect(screen.queryByText(/TierPlan recorded it as revision/)).toBeNull();
   });
 
   it("says Restore failed, that the attempt was recorded, and retries the restore", async () => {
@@ -2466,7 +2466,7 @@ describe("a restore of the deployed revision", () => {
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText("Restore failed")).toBeTruthy();
     expect(
-      within(alert).getByText("Coaming recorded the failed attempt as revision #9."),
+      within(alert).getByText("TierPlan recorded the failed attempt as revision #9."),
     ).toBeTruthy();
     expect(within(alert).queryByRole("button", { name: "Retry roll back" })).toBeNull();
     fireEvent.click(within(alert).getByRole("button", { name: "Retry restore" }));

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents
 
@@ -16,7 +16,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // A sealed CA key is bound to its environment by the context
@@ -54,7 +54,7 @@ func newCA(envID string, now time.Time) (*ca, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Coaming agent CA " + envID},
+		Subject:               pkix.Name{CommonName: "TierPlan agent CA " + envID},
 		NotBefore:             now.Add(-leafBackdate).UTC(),
 		NotAfter:              now.Add(caLifetime).UTC(),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -143,7 +143,7 @@ func (c *ca) issue(agentID, envID string, pub ed25519.PublicKey, now time.Time) 
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: agentID, OrganizationalUnit: []string{envID}},
-		URIs:                  []*url.URL{{Scheme: "coaming", Host: "agent", Path: "/" + agentID}},
+		URIs:                  []*url.URL{{Scheme: "tierplan", Host: "agent", Path: "/" + agentID}},
 		NotBefore:             now.Add(-leafBackdate).UTC(),
 		NotAfter:              notAfter,
 		KeyUsage:              x509.KeyUsageDigitalSignature,

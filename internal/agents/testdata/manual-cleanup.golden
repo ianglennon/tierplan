@@ -1,6 +1,6 @@
 Swarm
- docker service rm coaming-agent && docker secret rm coaming-agent-token-g1
- docker volume rm coaming-agent   # on every node that ran the agent
+ docker service rm tierplan-agent && docker secret rm tierplan-agent-token-g1
+ docker volume rm tierplan-agent   # on every node that ran the agent
 
 Standalone
- docker rm -f coaming-agent && docker volume rm coaming-agent
+ docker rm -f tierplan-agent && docker volume rm tierplan-agent

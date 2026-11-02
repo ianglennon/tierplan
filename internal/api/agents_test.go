@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The join token endpoints (plan 02-10, D-02): rotate, disable and inspect.
@@ -54,7 +54,7 @@ type tokenStatusBody struct {
 // first join token.
 func (f *envFix) agentEnv(t *testing.T) (id, token string) {
 	t.Helper()
-	f.inst.Apply("Coaming", "https://example.com/coaming")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated || got.Install == nil {
 		t.Fatalf("add agent environment: %d %s", rec.code, rec.body)
@@ -99,13 +99,13 @@ func TestTokenRotateAnswersTheInstallObjectOnceWithTheNextGenerationAndNoStore(t
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.Install == nil {
 		t.Fatalf("decode %s: %v", rec.Body, err)
 	}
-	if got.Install.Generation != 2 || got.Install.SecretName != "coaming-agent-token-g2" {
-		t.Errorf("generation %d secret %q, want 2 and coaming-agent-token-g2", got.Install.Generation, got.Install.SecretName)
+	if got.Install.Generation != 2 || got.Install.SecretName != "tierplan-agent-token-g2" {
+		t.Errorf("generation %d secret %q, want 2 and tierplan-agent-token-g2", got.Install.Generation, got.Install.SecretName)
 	}
 	if !strings.HasPrefix(got.Install.JoinToken, "cmjt_"+id+"_") || got.Install.JoinToken == first {
 		t.Errorf("the new token %q is not a fresh token of the environment", got.Install.JoinToken)
 	}
-	if !strings.Contains(got.Install.Swarm.Command, got.Install.JoinToken) || !strings.Contains(got.Install.Swarm.Command, "coaming-agent-token-g2") {
+	if !strings.Contains(got.Install.Swarm.Command, got.Install.JoinToken) || !strings.Contains(got.Install.Swarm.Command, "tierplan-agent-token-g2") {
 		t.Errorf("the swarm command does not carry the new token and secret name:\n%s", got.Install.Swarm.Command)
 	}
 	if got.HasAgents || got.EnvType != "" || got.Install.Swarm.RotateCommand != "" {
@@ -135,7 +135,7 @@ func TestTokenRotateOfASwarmWithAgentsCarriesTheRotateCommand(t *testing.T) {
 	if got.EnvType != "swarm" || !got.HasAgents {
 		t.Errorf("envType %q hasAgents %v, want swarm and true", got.EnvType, got.HasAgents)
 	}
-	if !strings.Contains(got.Install.Swarm.RotateCommand, "coaming-agent-token-g2") {
+	if !strings.Contains(got.Install.Swarm.RotateCommand, "tierplan-agent-token-g2") {
 		t.Errorf("rotate command lacks the new secret name:\n%s", got.Install.Swarm.RotateCommand)
 	}
 	if !strings.Contains(got.Install.Swarm.RotateCommand, got.Install.JoinToken) {
@@ -162,7 +162,7 @@ func TestTokenRotateWithoutAnAddressRefusesAndChangesNothing(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
 	id, _ := f.agentEnv(t)
-	f.inst.Apply("Coaming", "")
+	f.inst.Apply("TierPlan", "")
 	_, rec := f.rotate(t, id)
 	if rec.code != http.StatusConflict || rec.ptyp != "public_url_required" {
 		t.Fatalf("status = %d type %q: %s", rec.code, rec.ptyp, rec.body)
@@ -234,7 +234,7 @@ func TestTokenDisableAnswers204AuditsAndShowsInTheStatusUntilARotation(t *testin
 func TestTokenEndpointsAnswer404EnvironmentNotFoundForAnUnknownEnvironment(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com")
+	f.inst.Apply("TierPlan", "https://example.com")
 	const missing = "0197b8a0-0000-7000-8000-000000000000"
 	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodGet} {
 		rec := f.req(t, method, "/api/environments/"+missing+"/token", "")
@@ -953,7 +953,7 @@ func TestAnAdminUpdatesOneAgentThroughTheTunnelAndItIsAuditedUnderTheirName(t *t
 		t.Fatalf("update: %d %s, want 202", rec.code, rec.body)
 	}
 	u := controlLine(t, a.control)
-	if u.T != wire.TypeUpdate || u.Image != "ghcr.io/ianglennon/coaming-agent:0.2.1" || u.ID == "" {
+	if u.T != wire.TypeUpdate || u.Image != "ghcr.io/ianglennon/tierplan-agent:0.2.1" || u.ID == "" {
 		t.Fatalf("the agent was sent %+v", u)
 	}
 	if n := f.node(t, env.ID, a.id); n.UpdateState.State != "updating" {
@@ -1062,7 +1062,7 @@ func TestTheNodeListGivesTheManualUpdateCommandWhenTheHostRefusesSelfUpdate(t *t
 	f.srv.Events.WaitLen(t, 2)
 
 	n := f.node(t, env.ID, refusing.id)
-	if !strings.Contains(n.ManualUpdateCommand, "docker service update --image ghcr.io/ianglennon/coaming-agent:0.2.1") {
+	if !strings.Contains(n.ManualUpdateCommand, "docker service update --image ghcr.io/ianglennon/tierplan-agent:0.2.1") {
 		t.Errorf("an agent behind on a host that refuses: manualUpdateCommand = %q", n.ManualUpdateCommand)
 	}
 	if n := f.node(t, env.ID, letting.id); n.ManualUpdateCommand != "" {
@@ -1111,7 +1111,7 @@ func TestTheNodeListSaysWhichAgentsAreBehindTheServerAndNeverARevokedOne(t *test
 // server's switch is on (T-02-31).
 func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
 	t.Parallel()
-	const name = "COAMING_AGENT_ALLOW_INSECURE"
+	const name = "TIERPLAN_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label string
 		allow bool
@@ -1120,7 +1120,7 @@ func TestRotateAndManualUpdateCarryTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 	}{
 		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
 		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
-		{"switch on, https agent URL", true, "https://coaming.example.com", false},
+		{"switch on, https agent URL", true, "https://tierplan.example.com", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {

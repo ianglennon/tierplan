@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rebuild_test
 
@@ -11,7 +11,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
 )
 
 // The renderings of an existing network or volume that a compose file could declare (plan 08-12, D-46). The
@@ -34,7 +34,7 @@ func bridgeWithEverything() rebuild.NetworkInfo {
 		Pools:   []rebuild.Pool{{Subnet: "172.28.0.0/16", Gateway: "172.28.0.1"}},
 		Labels: map[string]string{
 			"com.docker.compose.project": "shop", "com.docker.compose.network": "back",
-			"com.docker.compose.config-hash": "abc", "team": "web", "coaming.stack.id": "x",
+			"com.docker.compose.config-hash": "abc", "team": "web", "tierplan.stack.id": "x",
 		},
 	}
 }
@@ -63,7 +63,7 @@ func TestNetworkCandidatesAreOrderedFromTheMinimalToTheMostFaithful(t *testing.T
 			t.Errorf("the most faithful rendering lacks %q:\n%s", want, last)
 		}
 	}
-	for _, unwanted := range []string{"com.docker.compose", "coaming"} {
+	for _, unwanted := range []string{"com.docker.compose", "tierplan"} {
 		for i, c := range cands {
 			if y := yamlOf(t, c); strings.Contains(y, unwanted) {
 				t.Errorf("candidate %d carries the label %q of a tool:\n%s", i, unwanted, y)

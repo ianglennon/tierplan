@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -16,7 +16,7 @@ function row(name: string, extra: Partial<ServiceItem> = {}): ServiceItem {
     updateState: "",
     image: "nginx:1",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     agent: false,
     updatedAt: "2026-10-01T10:00:00Z",
     ports: [],

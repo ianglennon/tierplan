@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 // The address-space settings (plan 10-21, NET-06, D-21, D-07 as amended). Docker is a fake daemon;

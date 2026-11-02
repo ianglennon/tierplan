@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // POST /api/setup/complete (plan 10, AUTH-01).
@@ -35,7 +35,7 @@ func completeJSON(t *testing.T, token string, over map[string]any) string {
 		"username":     "Admin",
 		"password":     goodPassword,
 		"instanceName": "Home lab",
-		"publicUrl":    "https://coaming.example",
+		"publicUrl":    "https://tierplan.example",
 	}
 	for k, v := range over {
 		body[k] = v
@@ -112,7 +112,7 @@ func (f *setupFixture) setting(t *testing.T, key string) (string, bool) {
 
 func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == "__Host-coaming_session" || c.Name == "__Secure-coaming_session" || c.Name == "coaming_session" {
+		if c.Name == "__Host-tierplan_session" || c.Name == "__Secure-tierplan_session" || c.Name == "tierplan_session" {
 			return c
 		}
 	}
@@ -151,7 +151,7 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	if v, ok := f.setting(t, "instance_name"); !ok || v != "Home lab" {
 		t.Fatalf("instance_name = %q, %v", v, ok)
 	}
-	if v, ok := f.setting(t, "public_url"); !ok || v != "https://coaming.example" {
+	if v, ok := f.setting(t, "public_url"); !ok || v != "https://tierplan.example" {
 		t.Fatalf("public_url = %q, %v", v, ok)
 	}
 	// The session: a hardened cookie, stored only as a hash, for this user, and the matching CSRF token.
@@ -159,7 +159,7 @@ func TestSetupCompleteCreatesTheAdminSignsInAndStoresTheSettings(t *testing.T) {
 	if c == nil {
 		t.Fatalf("no session cookie in %v", rec.Header()["Set-Cookie"])
 	}
-	if c.Name != "__Host-coaming_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" || c.MaxAge != 0 {
+	if c.Name != "__Host-tierplan_session" || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.Domain != "" || c.MaxAge != 0 {
 		t.Fatalf("cookie = %+v", c)
 	}
 	sum := sha256.Sum256([]byte(c.Value))
@@ -237,9 +237,9 @@ func TestSetupCompleteMakesTheInstanceAndTheOriginGuardUseTheNewSettingsAtOnce(t
 	}
 	// A mutation from the new public origin passes the Origin guard (and then meets the closed gate);
 	// one from the old, bare-address origin is refused by the guard itself.
-	allowed := f.completeFrom(t, testClientAddr, `{"token":"x"}`, map[string]string{"Origin": "https://coaming.example"})
+	allowed := f.completeFrom(t, testClientAddr, `{"token":"x"}`, map[string]string{"Origin": "https://tierplan.example"})
 	if allowed.Code == http.StatusForbidden {
-		t.Fatalf("Origin https://coaming.example was refused after setup: %s", allowed.Body)
+		t.Fatalf("Origin https://tierplan.example was refused after setup: %s", allowed.Body)
 	}
 	refused := f.completeFrom(t, testClientAddr, `{"token":"x"}`, map[string]string{"Origin": "http://127.0.0.1:7480"})
 	if refused.Code != http.StatusForbidden {
@@ -255,7 +255,7 @@ func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T)
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	c := sessionCookie(rec)
-	if c == nil || c.Name != "coaming_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+	if c == nil || c.Name != "tierplan_session" || c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie = %+v", c)
 	}
 }
@@ -263,10 +263,10 @@ func TestSetupCompleteUsesAnUnprefixedCookieWhenThePublicURLIsHTTP(t *testing.T)
 func TestSetupCompleteStoresTheNormalisedPublicURL(t *testing.T) {
 	t.Parallel()
 	f := newSetupFixture(t, config.Config{})
-	if rec := f.complete(t, map[string]any{"publicUrl": "HTTPS://Coaming.Example/ui/"}); rec.Code != http.StatusOK {
+	if rec := f.complete(t, map[string]any{"publicUrl": "HTTPS://TierPlan.Example/ui/"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
-	if v, _ := f.setting(t, "public_url"); v != "https://coaming.example/ui" {
+	if v, _ := f.setting(t, "public_url"); v != "https://tierplan.example/ui" {
 		t.Fatalf("public_url = %q, want the normalised form", v)
 	}
 }
@@ -288,7 +288,7 @@ func TestSetupCompleteIgnoresASubmittedPublicURLWhenTheEnvironmentFixesIt(t *tes
 	if f.inst.PublicOrigin() != "https://env.example" {
 		t.Fatalf("origin = %q", f.inst.PublicOrigin())
 	}
-	if c := sessionCookie(rec); c == nil || c.Name != "__Host-coaming_session" {
+	if c := sessionCookie(rec); c == nil || c.Name != "__Host-tierplan_session" {
 		t.Fatalf("cookie = %+v, want the https name from the env URL", c)
 	}
 }
@@ -329,14 +329,14 @@ func TestSetupCompleteRejectsEachInvalidInputWithAFieldCodeAndCreatesNothing(t *
 		"instance name empty":        {map[string]any{"instanceName": ""}, "body.instanceName", "instance_name_required"},
 		"instance name blank":        {map[string]any{"instanceName": "   "}, "body.instanceName", "instance_name_required"},
 		"instance name 65 chars":     {map[string]any{"instanceName": tooLong}, "body.instanceName", "instance_name_too_long"},
-		"public url relative":        {map[string]any{"publicUrl": "/coaming"}, "body.publicUrl", "invalid_public_url"},
-		"public url no scheme":       {map[string]any{"publicUrl": "coaming.example"}, "body.publicUrl", "invalid_public_url"},
-		"public url wrong scheme":    {map[string]any{"publicUrl": "ftp://coaming.example"}, "body.publicUrl", "invalid_public_url"},
-		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@coaming.example"}, "body.publicUrl", "invalid_public_url"},
-		"public url with a query":    {map[string]any{"publicUrl": "https://coaming.example/?a=b"}, "body.publicUrl", "invalid_public_url"},
+		"public url relative":        {map[string]any{"publicUrl": "/tierplan"}, "body.publicUrl", "invalid_public_url"},
+		"public url no scheme":       {map[string]any{"publicUrl": "tierplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url wrong scheme":    {map[string]any{"publicUrl": "ftp://tierplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url with userinfo":   {map[string]any{"publicUrl": "https://user:" + "secret@tierplan.example"}, "body.publicUrl", "invalid_public_url"},
+		"public url with a query":    {map[string]any{"publicUrl": "https://tierplan.example/?a=b"}, "body.publicUrl", "invalid_public_url"},
 		"public url empty":           {map[string]any{"publicUrl": ""}, "body.publicUrl", "invalid_public_url"},
-		"public url under /api":      {map[string]any{"publicUrl": "https://coaming.example/api"}, "body.publicUrl", "invalid_public_url"},
-		"public url under /agent":    {map[string]any{"publicUrl": "https://coaming.example/agent/x"}, "body.publicUrl", "invalid_public_url"},
+		"public url under /api":      {map[string]any{"publicUrl": "https://tierplan.example/api"}, "body.publicUrl", "invalid_public_url"},
+		"public url under /agent":    {map[string]any{"publicUrl": "https://tierplan.example/agent/x"}, "body.publicUrl", "invalid_public_url"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newSetupFixture(t, config.Config{})

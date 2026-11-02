@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // sharedHostRoutes proves RESEARCH Assumption A2 on a real swarm: a service accepts the bind mount of the single
@@ -72,7 +72,7 @@ func sharedHostRoutes(t *testing.T, f *swarmFix) {
 
 	// The mount is what the command said it was: one file, read-only, and nothing else of the host's /proc.
 	for _, line := range strings.Split(strings.TrimSpace(sh(t, f.sw.Managers[0],
-		"docker service inspect coaming-agent -f '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}} {{.Source}} {{.Target}} ro={{.ReadOnly}}{{println}}{{end}}'")), "\n") {
+		"docker service inspect tierplan-agent -f '{{range .Spec.TaskTemplate.ContainerSpec.Mounts}}{{.Type}} {{.Source}} {{.Target}} ro={{.ReadOnly}}{{println}}{{end}}'")), "\n") {
 		if strings.Contains(line, "/proc") && line != "bind /proc/1/net/route /host/route ro=true" {
 			t.Errorf("the service mounts %q; only /proc/1/net/route read-only may be mounted from /proc", line)
 		}

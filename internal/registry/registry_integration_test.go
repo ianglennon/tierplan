@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package registry_test
@@ -35,9 +35,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The credential test against a real registry (plan 05-12, D-12, D-14): registry:2 with an
@@ -67,7 +67,7 @@ func selfSigned(t *testing.T) (certPEM, keyPEM []byte) {
 	}
 	tpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(time.Now().UnixNano()),
-		Subject:               pkix.Name{CommonName: "coaming test registry"},
+		Subject:               pkix.Name{CommonName: "tierplan test registry"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
@@ -95,7 +95,7 @@ func startRegistry(t *testing.T, certPEM, keyPEM []byte) string {
 	t.Helper()
 	env := map[string]string{ //nolint:gosec // G101: names of the registry's own settings, not credentials
 		"REGISTRY_AUTH":                "htpasswd",
-		"REGISTRY_AUTH_HTPASSWD_REALM": "coaming-test",
+		"REGISTRY_AUTH_HTPASSWD_REALM": "tierplan-test",
 		"REGISTRY_AUTH_HTPASSWD_PATH":  "/auth/htpasswd",
 	}
 	files := []testcontainers.ContainerFile{{
@@ -174,7 +174,7 @@ func push(t *testing.T, hc *http.Client, base, repo string, tags ...string) {
 		return digest, len(content)
 	}
 	cfgDigest, cfgSize := blob([]byte(`{"architecture":"amd64","os":"linux","created":"2026-01-02T03:04:05Z","rootfs":{"type":"layers","diff_ids":[]}}`))
-	layerDigest, layerSize := blob([]byte("coaming test layer"))
+	layerDigest, layerSize := blob([]byte("tierplan test layer"))
 	manifest := fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
 		`"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},`+
 		`"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":%q,"size":%d}]}`,

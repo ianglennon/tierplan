@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -12,10 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The health broker (plan 02-12, ENV-06, D-36, D-37, D-54): what the global stream

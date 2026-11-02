@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { type QueryKey, useQueryClient } from "@tanstack/react-query";
 import {
@@ -100,7 +100,7 @@ export function mergeEvents(existing: EventDTO[], incoming: EventDTO[], cap: num
 // config event does the same for the configs list and the config pages. A node event refreshes
 // the nodes list, the node pages (their keys extend the list's) and the services list, whose key
 // the placement view extends, since a node going down or being drained moves tasks. A row of
-// Coaming's own has no list and refreshes the summary only. A network, container or service event
+// TierPlan's own has no list and refreshes the summary only. A network, container or service event
 // also refreshes the Address space page, since networks, tasks and their addresses move its meters.
 //
 // An event about an object of a stack (touchesStack: it carries the stack's swarm namespace or

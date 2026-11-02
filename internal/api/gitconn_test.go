@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,9 +16,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/gitx/gittest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/gitx/gittest"
 )
 
 // Git credentials and repositories (plan 09-04, GIT-01, D-01, D-02, D-04). The router, policy, CSRF

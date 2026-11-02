@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel_test
 
@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // timed starts a server whose hub heartbeats every 10 s, calls a session offline
@@ -652,7 +652,7 @@ func TestARenewFromAnAgentWhoseVerifierFailsIsAnsweredInternalAndRetryable(t *te
 
 const (
 	endpointOld = "wss://old.example.com/agent/connect"
-	endpointNew = "wss://new.example.com/coaming/agent/connect"
+	endpointNew = "wss://new.example.com/tierplan/agent/connect"
 	testPin     = "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 )
 

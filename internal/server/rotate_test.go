@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // rotatedDir is a data directory a server has run on, then had its master key
@@ -22,7 +22,7 @@ import (
 func rotatedDir(t *testing.T) (dir, oldKID, newKID string) {
 	t.Helper()
 	dir = t.TempDir() + "/data"
-	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func mv(t *testing.T, dir, from, to string) {
 
 func buildAt(t *testing.T, dir string) *Server {
 	t.Helper()
-	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": dir})
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": dir})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -97,8 +97,8 @@ func TestRotatedDataDirectoryStartsOnTheNewKey(t *testing.T) {
 func TestRotationCrashedAfterTheCommitIsFinishedAtTheNextStart(t *testing.T) {
 	dir, oldKID, newKID := rotatedDir(t)
 	// Put the key files back as they stand when the process dies after the
-	// commit and before any rename: the old key in coaming.key, the new one in
-	// coaming.key.new, no coaming.key.old.
+	// commit and before any rename: the old key in tierplan.key, the new one in
+	// tierplan.key.new, no tierplan.key.old.
 	mv(t, dir, vault.KeyFile, vault.NewKeyFile)
 	mv(t, dir, vault.OldKeyFile, vault.KeyFile)
 
@@ -115,7 +115,7 @@ func TestRotationCrashedAfterTheCommitIsFinishedAtTheNextStart(t *testing.T) {
 
 func TestRotationCrashedBetweenTheRenamesNeverCreatesAFreshKey(t *testing.T) {
 	dir, _, newKID := rotatedDir(t)
-	// coaming.key renamed to coaming.key.old, coaming.key.new not yet in place.
+	// tierplan.key renamed to tierplan.key.old, tierplan.key.new not yet in place.
 	mv(t, dir, vault.KeyFile, vault.NewKeyFile)
 
 	srv := buildAt(t, dir)
@@ -148,7 +148,7 @@ func TestRotationCrashedBeforeTheCommitDiscardsTheStaleNewKeyAndStartsOnTheOldKe
 
 func envConfig(t *testing.T, dir string, key []byte) map[string]string {
 	t.Helper()
-	return map[string]string{"COAMING_DATA_DIR": dir, "COAMING_ENCRYPTION_KEY": base64.StdEncoding.EncodeToString(key)}
+	return map[string]string{"TIERPLAN_DATA_DIR": dir, "TIERPLAN_ENCRYPTION_KEY": base64.StdEncoding.EncodeToString(key)}
 }
 
 func TestEnvironmentKeyRotationNeedsTheNewVariableAndKeepsTheNewKeyFile(t *testing.T) {
@@ -185,7 +185,7 @@ func TestEnvironmentKeyRotationNeedsTheNewVariableAndKeepsTheNewKeyFile(t *testi
 	if err == nil {
 		t.Fatal("the server started on the old variable after a rotation")
 	}
-	want := "Set COAMING_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile)
+	want := "Set TIERPLAN_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile)
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("Build = %v, want it to contain %q", err, want)
 	}

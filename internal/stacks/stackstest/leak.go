@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package stackstest holds test support for the packages that check, review and deploy stacks. It is
 // imported by tests only.
@@ -10,13 +10,13 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // samplePath stands in for a field's key when a withheld sentence's fixed part is worked out.
 const samplePath = "x"
 
-// fixedSentences are the characters of Coaming's own withheld sentences that hold no value: the general
+// fixedSentences are the characters of TierPlan's own withheld sentences that hold no value: the general
 // sentence, and what follows the key path in the sentence for a field and in the sentence for a file. They
 // are worked out from stacks.SecretValueMessage and stacks.SecretFileMessage, never typed in, so they
 // follow those functions.
@@ -31,7 +31,7 @@ func fixedSentences() []string {
 // NoSecretRun fails the test for every run of stacks.MinSecretLen characters of secret that it finds in
 // any of texts.
 //
-// Before it scans, it removes only the characters of Coaming's own fixed sentences: the general sentence
+// Before it scans, it removes only the characters of TierPlan's own fixed sentences: the general sentence
 // of stacks.SecretValueMessage(""), and the part after the key path of stacks.SecretValueMessage(path)
 // and stacks.SecretFileMessage(path). Those are constants that hold no value, and without the removal a
 // secret such as "2024secretword" would match the word "secret" in them. The key path before a sentence

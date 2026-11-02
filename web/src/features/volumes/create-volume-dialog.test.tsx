@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -237,7 +237,7 @@ describe("CreateVolumeDialog (common fields)", () => {
     for (const [status, type, text] of [
       [409, "host_read_only", "This host is read-only."],
       [409, "agent_host_policy", "/srv, /mnt or /media"],
-      [409, "agent_host_policy", "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES"],
+      [409, "agent_host_policy", "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES"],
       [503, "node_unavailable", "isn't reachable right now"],
       [500, "", "Something went wrong on the server."],
     ] as const) {

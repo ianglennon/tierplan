@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package audit_test
 
@@ -21,10 +21,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 var t0 = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

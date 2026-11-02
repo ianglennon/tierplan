@@ -1,12 +1,12 @@
 {
   "stackUnmanaged": {
     "badge": "Unmanaged",
-    "tooltip": "Coaming didn't create this stack and doesn't manage it. Adopt it to manage it here.",
-    "orphan": "Created by Coaming (another instance or a lost record).",
+    "tooltip": "TierPlan didn't create this stack and doesn't manage it. Adopt it to manage it here.",
+    "orphan": "Created by TierPlan (another instance or a lost record).",
     "portainer": "Portainer",
     "owner": {
-      "coaming": "Coaming",
-      "agent": "Coaming agent"
+      "tierplan": "TierPlan",
+      "agent": "TierPlan agent"
     },
     "notAdoptable": {
       "title": "Can't be adopted"
@@ -35,8 +35,8 @@
     "empty": {
       "unmanaged": {
         "title": "No unmanaged stacks",
-        "body": "Every stack on {{name}} is managed by Coaming.",
-        "bodyGlobal": "Every stack on the environments shown is managed by Coaming."
+        "body": "Every stack on {{name}} is managed by TierPlan.",
+        "bodyGlobal": "Every stack on the environments shown is managed by TierPlan."
       },
       "managed": {
         "title": "No managed stacks",

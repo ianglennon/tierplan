@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockertest
 
@@ -18,11 +18,11 @@ import (
 
 const (
 	// LocalAgentImage is what `make agent-image` builds on this machine's engine.
-	LocalAgentImage = "coaming-agent:dev"
+	LocalAgentImage = "tierplan-agent:dev"
 	// ReleaseAgentImage is the name a development server's install commands use
 	// (agents.AgentImage for a non-release version). The harness tags the local
 	// image with it on every node, so no registry is contacted.
-	ReleaseAgentImage = "ghcr.io/ianglennon/coaming-agent:edge"
+	ReleaseAgentImage = "ghcr.io/ianglennon/tierplan-agent:edge"
 )
 
 // hostClient is a moby client to the machine's own engine, where the images
@@ -41,9 +41,9 @@ func hostClient(t testing.TB) *client.Client {
 	return cli
 }
 
-// LoadAgentImage streams `docker save coaming-agent:dev` from this machine's
+// LoadAgentImage streams `docker save tierplan-agent:dev` from this machine's
 // engine into `docker load` on every node and tags it
-// ghcr.io/ianglennon/coaming-agent:edge, the image a development server's
+// ghcr.io/ianglennon/tierplan-agent:edge, the image a development server's
 // install commands name. When the image does not exist the test is skipped with
 // the command that builds it.
 func LoadAgentImage(t testing.TB, nodes ...*Node) {
@@ -55,7 +55,7 @@ func LoadAgentImage(t testing.TB, nodes ...*Node) {
 }
 
 // LoadAgentImageAs is LoadAgentImage for an image built under another tag (make
-// agent-image AGENT_VERSION=v0.2.1 AGENT_TAG=coaming-agent:v0.2.1): it copies src
+// agent-image AGENT_VERSION=v0.2.1 AGENT_TAG=tierplan-agent:v0.2.1): it copies src
 // into every node and tags it as target, the name an install command or an update
 // of that version uses. The test is skipped, with the command that builds src, when
 // this machine's engine does not have it.

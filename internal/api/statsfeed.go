@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // statsMemberSpec says what one member of an aggregate stats stream is: the container to

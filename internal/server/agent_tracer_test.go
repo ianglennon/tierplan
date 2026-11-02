@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -23,14 +23,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // agentAllowlist mirrors the paths the agent's proxy forwards (D-27). The test
@@ -69,22 +69,22 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 	}
 
 	// The agent binary, built from its own module.
-	agentBin := filepath.Join(t.TempDir(), "coaming-agent")
-	build := exec.Command("go", "build", "-o", agentBin, "./cmd/coaming-agent") //nolint:gosec // the agent module is built from this repository
+	agentBin := filepath.Join(t.TempDir(), "tierplan-agent")
+	build := exec.Command("go", "build", "-o", agentBin, "./cmd/tierplan-agent") //nolint:gosec // the agent module is built from this repository
 	build.Dir = "../../agent"
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build the agent: %v\n%s", err, out)
 	}
 
-	// Coaming over TLS. The listener exists before Build so the public URL, which
+	// TierPlan over TLS. The listener exists before Build so the public URL, which
 	// agents are told to dial and which the handshake audience is checked against,
 	// is known.
 	ts := httptest.NewUnstartedServer(nil)
 	publicURL := "https://" + ts.Listener.Addr().String()
 	cfg := testConfig(t, map[string]string{
-		"COAMING_DATA_DIR":   t.TempDir() + "/data",
-		"COAMING_PUBLIC_URL": publicURL,
+		"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
+		"TIERPLAN_PUBLIC_URL": publicURL,
 	})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -181,9 +181,9 @@ func TestAgentTracerStandaloneEnrolsAndComesOnline(t *testing.T) {
 	var agentLog lockedBuffer
 	agent := exec.CommandContext(agentCtx, agentBin) //nolint:gosec // the binary this test just built
 	agent.Env = []string{
-		"COAMING_AGENT_URL=" + created.Install.AgentURL,
-		"COAMING_AGENT_JOIN_TOKEN=" + created.Install.JoinToken,
-		"COAMING_AGENT_SOCKET=" + fake.SocketPath(),
+		"TIERPLAN_AGENT_URL=" + created.Install.AgentURL,
+		"TIERPLAN_AGENT_JOIN_TOKEN=" + created.Install.JoinToken,
+		"TIERPLAN_AGENT_SOCKET=" + fake.SocketPath(),
 		"SSL_CERT_FILE=" + certFile,
 		"PATH=" + os.Getenv("PATH"),
 	}
@@ -360,8 +360,8 @@ func TestAgentTracerWrongTokenIsRefused(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs the agent binary")
 	}
-	agentBin := filepath.Join(t.TempDir(), "coaming-agent")
-	build := exec.Command("go", "build", "-o", agentBin, "./cmd/coaming-agent") //nolint:gosec // the agent module is built from this repository
+	agentBin := filepath.Join(t.TempDir(), "tierplan-agent")
+	build := exec.Command("go", "build", "-o", agentBin, "./cmd/tierplan-agent") //nolint:gosec // the agent module is built from this repository
 	build.Dir = "../../agent"
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -370,8 +370,8 @@ func TestAgentTracerWrongTokenIsRefused(t *testing.T) {
 
 	ts := httptest.NewUnstartedServer(nil)
 	cfg := testConfig(t, map[string]string{
-		"COAMING_DATA_DIR":   t.TempDir() + "/data",
-		"COAMING_PUBLIC_URL": "https://" + ts.Listener.Addr().String(),
+		"TIERPLAN_DATA_DIR":   t.TempDir() + "/data",
+		"TIERPLAN_PUBLIC_URL": "https://" + ts.Listener.Addr().String(),
 	})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -399,9 +399,9 @@ func TestAgentTracerWrongTokenIsRefused(t *testing.T) {
 	var out lockedBuffer
 	agent := exec.Command(agentBin) //nolint:gosec // the binary this test just built
 	agent.Env = []string{
-		"COAMING_AGENT_URL=wss://" + ts.Listener.Addr().String() + "/agent/connect",
-		"COAMING_AGENT_JOIN_TOKEN=" + wrong,
-		"COAMING_AGENT_SOCKET=" + fake.SocketPath(),
+		"TIERPLAN_AGENT_URL=wss://" + ts.Listener.Addr().String() + "/agent/connect",
+		"TIERPLAN_AGENT_JOIN_TOKEN=" + wrong,
+		"TIERPLAN_AGENT_SOCKET=" + fake.SocketPath(),
 		"SSL_CERT_FILE=" + certFile,
 		"PATH=" + os.Getenv("PATH"),
 	}

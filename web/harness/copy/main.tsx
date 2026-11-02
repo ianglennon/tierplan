@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Test-only page for e2e/copy (G-02-1a), never part of the app build. It
 // renders the real CopyableCode plain, inside the real Dialog and inside the
@@ -24,7 +24,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Toaster } from "@/components/ui/sonner";
 
 const TOKEN = "cmjt_harness_S3CRET";
-const COMMAND = ` docker run -d --name coaming-agent -e COAMING_AGENT_JOIN_TOKEN='${TOKEN}' -e COAMING_AGENT_URL='wss://coaming.test/agent/connect' ghcr.io/ianglennon/coaming-agent:edge`;
+const COMMAND = ` docker run -d --name tierplan-agent -e TIERPLAN_AGENT_JOIN_TOKEN='${TOKEN}' -e TIERPLAN_AGENT_URL='wss://tierplan.test/agent/connect' ghcr.io/ianglennon/tierplan-agent:edge`;
 
 const code = <CopyableCode code={COMMAND} secret={TOKEN} label="the install command" />;
 const chosen = new URLSearchParams(window.location.search).get("case") ?? "plain";

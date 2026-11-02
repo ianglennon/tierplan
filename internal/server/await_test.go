@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The waits of the tests that run the real agent binary against the in-process server (phase

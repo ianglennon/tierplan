@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { useBlocker } from "@tanstack/react-router";
@@ -123,7 +123,7 @@ export function StackEditorPage({
   const canReveal = usePermission("secrets.reveal", envId);
   const deployNeeds = useNeeds("stacks.deploy", envId);
   const stack = useQuery(stackQuery(envId, stackId));
-  // A stack from a git repository: its Files tab shows the repository's files read-only and Coaming's own
+  // A stack from a git repository: its Files tab shows the repository's files read-only and TierPlan's own
   // overlay files, and has no compose editor (D-09, D-11).
   const fromGit = stack.data?.source === "git";
   const draft = useQuery(draftQuery(envId, stackId));

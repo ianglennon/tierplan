@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -9,8 +9,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 func TestTheEventsHubAwaitReturnsOnceAnEventHasBeenBuffered(t *testing.T) {
@@ -34,7 +34,7 @@ func TestTheEventsHubAwaitReturnsOnceATargetsFeedHasOpened(t *testing.T) {
 	t.Cleanup(mon.StopAll)
 	hub := NewHub(mon, nil, slog.New(slog.DiscardHandler), nil)
 	t.Cleanup(hub.Close)
-	row := dockerx.EventRow{ID: "own-1", Type: "coaming", Action: "note"}
+	row := dockerx.EventRow{ID: "own-1", Type: "tierplan", Action: "note"}
 	if hub.Inject("t1", row) {
 		t.Fatal("Inject reported success for a target nobody monitors")
 	}

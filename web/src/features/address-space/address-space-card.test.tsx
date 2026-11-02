@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
@@ -119,7 +119,7 @@ describe("AddressSpaceCard", () => {
     expect(within(card).getByText("Not measured yet")).toBeTruthy();
     expect(
       within(card).getByText(
-        "Coaming reads the pools from a manager, or estimates them on a standalone host.",
+        "TierPlan reads the pools from a manager, or estimates them on a standalone host.",
       ),
     ).toBeTruthy();
     expect(within(card).getByRole("link", { name: "Open address space" })).toBeTruthy();

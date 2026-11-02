@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Release configuration for goreleaser v2 (pinned in the Makefile and in
 # release.yml). A v* tag runs it from .github/workflows/release.yml and
-# publishes ghcr.io/ianglennon/coaming:X.Y.Z and :X.Y and the agent image
-# ghcr.io/ianglennon/coaming-agent with the same tags, built from the agent/
-# module at the same version. Pushes to main publish :edge of both from ci.yml. No floating catch-all tag is ever published while Coaming
+# publishes ghcr.io/ianglennon/tierplan:X.Y.Z and :X.Y and the agent image
+# ghcr.io/ianglennon/tierplan-agent with the same tags, built from the agent/
+# module at the same version. Pushes to main publish :edge of both from ci.yml. No floating catch-all tag is ever published while TierPlan
 # is 0.x (D-75), and no release is cut in Phase 1.
 #
 # Validate with `make release-check`; build the image locally with `make image`.
 version: 2
 
-project_name: coaming
+project_name: tierplan
 
 before:
   hooks:
@@ -19,9 +19,9 @@ before:
     - make web
 
 builds:
-  - id: coaming
-    main: ./cmd/coaming
-    binary: coaming
+  - id: tierplan
+    main: ./cmd/tierplan
+    binary: tierplan
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -31,17 +31,17 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X github.com/ianglennon/coaming/internal/buildinfo.Version=v{{ .Version }}
-      - -X github.com/ianglennon/coaming/internal/buildinfo.Commit={{ .FullCommit }}
-      - -X github.com/ianglennon/coaming/internal/buildinfo.SourceURL=https://github.com/ianglennon/coaming
+      - -X github.com/ianglennon/tierplan/internal/buildinfo.Version=v{{ .Version }}
+      - -X github.com/ianglennon/tierplan/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/ianglennon/tierplan/internal/buildinfo.SourceURL=https://github.com/ianglennon/tierplan
 
   # The agent: its own Go module (agent/), the same flags and platforms, and the
   # same version as the server so an agent never reports a version the server
   # did not ship with (D-16).
-  - id: coaming-agent
+  - id: tierplan-agent
     dir: agent
-    main: ./cmd/coaming-agent
-    binary: coaming-agent
+    main: ./cmd/tierplan-agent
+    binary: tierplan-agent
     env:
       - CGO_ENABLED=0
     goos: [linux]
@@ -51,13 +51,13 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X github.com/ianglennon/coaming/agent/internal/version.Version=v{{ .Version }}
+      - -X github.com/ianglennon/tierplan/agent/internal/version.Version=v{{ .Version }}
 
 archives:
-  - id: coaming
-    ids: [coaming]
+  - id: tierplan
+    ids: [tierplan]
     formats: [tar.gz]
-    name_template: "coaming_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "tierplan_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - README*
@@ -75,13 +75,13 @@ sboms:
     documents: ["${artifact}.spdx.json"]
 
 # The multi-arch image. goreleaser lays the binaries out as
-# $TARGETPLATFORM/coaming in the build context for the Dockerfile.
+# $TARGETPLATFORM/tierplan in the build context for the Dockerfile.
 dockers_v2:
-  - id: coaming
-    ids: [coaming]
+  - id: tierplan
+    ids: [tierplan]
     dockerfile: Dockerfile
     images:
-      - ghcr.io/ianglennon/coaming
+      - ghcr.io/ianglennon/tierplan
     # X.Y.Z always, X.Y for a final release. An empty tag is skipped, so a
     # prerelease gets only its full version.
     tags:
@@ -100,11 +100,11 @@ dockers_v2:
   # copies an extra file to the same relative path in the build context, so the
   # Dockerfile reads agent/image/state/. The image is published as its own
   # repository with the same tag rules (never a floating catch-all tag).
-  - id: coaming-agent
-    ids: [coaming-agent]
+  - id: tierplan-agent
+    ids: [tierplan-agent]
     dockerfile: agent/Dockerfile
     images:
-      - ghcr.io/ianglennon/coaming-agent
+      - ghcr.io/ianglennon/tierplan-agent
     tags:
       - "{{ .Version }}"
       - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"

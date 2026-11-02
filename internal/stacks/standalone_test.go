@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -12,7 +12,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // PrepareStandalone (plan 07-20, STK-02, STK-09; RESEARCH Pitfalls 4 and 5): the project the Compose SDK is

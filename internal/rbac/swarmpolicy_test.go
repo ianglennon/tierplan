@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rbac_test
 
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/rbac/swarmspec"
 )
 
 const privilegedService = `{"Name":"web","TaskTemplate":{"ContainerSpec":{"Image":"nginx","Mounts":[

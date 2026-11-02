@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitconn_test
 
@@ -21,11 +21,11 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // A token of 12 or more characters, so its last 4 are kept.

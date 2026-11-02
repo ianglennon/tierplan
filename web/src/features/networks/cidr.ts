@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // CIDR arithmetic for the overlap warning of the create dialog, and nothing else.
 // The server parses with net/netip and has the last word on whether an address is

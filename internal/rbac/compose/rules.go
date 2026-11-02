@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package compose
 
@@ -9,7 +9,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"github.com/ianglennon/coaming/proto/hostpath"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // ruleUnresolvable is the rule reported for a checked value that holds an

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -17,10 +17,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Snapshot kinds and revision outcomes, as the stack_snapshots table spells them.
@@ -74,7 +74,7 @@ func (r Repo) now() time.Time {
 	return time.Now().UTC()
 }
 
-// Stack is one stack Coaming manages.
+// Stack is one stack TierPlan manages.
 type Stack struct {
 	ID, EnvID, Name string
 	Target          stacks.Target
@@ -82,10 +82,10 @@ type Stack struct {
 	CreatedBy       string
 	CreatedAt       time.Time
 	Stopped         bool
-	// Discovered is true for a stack found on the engine by its labels that Coaming does not hold (D-07). It
+	// Discovered is true for a stack found on the engine by its labels that TierPlan does not hold (D-07). It
 	// is never stored: DiscoveredStack makes one, and Ownership reads it.
 	Discovered bool
-	// Adoption is what was recorded when Coaming took the stack over, the zero value for a stack that was not
+	// Adoption is what was recorded when TierPlan took the stack over, the zero value for a stack that was not
 	// adopted (Source.Kind is SourceAdopted exactly for the others).
 	Adoption stacks.Adoption
 }
@@ -149,7 +149,7 @@ func stackOf(row sqlc.Stack) Stack {
 }
 
 // adoptionOf reads the adoption record of a stack row. A record that is not valid JSON reads as the zero value
-// and is logged: a stack must stay listable, and ownership then falls back to the exact coaming.stack.id rule,
+// and is logged: a stack must stay listable, and ownership then falls back to the exact tierplan.stack.id rule,
 // which is the safe side.
 func adoptionOf(row sqlc.Stack) stacks.Adoption {
 	var a stacks.Adoption
@@ -416,7 +416,7 @@ func (r Repo) SetAdoption(ctx context.Context, stackID string, a stacks.Adoption
 	return nil
 }
 
-// ClearAdoptionPending ends the pending window of an adopted stack: the first good deploy has put Coaming's labels on
+// ClearAdoptionPending ends the pending window of an adopted stack: the first good deploy has put TierPlan's labels on
 // what it runs, so its workloads are owned by its ID alone from now on (D-16). The rest of the record is kept. It is
 // one statement, so a deploy that ends while the record is read elsewhere loses nothing. A stack that is gone is
 // ErrStackNotFound.

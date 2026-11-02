@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package access
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // Link kinds (user_links.kind).
@@ -270,7 +270,7 @@ func (s *Service) RegenerateInvite(ctx context.Context, actor audit.Actor, userI
 // travels in the URL fragment, which a browser never sends to a server, so it
 // appears in no access log, Referer header or proxy log on the way (D-22a). The
 // address is built on the public URL when one is stored; without one it is
-// relative to this Coaming, base path included, because that is all the server
+// relative to this TierPlan, base path included, because that is all the server
 // knows. The API and the CLI both build it here, so the two cannot disagree.
 func LinkURL(publicURL, basePath, token string) string {
 	base := strings.TrimRight(publicURL, "/")
@@ -288,7 +288,7 @@ func LinkURL(publicURL, basePath, token string) string {
 // who does not exist or is deleted is ErrNotFound and one who is disabled is
 // ErrUserDisabled; neither changes anything. There is no last-admin guard:
 // resetting the only instance admin is exactly the case this exists for. actor
-// is the admin, or audit.SystemCLI for `coaming user reset-password`; the caller
+// is the admin, or audit.SystemCLI for `tierplan user reset-password`; the caller
 // has checked users.manage. The entry holds the username, how many sessions
 // ended and the expiry, never the token.
 func (s *Service) IssueReset(ctx context.Context, actor audit.Actor, userID string, opts ...Option) (string, Link, error) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // allocatedBy returns the bytes the process allocated while fn ran. It reads the process-wide

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rbac
 
@@ -12,8 +12,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // AllEnvironments is the key Access and EffectivePermissions use for

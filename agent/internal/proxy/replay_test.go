@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -12,12 +12,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // composeReplayRequest is one request of the corpus: a request the Compose SDK sent to a real engine for a
 // standalone deploy (plan 07-21). internal/stackops/standalone_integration_test.go records it (with
-// COAMING_UPDATE_REPLAY=1) from the real SDK, running a stack with a secret and a config through create,
+// TIERPLAN_UPDATE_REPLAY=1) from the real SDK, running a stack with a secret and a config through create,
 // recreate, orphan removal, stop, start and down; IDs, digests and hashes are one placeholder.
 type composeReplayRequest struct {
 	Method  string          `json:"method"`
@@ -45,7 +45,7 @@ func TestComposeReplayPassesTheAllowlist(t *testing.T) {
 		t.Fatalf("the corpus is not readable: %v", err)
 	}
 	if len(corpus) < 20 {
-		t.Fatalf("the corpus holds %d requests, want the whole set a deploy sends (regenerate it with COAMING_UPDATE_REPLAY=1 go test -tags integration ./internal/stackops -run TestRecordComposeRequests)", len(corpus))
+		t.Fatalf("the corpus holds %d requests, want the whole set a deploy sends (regenerate it with TIERPLAN_UPDATE_REPLAY=1 go test -tags integration ./internal/stackops -run TestRecordComposeRequests)", len(corpus))
 	}
 
 	ctx := context.Background()

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 )
 
 // The service, list and node stats streams (plan 06-33, RES-11, D-29, D-31). Docker is a

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -17,8 +17,8 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The sizes the swarm takes (RESEARCH E18): a secret of up to 511,999 bytes and a config of up to

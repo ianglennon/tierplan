@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitsync
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // The pace of the background poller (D-14, RESEARCH Pitfalls 4 and 14).
@@ -30,7 +30,7 @@ const (
 	pollBackoffMax = time.Hour
 )
 
-// outcomeFailed is what the Checked seam is told of a check that could not be recorded (Coaming's own storage failed,
+// outcomeFailed is what the Checked seam is told of a check that could not be recorded (TierPlan's own storage failed,
 // or the stack was deleted while it waited), as opposed to a check that found the repository in error.
 const outcomeFailed = "failed"
 

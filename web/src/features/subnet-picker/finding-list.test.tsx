@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -104,7 +104,7 @@ describe("RouteCheckNotes", () => {
           check({
             node: "node-2",
             state: "unmounted",
-            fix: "docker service update --mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro coaming_agent",
+            fix: "docker service update --mount-add type=bind,src=/proc/1/net/route,dst=/host/route,ro tierplan_agent",
           }),
           check({ node: "node-3", state: "offline" }),
           check({ node: "node-4", state: "failed" }),
@@ -160,7 +160,7 @@ describe("RouteCheckNotes", () => {
     expect(screen.getAllByText(/Route check skipped/)).toHaveLength(3);
   });
 
-  it("words Coaming's own host's missing mount with the flag to add", () => {
+  it("words TierPlan's own host's missing mount with the flag to add", () => {
     render(
       <RouteCheckNotes
         envType="standalone"
@@ -168,7 +168,7 @@ describe("RouteCheckNotes", () => {
       />,
     );
     expect(document.body.textContent).toContain(
-      "Route check skipped on dev: Coaming's container can't read this host's routes. Add -v /proc/1/net/route:/host/route:ro to Coaming's docker run.",
+      "Route check skipped on dev: TierPlan's container can't read this host's routes. Add -v /proc/1/net/route:/host/route:ro to TierPlan's docker run.",
     );
     expect(screen.queryByText(/Re-run the agent/)).toBeNull();
   });

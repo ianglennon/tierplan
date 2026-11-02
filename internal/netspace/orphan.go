@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package netspace
 
@@ -7,7 +7,7 @@ import "time"
 
 // GracePeriod is how long a network must have been idle before it is listed as orphaned or
 // unused (D-08). It is measured from the later of the network's creation and the last time
-// Coaming saw it in use, so a network that was busy until an hour ago is not listed today.
+// TierPlan saw it in use, so a network that was busy until an hour ago is not listed today.
 const GracePeriod = 24 * time.Hour
 
 // Class is what the orphan check made of one network.
@@ -17,19 +17,19 @@ type Class string
 // are shown to a person; the rest are why a network is left out.
 const (
 	// ClassExcluded: an engine or swarm network (bridge, host, none, ingress, docker_gwbridge,
-	// config-only networks and the networks they are configured from), or one a Coaming stack
+	// config-only networks and the networks they are configured from), or one a TierPlan stack
 	// declares external.
 	ClassExcluded Class = "excluded"
 	// ClassInUse: something attaches to the network now.
 	ClassInUse Class = "in_use"
-	// ClassKept: a person asked never to list it (the coaming.keep=true label or a keep row).
+	// ClassKept: a person asked never to list it (the tierplan.keep=true label or a keep row).
 	ClassKept Class = "kept"
 	// ClassSkipped: the stack that owns it holds an operation on the environment, and a deploy
 	// makes networks before it makes the services that use them.
 	ClassSkipped Class = "skipped"
 	// ClassGrace: idle, but not yet for the whole grace period.
 	ClassGrace Class = "grace"
-	// ClassCantTell: Coaming cannot be sure, because a node that could hold an attachment did not
+	// ClassCantTell: TierPlan cannot be sure, because a node that could hold an attachment did not
 	// report, no manager answered, or a stack that may declare the network external did not load.
 	ClassCantTell Class = "cant_tell"
 	// ClassOwned: a stack (or compose project) that still exists owns it.
@@ -51,13 +51,13 @@ type OrphanInput struct {
 	// Known: the answer to InUse is complete (Usage.Known): every node that could hold an
 	// attachment reported, and on a swarm a manager answered.
 	Known bool
-	// KeepLabel: the network carries coaming.keep=true. KeepRow: a keep row holds its name.
+	// KeepLabel: the network carries tierplan.keep=true. KeepRow: a keep row holds its name.
 	KeepLabel, KeepRow bool
-	// External: a Coaming stack of the environment declares the network external.
+	// External: a TierPlan stack of the environment declares the network external.
 	External bool
 	// Busy: the stack that owns the network holds the environment's operation lock.
 	Busy bool
-	// StackExists: the stack or project named by OwnerLabel exists, as a Coaming stack record or
+	// StackExists: the stack or project named by OwnerLabel exists, as a TierPlan stack record or
 	// because a container or service still carries its label (user decision 4).
 	StackExists bool
 	// ExternalsUnknown: a stack of the environment did not load, so what it declares external
@@ -65,7 +65,7 @@ type OrphanInput struct {
 	ExternalsUnknown bool
 	// OwnerLabel is the stack or compose project the network's labels name, empty for none.
 	OwnerLabel string
-	// Created is when the network was made, LastInUse the last time Coaming saw it in use (the
+	// Created is when the network was made, LastInUse the last time TierPlan saw it in use (the
 	// zero time for never).
 	Created, LastInUse time.Time
 }
@@ -87,7 +87,7 @@ func IdleSince(created, lastInUse time.Time) time.Time {
 //  1. built-in or special: excluded
 //  2. in use: in use
 //  3. kept by label or by row: kept
-//  4. declared external by a Coaming stack: excluded
+//  4. declared external by a TierPlan stack: excluded
 //  5. owned by the stack that holds the operation lock: skipped
 //  6. idle for less than GracePeriod: grace (at exactly GracePeriod it is listed)
 //  7. the picture is incomplete: cant_tell

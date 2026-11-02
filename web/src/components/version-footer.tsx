@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import { api } from "@/api/client";
 
-// Build-time source URL (Vite define, env COAMING_SOURCE_URL). It keeps the
+// Build-time source URL (Vite define, env TIERPLAN_SOURCE_URL). It keeps the
 // AGPL section 13 source link on screen even when /api/version is unreachable.
-declare const __COAMING_SOURCE_URL__: string;
+declare const __TIERPLAN_SOURCE_URL__: string;
 
 // Links use the accent ink with a 2px focus ring (UI-SPEC Color, accent use 3 and 4).
 const linkClass =
@@ -40,7 +40,7 @@ export function VersionFooter() {
         <span>{t("common.brand.wordmark")}</span>
         {" · "}
         <a
-          href={__COAMING_SOURCE_URL__}
+          href={__TIERPLAN_SOURCE_URL__}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={t("common.versionFooter.sourceAria")}

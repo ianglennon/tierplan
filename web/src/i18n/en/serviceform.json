@@ -23,7 +23,7 @@
       "image": {
         "label": "Image",
         "placeholder": "nginx:1.27 or ghcr.io/acme/app:latest",
-        "helper": "Coaming pins the tag to its current digest when you apply.",
+        "helper": "TierPlan pins the tag to its current digest when you apply.",
         "browse": "Browse tags"
       },
       "mode": {

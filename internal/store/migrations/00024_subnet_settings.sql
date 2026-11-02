@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
 -- The address-space settings of one environment (NET-06, D-21, D-07 as amended). small_subnets

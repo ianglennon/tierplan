@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { ReactNode } from "react";
 
@@ -76,7 +76,7 @@ interface StackFilterBarProps {
 // StackFilterBar is the toolbar both stack lists share (UI-SPEC "Stack lists"): row 1 the search (250 ms
 // after the last key, replacing the history entry), the Show group, the list's own controls and Clear filters
 // while a filter is on; row 2 the status chips with their counts, wrapping at every width. The chips filter
-// the stacks Coaming manages only.
+// the stacks TierPlan manages only.
 export function StackFilterBar({
   q,
   status,

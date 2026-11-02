@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package dockerx_test
@@ -14,11 +14,11 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
-// TestImageRemoveAndUntag proves against the engine COAMING_TEST_ENGINE names (29, whose
+// TestImageRemoveAndUntag proves against the engine TIERPLAN_TEST_ENGINE names (29, whose
 // image store is containerd's, and 24, the classic one) that an image with several names is
 // removed without force by untagging each name and then deleting it, that untagging one name
 // keeps the image under the others, and that an image a container uses, started or not, is
@@ -52,7 +52,7 @@ func TestImageRemoveAndUntag(t *testing.T) {
 		defer cancel()
 		_, _ = raw.ContainerRemove(c, seed, client.ContainerRemoveOptions{Force: true})
 	})
-	if _, err := raw.ContainerCommit(ctx, seed, client.ContainerCommitOptions{Reference: tags[0], Comment: "coaming test " + suffix}); err != nil {
+	if _, err := raw.ContainerCommit(ctx, seed, client.ContainerCommitOptions{Reference: tags[0], Comment: "tierplan test " + suffix}); err != nil {
 		t.Fatalf("commit %s: %v", seed, err)
 	}
 	if _, err := raw.ContainerRemove(ctx, seed, client.ContainerRemoveOptions{Force: true}); err != nil {
@@ -77,7 +77,7 @@ func TestImageRemoveAndUntag(t *testing.T) {
 	})
 
 	// The premise: by its ID an image with several names is refused, and force is not an
-	// option Coaming has.
+	// option TierPlan has.
 	if _, err := raw.ImageRemove(ctx, id, client.ImageRemoveOptions{}); !dockerx.IsConflict(err) {
 		t.Fatalf("a delete by ID of an image with several names = %v, want a conflict (must be forced)", err)
 	}

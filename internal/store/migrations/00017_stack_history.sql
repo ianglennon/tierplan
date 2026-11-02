@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
 -- Stack history and adoption (Phase 8, STK-08, STK-13). The history is append-only: a roll back adds a
@@ -15,8 +15,8 @@ ALTER TABLE stack_snapshots ADD COLUMN origin TEXT NOT NULL DEFAULT 'deploy'
 -- base_seq; this column names it plainly and does not depend on how base_seq is read.
 ALTER TABLE stack_snapshots ADD COLUMN restored_from INTEGER NOT NULL DEFAULT 0;
 
--- What adoption recorded about a stack taken over from outside Coaming: a JSON object, '{}' for a stack that was
--- created in Coaming. Plan 08-13 writes and reads it.
+-- What adoption recorded about a stack taken over from outside TierPlan: a JSON object, '{}' for a stack that was
+-- created in TierPlan. Plan 08-13 writes and reads it.
 ALTER TABLE stacks ADD COLUMN adoption TEXT NOT NULL DEFAULT '{}';
 
 -- Phase 7 took a roll back as a revision whose base_seq is the revision it restored, and recorded the operation

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package convert_test
 
@@ -12,7 +12,7 @@ import (
 
 	composetypes "github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // serviceKeys returns the compose YAML key of every field of types.ServiceConfig, including the

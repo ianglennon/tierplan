@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -224,8 +224,8 @@ describe("Start from", () => {
     const paste = within(group).getByRole("radio", { name: /I have the original compose file/ });
     expect(rebuild.getAttribute("aria-checked")).toBe("true");
     expect(paste.getAttribute("aria-checked")).toBe("false");
-    expect(screen.getByText("Coaming builds the compose file from what's running.")).toBeTruthy();
-    expect(screen.getByText("Paste it and Coaming checks it against what's running.")).toBeTruthy();
+    expect(screen.getByText("TierPlan builds the compose file from what's running.")).toBeTruthy();
+    expect(screen.getByText("Paste it and TierPlan checks it against what's running.")).toBeTruthy();
     expect(screen.queryByLabelText("Original compose file")).toBeNull();
     expect(pasteChecks()).toEqual([]);
   });

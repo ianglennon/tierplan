@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -140,9 +140,9 @@ describe("the audit log", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Audit log" })).toBeTruthy();
     const caption = await screen.findByText(/Entries are kept for 90 days\./);
     expect(caption.textContent).toContain(
-      "Verify integrity with coaming audit verify inside the container.",
+      "Verify integrity with tierplan audit verify inside the container.",
     );
-    expect(caption.querySelector("code")?.textContent).toBe("coaming audit verify");
+    expect(caption.querySelector("code")?.textContent).toBe("tierplan audit verify");
     for (const name of [
       "Time",
       "User",
@@ -602,7 +602,7 @@ describe("export", () => {
     ).toBeTruthy();
     const csv = await screen.findByRole("menuitem", { name: "Export CSV" });
     const json = screen.getByRole("menuitem", { name: "Export JSON" });
-    const url = new URL(csv.getAttribute("href") as string, "http://coaming.test");
+    const url = new URL(csv.getAttribute("href") as string, "http://tierplan.test");
     expect(url.pathname).toBe("/api/audit/export");
     expect(url.searchParams.get("format")).toBe("csv");
     expect(url.searchParams.get("user")).toBe("alice");
@@ -610,7 +610,7 @@ describe("export", () => {
     expect(url.searchParams.has("from")).toBe(true);
     expect(url.searchParams.has("cursor")).toBe(false);
     expect(
-      new URL(json.getAttribute("href") as string, "http://coaming.test").searchParams.get(
+      new URL(json.getAttribute("href") as string, "http://tierplan.test").searchParams.get(
         "format",
       ),
     ).toBe("json");

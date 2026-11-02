@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -13,12 +13,12 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	mobycontainer "github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Standalone stacks on the server's own host (plan 07-20, STK-02, STK-06, STK-09): the review compares the
@@ -205,7 +205,7 @@ func TestReviewTakesAChangedSecretFileForAChangedService(t *testing.T) {
 	}
 }
 
-func TestReviewBlocksAComposeProjectOfTheSameNameThatCoamingDoesNotManage(t *testing.T) {
+func TestReviewBlocksAComposeProjectOfTheSameNameThatTierPlanDoesNotManage(t *testing.T) {
 	t.Parallel()
 	foreign := dockertest.FakeContainer{
 		ID: "c1", Names: []string{"/demo-web-1"}, Image: "nginx", State: "running",
@@ -365,7 +365,7 @@ func TestDeployStandaloneStopsAtTheServicesWhenTheSDKFailsAndSkipsWhatFollows(t 
 	}
 }
 
-func TestDeployStandaloneRefusesAProjectOfTheSameNameCoamingDoesNotManage(t *testing.T) {
+func TestDeployStandaloneRefusesAProjectOfTheSameNameTierPlanDoesNotManage(t *testing.T) {
 	t.Parallel()
 	foreign := dockertest.FakeContainer{
 		ID: "c1", Names: []string{"/demo-web-1"}, Image: "nginx", State: "running",
@@ -381,7 +381,7 @@ func TestDeployStandaloneRefusesAProjectOfTheSameNameCoamingDoesNotManage(t *tes
 		t.Fatalf("result = %+v, want stack_name_clash", res)
 	}
 	if stand.calls != 0 {
-		t.Error("the SDK ran for a project Coaming does not manage")
+		t.Error("the SDK ran for a project TierPlan does not manage")
 	}
 	if got := itemStates(job)["check"]; got != "failed:stack_name_clash" {
 		t.Errorf("check = %s", got)

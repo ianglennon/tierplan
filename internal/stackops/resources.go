@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -14,14 +14,14 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The ownership of an object on the Resources tab. An object is the stack's only when it carries the
 // stack's own labels; one the compose file refers to that was made outside the stack is external, and
-// Coaming never changes or removes it (STK-10, D-22).
+// TierPlan never changes or removes it (STK-10, D-22).
 const (
 	OwnerStack    = "stack"
 	OwnerExternal = "external"
@@ -95,7 +95,7 @@ type ObjectUser struct{ ID, Name string }
 type ObjectResource struct {
 	ID string
 	// Name is the name as the compose file writes it, FullName the name of the object on the swarm (the stack,
-	// the name and the content hash joined) and Hash that content hash, empty for an object Coaming did not hash.
+	// the name and the content hash joined) and Hash that content hash, empty for an object TierPlan did not hash.
 	Name, FullName, Hash string
 	// UsedBy are the services of the stack that use it, by name.
 	UsedBy []ObjectUser
@@ -527,7 +527,7 @@ func usersOf(o objectInfo, uses []serviceUse, refs func(dockerx.ServiceRef) []do
 }
 
 // swarmObjects lists the secrets or configs of a swarm stack: those that carry the stack's own labels, by the name the
-// compose file uses and the content hash Coaming put in the object's name, and those the compose file declares external,
+// compose file uses and the content hash TierPlan put in the object's name, and those the compose file declares external,
 // found by the name it gives. An object is the stack's only by its labels; an external one never reads Stack. A
 // stack found by its labels owns none (D-13): every secret and config its services reference is External, whatever
 // labels it carries, because adopting never takes one over.
@@ -632,7 +632,7 @@ func (d Deps) networksOf(ctx context.Context, envID string, stack Stack, decl De
 
 // standaloneContainers lists the containers of the stack's Compose project, stopped ones too, one-off
 // containers (`compose run`) left out. They are the stack's own and the ones the host CLI added to its project
-// without Coaming's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6);
+// without TierPlan's labels (docker compose up --scale) beside a container the stack owns (SplitProject, G-08-6);
 // another stack's container and a project the stack owns none of stay out.
 func (d Deps) standaloneContainers(ctx context.Context, envID string, stack Stack) ([]ContainerResource, error) {
 	node, err := d.StandaloneNode(ctx, envID)

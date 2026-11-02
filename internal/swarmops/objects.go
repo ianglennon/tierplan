@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package swarmops
 
@@ -15,8 +15,8 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
 )
 
 // The kinds of object an apply creates for a service, in the order they are created: a network
@@ -88,7 +88,7 @@ func (e *ObjectCreateError) Error() string {
 func (e *ObjectCreateError) Unwrap() error { return e.Err }
 
 // StagedObject is an object the caller made in the editor, which does not exist yet. Data is the
-// value of a secret or the content of a config; it crosses Coaming once, on its way to the manager.
+// value of a secret or the content of a config; it crosses TierPlan once, on its way to the manager.
 type StagedObject struct {
 	Kind, Name string
 	Data       []byte

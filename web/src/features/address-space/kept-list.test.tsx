@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -113,10 +113,10 @@ describe("KeptList", () => {
     const table = screen.getByRole("table", { name: "Kept networks" });
     expect(
       screen.getByText(
-        "Coaming never lists these as orphaned or unused, and the janitor leaves them alone.",
+        "TierPlan never lists these as orphaned or unused, and the janitor leaves them alone.",
       ),
     ).toBeTruthy();
-    expect(within(table).getByText("ian in Coaming")).toBeTruthy();
+    expect(within(table).getByText("ian in TierPlan")).toBeTruthy();
     expect(within(table).getByText("A label on the network")).toBeTruthy();
   });
 
@@ -133,7 +133,7 @@ describe("KeptList", () => {
     expect(labelled.getAttribute("aria-disabled")).toBe("true");
     expect(
       screen.getAllByText(
-        "Kept by the coaming.keep label on the network. Remove the label to stop keeping it.",
+        "Kept by the tierplan.keep label on the network. Remove the label to stop keeping it.",
       ).length,
     ).toBeGreaterThan(0);
     fireEvent.click(labelled);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package httpx
 
@@ -13,9 +13,9 @@ import (
 // starts with base + "/", and leaves every other path unchanged. It is the
 // outermost handler, so it runs before the router and every middleware.
 //
-// Coaming is served under the path of its public URL (D-50). A proxy that
+// TierPlan is served under the path of its public URL (D-50). A proxy that
 // strips the prefix sends "/api/version" and one that does not sends
-// "/coaming/api/version"; both reach the same route. Probes such as /healthz
+// "/tierplan/api/version"; both reach the same route. Probes such as /healthz
 // arrive unprefixed and pass through untouched. base is read on every request,
 // so a public URL changed at runtime applies at once, and "" disables the
 // middleware. The base is never taken from a request header (D-51, T-02-11).

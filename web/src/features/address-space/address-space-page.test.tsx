@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -168,11 +168,11 @@ describe("the Address space page", () => {
   it("words the estimated note by source", async () => {
     const notes = {
       daemon:
-        "These numbers are estimated from the address pools the daemon reports and the bridge subnets Coaming can see.",
+        "These numbers are estimated from the address pools the daemon reports and the bridge subnets TierPlan can see.",
       defaults:
-        "These numbers are estimated. The daemon doesn't set its own address pools, so Coaming counts against Docker's default pools and the bridge subnets it can see.",
+        "These numbers are estimated. The daemon doesn't set its own address pools, so TierPlan counts against Docker's default pools and the bridge subnets it can see.",
       entered:
-        "These numbers are estimated from the pools you entered in this environment's settings and the bridge subnets Coaming can see.",
+        "These numbers are estimated from the pools you entered in this environment's settings and the bridge subnets TierPlan can see.",
     } as const;
     for (const source of ["daemon", "defaults", "entered"] as const) {
       body = space({
@@ -184,7 +184,7 @@ describe("the Address space page", () => {
       expect(await screen.findByText(notes[source])).toBeTruthy();
       expect(screen.getByText("Estimated")).toBeTruthy();
       // The old sentence is gone.
-      expect(screen.queryByText(/Docker doesn't tell Coaming which address pools/)).toBeNull();
+      expect(screen.queryByText(/Docker doesn't tell TierPlan which address pools/)).toBeNull();
       // A standalone page has no swarm caption.
       expect(screen.queryByText("Measured from the swarm.")).toBeNull();
       cleanup();
@@ -236,7 +236,7 @@ describe("the Address space page", () => {
     });
     mount();
     const alert = await screen.findByRole("status");
-    expect(within(alert).getByText("Coaming can't measure the swarm's pools")).toBeTruthy();
+    expect(within(alert).getByText("TierPlan can't measure the swarm's pools")).toBeTruthy();
     expect(
       within(alert).getByText(
         "No manager is connected. The subnets below are the last ones read from the nodes that are reporting.",

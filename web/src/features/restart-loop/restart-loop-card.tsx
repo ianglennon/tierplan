@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useId, useState } from "react";
@@ -41,7 +41,7 @@ function wholeNumber(text: string, min: number, max: number): number | undefined
 // RestartLoopCard is "Restart-loop detection" in Settings > Environments > {env} (RES-13, D-14, Q3,
 // Q5): how many failed tasks inside how many minutes make a restart loop here. It says how many
 // failed tasks Docker itself keeps per slot, because a threshold above that is only met by loops
-// that Coaming's own earlier checks have seen. It is for someone holding environments.configure on
+// that TierPlan's own earlier checks have seen. It is for someone holding environments.configure on
 // the environment; without it nothing is drawn and nothing is read.
 export function RestartLoopCard({ envId }: RestartLoopCardProps) {
   const allowed = usePermission("environments.configure", envId);

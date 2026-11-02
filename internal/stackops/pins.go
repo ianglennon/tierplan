@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -15,10 +15,10 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
 )
 
 // The codes of the image lookup. CodeRegistryUnreachable and CodeImageUnresolved end the lookup
@@ -274,7 +274,7 @@ func imageProblem(res lookupResult, it pinItem) stacks.Problem {
 		File: stacks.ComposeFile, Key: "services." + it.Short + ".image",
 	}
 	if res.failure == CodeRegistryUnreachable {
-		p.Message = fmt.Sprintf("Coaming can't reach %s, and %s needs a fresh lookup. Services that are already pinned don't need the registry.", res.host, it.Short)
+		p.Message = fmt.Sprintf("TierPlan can't reach %s, and %s needs a fresh lookup. Services that are already pinned don't need the registry.", res.host, it.Short)
 	} else {
 		p.Message = fmt.Sprintf("Couldn't look up %s on %s to pin it to a digest. Check the name, the tag and the credential, then try again.", it.AsWritten, res.host)
 	}
@@ -282,7 +282,7 @@ func imageProblem(res lookupResult, it pinItem) stacks.Problem {
 }
 
 func localImageMessage(image string) string {
-	return fmt.Sprintf("“%s” isn't from a registry, so Coaming pins it to the local image ID.", image)
+	return fmt.Sprintf("“%s” isn't from a registry, so TierPlan pins it to the local image ID.", image)
 }
 
 // registryHost is the registry an image reference names, docker.io for a Docker Hub name; the

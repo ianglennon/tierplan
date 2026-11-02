@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -21,10 +21,10 @@ import (
 
 const (
 	// stanzaType is the age recipient stanza type of the backup passphrase.
-	stanzaType = "coaming-argon2id"
+	stanzaType = "tierplan-argon2id"
 	// wrapInfoLabel is the HKDF info prefix of the key that wraps the age file
 	// key. The SHA-256 of the outer header follows it (T-03-05).
-	wrapInfoLabel = "coaming/backup-wrap/v1"
+	wrapInfoLabel = "tierplan/backup-wrap/v1"
 	wrapKeyLen    = 32
 )
 

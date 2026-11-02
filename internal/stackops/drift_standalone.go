@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // driftStandalone is Drift for a stack on a standalone host (D-21, RESEARCH Pattern 6). The deployed revision is
@@ -25,7 +25,7 @@ import (
 //
 // Three things are added to what the review compares. A container's image is checked against the revision's pin,
 // because the field comparison leaves the image out. A service whose containers differ from the prepared service in
-// nothing the person wrote (an adopted stack's containers carry no label of Coaming's, so their config hash never
+// nothing the person wrote (an adopted stack's containers carry no label of TierPlan's, so their config hash never
 // matches) is not drift. And a container of the project that the revision does not declare is Extra when it is the
 // stack's, as a service with no container is Missing.
 //
@@ -82,7 +82,7 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 		if e != nil {
 			return e
 		}
-		// What the stack owns, and what the host CLI added to its project without Coaming's label, is the stack's to
+		// What the stack owns, and what the host CLI added to its project without TierPlan's label, is the stack's to
 		// compare; a container with another stack's ID, or in a project the stack owns nothing of, is not (SplitProject).
 		mine, unlabelled, _ := SplitProject(own, all, func(c dockerx.ComposeContainer) map[string]string { return c.Labels })
 		owned = append(mine, unlabelled...)
@@ -100,7 +100,7 @@ func (d Deps) driftStandalone(ctx context.Context, in DriftInput) (DriftResult, 
 			continue
 		}
 		// A service that differs only in its config hash, with no setting and nothing hidden that differs, is a
-		// container that was made without Coaming's labels: not drift (D-21).
+		// container that was made without TierPlan's labels: not drift (D-21).
 		if c.Forced || c.Row.Settings > 0 || len(c.Row.HiddenChanges) > 0 {
 			rows[c.Name] = DriftService{Name: c.Name, Short: c.Name, Change: DriftChanged, Diff: c.Row}
 		}

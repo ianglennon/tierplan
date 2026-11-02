@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -18,10 +18,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // Earlier lines and the merged download of a service's log (plan 06-31, OBS-02, D-35). Both
@@ -39,7 +39,7 @@ const (
 	// drops the ones it cannot need.
 	pageTrimSlack = 1024
 	// downloadCutNotice starts the first line of a download that left lines out.
-	downloadCutNotice = "Coaming: the oldest lines of this range were left out, so this file starts later than asked. It holds the newest "
+	downloadCutNotice = "TierPlan: the oldest lines of this range were left out, so this file starts later than asked. It holds the newest "
 )
 
 // ServiceLogsInput is the path and query of a page of earlier lines of a service's log.
@@ -381,7 +381,7 @@ func serveServiceLogDownload(w http.ResponseWriter, req *http.Request, d Service
 	releaseServer, ok := serverLim.acquire("server")
 	if !ok {
 		writeJSONProblem(w, http.StatusTooManyRequests, problemStreamBusy,
-			"Coaming is already preparing as many log downloads as it can. Try again in a moment.")
+			"TierPlan is already preparing as many log downloads as it can. Try again in a moment.")
 		return
 	}
 	defer releaseServer()

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockertest
 
@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
@@ -32,7 +32,7 @@ import (
 )
 
 // EngineFromEnv is the dind major version the tests run against:
-// COAMING_TEST_ENGINE, or 29.
+// TIERPLAN_TEST_ENGINE, or 29.
 func EngineFromEnv() string {
 	if v := os.Getenv(EnvEngine); v != "" {
 		return v
@@ -49,7 +49,7 @@ type Node struct {
 	// that is stopped and started again keeps the address its swarm knows.
 	IP string
 	// Gateway is the network's gateway: the address of this machine as the
-	// nodes see it, which is where an in-process Coaming is reachable from them.
+	// nodes see it, which is where an in-process TierPlan is reachable from them.
 	Gateway string
 	// Manager is true for a swarm manager.
 	Manager bool
@@ -128,7 +128,7 @@ func newNetwork(t testing.TB) *netPlan {
 // first manager `docker swarm init` on its own address, joins the rest with the
 // tokens it prints, and returns once a leader is elected and every node is
 // ready (polling for up to a minute each, never sleeping a fixed time). Engine
-// "" means COAMING_TEST_ENGINE. Everything is removed when the test ends.
+// "" means TIERPLAN_TEST_ENGINE. Everything is removed when the test ends.
 func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 	t.Helper()
 	if managers < 1 {
@@ -199,8 +199,8 @@ func StartSwarm(t testing.TB, engine string, managers, workers int) *Swarm {
 }
 
 // StartHost starts one dind node on a network of its own, for a standalone
-// host. It ignores COAMING_TEST_DOCKER_HOST: an agent test needs a network its
-// in-process Coaming is reachable on, which the CI dind service is not.
+// host. It ignores TIERPLAN_TEST_DOCKER_HOST: an agent test needs a network its
+// in-process TierPlan is reachable on, which the CI dind service is not.
 func StartHost(t testing.TB, engine string) *Node {
 	t.Helper()
 	if engine == "" {

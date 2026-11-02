@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -13,14 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // ResolvePins decides which image each service is sent with and looks up only the ones that need
@@ -193,7 +193,7 @@ func TestPinAnUnreachableRegistryBlocksOnlyTheServiceThatNeedsAFreshLookup(t *te
 		t.Fatalf("problems = %+v, want one", out.Problems)
 	}
 	p := out.Problems[0]
-	want := "Coaming can't reach registry.example:5000, and app needs a fresh lookup. Services that are already pinned don't need the registry."
+	want := "TierPlan can't reach registry.example:5000, and app needs a fresh lookup. Services that are already pinned don't need the registry."
 	if p.Severity != stacks.SeverityError || p.Code != stackops.CodeRegistryUnreachable || p.Message != want || p.Key != "services.app.image" {
 		t.Errorf("problem = %+v, want the blocking sentence for app", p)
 	}
@@ -240,7 +240,7 @@ func TestPinALocalOnlyImagePinsToItsImageIDWithAWarning(t *testing.T) {
 	if pin.Action != stacks.PinLocal || pin.Ref != localImageID {
 		t.Errorf("pin = %+v, want the local image ID", pin)
 	}
-	wantNote := "“myapp:1” isn't from a registry, so Coaming pins it to the local image ID."
+	wantNote := "“myapp:1” isn't from a registry, so TierPlan pins it to the local image ID."
 	if len(out.Problems) != 1 || out.Problems[0].Severity != stacks.SeverityWarning || out.Problems[0].Code != stackops.CodeLocalImage || out.Problems[0].Message != wantNote {
 		t.Errorf("problems = %+v, want the local-image warning %q", out.Problems, wantNote)
 	}
@@ -296,7 +296,7 @@ func TestPinAStandaloneHostsLocalOnlyImagePinsToItsIDWithAWarning(t *testing.T) 
 	if len(rv.Images) != 1 || rv.Images[0].State != stackops.ImageLocal {
 		t.Errorf("images = %+v, want web local", rv.Images)
 	}
-	wantNote := "“myapp:1” isn't from a registry, so Coaming pins it to the local image ID."
+	wantNote := "“myapp:1” isn't from a registry, so TierPlan pins it to the local image ID."
 	found := false
 	for _, p := range rv.Problems {
 		found = found || (p.Severity == stacks.SeverityWarning && p.Code == stackops.CodeLocalImage && p.Message == wantNote)

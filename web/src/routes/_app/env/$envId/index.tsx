@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
@@ -71,7 +71,7 @@ function Dashboard() {
   const failed = summary.isError;
   const counts = data?.counts;
   const status = data?.environment.status ?? listed?.status;
-  // D-27: the badge needs both the server's answer that this is Coaming's own
+  // D-27: the badge needs both the server's answer that this is TierPlan's own
   // host and the container ID it found.
   const isSelf = Boolean(listed?.isSelfHost && data?.selfContainerId);
   const name = data?.environment.name ?? listed?.name;

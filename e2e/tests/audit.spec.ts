@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 4 (D-80): the audit log holds what the first two specs did, can
 // be filtered by action, exports CSV, and its hash chain verifies from inside
@@ -60,7 +60,7 @@ test("the audit log lists what happened, filters by action and exports CSV", asy
 test("the audit chain verifies from inside the container", async () => {
   // The CLI path again: root in the container, dropped to UID 1000, reading the
   // same database the server wrote.
-  const out = compose("exec", "-T", "coaming", "coaming", "audit", "verify");
+  const out = compose("exec", "-T", "tierplan", "tierplan", "audit", "verify");
   expect(out).toMatch(/^audit chain OK: \d+ entries/m);
 });
 
@@ -100,6 +100,6 @@ test("a password typed as the username never reaches the audit log, its export o
   }
 
   // The same string must not be in what the container wrote to stdout either.
-  const logs = compose("logs", "--no-color", "coaming");
+  const logs = compose("logs", "--no-color", "tierplan");
   expect(logs).not.toContain(TYPED);
 });

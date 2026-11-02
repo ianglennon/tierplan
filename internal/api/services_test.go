@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -15,11 +15,11 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Services list and scale (plan 06-01, RES-02, D-08, D-10). Docker is a fake daemon behind
@@ -160,7 +160,7 @@ func (f *envFix) serviceAudits(t *testing.T) []auditRowFull {
 func TestListServicesOfALocalSwarmManagerAnswersItsRows(t *testing.T) {
 	t.Parallel()
 	f, e := serviceEnv(t, webService(),
-		dockertest.FakeService{ID: "svc-agent", Name: "coaming-agent", Mode: "global", Running: 3, Desired: 3, Image: "coaming/agent:1"},
+		dockertest.FakeService{ID: "svc-agent", Name: "tierplan-agent", Mode: "global", Running: 3, Desired: 3, Image: "tierplan/agent:1"},
 		dockertest.FakeService{ID: "svc-job", Name: "backup", Mode: "replicated-job", UpdateState: "completed"})
 	rec := f.get(t, e, "services")
 	if rec.code != http.StatusOK {
@@ -171,7 +171,7 @@ func TestListServicesOfALocalSwarmManagerAnswersItsRows(t *testing.T) {
 		t.Fatalf("list = %+v", got)
 	}
 	names := []string{got.Items[0].Name, got.Items[1].Name, got.Items[2].Name}
-	if !slices.Equal(names, []string{"backup", "coaming-agent", "web"}) {
+	if !slices.Equal(names, []string{"backup", "tierplan-agent", "web"}) {
 		t.Errorf("names = %v, want sorted by name", names)
 	}
 	var web serviceItem
@@ -293,7 +293,7 @@ func TestScaleWithNoMatchingCredentialSendsNoHeader(t *testing.T) {
 func TestScaleRefusals(t *testing.T) {
 	t.Parallel()
 	f, e := serviceEnv(t, webService(),
-		dockertest.FakeService{ID: "svc-agent", Name: "coaming-agent", Mode: "global", Running: 1, Desired: 1},
+		dockertest.FakeService{ID: "svc-agent", Name: "tierplan-agent", Mode: "global", Running: 1, Desired: 1},
 		dockertest.FakeService{ID: "svc-job", Name: "backup", Mode: "replicated-job"})
 
 	t.Run("a viewer is refused and sees nothing change", func(t *testing.T) {
@@ -468,7 +468,7 @@ func TestAScaleTheManagersAgentRefusesByHostPolicyIsAgentHostPolicyAndAuditedWit
 	if r.Result != "failed" || r.Code != "agent_host_policy" {
 		t.Fatalf("result = %+v, want failed agent_host_policy", r)
 	}
-	if !strings.Contains(r.Detail, "COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES") {
+	if !strings.Contains(r.Detail, "TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES") {
 		t.Errorf("detail = %q, want it to name the setting that allows host access", r.Detail)
 	}
 	rows := f.serviceAudits(t)
@@ -699,7 +699,7 @@ func bulkScaleServices() []dockertest.FakeService {
 	}
 	return []dockertest.FakeService{
 		rep("svc-a", "alpha"), rep("svc-b", "bravo"), rep("svc-c", "charlie"),
-		{ID: "svc-g", Name: "coaming-agent", Mode: "global", Running: 1, Desired: 1},
+		{ID: "svc-g", Name: "tierplan-agent", Mode: "global", Running: 1, Desired: 1},
 		{ID: "svc-j", Name: "backup", Mode: "replicated-job"},
 	}
 }
@@ -1006,7 +1006,7 @@ func TestDetectingARestartLoopChangesNothingInDocker(t *testing.T) {
 	}
 }
 
-// insertStackRow puts a stack of Coaming's own in an environment under an ID the test chose, so that a
+// insertStackRow puts a stack of TierPlan's own in an environment under an ID the test chose, so that a
 // label on a fake object can name it.
 func (f *envFix) insertStackRow(t *testing.T, envID, id, name string) {
 	t.Helper()
@@ -1018,31 +1018,31 @@ func (f *envFix) insertStackRow(t *testing.T, envID, id, name string) {
 	}
 }
 
-// stackLinkServices are four services that each name a stack in a different way: one Coaming manages,
-// one that carries Coaming's ID for a stack that does not exist, one that carries a real ID under another
+// stackLinkServices are four services that each name a stack in a different way: one TierPlan manages,
+// one that carries TierPlan's ID for a stack that does not exist, one that carries a real ID under another
 // stack's name, and one a plain docker stack deploy made.
 func stackLinkServices() []dockertest.FakeService {
 	svc := func(id, name string, labels map[string]string) dockertest.FakeService {
 		return dockertest.FakeService{ID: id, Name: name, Mode: "replicated", Running: 1, Desired: 1, Image: scaleImage, Version: 3, Labels: labels}
 	}
 	return []dockertest.FakeService{
-		svc("svc-own", "own", map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-shop"}),
-		svc("svc-ghost", "ghost", map[string]string{"com.docker.stack.namespace": "gone", "coaming.stack.id": "stk-gone"}),
-		svc("svc-forged", "forged", map[string]string{"com.docker.stack.namespace": "other", "coaming.stack.id": "stk-shop"}),
+		svc("svc-own", "own", map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-shop"}),
+		svc("svc-ghost", "ghost", map[string]string{"com.docker.stack.namespace": "gone", "tierplan.stack.id": "stk-gone"}),
+		svc("svc-forged", "forged", map[string]string{"com.docker.stack.namespace": "other", "tierplan.stack.id": "stk-shop"}),
 		svc("svc-foreign", "foreign", map[string]string{"com.docker.stack.namespace": "legacy"}),
 	}
 }
 
-// TestServiceRowsAndDetailsLinkOnlyTheStacksCoamingManages is STK-10 and T-07-146: a service's
-// coamingStackId is set when the label names a stack this environment holds under that name, and empty
-// for a stack Coaming does not manage, whatever the label claims.
-func TestServiceRowsAndDetailsLinkOnlyTheStacksCoamingManages(t *testing.T) {
+// TestServiceRowsAndDetailsLinkOnlyTheStacksTierPlanManages is STK-10 and T-07-146: a service's
+// tierplanStackId is set when the label names a stack this environment holds under that name, and empty
+// for a stack TierPlan does not manage, whatever the label claims.
+func TestServiceRowsAndDetailsLinkOnlyTheStacksTierPlanManages(t *testing.T) {
 	t.Parallel()
 	f, e := serviceEnv(t, stackLinkServices()...)
 	f.insertStackRow(t, e.ID, "stk-shop", "shop")
 	type linked struct {
 		Stack          string `json:"stack"`
-		CoamingStackID string `json:"coamingStackId"`
+		TierPlanStackID string `json:"tierplanStackId"`
 	}
 	list := decode[struct {
 		Items []struct {
@@ -1072,7 +1072,7 @@ func TestServiceRowsAndDetailsLinkOnlyTheStacksCoamingManages(t *testing.T) {
 }
 
 // TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending: the Services list, a service's detail and its
-// spec link a service that carries no coaming.stack.id, or the stale one recorded at adoption, to the adopted stack while
+// spec link a service that carries no tierplan.stack.id, or the stale one recorded at adoption, to the adopted stack while
 // its first deploy is pending ("Managed by stack shop"), and never link another ID under that name (T-07-146). After the
 // first deploy only the stack's own ID links.
 func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *testing.T) {
@@ -1082,9 +1082,9 @@ func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *
 	}
 	f, e := serviceEnv(t,
 		svc("svc-bare", "shop_bare", map[string]string{"com.docker.stack.namespace": "shop"}),
-		svc("svc-stale", "shop_stale", map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stale-id"}),
-		svc("svc-forged", "shop_forged", map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-other"}),
-		svc("svc-own", "shop_own", map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-ad"}),
+		svc("svc-stale", "shop_stale", map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stale-id"}),
+		svc("svc-forged", "shop_forged", map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-other"}),
+		svc("svc-own", "shop_own", map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-ad"}),
 	)
 	err := f.st.Q.InsertAdoptedStack(testsupport.Context(t), sqlc.InsertAdoptedStackParams{
 		ID: "stk-ad", EnvID: e.ID, Name: "shop", Target: "swarm", SourceKind: "adopted", SourceRef: "shop", CreatedBy: "seed", CreatedAt: 1,
@@ -1094,7 +1094,7 @@ func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *
 		t.Fatal(err)
 	}
 	type linked struct {
-		CoamingStackID string `json:"coamingStackId"`
+		TierPlanStackID string `json:"tierplanStackId"`
 	}
 	check := func(when string, want map[string]string) {
 		t.Helper()
@@ -1108,14 +1108,14 @@ func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *
 			t.Fatalf("%s: list = %+v, want %d rows", when, list.Items, len(want))
 		}
 		for _, it := range list.Items {
-			if it.CoamingStackID != want[it.Name] {
-				t.Errorf("%s: list row %s coamingStackId = %q, want %q", when, it.Name, it.CoamingStackID, want[it.Name])
+			if it.TierPlanStackID != want[it.Name] {
+				t.Errorf("%s: list row %s tierplanStackId = %q, want %q", when, it.Name, it.TierPlanStackID, want[it.Name])
 			}
 		}
 		for id, name := range map[string]string{"svc-bare": "shop_bare", "svc-stale": "shop_stale", "svc-forged": "shop_forged", "svc-own": "shop_own"} {
 			for _, path := range []string{"services/" + id, "services/" + id + "/spec"} {
-				if got := decode[linked](t, f.get(t, e, path)); got.CoamingStackID != want[name] {
-					t.Errorf("%s: %s coamingStackId = %q, want %q", when, path, got.CoamingStackID, want[name])
+				if got := decode[linked](t, f.get(t, e, path)); got.TierPlanStackID != want[name] {
+					t.Errorf("%s: %s tierplanStackId = %q, want %q", when, path, got.TierPlanStackID, want[name])
 				}
 			}
 		}
@@ -1129,9 +1129,9 @@ func TestServiceDetailLinksAPendingAdoptedStackOnlyWhileItsAdoptionIsPending(t *
 	check("deployed", map[string]string{"shop_bare": "", "shop_stale": "", "shop_forged": "", "shop_own": "stk-ad"})
 }
 
-// TestAStackOwnedRefusalNamesTheCoamingStackOnlyWhenCoamingManagesIt is the stack_owned 409 a service
-// page gets: the stack in errors as stack, and as coamingStackId when the SPA may link to it.
-func TestAStackOwnedRefusalNamesTheCoamingStackOnlyWhenCoamingManagesIt(t *testing.T) {
+// TestAStackOwnedRefusalNamesTheTierPlanStackOnlyWhenTierPlanManagesIt is the stack_owned 409 a service
+// page gets: the stack in errors as stack, and as tierplanStackId when the SPA may link to it.
+func TestAStackOwnedRefusalNamesTheTierPlanStackOnlyWhenTierPlanManagesIt(t *testing.T) {
 	t.Parallel()
 	f, e := serviceEnv(t, stackLinkServices()...)
 	f.insertStackRow(t, e.ID, "stk-shop", "shop")
@@ -1144,16 +1144,16 @@ func TestAStackOwnedRefusalNamesTheCoamingStackOnlyWhenCoamingManagesIt(t *testi
 		if err := json.Unmarshal(rec.body, &p); err != nil {
 			t.Fatal(err)
 		}
-		if p.at("stack") == "" || p.at("coamingStackId") != want {
-			t.Errorf("remove %s: stack %q, coamingStackId %q, want the stack named and coamingStackId %q", service, p.at("stack"), p.at("coamingStackId"), want)
+		if p.at("stack") == "" || p.at("tierplanStackId") != want {
+			t.Errorf("remove %s: stack %q, tierplanStackId %q, want the stack named and tierplanStackId %q", service, p.at("stack"), p.at("tierplanStackId"), want)
 		}
 	}
 }
 
-// TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages is STK-10 for the other Phase 4
-// and 6 pages: a container, secret or config row and detail carries coamingStackId under the same rule as
+// TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksTierPlanManages is STK-10 for the other Phase 4
+// and 6 pages: a container, secret or config row and detail carries tierplanStackId under the same rule as
 // a service, a container being owned by its swarm stack or its compose project.
-func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages(t *testing.T) {
+func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksTierPlanManages(t *testing.T) {
 	t.Parallel()
 	ctr := func(n int, name string, labels map[string]string) dockertest.FakeContainer {
 		return dockertest.FakeContainer{
@@ -1162,20 +1162,20 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages(t
 	}
 	f, e := actionsEnv(t, func(c *dockertest.FakeConfig) {
 		c.Containers = []dockertest.FakeContainer{
-			ctr(1, "c-swarm", map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-shop"}),
-			ctr(2, "c-project", map[string]string{"com.docker.compose.project": "shop", "coaming.stack.id": "stk-shop"}),
-			ctr(3, "c-forged", map[string]string{"com.docker.compose.project": "other", "coaming.stack.id": "stk-shop"}),
+			ctr(1, "c-swarm", map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-shop"}),
+			ctr(2, "c-project", map[string]string{"com.docker.compose.project": "shop", "tierplan.stack.id": "stk-shop"}),
+			ctr(3, "c-forged", map[string]string{"com.docker.compose.project": "other", "tierplan.stack.id": "stk-shop"}),
 			ctr(4, "c-foreign", map[string]string{"com.docker.compose.project": "legacy"}),
 			ctr(5, "c-plain", nil),
 		}
 		c.Secrets = []dockertest.FakeSecret{
-			{ID: "sec-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-shop"}},
-			{ID: "sec-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "coaming.stack.id": "stk-shop"}},
+			{ID: "sec-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-shop"}},
+			{ID: "sec-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "tierplan.stack.id": "stk-shop"}},
 			{ID: "sec-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}},
 		}
 		c.Configs = []dockertest.FakeConfigObject{
-			{ID: "cfg-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "stk-shop"}, Data: []byte("x")},
-			{ID: "cfg-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "coaming.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-own", Name: "own", Labels: map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "stk-shop"}, Data: []byte("x")},
+			{ID: "cfg-forged", Name: "forged", Labels: map[string]string{"com.docker.stack.namespace": "other", "tierplan.stack.id": "stk-shop"}, Data: []byte("x")},
 			{ID: "cfg-foreign", Name: "foreign", Labels: map[string]string{"com.docker.stack.namespace": "legacy"}, Data: []byte("x")},
 		}
 	})
@@ -1184,7 +1184,7 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages(t
 		ID             string `json:"id"`
 		NodeID         string `json:"nodeId"`
 		Name           string `json:"name"`
-		CoamingStackID string `json:"coamingStackId"`
+		TierPlanStackID string `json:"tierplanStackId"`
 	}
 	type rows struct {
 		Items []row `json:"items"`
@@ -1195,8 +1195,8 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages(t
 			t.Fatalf("%s list = %+v, want %d rows", what, got, len(want))
 		}
 		for _, r := range got {
-			if r.CoamingStackID != want[r.Name] {
-				t.Errorf("%s row %s coamingStackId = %q, want %q", what, r.Name, r.CoamingStackID, want[r.Name])
+			if r.TierPlanStackID != want[r.Name] {
+				t.Errorf("%s row %s tierplanStackId = %q, want %q", what, r.Name, r.TierPlanStackID, want[r.Name])
 			}
 		}
 	}
@@ -1208,23 +1208,23 @@ func TestContainerSecretAndConfigRowsAndDetailsLinkOnlyTheStacksCoamingManages(t
 		if rec.code != http.StatusOK {
 			t.Fatalf("container detail %s = %d %s", r.Name, rec.code, rec.body)
 		}
-		if d := decode[row](t, rec); d.CoamingStackID != wantContainers[r.Name] {
-			t.Errorf("container detail %s coamingStackId = %q, want %q", r.Name, d.CoamingStackID, wantContainers[r.Name])
+		if d := decode[row](t, rec); d.TierPlanStackID != wantContainers[r.Name] {
+			t.Errorf("container detail %s tierplanStackId = %q, want %q", r.Name, d.TierPlanStackID, wantContainers[r.Name])
 		}
 	}
 	want := map[string]string{"own": "stk-shop", "forged": "", "foreign": ""}
 	secrets := decode[rows](t, f.get(t, e, "secrets")).Items
 	check("secret", secrets, want)
 	for _, r := range secrets {
-		if d := decode[row](t, f.get(t, e, "secrets/"+r.ID)); d.CoamingStackID != want[r.Name] {
-			t.Errorf("secret detail %s coamingStackId = %q, want %q", r.Name, d.CoamingStackID, want[r.Name])
+		if d := decode[row](t, f.get(t, e, "secrets/"+r.ID)); d.TierPlanStackID != want[r.Name] {
+			t.Errorf("secret detail %s tierplanStackId = %q, want %q", r.Name, d.TierPlanStackID, want[r.Name])
 		}
 	}
 	configs := decode[rows](t, f.get(t, e, "configs")).Items
 	check("config", configs, want)
 	for _, r := range configs {
-		if d := decode[row](t, f.get(t, e, "configs/"+r.ID)); d.CoamingStackID != want[r.Name] {
-			t.Errorf("config detail %s coamingStackId = %q, want %q", r.Name, d.CoamingStackID, want[r.Name])
+		if d := decode[row](t, f.get(t, e, "configs/"+r.ID)); d.TierPlanStackID != want[r.Name] {
+			t.Errorf("config detail %s tierplanStackId = %q, want %q", r.Name, d.TierPlanStackID, want[r.Name])
 		}
 	}
 }

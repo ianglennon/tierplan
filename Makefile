@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-PKG := github.com/ianglennon/coaming/internal/buildinfo
+PKG := github.com/ianglennon/tierplan/internal/buildinfo
 
 # The three Go modules: the server (the root), the agent and the shared wire
 # protocol they both import. Every Go gate (test, lint, tidy-check) loops over
@@ -29,15 +29,15 @@ web:
 	touch web/dist/.gitkeep  # Vite empties outDir
 
 build: web
-	CGO_ENABLED=0 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o bin/coaming ./cmd/coaming
+	CGO_ENABLED=0 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o bin/tierplan ./cmd/tierplan
 
 # sqlc runs through `go run` at a pinned version, so nothing is added to go.mod.
 SQLC_VERSION := v1.31.1
 
 gen:
-	go run ./cmd/coaming openapi > openapi.json
-	go run ./cmd/coaming permissions --format markdown > docs/permissions.md
-	go run ./cmd/coaming permissions --format typescript > web/src/api/permissions.gen.ts
+	go run ./cmd/tierplan openapi > openapi.json
+	go run ./cmd/tierplan permissions --format markdown > docs/permissions.md
+	go run ./cmd/tierplan permissions --format typescript > web/src/api/permissions.gen.ts
 	pnpm -C web exec openapi-typescript ../openapi.json -o src/api/schema.d.ts
 	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	node scripts/gen-notices.mjs
@@ -119,7 +119,7 @@ STRESS_BUDGET := 330m
 test-stress:
 	@GOTESTSUM='$(GOTESTSUM)' TEST_RESULTS=$(TEST_RESULTS) TEST_BUDGET=$(STRESS_BUDGET) scripts/stress.sh $(STRESS_SHARD)
 
-# Takes the fixed-name e2e stack (project coaming-e2e, subnet 172.30.0.0/24, ports
+# Takes the fixed-name e2e stack (project tierplan-e2e, subnet 172.30.0.0/24, ports
 # 8443 and 8444, two privileged dind containers) down with its volumes and any
 # orphan. Idempotent: it succeeds when nothing is running. The recipe above traps
 # EXIT for this, but a make that is terminated under dash never runs the trap
@@ -134,11 +134,11 @@ e2e-down:
 test-summary:
 	scripts/test-summary.sh $(TEST_RESULTS)/*.json
 
-# Real-engine tests (D-28), build tag `integration`. With COAMING_TEST_DOCKER_HOST
+# Real-engine tests (D-28), build tag `integration`. With TIERPLAN_TEST_DOCKER_HOST
 # set (CI points it at the dind service) they use that engine; without it each
-# run starts docker:<N>-dind (N is COAMING_TEST_ENGINE, default 29) with testcontainers, so the
+# run starts docker:<N>-dind (N is TIERPLAN_TEST_ENGINE, default 29) with testcontainers, so the
 # machine needs a Docker it can reach. The agent tests always start their own
-# dind (they need a network the in-process Coaming is reachable on) and load the
+# dind (they need a network the in-process TierPlan is reachable on) and load the
 # agent image into it, so the image is built first.
 #
 # Only the packages whose tests change under the tag run (D-05 shuffles them):
@@ -154,7 +154,7 @@ test-int: agent-image
 	$(GOTESTSUM) --format pkgname --jsonfile $(TEST_RESULTS)/integration.json -- -tags=integration -race -count=1 -shuffle=on -timeout 30m $$pkgs
 
 # The multi-node suite (D-57, D-58), build tag `swarm`: real agents in a dind swarm
-# of 3 managers and 1 worker, for the engine COAMING_TEST_ENGINE names (default
+# of 3 managers and 1 worker, for the engine TIERPLAN_TEST_ENGINE names (default
 # 29). Needs Docker it can reach, with buildx for the agent image. Only the
 # swarm-tagged package (internal/agents) runs, derived like test-int's list. One
 # engine took about 17 minutes on a developer machine when every internal package
@@ -193,12 +193,12 @@ dev:
 # web/dist on disk as it is at the moment (it is not rebuilt by Vite's dev server).
 #
 # The agent settings are for the local swarm (make dev-swarm) and for development
-# only. COAMING_AGENT_URL is where agents dial: the dev swarm's network sees this
+# only. TIERPLAN_AGENT_URL is where agents dial: the dev swarm's network sees this
 # machine as DEV_SWARM_GATEWAY, and it is plain ws:// because there is no
-# certificate for an address like that. COAMING_AGENT_ALLOW_INSECURE lets those
+# certificate for an address like that. TIERPLAN_AGENT_ALLOW_INSECURE lets those
 # plain connections in, which sends join tokens and Docker answers unencrypted; the
-# server logs a warning at start while it is on. While it is on, the command Coaming
-# shows also sets COAMING_AGENT_ALLOW_INSECURE=true on the agents, which otherwise
+# server logs a warning at start while it is on. While it is on, the command TierPlan
+# shows also sets TIERPLAN_AGENT_ALLOW_INSECURE=true on the agents, which otherwise
 # refuse plain ws:// to another host. Neither belongs anywhere but this
 # target and the proxy smoke test (scripts/proxy-smoke.sh). To let the dev
 # swarm's nodes reach the server, listen on every interface:
@@ -208,20 +208,20 @@ DEV_PUBLIC_URL ?= http://localhost:5173
 DEV_WEB_HOST ?=
 DEV_SWARM_GATEWAY ?= 172.31.250.1
 dev-go:
-	COAMING_LISTEN=$(DEV_LISTEN) COAMING_DATA_DIR=./.devdata COAMING_PUBLIC_URL='$(DEV_PUBLIC_URL)' \
-	COAMING_AGENT_URL=http://$(DEV_SWARM_GATEWAY):7480 COAMING_AGENT_ALLOW_INSECURE=true \
+	TIERPLAN_LISTEN=$(DEV_LISTEN) TIERPLAN_DATA_DIR=./.devdata TIERPLAN_PUBLIC_URL='$(DEV_PUBLIC_URL)' \
+	TIERPLAN_AGENT_URL=http://$(DEV_SWARM_GATEWAY):7480 TIERPLAN_AGENT_ALLOW_INSECURE=true \
 	go run github.com/air-verse/air@v1.67.4 \
 		-tmp_dir .devdata/air \
-		-build.cmd "go build -tags devspa -o .devdata/air/coaming ./cmd/coaming" \
-		-build.bin .devdata/air/coaming \
+		-build.cmd "go build -tags devspa -o .devdata/air/tierplan ./cmd/tierplan" \
+		-build.bin .devdata/air/tierplan \
 		-build.args_bin serve \
 		-build.include_ext go \
 		-build.exclude_dir web,bin,.devdata,.git,.planning,.claude,scripts
 
-# COAMING_DEV_PUBLIC_URL lets the public URL's host name past Vite's host check
+# TIERPLAN_DEV_PUBLIC_URL lets the public URL's host name past Vite's host check
 # (web/vite.config.ts); without it Vite answers only localhost and IP addresses.
 dev-web:
-	COAMING_DEV_PUBLIC_URL='$(DEV_PUBLIC_URL)' pnpm -C web dev $(if $(DEV_WEB_HOST),--host $(DEV_WEB_HOST))
+	TIERPLAN_DEV_PUBLIC_URL='$(DEV_PUBLIC_URL)' pnpm -C web dev $(if $(DEV_WEB_HOST),--host $(DEV_WEB_HOST))
 
 # A local Docker Swarm of three managers and a worker (docker:29-dind, privileged),
 # with the agent built from this tree loaded on every node (D-60). The command it
@@ -301,14 +301,14 @@ GORELEASER := go run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 release-check:
 	$(GORELEASER) check
 	@mkdir -p bin
-	$(GORELEASER) build --snapshot --clean --single-target --id coaming --output bin/coaming-release
-	@v="$$(bin/coaming-release version)"; echo "$$v"; \
+	$(GORELEASER) build --snapshot --clean --single-target --id tierplan --output bin/tierplan-release
+	@v="$$(bin/tierplan-release version)"; echo "$$v"; \
 	case "$$v" in \
 	  v[0-9]*) ;; \
 	  *) echo "release-check: the release binary reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
 	esac
-	$(GORELEASER) build --snapshot --clean --single-target --id coaming-agent --output bin/coaming-agent-release
-	@v="$$(bin/coaming-agent-release --version)"; echo "$$v"; \
+	$(GORELEASER) build --snapshot --clean --single-target --id tierplan-agent --output bin/tierplan-agent-release
+	@v="$$(bin/tierplan-agent-release --version)"; echo "$$v"; \
 	case "$$v" in \
 	  v[0-9]*) ;; \
 	  *) echo "release-check: the release agent reports '$$v', expected a version that starts with v and a number" >&2; exit 1 ;; \
@@ -325,25 +325,25 @@ image-smoke:
 	scripts/image-smoke.sh
 
 # The agent image for this machine's architecture, tagged AGENT_TAG (default
-# coaming-agent:dev) and loaded into the local engine. The context is laid out as goreleaser lays it
-# out: $TARGETPLATFORM/coaming-agent plus agent/image/state/. The binary is a
+# tierplan-agent:dev) and loaded into the local engine. The context is laid out as goreleaser lays it
+# out: $TARGETPLATFORM/tierplan-agent plus agent/image/state/. The binary is a
 # plain build (version "dev"); set AGENT_VERSION=v0.1.0 to stamp one. The
 # self-update tests build two, make agent-image AGENT_VERSION=v0.2.0
-# AGENT_TAG=coaming-agent:v0.2.0 and the same for v0.2.1. Needs Docker with buildx.
+# AGENT_TAG=tierplan-agent:v0.2.0 and the same for v0.2.1. Needs Docker with buildx.
 AGENT_ARCH ?= $(shell go env GOARCH)
 AGENT_CTX := .devdata/agent-image
-AGENT_VERSION_PKG := github.com/ianglennon/coaming/agent/internal/version
-AGENT_TAG ?= coaming-agent:dev
+AGENT_VERSION_PKG := github.com/ianglennon/tierplan/agent/internal/version
+AGENT_TAG ?= tierplan-agent:dev
 agent-image:
 	rm -rf $(AGENT_CTX)
 	mkdir -p $(AGENT_CTX)/linux/$(AGENT_ARCH) $(AGENT_CTX)/agent/image
 	cp -R agent/image/state $(AGENT_CTX)/agent/image/state
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(AGENT_ARCH) go -C agent build -trimpath \
 		-ldflags "-s -w $(if $(AGENT_VERSION),-X $(AGENT_VERSION_PKG).Version=$(AGENT_VERSION))" \
-		-o $(CURDIR)/$(AGENT_CTX)/linux/$(AGENT_ARCH)/coaming-agent ./cmd/coaming-agent
+		-o $(CURDIR)/$(AGENT_CTX)/linux/$(AGENT_ARCH)/tierplan-agent ./cmd/tierplan-agent
 	docker buildx build --platform linux/$(AGENT_ARCH) -f agent/Dockerfile -t $(AGENT_TAG) --load $(AGENT_CTX)
 
-# Runs coaming-agent:dev with the documented hardening flags: UID 1000, no
+# Runs tierplan-agent:dev with the documented hardening flags: UID 1000, no
 # root capability left, no-new-privileges (also without the security option, as
 # a swarm service runs it), a writable state volume and the Docker socket. Needs
 # Docker, python3 and tar.
@@ -351,30 +351,30 @@ agent-image-smoke:
 	scripts/agent-image-smoke.sh
 
 # The build contexts for the :edge images: the binaries laid out as
-# $TARGETPLATFORM/coaming (server) and $TARGETPLATFORM/coaming-agent (agent)
+# $TARGETPLATFORM/tierplan (server) and $TARGETPLATFORM/tierplan-agent (agent)
 # next to their Dockerfiles, as goreleaser does it. CI pushes them with buildx
 # from the main branch.
 edge-context:
 	$(GORELEASER) build --snapshot --clean
 	rm -rf dist/edge dist/edge-agent
 	mkdir -p dist/edge/linux/amd64 dist/edge/linux/arm64
-	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name coaming -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/coaming
-	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name coaming -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/coaming
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_amd64*' -print | head -n 1)" dist/edge/linux/amd64/tierplan
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan -path '*linux_arm64*' -print | head -n 1)" dist/edge/linux/arm64/tierplan
 	cp Dockerfile dist/edge/Dockerfile
 	mkdir -p dist/edge-agent/linux/amd64 dist/edge-agent/linux/arm64 dist/edge-agent/agent/image
-	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name coaming-agent -path '*linux_amd64*' -print | head -n 1)" dist/edge-agent/linux/amd64/coaming-agent
-	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name coaming-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/coaming-agent
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_amd64*' -print | head -n 1)" dist/edge-agent/linux/amd64/tierplan-agent
+	cp "$$(find dist -path 'dist/edge*' -prune -o -type f -name tierplan-agent -path '*linux_arm64*' -print | head -n 1)" dist/edge-agent/linux/arm64/tierplan-agent
 	cp -R agent/image/state dist/edge-agent/agent/image/state
 	cp agent/Dockerfile dist/edge-agent/Dockerfile
 
 # --- End-to-end (D-80, D-59, RESEARCH Pattern 11) ---
-# The built image behind Caddy at https://127.0.0.1:8443/coaming with a generated
+# The built image behind Caddy at https://127.0.0.1:8443/tierplan with a generated
 # certificate, under Docker Compose with a docker:29-dind sidecar it manages and a
 # second dind daemon that plays the remote host, driven by Playwright through
 # setup, sign-in, the dashboard, the audit log, settings and the agent golden
 # path (add an environment, run the copied command, switch to it, revoke it).
 # Needs Docker with buildx and compose. Build outputs live under .devdata/, which
-# is git-ignored. COAMING_E2E_HTTPS_PORT moves the published port off 8443.
+# is git-ignored. TIERPLAN_E2E_HTTPS_PORT moves the published port off 8443.
 E2E_DIST := .devdata/dist-e2e
 E2E_TLS := .devdata/e2e-tls
 E2E_COMPOSE := docker compose -f e2e/compose.yaml
@@ -387,30 +387,30 @@ E2E_BROWSER_ARGS ?= --with-deps chromium
 E2E_ARGS ?=
 
 # The image under test: a linux/amd64 binary with the SPA embedded, wrapped by
-# the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/coaming in
-# the build context), tagged coaming:e2e and loaded into the local engine.
+# the release Dockerfile the way goreleaser does it ($TARGETPLATFORM/tierplan in
+# the build context), tagged tierplan:e2e and loaded into the local engine.
 e2e-image: web
 	mkdir -p $(E2E_DIST)/linux/amd64
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/coaming ./cmd/coaming
-	docker buildx build --platform linux/amd64 -f Dockerfile -t coaming:e2e --load $(E2E_DIST)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath $(if $(LDFLAGS),-ldflags "$(LDFLAGS)") -o $(E2E_DIST)/linux/amd64/tierplan ./cmd/tierplan
+	docker buildx build --platform linux/amd64 -f Dockerfile -t tierplan:e2e --load $(E2E_DIST)
 
-# Coaming behind Caddy, nginx and Traefik, each with the file in docs/proxy, at
-# the root of a host and at /coaming: the index and its base meta, /api/version, a
+# TierPlan behind Caddy, nginx and Traefik, each with the file in docs/proxy, at
+# the root of a host and at /tierplan: the index and its base meta, /api/version, a
 # WebSocket upgrade of the agent endpoint, an unbuffered event stream, and three
-# deliberately broken nginx setups that Coaming must notice. Needs Docker, curl
+# deliberately broken nginx setups that TierPlan must notice. Needs Docker, curl
 # and jq; the proxy images are pulled when they are not local. One PASS or FAIL
 # line per check; any FAIL fails the target.
 proxy-smoke: e2e-image
 	scripts/proxy-smoke.sh
 
-# D-23: removes the containers, networks and volumes labelled coaming.ci.owner=
-# $COAMING_CI_OWNER (the smokes label what they create) and nothing else. ci.yml runs
-# it in an if: always() step of every job that uses Docker. Needs COAMING_CI_OWNER.
+# D-23: removes the containers, networks and volumes labelled tierplan.ci.owner=
+# $TIERPLAN_CI_OWNER (the smokes label what they create) and nothing else. ci.yml runs
+# it in an if: always() step of every job that uses Docker. Needs TIERPLAN_CI_OWNER.
 ci-clean:
 	scripts/ci-clean.sh
 
 # D-23: docker system df, and a failure naming the filesystem when the workspace or
-# Docker's root has less than COAMING_CI_MIN_FREE_GB (default 20) free.
+# Docker's root has less than TIERPLAN_CI_MIN_FREE_GB (default 20) free.
 ci-preflight:
 	scripts/ci-preflight.sh
 
@@ -441,13 +441,13 @@ upgrade-smoke: e2e-image agent-image
 	pnpm -C $(UPGRADE_BASE_DIR)/web build; \
 	touch $(UPGRADE_BASE_DIR)/web/dist/.gitkeep; \
 	mkdir -p $(UPGRADE_BASE_CTX)/linux/amd64; \
-	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/coaming ./cmd/coaming); \
-	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t coaming:base --load $(UPGRADE_BASE_CTX); \
-	BASE_IMAGE=coaming:base HEAD_IMAGE=coaming:e2e AGENT_IMAGE=coaming-agent:dev scripts/upgrade-smoke.sh
+	(cd $(UPGRADE_BASE_DIR) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o $(CURDIR)/$(UPGRADE_BASE_CTX)/linux/amd64/tierplan ./cmd/tierplan); \
+	docker buildx build --platform linux/amd64 -f $(UPGRADE_BASE_DIR)/Dockerfile -t tierplan:base --load $(UPGRADE_BASE_CTX); \
+	BASE_IMAGE=tierplan:base HEAD_IMAGE=tierplan:e2e AGENT_IMAGE=tierplan-agent:dev scripts/upgrade-smoke.sh
 
 # The restore-over-a-running-container proof (D-30, PLAT-03, RESEARCH A3/A5): in the
 # shipped image with no restart policy, restore a backup through the web UI's API and
-# check that Coaming re-executed itself with PID 1 intact (same State.Pid, StartedAt and
+# check that TierPlan re-executed itself with PID 1 intact (same State.Pid, StartedAt and
 # RestartCount), the restored accounts sign in, an account made after the backup does not,
 # and the audit chain verifies. RESTART_MODE=exit proves the fallback (the process
 # exits and a restart policy starts it) with the same checks. One PASS or FAIL line per
@@ -455,7 +455,7 @@ upgrade-smoke: e2e-image agent-image
 restore-smoke: e2e-image
 	scripts/restore-smoke.sh
 
-# The clipboard fallback in a real Chromium on an insecure origin (http://coaming.test
+# The clipboard fallback in a real Chromium on an insecure origin (http://tierplan.test
 # mapped to 127.0.0.1, so there is no navigator.clipboard), against the real
 # CopyableCode plain, inside a Dialog and inside an AlertDialog (G-02-1a). jsdom
 # cannot show that bug. Needs no Docker.
@@ -467,7 +467,7 @@ e2e-copy:
 
 # The certificate the proxy serves is generated here (7 days, SANs 127.0.0.1,
 # localhost and the proxy's address on the compose network) with its SPKI pin,
-# which the agent spec gives the agent as COAMING_AGENT_PIN. The agent image is
+# which the agent spec gives the agent as TIERPLAN_AGENT_PIN. The agent image is
 # built and loaded into the remote host's Docker under the name the install
 # command uses for an edge server, so the run needs no registry.
 # The browser runs in the stack (the browser service, out of reach of the host's
@@ -475,21 +475,21 @@ e2e-copy:
 # for the copy suite and for running a spec by hand without the stack's browser.
 # The stack is always torn down, with its volumes, whatever the tests do, and
 # the exit status is the tests' own. A failed run prints the container logs.
-E2E_BROWSER_WS = ws://127.0.0.1:$${COAMING_E2E_BROWSER_PORT:-8444}/
+E2E_BROWSER_WS = ws://127.0.0.1:$${TIERPLAN_E2E_BROWSER_PORT:-8444}/
 e2e: e2e-image agent-image
 	@set -e; \
 	go run scripts/e2e-cert.go -out $(E2E_TLS); \
 	pnpm -C e2e install --frozen-lockfile; \
 	trap '$(E2E_COMPOSE) down -v --remove-orphans' EXIT; \
 	$(E2E_COMPOSE) up -d --wait || { $(E2E_COMPOSE) logs --no-color --tail 100; exit 1; }; \
-	docker save coaming-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
-	$(E2E_COMPOSE) exec -T agenthost docker tag coaming-agent:dev ghcr.io/ianglennon/coaming-agent:edge; \
+	docker save tierplan-agent:dev | $(E2E_COMPOSE) exec -T agenthost docker load; \
+	$(E2E_COMPOSE) exec -T agenthost docker tag tierplan-agent:dev ghcr.io/ianglennon/tierplan-agent:edge; \
 	pnpm -C e2e exec playwright install $(E2E_BROWSER_ARGS); \
 	status=0; \
-	COAMING_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test $(E2E_ARGS) || status=$$?; \
+	TIERPLAN_E2E_BROWSER_WS=$(E2E_BROWSER_WS) pnpm -C e2e exec playwright test $(E2E_ARGS) || status=$$?; \
 	if [ "$$status" -ne 0 ]; then \
-		$(E2E_COMPOSE) logs --no-color --tail 100 coaming || true; \
+		$(E2E_COMPOSE) logs --no-color --tail 100 tierplan || true; \
 		$(E2E_COMPOSE) logs --no-color --tail 50 caddy || true; \
-		$(E2E_COMPOSE) exec -T agenthost docker logs --tail 50 coaming-agent || true; \
+		$(E2E_COMPOSE) exec -T agenthost docker logs --tail 50 tierplan-agent || true; \
 	fi; \
 	exit $$status

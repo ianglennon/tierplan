@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // seenWriteEvery is how stale a network's last-in-use time must be before it is written again.
@@ -21,12 +21,12 @@ import (
 // (D-09, T-10-25).
 const seenWriteEvery = 5 * time.Minute
 
-// StackFacts is what Coaming's own stacks know about the networks of an environment. The stack
+// StackFacts is what TierPlan's own stacks know about the networks of an environment. The stack
 // manager implements it (stackops.NetFacts); this package never imports the stacks.
 type StackFacts interface {
-	// Stacks are the names and the IDs of the Coaming stacks of the environment.
+	// Stacks are the names and the IDs of the TierPlan stacks of the environment.
 	Stacks(ctx context.Context, envID string) (names, ids map[string]bool, err error)
-	// ExternalNetworks are the names of the networks any Coaming stack of the environment
+	// ExternalNetworks are the names of the networks any TierPlan stack of the environment
 	// declares external. unknown names the stacks that did not load, whose declarations are
 	// therefore not known.
 	ExternalNetworks(ctx context.Context, envID string) (names map[string]bool, unknown []string, err error)
@@ -34,7 +34,7 @@ type StackFacts interface {
 	Busy(envID string) (stackName string, ok bool)
 }
 
-// WithStackFacts sets where the orphan check learns about Coaming's stacks. It returns s, and is
+// WithStackFacts sets where the orphan check learns about TierPlan's stacks. It returns s, and is
 // called before the reader is used.
 func (s *AddressSpaces) WithStackFacts(f StackFacts) *AddressSpaces {
 	s.facts = f
@@ -42,7 +42,7 @@ func (s *AddressSpaces) WithStackFacts(f StackFacts) *AddressSpaces {
 }
 
 // OrphanRow is one network the orphan check lists: orphaned (its stack is gone), unused (no stack
-// ever owned it) or cant_tell (Coaming cannot be sure).
+// ever owned it) or cant_tell (TierPlan cannot be sure).
 type OrphanRow struct {
 	NetworkID, Name, Node, NodeID, Scope, Driver string
 	// Builtin is true for the engine's or swarm's own network, a config-only network and the
@@ -54,7 +54,7 @@ type OrphanRow struct {
 	// is stack or project; both are empty for a network with no owner label.
 	FormerOwner, FormerOwnerKind string
 	// IdleSince is when the network's idle time started: the later of its creation and the last
-	// time Coaming saw it in use. IdleFromSeen is true when that was the last time seen in use.
+	// time TierPlan saw it in use. IdleFromSeen is true when that was the last time seen in use.
 	IdleSince    time.Time
 	IdleFromSeen bool
 }
@@ -290,7 +290,7 @@ func (s *AddressSpaces) Recheck(ctx context.Context, envID, networkID, nodeID st
 }
 
 // KeptRow is one network kept out of the orphan list (D-11): by a keep row a person made, by the
-// coaming.keep=true label on the network, or both.
+// tierplan.keep=true label on the network, or both.
 type KeptRow struct {
 	Name string
 	// Node is the node's name, empty for a swarm-wide network and for a keep row whose node is no
@@ -387,10 +387,10 @@ func (s *AddressSpaces) ForgetOrphans(envID string) {
 	e.omu.Unlock()
 }
 
-// stackKnowledge is what Coaming's own stacks say about an environment, read once for a check.
+// stackKnowledge is what TierPlan's own stacks say about an environment, read once for a check.
 type stackKnowledge struct {
 	names, ids map[string]bool
-	// externals are the names of the networks a Coaming stack declares external; unknown names
+	// externals are the names of the networks a TierPlan stack declares external; unknown names
 	// the stacks that did not load.
 	externals map[string]bool
 	unknown   []string
@@ -398,12 +398,12 @@ type stackKnowledge struct {
 	busy string
 }
 
-// exists reports whether a Coaming stack record has this name or this ID.
+// exists reports whether a TierPlan stack record has this name or this ID.
 func (k stackKnowledge) exists(name, id string) bool {
 	return k.names[name] || (id != "" && k.ids[id])
 }
 
-// stackFacts reads what Coaming's stacks say. With no source of facts no stack record exists and
+// stackFacts reads what TierPlan's stacks say. With no source of facts no stack record exists and
 // nothing is declared external; the workload rule still applies.
 func (s *AddressSpaces) stackFacts(ctx context.Context, envID string) (stackKnowledge, error) {
 	k := stackKnowledge{names: map[string]bool{}, ids: map[string]bool{}, externals: map[string]bool{}, unknown: []string{}}
@@ -422,7 +422,7 @@ func (s *AddressSpaces) stackFacts(ctx context.Context, envID string) (stackKnow
 }
 
 // workloadLabels are the stack and compose-project names that containers and services of an
-// environment still carry, whether or not a Coaming stack of that name exists (user decision 4).
+// environment still carry, whether or not a TierPlan stack of that name exists (user decision 4).
 type workloadLabels struct {
 	stacks, projects map[string]bool
 	// complete is false when a swarm's services could not be read, so a label may be carried by
@@ -471,10 +471,10 @@ func (s *AddressSpaces) workloads(ctx context.Context, envID string, agg Aggrega
 const (
 	labelStackNamespace = "com.docker.stack.namespace"
 	labelComposeProject = "com.docker.compose.project"
-	// labelStackID is the label Coaming puts on what it deploys, the ID of the stack record.
-	labelStackID = "coaming.stack.id"
+	// labelStackID is the label TierPlan puts on what it deploys, the ID of the stack record.
+	labelStackID = "tierplan.stack.id"
 	// labelKeep, set to "true" on a network, exempts it from the orphan check (D-11).
-	labelKeep = "coaming.keep"
+	labelKeep = "tierplan.keep"
 )
 
 // networkOwnerOf is the stack or compose project a network's labels name; a stack wins when both

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 // This file is the agent's only TLS configuration, and the only place in the
@@ -22,9 +22,9 @@ import (
 //  1. With no pin at all, the ordinary way: the certificate chains to a root
 //     the system trusts and names the host the agent dialled.
 //  2. A pin whose SPKI hash is the hash of the server's own certificate. A
-//     self-signed Coaming cannot be verified by a chain, so the pin is the
+//     self-signed TierPlan cannot be verified by a chain, so the pin is the
 //     verification.
-//  3. A pin from COAMING_AGENT_PIN on a certificate authority in the chain the
+//  3. A pin from TIERPLAN_AGENT_PIN on a certificate authority in the chain the
 //     server presents, for a private-CA proxy: the pinned certificate becomes the
 //     only trust anchor and the server's certificate must verify against it, for
 //     the host that was dialled. Merely sending the authority's certificate along
@@ -32,7 +32,7 @@ import (
 //
 // With pins set, a certificate that verifies against the system roots is still
 // accepted. A pin never makes an agent distrust what any client would trust, so
-// an administrator who moves Coaming from its self-signed certificate to a public
+// an administrator who moves TierPlan from its self-signed certificate to a public
 // one does not strand the agents that stored the old pin.
 //
 // Go checks a self-signed certificate through VerifyConnection only when the
@@ -41,7 +41,7 @@ import (
 // above, in its place. For wss:// there is no other way to a verified-by-pin
 // connection and no setting, variable or error path that leaves a connection
 // unverified. Plain ws:// is not TLS at all: it is dialed only to a loopback host,
-// or to another host when COAMING_AGENT_ALLOW_INSECURE is set on the agent, which
+// or to another host when TIERPLAN_AGENT_ALLOW_INSECURE is set on the agent, which
 // is for development (T-02-31). Nothing learned over such a session is kept
 // (pushes are taken only over a verified wss:// session).
 
@@ -77,7 +77,7 @@ func asUntrusted(err error) *UntrustedError {
 }
 
 // tlsConfig is the configuration the agent dials with. pins are the pins stored
-// from welcomes and installPins the ones from COAMING_AGENT_PIN; roots replaces
+// from welcomes and installPins the ones from TIERPLAN_AGENT_PIN; roots replaces
 // the system roots, for a test, and is nil in production. host is the name or
 // address being dialled, the one a certificate must be valid for: the connection
 // state does not carry it when the agent dials an IP address, so it is given here.
@@ -147,7 +147,7 @@ func verifyServer(cs tls.ConnectionState, pins, installPins []string, roots *x50
 	return nil
 }
 
-// newHTTPClient is the client the agent dials Coaming with. It honours
+// newHTTPClient is the client the agent dials TierPlan with. It honours
 // HTTPS_PROXY, HTTP_PROXY and NO_PROXY from the environment, and uses tlsConfig
 // for host.
 func newHTTPClient(pins, installPins []string, roots *x509.CertPool, host string) *http.Client {
@@ -163,7 +163,7 @@ func newHTTPClient(pins, installPins []string, roots *x509.CertPool, host string
 	tr.ForceAttemptHTTP2 = false
 	return &http.Client{
 		Transport: tr,
-		// The certificate is checked for the host in COAMING_AGENT_URL, so the
+		// The certificate is checked for the host in TIERPLAN_AGENT_URL, so the
 		// agent never follows a redirect to another one.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

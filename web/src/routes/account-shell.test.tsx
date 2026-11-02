@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -144,7 +144,7 @@ describe("account and warnings in the app shell", () => {
   it("shows an admin the bell and, for a data directory that is lost with the container, the banner above the header", async () => {
     warnings = [
       { id: "data_not_persisted", reason: "not a mount point" },
-      { id: "key_backup", keyPath: "/data/coaming.key" },
+      { id: "key_backup", keyPath: "/data/tierplan.key" },
     ];
     renderAt("/");
     expect(await screen.findByRole("button", { name: "Warnings, 1 item" })).toBeTruthy();

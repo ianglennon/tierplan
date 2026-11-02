@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // stubMaint is a selfmaint.Service that records what it was asked and answers as
@@ -168,13 +168,13 @@ func (r *maintRig) heartbeats(n int) {
 func TestAnUpdateMessageReachesSelfMaintenanceAndItsResultGoesBackWithTheID(t *testing.T) {
 	svc := &stubMaint{}
 	r := newMaintRig(t, svc)
-	r.send(`{"t":"update","id":"req-1","image":"ghcr.io/ianglennon/coaming-agent:0.2.1","futureField":[1]}`)
+	r.send(`{"t":"update","id":"req-1","image":"ghcr.io/ianglennon/tierplan-agent:0.2.1","futureField":[1]}`)
 	res := r.result()
 	if !res.OK || res.ID != "req-1" || res.T != wire.TypeUpdateResult {
 		t.Fatalf("result = %+v", res)
 	}
 	got := svc.gotUpdates()
-	if len(got) != 1 || got[0].Image != "ghcr.io/ianglennon/coaming-agent:0.2.1" || got[0].ID != "req-1" {
+	if len(got) != 1 || got[0].Image != "ghcr.io/ianglennon/tierplan-agent:0.2.1" || got[0].ID != "req-1" {
 		t.Fatalf("self-maintenance got %+v", got)
 	}
 }
@@ -254,7 +254,7 @@ func maintScript(t *testing.T) func(int, wire.Auth) reply {
 	t.Helper()
 	return func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{
-			`{"t":"update","id":"upd-1","image":"ghcr.io/ianglennon/coaming-agent:0.2.1"}`,
+			`{"t":"update","id":"upd-1","image":"ghcr.io/ianglennon/tierplan-agent:0.2.1"}`,
 			`{"t":"uninstall","id":"un-1","removeData":true,"service":true}`,
 		}}
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // The account lifecycle routes (plan 03-14, AUTH-04, D-22c, D-02). Negative

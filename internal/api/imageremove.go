@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -13,12 +13,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 const (
@@ -60,7 +60,7 @@ type ImageRemoveResult struct {
 	NodeID  string `json:"nodeId" doc:"The node ID the request named"`
 	ImageID string `json:"imageId" doc:"The image ID the request named"`
 	Result  string `json:"result" enum:"done,failed,skipped" doc:"done: the image and all its names are gone from the node. failed: it was refused or could not be sent; code says why. skipped: not acted on because the image has a name and the request was a bulk delete of dangling images; code is not_dangling"`
-	Code    string `json:"code,omitempty" enum:"image_in_use,not_dangling,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
+	Code    string `json:"code,omitempty" enum:"image_in_use,not_dangling,not_found,node_unreachable,host_read_only,agent_policy_denied,action_failed" doc:"Why a target failed or was skipped. not_dangling (with result skipped): the image has a name and the request was a bulk delete of dangling images; nothing was sent. image_in_use: a container on the node, running or not, or a swarm service spec references the image; nothing was removed and detail names up to 5 users. not_found: the node has no such image, so it is already gone. node_unreachable: the node is not a connected node of this environment, its engine did not answer, or on a swarm no manager could be asked for the services; nothing was removed. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent. agent_policy_denied: the node's agent refused the call by its own policy. action_failed: the engine refused it; detail has its message"`
 	Detail  string `json:"detail,omitempty" doc:"A plain sentence, or for action_failed the engine's message, at most 300 characters"`
 }
 
@@ -303,7 +303,7 @@ func runImageOp(ctx context.Context, d ImagesDeps, envID string, chk imageCheck,
 		if out.ref == "" {
 			out.ref = shortImageID(op.imageID)
 		}
-		return fail(codeNodeUnreachable, "The node is not connected to Coaming.")
+		return fail(codeNodeUnreachable, "The node is not connected to TierPlan.")
 	}
 	i := slices.IndexFunc(chk.agg.Images, func(r envs.ImageRow) bool { return r.NodeID == op.nodeID && r.ID == op.imageID })
 	if i < 0 {

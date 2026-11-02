@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -672,7 +672,7 @@ describe("CreateNetworkDialog (subnet picker)", () => {
     await typeName(dialog, "app-net");
     fireEvent.click(within(dialog).getByRole("button", { name: "Create network" }));
     expect((await within(dialog).findByRole("alert")).textContent).toContain(
-      "The swarm didn't give this network an address range, so Coaming removed it again.",
+      "The swarm didn't give this network an address range, so TierPlan removed it again.",
     );
   });
 

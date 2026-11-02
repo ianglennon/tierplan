@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package instance holds the instance settings every request reads: the display
 // name (D-03), the public URL that drives the Origin guard and the session
@@ -22,11 +22,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // Settings keys.
@@ -40,7 +40,7 @@ const (
 	SettingShellIdleMinutes = "shell_idle_minutes"
 	SettingShellMaxPerUser  = "shell_max_per_user"
 
-	// SettingStackRevisionsKept is how many revisions of each stack Coaming keeps (D-01): the
+	// SettingStackRevisionsKept is how many revisions of each stack TierPlan keeps (D-01): the
 	// newest N, plus the deployed one and any still deploying.
 	SettingStackRevisionsKept = "stack_revisions_kept"
 )
@@ -61,13 +61,13 @@ const (
 	MaxStackRevisionsKept     = 200
 )
 
-// ErrPublicURLLocked is returned by SetTx when COAMING_PUBLIC_URL fixes the
+// ErrPublicURLLocked is returned by SetTx when TIERPLAN_PUBLIC_URL fixes the
 // public URL and the caller asks for a different one (D-04).
-var ErrPublicURLLocked = errors.New("the public URL is fixed by COAMING_PUBLIC_URL")
+var ErrPublicURLLocked = errors.New("the public URL is fixed by TIERPLAN_PUBLIC_URL")
 
-// ErrAgentURLLocked is returned by SetAgentURLTx when COAMING_AGENT_URL fixes the
+// ErrAgentURLLocked is returned by SetAgentURLTx when TIERPLAN_AGENT_URL fixes the
 // agent URL and the caller asks for a different one (D-18).
-var ErrAgentURLLocked = errors.New("the agent URL is fixed by COAMING_AGENT_URL")
+var ErrAgentURLLocked = errors.New("the agent URL is fixed by TIERPLAN_AGENT_URL")
 
 // Instance caches the instance name, the public URL and the agent URL.
 type Instance struct {
@@ -85,7 +85,7 @@ type Instance struct {
 	revisionsKept atomic.Int64
 }
 
-// Load reads the stored settings. When COAMING_PUBLIC_URL is set it wins over
+// Load reads the stored settings. When TIERPLAN_PUBLIC_URL is set it wins over
 // any stored value and the instance is locked: the stored value is neither read
 // nor written, so removing the variable later falls back to what was stored.
 func Load(ctx context.Context, s *store.Store, cfg config.Config) (*Instance, error) {
@@ -172,8 +172,8 @@ func (i *Instance) Secure() bool {
 	return strings.HasPrefix(i.PublicOrigin(), "https://")
 }
 
-// BasePath is the escaped path of the public URL, for example "/coaming" for
-// https://example.com/coaming, and "" when there is no public URL or it has no
+// BasePath is the escaped path of the public URL, for example "/tierplan" for
+// https://example.com/tierplan, and "" when there is no public URL or it has no
 // path. It is the single source of the base every link, asset URL and cookie
 // scope derives from (D-50, D-51), and is read per request so a change takes
 // effect at once. PublicURL is already free of a trailing slash.
@@ -191,7 +191,7 @@ func (i *Instance) CookieScope() auth.CookieScope {
 	return auth.CookieScope{Secure: i.Secure(), BasePath: i.BasePath()}
 }
 
-// Locked reports whether COAMING_PUBLIC_URL fixes the public URL.
+// Locked reports whether TIERPLAN_PUBLIC_URL fixes the public URL.
 func (i *Instance) Locked() bool { return i.locked }
 
 // SetTx stores the name, and the public URL unless it is locked, inside the
@@ -230,7 +230,7 @@ func (i *Instance) Apply(name, publicURL string) {
 // public URL.
 func (i *Instance) AgentURL() string { return *i.agentURL.Load() }
 
-// AgentURLLocked reports whether COAMING_AGENT_URL fixes the agent URL.
+// AgentURLLocked reports whether TIERPLAN_AGENT_URL fixes the agent URL.
 func (i *Instance) AgentURLLocked() bool { return i.agentLocked }
 
 // AgentBase is the URL agents are told to dial: the agent URL when one is set,
@@ -261,7 +261,7 @@ func (i *Instance) AgentEndpoint() string {
 
 // SetAgentURLTx stores the agent URL inside the caller's write transaction, with
 // "" clearing it. Like SetTx it leaves the cache alone: call ApplyAgentURL after
-// the commit. When COAMING_AGENT_URL fixes the URL a different value is refused
+// the commit. When TIERPLAN_AGENT_URL fixes the URL a different value is refused
 // with ErrAgentURLLocked, and the fixed one is never copied into the settings
 // table, so removing the variable later falls back to what was stored.
 func (i *Instance) SetAgentURLTx(ctx context.Context, tx *sql.Tx, q *sqlc.Queries, agentURL string) error {

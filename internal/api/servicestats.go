@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
 )
 
 // The aggregate stats streams (plan 06-33, RES-11, D-29, D-31): the totals of a service with
@@ -214,7 +214,7 @@ type swarmStatsRead struct {
 	service dockerx.ServiceRow
 	// tasks are the running tasks that have a container, newest first.
 	tasks []dockerx.TaskRow
-	// targets maps the swarm node IDs that Coaming can reach now to the node the hub asks.
+	// targets maps the swarm node IDs that TierPlan can reach now to the node the hub asks.
 	targets map[string]envs.NodeRef
 	// partial is true when the tasks were cut to maxNodeStatsTasks.
 	partial bool

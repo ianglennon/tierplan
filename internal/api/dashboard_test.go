@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -14,16 +14,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The environment summary and the four read-only lists (plan 18, ENV-07, PLAT-06,
@@ -154,7 +154,7 @@ func richEngine() dockertest.FakeConfig {
 	return dockertest.FakeConfig{
 		Hostname: "node-1", Version: "29.1.0",
 		Containers: []dockertest.FakeContainer{
-			{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/coaming"}, Image: "coaming:edge", State: "running", Status: "Up 1 hour", Created: 1700000000,
+			{ID: selfID + "ffffffffffffffffffffffffffffffffffffffffffffffffffff", Names: []string{"/tierplan"}, Image: "tierplan:edge", State: "running", Status: "Up 1 hour", Created: 1700000000,
 				Ports: []dockertest.FakePort{{IP: "0.0.0.0", Private: 8080, Public: 8080, Type: "tcp"}}},
 			{ID: "aaaaaaaaaaaa11111111111111111111111111111111111111111111111111", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours", Created: 1700000100},
 			{ID: "bbbbbbbbbbbb22222222222222222222222222222222222222222222222222", Names: []string{"/db"}, Image: "postgres:17", State: "exited", Status: "Exited (0) 3 hours ago", Created: 1700000200},
@@ -289,7 +289,7 @@ func TestListContainersWithinTheCapIsNotTruncated(t *testing.T) {
 	}
 }
 
-func TestListContainersBadgesOnlyCoamingsOwnContainer(t *testing.T) {
+func TestListContainersBadgesOnlyTierPlansOwnContainer(t *testing.T) {
 	t.Parallel()
 	f, e := dashEnv(t, richEngine())
 	l := decode[listBody[containerItem]](t, f.get(t, e, "containers"))
@@ -299,8 +299,8 @@ func TestListContainersBadgesOnlyCoamingsOwnContainer(t *testing.T) {
 			selfNames = append(selfNames, c.Name)
 		}
 	}
-	if !slices.Equal(selfNames, []string{"coaming"}) {
-		t.Errorf("isSelf is true for %v, want only coaming (D-27)", selfNames)
+	if !slices.Equal(selfNames, []string{"tierplan"}) {
+		t.Errorf("isSelf is true for %v, want only tierplan (D-27)", selfNames)
 	}
 }
 
@@ -313,8 +313,8 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 	if web.State != "running" || web.Status != "Up 2 hours" || web.Image != "nginx:1.27" || web.Created != "2023-11-14T22:15:00Z" || web.ID == "" {
 		t.Errorf("web = %+v", web)
 	}
-	if bay := cs[slices.IndexFunc(cs, func(c containerItem) bool { return c.Name == "coaming" })]; !slices.Equal(bay.Ports, []string{"0.0.0.0:8080->8080/tcp"}) {
-		t.Errorf("coaming ports = %q", bay.Ports)
+	if bay := cs[slices.IndexFunc(cs, func(c containerItem) bool { return c.Name == "tierplan" })]; !slices.Equal(bay.Ports, []string{"0.0.0.0:8080->8080/tcp"}) {
+		t.Errorf("tierplan ports = %q", bay.Ports)
 	}
 
 	is := decode[listBody[imageItem]](t, f.get(t, e, "images")).Items
@@ -339,11 +339,11 @@ func TestListsCarryTheDocumentedColumns(t *testing.T) {
 }
 
 // containerKeys are the only keys a container row may have (T-04-29). Every other
-// label, every mount and every variable stays on the server. coamingStackId is no label: it is the ID
-// of a stack the server confirmed (plan 07-30, T-07-146), empty for a stack Coaming does not manage.
+// label, every mount and every variable stays on the server. tierplanStackId is no label: it is the ID
+// of a stack the server confirmed (plan 07-30, T-07-146), empty for a stack TierPlan does not manage.
 var containerKeys = []string{
 	"node", "nodeId", "id", "name", "state", "status", "image", "created", "ports", "isSelf",
-	"project", "stack", "service", "health", "selfKind", "readOnly", "coamingStackId",
+	"project", "stack", "service", "health", "selfKind", "readOnly", "tierplanStackId",
 }
 
 func TestListsNeverCarryLabelsMountsOrVariables(t *testing.T) {

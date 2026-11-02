@@ -39,7 +39,7 @@ func (q *Queries) FinishBackupRun(ctx context.Context, arg FinishBackupRunParams
 
 const getBackupSchedule = `-- name: GetBackupSchedule :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 SELECT id, enabled, frequency, weekday, time_utc, keep, passphrase_sealed, updated_at, updated_by
 FROM backup_schedule

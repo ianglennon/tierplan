@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -11,8 +11,8 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 )
 
 // A service's tasks, grouped by slot with the history Docker keeps (plan 06-07, RES-04, D-17,
@@ -75,7 +75,7 @@ func tkExited(id, service, node string, slot int, state, desired string, exit in
 	return t
 }
 
-// tkNodes are the nodes of the fixture swarm: the manager Coaming's local socket is, a
+// tkNodes are the nodes of the fixture swarm: the manager TierPlan's local socket is, a
 // ready worker, a worker that is down and one that is disconnected.
 func tkNodes() []dockertest.FakeNode {
 	return []dockertest.FakeNode{

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup_test
 
@@ -15,12 +15,12 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Backing up everything git (plan 09-32, PLAT-03, P3 D-28): the credentials, repositories, git stacks and webhooks

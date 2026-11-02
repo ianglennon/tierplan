@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -131,13 +131,13 @@ describe("CreateUserDialog", () => {
     expect(screen.getByRole("dialog", { name: "Create user" })).toBeTruthy();
     expect(
       screen.getByText(
-        "They get a one-time link to choose their own password. Coaming doesn't send email.",
+        "They get a one-time link to choose their own password. TierPlan doesn't send email.",
       ),
     ).toBeTruthy();
     expect(
       screen.getByText(/3 to 32 characters: letters, numbers, dot, dash or underscore/),
     ).toBeTruthy();
-    expect(screen.getByText("Nothing uses it yet. Coaming sends no email.")).toBeTruthy();
+    expect(screen.getByText("Nothing uses it yet. TierPlan sends no email.")).toBeTruthy();
 
     fill("Alice", { displayName: " Alice L ", email: "alice@example.test" });
     submit();
@@ -271,7 +271,7 @@ describe("CreateUserDialog errors", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(
-      "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+      "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening.",
     );
     expect(screen.getByRole("dialog", { name: "Create user" })).toBeTruthy();
     expect(document.querySelector("[data-sonner-toast]")).toBeNull();
@@ -285,7 +285,7 @@ describe("CreateUserDialog errors", () => {
     fill("alice");
     submit();
     expect((await screen.findByRole("alert")).textContent).toBe(
-      "Can't reach Coaming. Check your connection and try again.",
+      "Can't reach TierPlan. Check your connection and try again.",
     );
   });
 

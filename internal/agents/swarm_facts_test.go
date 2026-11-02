@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // These checks run the product's own Docker code against a real swarm, where the
@@ -175,8 +175,8 @@ func sharedRealEngineFacts(t *testing.T, f *swarmFix) {
 
 	// The agent service is found by its label and not its name: the check the
 	// stack-file install relies on, here proved on the service as installed.
-	if out := strings.TrimSpace(sh(t, f.sw.Managers[0], "docker service ls --filter label=coaming.agent=true --format '{{.Name}}'")); out != agentName {
-		t.Errorf("services labelled coaming.agent=true = %q, want %s", out, agentName)
+	if out := strings.TrimSpace(sh(t, f.sw.Managers[0], "docker service ls --filter label=tierplan.agent=true --format '{{.Name}}'")); out != agentName {
+		t.Errorf("services labelled tierplan.agent=true = %q, want %s", out, agentName)
 	}
 
 	// The environment's agent count is what the service says: running tasks.

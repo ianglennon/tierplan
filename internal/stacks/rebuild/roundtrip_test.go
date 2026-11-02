@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rebuild_test
 
@@ -17,10 +17,10 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The offline oracle of the swarm rebuilder (plan 08-11, D-20): converting a compose file, rebuilding the compose
@@ -113,12 +113,12 @@ func inputOf(name string, plan convert.Plan, objs plannedObjects) rebuild.SwarmI
 	return in
 }
 
-// withoutOwnLabels returns the spec as the review compares it, without the labels Coaming puts on what it makes.
+// withoutOwnLabels returns the spec as the review compares it, without the labels TierPlan puts on what it makes.
 func withoutOwnLabels(s swarm.ServiceSpec) swarm.ServiceSpec {
 	s = stacks.NormalizeSpec(s)
 	for _, labels := range []map[string]string{s.Labels, s.TaskTemplate.ContainerSpec.Labels} {
 		for k := range labels {
-			if strings.HasPrefix(k, "coaming.") {
+			if strings.HasPrefix(k, "tierplan.") {
 				delete(labels, k)
 			}
 		}

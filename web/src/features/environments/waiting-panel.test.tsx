@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
@@ -17,7 +17,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   useNavigate: () => navigate,
 }));
 
-const URL_ = "wss://coaming.example.com/agent/connect";
+const URL_ = "wss://tierplan.example.com/agent/connect";
 const KEY = environmentsQuery.queryKey;
 
 function item(extra: Partial<EnvironmentItem> = {}): EnvironmentItem {
@@ -243,7 +243,7 @@ describe("WaitingPanel", () => {
       }).format(at);
       const row = screen.getByRole("listitem");
       expect(
-        within(row).getByText("Refused: Coaming rejected the agent's credentials."),
+        within(row).getByText("Refused: TierPlan rejected the agent's credentials."),
       ).toBeTruthy();
       expect(
         within(row).getByText(
@@ -315,11 +315,11 @@ describe("WaitingPanel", () => {
       await advance(2_000);
       const line = screen.getByText(/Still waiting\?/);
       expect(line.textContent).toBe(
-        `Still waiting? Check that the host can reach ${URL_}, then look at the agent's log: docker logs coaming-agent (standalone) or docker service logs coaming-agent (swarm).`,
+        `Still waiting? Check that the host can reach ${URL_}, then look at the agent's log: docker logs tierplan-agent (standalone) or docker service logs tierplan-agent (swarm).`,
       );
       expect(Array.from(line.querySelectorAll("code")).map((c) => c.textContent)).toEqual([
-        "docker logs coaming-agent",
-        "docker service logs coaming-agent",
+        "docker logs tierplan-agent",
+        "docker service logs tierplan-agent",
       ]);
     });
 

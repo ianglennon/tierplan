@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // draftState is a stack's draft as the route answers it: whether it is a saved draft, its version and its files.
@@ -66,22 +66,22 @@ func sharedStackHistoryRollback(t *testing.T, f *swarmFix) {
 		f.waitTasksOn(t, svc, digest, replicas, taskWait)
 	}
 
-	id := f.createStackCoaming(t, stack, composeOf(refs[0], ""))
-	// Cleanups run last in, first out: Coaming removes the stack; the docker CLI only sweeps up what a failure left.
+	id := f.createStackTierPlan(t, stack, composeOf(refs[0], ""))
+	// Cleanups run last in, first out: TierPlan removes the stack; the docker CLI only sweeps up what a failure left.
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	t.Cleanup(func() { removeStackCoaming(t, f, id, stack, engineObjects{}) })
+	t.Cleanup(func() { removeStackTierPlan(t, f, id, stack, engineObjects{}) })
 
 	// Three deploys, three digests: revisions #1, #2 and #3, each good.
 	for i := range refs {
 		if i > 0 {
-			f.saveStackCoaming(t, id, paritySource{Compose: composeOf(refs[i], "")})
+			f.saveStackTierPlan(t, id, paritySource{Compose: composeOf(refs[i], "")})
 		}
-		f.deployStackCoaming(t, id)
+		f.deployStackTierPlan(t, id)
 		runsImage(refs[i], digests[i])
 	}
 
 	// An edit nobody deployed: the draft has changes the roll back must leave alone.
-	f.saveStackCoaming(t, id, paritySource{Compose: composeOf(refs[2], "    environment:\n      NOTE: edited after the third deploy\n")})
+	f.saveStackTierPlan(t, id, paritySource{Compose: composeOf(refs[2], "    environment:\n      NOTE: edited after the third deploy\n")})
 	draftBefore := readDraft(t, f, id)
 	if !draftBefore.IsDraft {
 		t.Fatalf("the draft after an edit = %+v, want a saved draft", draftBefore)

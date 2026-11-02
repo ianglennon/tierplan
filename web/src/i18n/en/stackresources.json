@@ -67,7 +67,7 @@
     "ownership": {
       "stack": "Stack",
       "external": "External",
-      "externalTooltip": "Created outside this stack. Coaming never changes or removes it."
+      "externalTooltip": "Created outside this stack. TierPlan never changes or removes it."
     },
     "volumes": {
       "notReporting_one": "Not reporting: {{nodes}}. Its volumes are left out.",

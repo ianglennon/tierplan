@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { CircleX, X } from "lucide-react";
 
@@ -23,7 +23,7 @@ export interface OverlayFilesCardProps {
 }
 
 // OverlayFilesCard is Card 4 of the From git page (UI-SPEC, D-09): the files the compose files need
-// that the repository does not have, such as a secret, supplied in Coaming and kept encrypted. It
+// that the repository does not have, such as a secret, supplied in TierPlan and kept encrypted. It
 // is there only when a check lists a missing path or an overlay file has been added; otherwise
 // there is nothing to say. Paths are drawn as text, and no contents are ever listed.
 export function OverlayFilesCard({

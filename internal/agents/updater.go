@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package agents
 
@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // updateActor is the principal an automatic update is audited under (D-13).
@@ -57,7 +57,7 @@ var (
 	ErrAgentOffline = errors.New("agents: the agent is not connected")
 	// ErrNoManager means a swarm has no connected manager agent to send the update through.
 	ErrNoManager = errors.New("agents: no manager agent of the swarm is connected")
-	// ErrSelfUpdateOff means the host owner set COAMING_AGENT_SELF_UPDATE=false.
+	// ErrSelfUpdateOff means the host owner set TIERPLAN_AGENT_SELF_UPDATE=false.
 	ErrSelfUpdateOff = errors.New("agents: the host does not let the agent update itself")
 	// ErrAgentUpToDate means the agent already runs this server's version.
 	ErrAgentUpToDate = errors.New("agents: the agent is already up to date")
@@ -834,7 +834,7 @@ func (u *Updater) UpdateAll(ctx context.Context, actor audit.Actor, envID, ip, u
 
 // ----- the environment setting -----
 
-// AutoUpdate is whether Coaming updates the agents of an environment itself. It
+// AutoUpdate is whether TierPlan updates the agents of an environment itself. It
 // reports ErrEnvironmentNotFound for an environment that is not an agent
 // environment. It is on unless an admin switched it off.
 func (s *Service) AutoUpdate(ctx context.Context, envID string) (bool, error) {
@@ -899,7 +899,7 @@ func onOff(on bool) string {
 }
 
 // ManualUpdateNeeded is whether the node list should give an admin the command that
-// updates an agent by hand: the agent is behind a release server, and Coaming cannot
+// updates an agent by hand: the agent is behind a release server, and TierPlan cannot
 // do it for the admin. That is when the agent is outside the server's version window,
 // when it is too old to understand the update message, and when it is connected and
 // its host owner turned self-update off. Versions that are not releases are never

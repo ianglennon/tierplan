@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { MAX_QUERY, type SortDir } from "@/features/containers/list-search";
 import { z } from "@/lib/zod-config";
@@ -17,7 +17,7 @@ export const STACK_STATUS_VALUES = [
 ] as const;
 export type StackStatusValue = (typeof STACK_STATUS_VALUES)[number];
 
-// The Show toggle-group: only the stacks Coaming manages or only the ones it found. Absent means both.
+// The Show toggle-group: only the stacks TierPlan manages or only the ones it found. Absent means both.
 export const STACK_KIND_VALUES = ["managed", "unmanaged"] as const;
 export type StackKindValue = (typeof STACK_KIND_VALUES)[number];
 

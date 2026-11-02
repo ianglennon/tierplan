@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // TestStandaloneAgent runs the generated standalone command in a dind host, for
-// the engine COAMING_TEST_ENGINE names (24 to 29): the real agent image enrols
+// the engine TIERPLAN_TEST_ENGINE names (24 to 29): the real agent image enrols
 // with the join token, the environment comes online with the engine's version
 // and the dashboard summary is read through the tunnel (D-58, ENV-01). The same
 // run checks that the documented hardening flags work with the real image
@@ -29,7 +29,7 @@ func TestStandaloneAgent(t *testing.T) {
 	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
 
 	env := srv.CreateAgentEnvironment("")
-	if !strings.HasPrefix(env.Install.Image, "ghcr.io/ianglennon/coaming-agent:edge") {
+	if !strings.HasPrefix(env.Install.Image, "ghcr.io/ianglennon/tierplan-agent:edge") {
 		t.Fatalf("a development server should install the edge image, got %q", env.Install.Image)
 	}
 	if want := "wss://" + strings.TrimPrefix(srv.URL, "https://") + "/agent/connect"; env.Install.AgentURL != want {
@@ -74,14 +74,14 @@ func TestStandaloneAgent(t *testing.T) {
 		t.Errorf("summary containers = %d (%d running), want the agent alone", sum.Counts.Containers, sum.Counts.ContainersRunning)
 	}
 	list, code, body := srv.Containers(env.ID, "")
-	if code != http.StatusOK || len(list.Items) != 1 || list.Items[0].Name != "coaming-agent" {
+	if code != http.StatusOK || len(list.Items) != 1 || list.Items[0].Name != "tierplan-agent" {
 		t.Errorf("containers = %d %s, want the agent alone", code, body)
 	}
 
 	// The agent drops from root to UID 1000 and keeps no capability it was not
 	// given. The image is distroless, so there is no `docker exec` into it: the
 	// process is read from the node's own /proc (A1, A6, A9).
-	pid := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.State.Pid}}' coaming-agent"))
+	pid := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.State.Pid}}' tierplan-agent"))
 	status := sh(t, host, "cat /proc/"+pid+"/status")
 	if uid := fieldOf(status, "Uid:"); uid != "1000 1000 1000 1000" {
 		t.Errorf("agent Uid = %q, want 1000 for real, effective, saved and fs", uid)
@@ -98,23 +98,23 @@ func TestStandaloneAgent(t *testing.T) {
 	// The flags the command documents are what Docker applied (A16).
 	// Newer engines report the capabilities as CAP_SETGID and sorted, older ones as
 	// they were written, so the names are compared bare and sorted.
-	hc := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}} {{.HostConfig.SecurityOpt}} {{.HostConfig.RestartPolicy.Name}}' coaming-agent"))
+	hc := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}} {{.HostConfig.SecurityOpt}} {{.HostConfig.RestartPolicy.Name}}' tierplan-agent"))
 	hc = strings.ReplaceAll(hc, "CAP_", "")
 	hc = strings.Replace(hc, "[SETUID SETGID]", "[SETGID SETUID]", 1)
 	if want := "true [ALL] [SETGID SETUID] [no-new-privileges] unless-stopped"; hc != want {
 		t.Errorf("host config = %q, want %q", hc, want)
 	}
 	// The state volume is written by UID 1000: the agent's identity is on it.
-	if files := sh(t, host, "ls -ln $(docker volume inspect -f '{{.Mountpoint}}' coaming-agent)"); !strings.Contains(files, " 1000 ") {
+	if files := sh(t, host, "ls -ln $(docker volume inspect -f '{{.Mountpoint}}' tierplan-agent)"); !strings.Contains(files, " 1000 ") {
 		t.Errorf("the state volume holds no file owned by 1000:\n%s", files)
 	}
 
 	// No install command opens an inbound port (ENV-03).
-	if ports := strings.TrimSpace(sh(t, host, "docker ps --filter name=coaming-agent --format '{{.Ports}}'")); ports != "" {
+	if ports := strings.TrimSpace(sh(t, host, "docker ps --filter name=tierplan-agent --format '{{.Ports}}'")); ports != "" {
 		t.Errorf("the agent publishes ports %q, want none", ports)
 	}
 	// The default bridge is "bridge" on Engine 29 and "default" on 24.
-	if nm := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.NetworkMode}} {{len .HostConfig.PortBindings}}' coaming-agent")); nm != "bridge 0" && nm != "default 0" {
+	if nm := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.NetworkMode}} {{len .HostConfig.PortBindings}}' tierplan-agent")); nm != "bridge 0" && nm != "default 0" {
 		t.Errorf("agent network mode and bindings = %q, want the default bridge with no published port", nm)
 	}
 }
@@ -131,14 +131,14 @@ func TestStandaloneAgentWithDockerUnreachable(t *testing.T) {
 	srv := servertest.Start(t, servertest.Options{Host: host.Gateway})
 	env := srv.CreateAgentEnvironment("")
 
-	cmd := strings.Replace(env.Install.Standalone.Command, " "+env.Install.Image, " -e COAMING_AGENT_SOCKET=/var/run/missing.sock "+env.Install.Image, 1)
+	cmd := strings.Replace(env.Install.Standalone.Command, " "+env.Install.Image, " -e TIERPLAN_AGENT_SOCKET=/var/run/missing.sock "+env.Install.Image, 1)
 	if cmd == env.Install.Standalone.Command {
 		t.Fatal("could not add the socket override to the command")
 	}
 	sh(t, host, cmd)
 
 	srv.WaitFor("the agent to be refused with engine_unreachable", 60*time.Second, func() (bool, string) {
-		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs --tail 5 coaming-agent 2>&1")
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs --tail 5 tierplan-agent 2>&1")
 		return strings.Contains(out, "code=engine_unreachable") && strings.Contains(out, "Check that the Docker socket is mounted"), out
 	})
 	srv.WaitFor("the audit log to record engine_unreachable", 30*time.Second, func() (bool, string) {
@@ -221,7 +221,7 @@ func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
 	srv.WaitOnline(env.ID, 60*time.Second)
 
 	identityOf := func() string {
-		out := sh(t, host, `cat "$(docker volume inspect -f '{{.Mountpoint}}' coaming-agent)/identity.json"`)
+		out := sh(t, host, `cat "$(docker volume inspect -f '{{.Mountpoint}}' tierplan-agent)/identity.json"`)
 		var id struct {
 			AgentID string `json:"agentId"`
 		}
@@ -239,7 +239,7 @@ func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
 	if len(before) != 1 {
 		t.Fatalf("agent rows after the install = %+v, want 1", before)
 	}
-	oldContainer := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.Id}}' coaming-agent"))
+	oldContainer := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.Id}}' tierplan-agent"))
 
 	// The token-less update an operator is shown, minus its docker pull: the image
 	// is loaded into the node already and ghcr.io does not resolve to a registry here.
@@ -248,7 +248,7 @@ func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
 	if !ok {
 		t.Fatalf("the manual update command does not start with its docker pull: %q", manual)
 	}
-	for _, want := range []string{"--cap-drop ALL --cap-add SETUID --cap-add SETGID", "-v coaming-agent:/var/lib/coaming-agent"} {
+	for _, want := range []string{"--cap-drop ALL --cap-add SETUID --cap-add SETGID", "-v tierplan-agent:/var/lib/tierplan-agent"} {
 		if !strings.Contains(recreate, want) {
 			t.Fatalf("the recreate command lacks %q: %s", want, recreate)
 		}
@@ -260,18 +260,18 @@ func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
 
 	var log string
 	srv.WaitFor("the recreated agent to connect as the same agent", 90*time.Second, func() (bool, string) {
-		id, _ := host.Sh(execCtx(t, time.Minute), "docker inspect -f '{{.Id}}' coaming-agent")
-		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs coaming-agent 2>&1")
+		id, _ := host.Sh(execCtx(t, time.Minute), "docker inspect -f '{{.Id}}' tierplan-agent")
+		out, _ := host.Sh(execCtx(t, time.Minute), "docker logs tierplan-agent 2>&1")
 		log = out
 		ok := strings.TrimSpace(id) != "" && strings.TrimSpace(id) != oldContainer &&
-			strings.Contains(out, "connected to Coaming") && strings.Contains(out, "agent_id="+agentID)
+			strings.Contains(out, "connected to TierPlan") && strings.Contains(out, "agent_id="+agentID)
 		return ok, out[max(0, len(out)-600):]
 	})
 
-	if n := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.RestartCount}}' coaming-agent")); n != "0" {
+	if n := strings.TrimSpace(sh(t, host, "docker inspect -f '{{.RestartCount}}' tierplan-agent")); n != "0" {
 		t.Errorf("RestartCount = %s, want 0: the agent started at once", n)
 	}
-	capDrop := strings.ReplaceAll(strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.CapDrop}}' coaming-agent")), "CAP_", "")
+	capDrop := strings.ReplaceAll(strings.TrimSpace(sh(t, host, "docker inspect -f '{{.HostConfig.CapDrop}}' tierplan-agent")), "CAP_", "")
 	if capDrop != "[ALL]" {
 		t.Errorf("CapDrop = %s, want [ALL] (D-22)", capDrop)
 	}
@@ -280,7 +280,7 @@ func TestStandaloneAgentRestartsWithoutAJoinToken(t *testing.T) {
 			t.Errorf("the agent log lacks %q:\n%s", want, log)
 		}
 	}
-	if strings.Contains(log, "enrolled with Coaming") {
+	if strings.Contains(log, "enrolled with TierPlan") {
 		t.Errorf("the agent enrolled again instead of reconnecting:\n%s", log)
 	}
 

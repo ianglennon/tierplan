@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -184,7 +184,7 @@ describe("AgentUpdatesCard", () => {
     const sw = screen.getByRole("switch", { name: "Update agents automatically" });
     expect(sw.getAttribute("aria-checked")).toBe("true");
     const helper =
-      "After a Coaming upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.";
+      "After a TierPlan upgrade, agents here are updated within the compatibility window. Turn this off to update them yourself.";
     expect(screen.getByText(helper)).toBeTruthy();
     expect(sw.getAttribute("aria-describedby")).toBe(screen.getByText(helper).id);
     expect(updateAll()).toBeNull();
@@ -388,7 +388,7 @@ describe("AgentUpdatesCard", () => {
       agent("a2", "locked-1", {
         selfUpdate: false,
         manualUpdateCommand:
-          " docker service update --image ghcr.io/ianglennon/coaming-agent:0.2.1 coaming-agent",
+          " docker service update --image ghcr.io/ianglennon/tierplan-agent:0.2.1 tierplan-agent",
       }),
     ];
     await mount();
@@ -396,7 +396,7 @@ describe("AgentUpdatesCard", () => {
       await screen.findByText("Self-update is turned off on locked-1. Update it by hand:"),
     ).toBeTruthy();
     expect(
-      screen.getByText(/docker service update --image ghcr\.io\/ianglennon\/coaming-agent:0\.2\.1/),
+      screen.getByText(/docker service update --image ghcr\.io\/ianglennon\/tierplan-agent:0\.2\.1/),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Copy the update command for locked-1" }),
@@ -404,7 +404,7 @@ describe("AgentUpdatesCard", () => {
     expect(screen.queryByText(/mgr-1/)).toBeNull();
   });
 
-  it("words the note differently for an agent Coaming cannot update for another reason", async () => {
+  it("words the note differently for an agent TierPlan cannot update for another reason", async () => {
     agents = [
       agent("a2", "ancient-1", {
         agentVersion: "0.0.9",
@@ -413,7 +413,7 @@ describe("AgentUpdatesCard", () => {
     ];
     await mount();
     const note = await screen.findByText(
-      "Coaming can't update ancient-1 by itself. Update it by hand:",
+      "TierPlan can't update ancient-1 by itself. Update it by hand:",
     );
     expect(note.closest("div")?.textContent).toContain("docker service update --image x y");
     expect(within(note.closest("div") as HTMLElement).getByRole("button")).toBeTruthy();

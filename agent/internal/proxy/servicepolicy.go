@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -13,13 +13,13 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
 
-	"github.com/ianglennon/coaming/proto/hostpath"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // errHostPolicy is the refusal of a service spec that gives tasks host access, of a
 // container create that gives the container host access, or of a volume create that would
 // mount the host or name a volume plugin, on a host whose owner did not set
-// COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36, and D-36/D-38 as amended). The handler
+// TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES (D-36, and D-36/D-38 as amended). The handler
 // answers it 403 with the host_policy message, not as a plain allowlist refusal, so the
 // server can tell the user which setting lifts it.
 var errHostPolicy = errors.New("the request gives host access")

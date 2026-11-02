@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -263,7 +263,7 @@ describe("StackResources of a swarm stack", () => {
     expect(within(table).queryByText("External")).toBeNull();
   });
 
-  it("marks an external network External, with the sentence that Coaming never changes it", async () => {
+  it("marks an external network External, with the sentence that TierPlan never changes it", async () => {
     resources = {
       tasks: { items: [], error: "" },
       networks: {
@@ -280,7 +280,7 @@ describe("StackResources of a swarm stack", () => {
     expect(
       (
         await screen.findAllByText(
-          "Created outside this stack. Coaming never changes or removes it.",
+          "Created outside this stack. TierPlan never changes or removes it.",
         )
       ).length,
     ).toBeGreaterThan(0);

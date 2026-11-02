@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -17,12 +17,12 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The merged log of a stack (plan 07-29, STK-10, D-22). Docker is a fake swarm manager (or a
@@ -562,7 +562,7 @@ func soloContainer(stackID, id, service string, number int, state string, create
 		ID: id, Names: []string{"/solo-" + service + "-" + strconv.Itoa(number)}, Image: "img", State: state, Created: created,
 		Labels: map[string]string{
 			"com.docker.compose.project": "solo", "com.docker.compose.service": service,
-			"com.docker.compose.container-number": strconv.Itoa(number), "coaming.stack.id": stackID,
+			"com.docker.compose.container-number": strconv.Itoa(number), "tierplan.stack.id": stackID,
 		},
 	}
 }
@@ -662,10 +662,10 @@ func TestStackLogsOfAStandaloneStackFollowEachContainerAndMergeThemWithTheirServ
 }
 
 // soloCLIContainer is the container docker compose up --scale adds to the project from the host CLI: none of
-// Coaming's labels, the CLI's own config hash and version (G-08-6).
+// TierPlan's labels, the CLI's own config hash and version (G-08-6).
 func soloCLIContainer(id, service string, number int, state string, created int64) dockertest.FakeContainer {
 	c := soloContainer("", id, service, number, state, created)
-	delete(c.Labels, "coaming.stack.id")
+	delete(c.Labels, "tierplan.stack.id")
 	c.Labels["com.docker.compose.config-hash"] = "cli-hash"
 	c.Labels["com.docker.compose.version"] = "5.6.1"
 	return c
@@ -683,7 +683,7 @@ func soloWithCLIAndStranger(stackID string) []dockertest.FakeContainer {
 }
 
 // TestStackLogsOfAStandaloneStackFollowAContainerTheHostCLIAdded: docker compose up --scale web=2 adds web-2 to the
-// project with none of Coaming's labels. Beside the containers the stack owns it is the person's own change to the
+// project with none of TierPlan's labels. Beside the containers the stack owns it is the person's own change to the
 // stack, so the stack's merged log follows it under its service and number, and masks the stack's known secret
 // values in it. A container that carries another stack's ID is not followed (G-08-6, P7 D-12, T-08-47).
 func TestStackLogsOfAStandaloneStackFollowAContainerTheHostCLIAdded(t *testing.T) {
@@ -1014,7 +1014,7 @@ func TestStackLogDownloadPastItsSizeLeavesOutTheOldestLinesAndSaysSoFirst(t *tes
 	f := newStackLogsFix(t, stackLogsTasks(), stackLogsBurst(), func(f *envFix) { f.stackLogs.MaxDownloadBytes = 3 * 36 })
 	w := f.download(t, "")
 	lines := strings.Split(strings.TrimSuffix(w.body.String(), "\n"), "\n")
-	if len(lines) != 4 || !strings.HasPrefix(lines[0], "Coaming: the oldest lines of this range were left out") {
+	if len(lines) != 4 || !strings.HasPrefix(lines[0], "TierPlan: the oldest lines of this range were left out") {
 		t.Fatalf("body =\n%s\nwant a notice and the newest three lines", w.body.String())
 	}
 	if !strings.HasSuffix(lines[3], "web1 b") {

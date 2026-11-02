@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # Appends a Signed-off-by trailer (DCO, D-69) to every commit message, so
 # contributors do not have to remember `git commit -s`. Enable with `make hooks`.

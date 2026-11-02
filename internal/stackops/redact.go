@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // RedactChanges returns copies of changes for a reader who may not reveal secrets (D-47, AUTH-07). The spec of a

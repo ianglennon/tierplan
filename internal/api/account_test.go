@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/datadir"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/datadir"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Password change and instance warnings (plan 14, AUTH-02, AUTH-08, PLAT-01).
@@ -408,14 +408,14 @@ func TestWarningsAndTheirAcknowledgementNeedSettingsPermissions(t *testing.T) {
 
 // --- proxy items in GET /api/warnings (plan 02-25, D-53) -------------------
 
-const proxyPublicURL = "https://coaming.example.com"
+const proxyPublicURL = "https://tierplan.example.com"
 
 // withProxyObserver gives the fixture a proxy observer on the fixture's clock and a
 // public URL, and rebuilds the router.
 func (f *authFixture) withProxyObserver(t *testing.T) {
 	t.Helper()
 	f.proxy = httpx.NewProxyObserver(f.inst.PublicURL, f.clk.now)
-	f.inst.Apply("Coaming", proxyPublicURL)
+	f.inst.Apply("TierPlan", proxyPublicURL)
 	f.h = f.build(t)
 }
 
@@ -576,7 +576,7 @@ func TestARefusalBurstIsNotShownWithoutSettingsRead(t *testing.T) {
 	}
 }
 
-// Agents Coaming does not know after a restore (D-31): one warning, with how many,
+// Agents TierPlan does not know after a restore (D-31): one warning, with how many,
 // for an instance admin while the registry holds any.
 func TestUnknownAgentsRaisesAWarningWithTheCountForAnInstanceAdminWhileTheRegistryHoldsAny(t *testing.T) {
 	t.Parallel()

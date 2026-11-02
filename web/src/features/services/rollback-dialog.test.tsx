@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -25,7 +25,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "acme/web:2",
   stack: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -44,7 +44,7 @@ interface SpecAnswer {
   name: string;
   mode: string;
   stack: string;
-  coamingStackId: string;
+  tierplanStackId: string;
   agent: boolean;
   masked: boolean;
   spec: Record<string, unknown>;
@@ -56,7 +56,7 @@ const loaded = (extra: Partial<SpecAnswer> = {}): SpecAnswer => ({
   name: "web",
   mode: "replicated",
   stack: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   agent: false,
   masked: false,
   spec: specOf("acme/web:2"),
@@ -217,9 +217,9 @@ describe("RollbackDialog", () => {
   });
 
   // The rollback warning names no stack, so the link beside it is Open stack.
-  it("offers Open stack beside the warning when Coaming manages the stack, the text unchanged", async () => {
-    specAnswer = () => Response.json(loaded({ stack: "shop", coamingStackId: "stk-shop" }));
-    mount({ ...web, stack: "shop", coamingStackId: "stk-shop" });
+  it("offers Open stack beside the warning when TierPlan manages the stack, the text unchanged", async () => {
+    specAnswer = () => Response.json(loaded({ stack: "shop", tierplanStackId: "stk-shop" }));
+    mount({ ...web, stack: "shop", tierplanStackId: "stk-shop" });
     const link = screen.getByRole("link", { name: "Open stack" });
     expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
     expect(link.closest('[role="status"]')?.textContent).toContain(
@@ -228,7 +228,7 @@ describe("RollbackDialog", () => {
     await diff();
   });
 
-  it("offers no Open stack for a stack Coaming does not manage", async () => {
+  it("offers no Open stack for a stack TierPlan does not manage", async () => {
     specAnswer = () => Response.json(loaded({ stack: "shop" }));
     mount({ ...web, stack: "shop" });
     expect(screen.getByText("The next stack deploy applies the compose file again.")).toBeTruthy();

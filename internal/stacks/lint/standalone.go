@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package lint
 
@@ -13,7 +13,7 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 )
 
-// StandaloneUnsupported is the compose attributes a standalone host ignores. It is Coaming's copy
+// StandaloneUnsupported is the compose attributes a standalone host ignores. It is TierPlan's copy
 // of the list in docker/compose's pkg/compose/unsupported_attributes.go (Apache-2.0), version
 // v5.6.0, where it is unexported: presenceUnsupportedAttributes (an attribute that is ignored
 // whatever its value) and valueConditionalAttributes (only some values are ignored), written here
@@ -95,15 +95,15 @@ func standaloneFindings(in Input) []Finding {
 }
 
 // unsupportedKeys are the keys of a service that the Compose SDK carries out by running something the deploy
-// must not: a program of the Coaming server (a provider service runs the executable its type names, a model
+// must not: a program of the TierPlan server (a provider service runs the executable its type names, a model
 // runs the docker model plugin), or a command in the container through exec, which the guard refuses (a
 // lifecycle hook). Each is an error, whatever the person's role.
 var unsupportedKeys = []struct{ key, why string }{
-	{"provider", "A provider service runs a program on the Coaming server."},
-	{"models", "A model is pulled and served by a program on the Coaming server."},
-	{"pre_start", "A lifecycle hook runs a command in a container, which Coaming doesn't allow. Run the step in the entrypoint."},
-	{"post_start", "A lifecycle hook runs a command in a container, which Coaming doesn't allow. Run the step in the entrypoint."},
-	{"pre_stop", "A lifecycle hook runs a command in a container, which Coaming doesn't allow. Run the step in the entrypoint."},
+	{"provider", "A provider service runs a program on the TierPlan server."},
+	{"models", "A model is pulled and served by a program on the TierPlan server."},
+	{"pre_start", "A lifecycle hook runs a command in a container, which TierPlan doesn't allow. Run the step in the entrypoint."},
+	{"post_start", "A lifecycle hook runs a command in a container, which TierPlan doesn't allow. Run the step in the entrypoint."},
+	{"pre_stop", "A lifecycle hook runs a command in a container, which TierPlan doesn't allow. Run the step in the entrypoint."},
 }
 
 // unsupportedKeyFindings reports the unsupportedKeys a service sets, and the top-level models.
@@ -312,7 +312,7 @@ func readOnlyFindings(in Input) []Finding {
 	return out
 }
 
-// writtenIn reports whether an object's content is something Coaming has to put into the container.
+// writtenIn reports whether an object's content is something TierPlan has to put into the container.
 func writtenIn(o types.FileObjectConfig) bool {
 	return !bool(o.External) && (o.File != "" || o.Content != "" || o.Environment != "")
 }

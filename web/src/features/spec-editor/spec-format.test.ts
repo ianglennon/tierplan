@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -302,10 +302,10 @@ describe("the remembered format", () => {
     expect(loadSpecFormat()).toBe("yaml");
   });
 
-  it("remembers the choice under coaming.spec-format", () => {
+  it("remembers the choice under tierplan.spec-format", () => {
     saveSpecFormat("json");
     expect(localStorage.getItem(SPEC_FORMAT_KEY)).toBe("json");
-    expect(SPEC_FORMAT_KEY).toBe("coaming.spec-format");
+    expect(SPEC_FORMAT_KEY).toBe("tierplan.spec-format");
     expect(loadSpecFormat()).toBe("json");
     saveSpecFormat("yaml");
     expect(loadSpecFormat()).toBe("yaml");

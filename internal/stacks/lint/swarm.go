@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package lint
 
 import (
 	"sort"
 
-	"github.com/ianglennon/coaming/internal/stacks/fieldclass"
+	"github.com/ianglennon/tierplan/internal/stacks/fieldclass"
 )
 
 // swarmActions is what to do about each compose service key that a swarm ignores or refuses, the
@@ -87,7 +87,7 @@ var swarmActions = map[string]string{
 
 // handledElsewhere are keys the table classes Blocking that lint leaves to another step. env_file
 // is checked by the prescan (it must name a file of the stack, unless it is optional) and is read
-// by Coaming from the stack's own files in stacks.ResolveEnvFiles, which empties EnvFiles before
+// by TierPlan from the stack's own files in stacks.ResolveEnvFiles, which empties EnvFiles before
 // any deploy sees the project. It stays Blocking in the converter's table on purpose: a project
 // that reaches the converter with an env_file still on it was not resolved, and is refused rather
 // than deployed with the file ignored. TestEnvFileIsLeftToThePrescanUntilItIsClassedConverted pins

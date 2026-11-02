@@ -346,7 +346,7 @@ type InsertAdoptedStackParams struct {
 	Adoption   string
 }
 
-// InsertStack with the adoption record (D-14): the stack of a discovered stack Coaming took over.
+// InsertStack with the adoption record (D-14): the stack of a discovered stack TierPlan took over.
 func (q *Queries) InsertAdoptedStack(ctx context.Context, arg InsertAdoptedStackParams) error {
 	_, err := q.db.ExecContext(ctx, insertAdoptedStack,
 		arg.ID,
@@ -454,7 +454,7 @@ func (q *Queries) InsertSnapshotVar(ctx context.Context, arg InsertSnapshotVarPa
 
 const insertStack = `-- name: InsertStack :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)

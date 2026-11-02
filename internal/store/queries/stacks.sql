@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 -- name: InsertStack :exec
 INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0);
 
 -- name: InsertAdoptedStack :exec
--- InsertStack with the adoption record (D-14): the stack of a discovered stack Coaming took over.
+-- InsertStack with the adoption record (D-14): the stack of a discovered stack TierPlan took over.
 INSERT INTO stacks (id, env_id, name, target, source_kind, source_ref, created_by, created_at, stopped, adoption)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?);
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package stackops_test
@@ -31,17 +31,17 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // TestStandaloneDeployOnARealEngine reviews and deploys a stack on a real engine through the Compose SDK, the
 // way the server does for its own host (plan 07-20, STK-02, STK-06, STK-09): the environment is a local
 // socket (a proxy to a docker:<N>-dind container), the image is in a registry of the node's own, and the SDK
-// is the real one over Coaming's client behind the guard. It shows that the first review lists the service as
+// is the real one over TierPlan's client behind the guard. It shows that the first review lists the service as
 // added with a new pin, that the deploy runs one container labelled with the project and the stack, that the
 // config hash the review computes is the one the SDK stamps, that a redeploy nobody edited keeps the same
 // container (even after the tag moved), and that an edit recreates it.
@@ -54,7 +54,7 @@ func TestStandaloneDeployOnARealEngine(t *testing.T) {
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
 	image := registry + "/cm/web:1"
 	pushed := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
-	// Coaming's own client to the node, for what the test reads back: the project's containers.
+	// TierPlan's own client to the node, for what the test reads back: the project's containers.
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
 	if err != nil {
 		t.Fatalf("dockerx.New: %v", err)
@@ -335,7 +335,7 @@ const replayCorpus = "../../agent/internal/proxy/testdata/compose-replay.json"
 // TestRecordComposeRequests runs a stack through every request the Compose SDK sends for a standalone deploy
 // (create with a secret and a config, recreate, orphan removal, stop, start, down) against a real engine, with
 // a recording proxy between the SDK and the engine, and holds the result as the corpus the agent's allowlist
-// is replayed against (plan 07-21, STK-02, RESEARCH Wave 0). COAMING_UPDATE_REPLAY=1 writes the corpus; without
+// is replayed against (plan 07-21, STK-02, RESEARCH Wave 0). TIERPLAN_UPDATE_REPLAY=1 writes the corpus; without
 // it the test only fails when a request has appeared that the corpus has no method and path for.
 func TestRecordComposeRequests(t *testing.T) {
 	if err := dockerx.InitCompose(t.TempDir(), slog.New(slog.DiscardHandler)); err != nil {
@@ -429,7 +429,7 @@ func TestRecordComposeRequests(t *testing.T) {
 	assertNoFileBinds(t, got)
 	assertKindsRecorded(t, got)
 
-	if os.Getenv("COAMING_UPDATE_REPLAY") == "1" {
+	if os.Getenv("TIERPLAN_UPDATE_REPLAY") == "1" {
 		out, err := json.MarshalIndent(got, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -443,7 +443,7 @@ func TestRecordComposeRequests(t *testing.T) {
 	}
 	held, err := os.ReadFile(replayCorpus)
 	if err != nil {
-		t.Fatalf("read the corpus (COAMING_UPDATE_REPLAY=1 writes it): %v", err)
+		t.Fatalf("read the corpus (TIERPLAN_UPDATE_REPLAY=1 writes it): %v", err)
 	}
 	var corpus []composeRequest
 	if err := json.Unmarshal(held, &corpus); err != nil {
@@ -460,7 +460,7 @@ func TestRecordComposeRequests(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("the SDK sent requests the corpus has no method and path for, run with COAMING_UPDATE_REPLAY=1: %v", slices.Compact(missing))
+		t.Errorf("the SDK sent requests the corpus has no method and path for, run with TIERPLAN_UPDATE_REPLAY=1: %v", slices.Compact(missing))
 	}
 }
 
@@ -525,7 +525,7 @@ func assertKindsRecorded(t *testing.T, reqs []composeRequest) {
 }
 
 // TestStandaloneReviewEmptyAfterDeployLocal is the completeness test of the review's normaliser (plan 07-22,
-// STK-06, Pitfall 5) on Coaming's own host: a stack that sets many of the settings the engine keeps (a
+// STK-06, Pitfall 5) on TierPlan's own host: a stack that sets many of the settings the engine keeps (a
 // restart policy, a healthcheck, a user, a working directory, a hostname, capabilities, ulimits, a log
 // driver with options, limits, a tmpfs, a read-only root, init, extra hosts, DNS, a sysctl, labels and an
 // environment, user networks with an alias and a named volume) and services that share another's network
@@ -709,7 +709,7 @@ func TestLocalOnlyImagePinsToItsID(t *testing.T) {
 	}
 	imageID, digests, _ := strings.Cut(strings.TrimSpace(out), " ")
 	if digests != "[]" {
-		t.Skipf("the engine lists repository digests %s for an image no registry ever gave it, so Coaming cannot take it for a local image on this engine's image store", digests)
+		t.Skipf("the engine lists repository digests %s for an image no registry ever gave it, so TierPlan cannot take it for a local image on this engine's image store", digests)
 	}
 
 	rig := newRigOver(t, dockertest.UnixProxy(t, node.Host()))
@@ -740,7 +740,7 @@ func TestLocalOnlyImagePinsToItsID(t *testing.T) {
 	if !res.OK() {
 		t.Fatalf("deploy: %+v items %v", res, itemStates(job))
 	}
-	ran, err := node.Sh(ctx, "docker inspect --format '{{.Image}} {{index .Config.Labels \"coaming.stack.image\"}}' "+name+"-app-1")
+	ran, err := node.Sh(ctx, "docker inspect --format '{{.Image}} {{index .Config.Labels \"tierplan.stack.image\"}}' "+name+"-app-1")
 	if err != nil {
 		t.Fatalf("inspect the container: %v\n%s", err, ran)
 	}
@@ -870,7 +870,7 @@ func TestStandaloneStopStartKeepsSecrets(t *testing.T) {
 
 // TestVolumeConfigEditKeepsTheVolume redeploys a stack whose compose file changed the labels of a named
 // volume that holds data, on a real engine through the Compose SDK (plan 08-07, STK-13, D-46). The SDK's
-// reconciler asks before it recreates a volume whose settings differ from the file, and Coaming answers no:
+// reconciler asks before it recreates a volume whose settings differ from the file, and TierPlan answers no:
 // the volume is the same one (its creation time is unchanged), the marker file written into it is still
 // there, and the deploy went on.
 func TestVolumeConfigEditKeepsTheVolume(t *testing.T) {
@@ -1014,7 +1014,7 @@ func TestStandaloneRollbackOnARealEngine(t *testing.T) {
 	registry := dockertest.StartRegistry(t, node, dockertest.RegistryOptions{})
 	image := registry + "/cm/web:1"
 	first := dockertest.PushImage(t, node, "busybox:1.36.1", image, nil)
-	// Coaming's own client to the node, for what the test reads back: the project's containers.
+	// TierPlan's own client to the node, for what the test reads back: the project's containers.
 	cli, err := dockerx.New(dockertest.TCPTransportFor(node.Host()))
 	if err != nil {
 		t.Fatalf("dockerx.New: %v", err)

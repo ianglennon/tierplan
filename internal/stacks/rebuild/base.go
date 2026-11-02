@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package rebuild
 
@@ -12,7 +12,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Base is the definition a stack already has, which a rebuild of a stack Coaming manages is made on top of (D-54).
+// Base is the definition a stack already has, which a rebuild of a stack TierPlan manages is made on top of (D-54).
 // Adoption rebuilds a stack nobody has described, so it has no Base and writes what runs as literals (D-15). A
 // stack that has a deployed revision keeps what that revision said where the engine cannot say it better: the
 // stack's own secrets and configs stay files, its networks and volumes keep the declarations the file gave them,
@@ -96,7 +96,7 @@ type substitutions struct {
 
 // placeholderPrefix starts every placeholder. It holds only characters that need no quoting, and each placeholder
 // ends in an underscore, so no placeholder is the start of another.
-const placeholderPrefix = "COAMING_SUBSTITUTION_"
+const placeholderPrefix = "TIERPLAN_SUBSTITUTION_"
 
 func (s *substitutions) add(text string) string {
 	if p, ok := s.by[text]; ok {

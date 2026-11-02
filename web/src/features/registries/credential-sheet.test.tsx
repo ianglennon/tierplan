@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -1279,7 +1279,7 @@ describe("CredentialSheet Advanced (self-hosted registries)", () => {
     expect(ca.className).toContain("overflow-auto");
     expect(
       screen.getByText(
-        "For a registry with its own certificate authority. Used for Coaming's tests and tag browsing.",
+        "For a registry with its own certificate authority. Used for TierPlan's tests and tag browsing.",
       ),
     ).toBeTruthy();
     expect(switchEl().getAttribute("aria-checked")).toBe("false");
@@ -1289,14 +1289,14 @@ describe("CredentialSheet Advanced (self-hosted registries)", () => {
     mount();
     await screen.findByText("Add a registry credential");
     fireEvent.click(advancedTrigger());
-    const note = await screen.findByText(/These settings only affect Coaming's own tests/);
+    const note = await screen.findByText(/These settings only affect TierPlan's own tests/);
     expect(note.textContent).toContain("insecure-registries or certs.d");
-    expect(note.textContent).toContain("Coaming never changes daemon settings");
+    expect(note.textContent).toContain("TierPlan never changes daemon settings");
     const link = screen.getByRole("link", { name: "Self-hosted registry docs" });
     expect(link.getAttribute("href")).toBe(
-      "https://github.com/ianglennon/coaming/blob/main/docs/registries.md#self-hosted-registries",
+      "https://github.com/ianglennon/tierplan/blob/main/docs/registries.md#self-hosted-registries",
     );
-    const warning = "Coaming will use this credential over a connection that isn't verified.";
+    const warning = "TierPlan will use this credential over a connection that isn't verified.";
     expect(screen.queryByText(new RegExp(warning))).toBeNull();
     fireEvent.click(switchEl());
     expect(switchEl().getAttribute("aria-checked")).toBe("true");

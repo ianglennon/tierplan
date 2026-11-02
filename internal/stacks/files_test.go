@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 func TestValidPath(t *testing.T) {

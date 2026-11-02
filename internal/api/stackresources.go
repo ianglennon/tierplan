@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -10,12 +10,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // StackResourceTaskBody is the current task of one slot of a swarm stack's service.
@@ -56,7 +56,7 @@ type StackNetworkResourceBody struct {
 	Name      string `json:"name" doc:"The network name"`
 	Driver    string `json:"driver" doc:"The network driver"`
 	Scope     string `json:"scope" doc:"swarm for a network of the whole cluster, local for one of a host"`
-	Ownership string `json:"ownership" enum:"stack,external" doc:"stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which Coaming never changes or removes"`
+	Ownership string `json:"ownership" enum:"stack,external" doc:"stack: the network carries the stack's own labels. external: the compose file refers to a network created outside the stack, which TierPlan never changes or removes"`
 }
 
 // StackNetworksCardBody is the Networks card.
@@ -71,7 +71,7 @@ type StackVolumeResourceBody struct {
 	Driver    string `json:"driver" doc:"The volume driver"`
 	Node      string `json:"node" doc:"The display name of the node that holds the volume"`
 	NodeID    string `json:"nodeId" doc:"The ID of that node, which the volume's page takes as its node"`
-	Ownership string `json:"ownership" enum:"stack,external" doc:"stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which Coaming never changes or removes"`
+	Ownership string `json:"ownership" enum:"stack,external" doc:"stack: the volume carries the stack's own labels. external: the compose file refers to a volume created outside the stack, which TierPlan never changes or removes"`
 }
 
 // StackVolumesCardBody is the Volumes card.
@@ -92,9 +92,9 @@ type StackObjectResourceBody struct {
 	ID        string                `json:"id" doc:"The swarm object ID; empty on a standalone host, where a secret or a config is a file in the containers"`
 	Name      string                `json:"name" doc:"The name as the compose file writes it"`
 	FullName  string                `json:"fullName" doc:"The name of the object on the swarm: the stack, the name and the content hash joined. The name itself on a standalone host and for an external object"`
-	Hash      string                `json:"hash" doc:"The short content hash Coaming put in the name of an object it made from a file; empty for any other"`
+	Hash      string                `json:"hash" doc:"The short content hash TierPlan put in the name of an object it made from a file; empty for any other"`
 	UsedBy    []StackObjectUserBody `json:"usedBy" doc:"The services of this stack whose spec refers to the object, by name. Services of other stacks are not counted"`
-	Ownership string                `json:"ownership" enum:"stack,external" doc:"stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which Coaming never changes or removes"`
+	Ownership string                `json:"ownership" enum:"stack,external" doc:"stack: the object carries the stack's own labels, or is a file of a standalone stack. external: the compose file refers to an object created outside the stack, which TierPlan never changes or removes"`
 }
 
 // StackObjectsCardBody is the Secrets or the Configs card. No secret value and no config content is part of it.
@@ -124,7 +124,7 @@ func registerStackResources(r *httpx.Router, d StacksDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listStackResources", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/resources",
 		Summary: "What a stack owns on its environment",
-		Description: "The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its Coaming ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. " +
+		Description: "The tasks (a swarm) or containers (a standalone host), the networks, the volumes (one row for each node that holds one), the secrets and the configs of the stack, found by the stack's labels: its swarm namespace or Compose project together with its TierPlan ID, so an object of another stack, or one somebody made under the same name, is never listed as the stack's. " +
 			"Objects the deployed compose file refers to that were made outside the stack are listed with ownership external. A standalone stack's secrets and configs are read from its deployed definition, because they are files in the containers. " +
 			"Each card is read on its own and carries its own error (a code, never the engine's text), so one read that fails never hides the others. No secret value and no config content is read. " +
 			"A stack ID of another environment is 404 stack_not_found. Needs stacks.read (Viewer).",
@@ -154,7 +154,7 @@ func listStackResources(ctx context.Context, d StacksDeps, in *StackPathInput) (
 	return &StackResourcesOutput{CacheControl: "no-store", Body: stackResourcesBody(ctx, d, in.EnvID, st, res)}, nil
 }
 
-// stackResourcesBody draws the cards of a stack's Resources as the answers carry them, for a stack Coaming manages
+// stackResourcesBody draws the cards of a stack's Resources as the answers carry them, for a stack TierPlan manages
 // and for one it found by its labels alike.
 func stackResourcesBody(ctx context.Context, d StacksDeps, envID string, st stackops.Stack, res stackops.Resources) StackResourcesBody {
 	body := StackResourcesBody{

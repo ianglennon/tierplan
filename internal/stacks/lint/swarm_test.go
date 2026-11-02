@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package lint
 
@@ -10,7 +10,7 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks/fieldclass"
+	"github.com/ianglennon/tierplan/internal/stacks/fieldclass"
 )
 
 // fakeIndex is an Index over a flat map of dotted path to scalar text ("" for a mapping or a

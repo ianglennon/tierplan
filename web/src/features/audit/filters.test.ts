@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { describe, expect, it } from "vitest";
 
@@ -424,7 +424,7 @@ describe("exportUrl and listParams", () => {
   it("builds the export URL with exactly the filters the list uses", () => {
     const search = auditSearchSchema.parse({ user: "admin", action: ["auth.login"], range: "1h" });
     const list = new URLSearchParams(listParams(search, NOW));
-    const url = new URL(exportUrl("csv", search, NOW), "http://coaming.test");
+    const url = new URL(exportUrl("csv", search, NOW), "http://tierplan.test");
     expect(url.pathname).toBe("/api/audit/export");
     expect(url.searchParams.get("format")).toBe("csv");
     const filters = new URLSearchParams(url.searchParams);
@@ -435,14 +435,14 @@ describe("exportUrl and listParams", () => {
 
   it("puts the served base path in front of the export URL", () => {
     const meta = document.createElement("meta");
-    meta.name = "coaming-base";
-    meta.content = "/coaming";
+    meta.name = "tierplan-base";
+    meta.content = "/tierplan";
     document.head.append(meta);
     resetBasePathForTests();
     try {
       const search = auditSearchSchema.parse({ user: "admin", range: "1h" });
-      const url = new URL(exportUrl("csv", search, NOW), "http://coaming.test");
-      expect(url.pathname).toBe("/coaming/api/audit/export");
+      const url = new URL(exportUrl("csv", search, NOW), "http://tierplan.test");
+      expect(url.pathname).toBe("/tierplan/api/audit/export");
       expect(url.searchParams.get("format")).toBe("csv");
       expect(url.searchParams.get("user")).toBe("admin");
     } finally {
@@ -452,7 +452,7 @@ describe("exportUrl and listParams", () => {
   });
 
   it("asks for JSON and sends no filters when there are none", () => {
-    const url = new URL(exportUrl("json", { range: "all" }, NOW), "http://coaming.test");
+    const url = new URL(exportUrl("json", { range: "all" }, NOW), "http://tierplan.test");
     expect(url.search).toBe("?format=json");
   });
 

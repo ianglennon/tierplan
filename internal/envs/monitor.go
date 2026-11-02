@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package envs keeps the managed environments: which Docker hosts an admin
 // opted in (the registry), and whether each is reachable right now (the
@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/engine"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/engine"
 )
 
 // State is what the monitor currently believes about an environment.
@@ -34,7 +34,7 @@ const (
 	// StateOffline is an environment whose engine did not answer.
 	StateOffline State = "offline"
 	// StateUnsupported is an environment whose engine answered but is not one
-	// Coaming manages (too old, Podman, rootless, Docker Desktop).
+	// TierPlan manages (too old, Podman, rootless, Docker Desktop).
 	StateUnsupported State = "unsupported"
 )
 

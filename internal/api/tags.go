@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -18,12 +18,12 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // TagsDeps are the dependencies of the tag browsing route.
@@ -393,7 +393,7 @@ func platformKey(p registry.Platform) string {
 }
 
 // knownArch lists the node architectures a missing-platform flag is made for. A node that
-// reports anything else is ignored rather than flagged: a flag Coaming cannot back is noise.
+// reports anything else is ignored rather than flagged: a flag TierPlan cannot back is noise.
 var knownArch = map[string]bool{
 	"amd64": true, "arm64": true, "arm/v7": true, "arm/v6": true, "arm/v5": true, "386": true,
 	"ppc64le": true, "s390x": true, "riscv64": true, "mips64le": true,

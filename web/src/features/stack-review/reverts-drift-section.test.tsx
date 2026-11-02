@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -123,11 +123,11 @@ describe("the section", () => {
     expect(within(first).getByText("3")).toBeTruthy();
     expect(within(first).getByText("1")).toBeTruthy();
     expect(within(first).getByText("Mode.Replicated.Replicas")).toBeTruthy();
-    expect(first.textContent).toContain("web was scaled from 1 to 3 by alice in Coaming, 2 h ago.");
-    // Nothing in the audit log explains the second one, which reads as a change made outside Coaming.
+    expect(first.textContent).toContain("web was scaled from 1 to 3 by alice in TierPlan, 2 h ago.");
+    // Nothing in the audit log explains the second one, which reads as a change made outside TierPlan.
     expect(within(second).getByText("HOTFIX=1")).toBeTruthy();
     expect(within(second).getByText("not set")).toBeTruthy();
-    expect(second.textContent).toContain("Changed outside Coaming.");
+    expect(second.textContent).toContain("Changed outside TierPlan.");
   });
 
   it("says a service is created again or removed in words", () => {

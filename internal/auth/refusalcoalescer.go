@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package auth
 
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 // Defaults of the refusal coalescer (D-20). The window is how long repeats of one

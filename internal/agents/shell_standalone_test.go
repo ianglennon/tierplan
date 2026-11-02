@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // output collects what an exec session prints so a test can wait for text. Each write
@@ -121,10 +121,10 @@ func TestStandaloneAgentExec(t *testing.T) {
 		defer func() { _ = s.Close() }()
 		out := collect(s)
 
-		if _, err := s.Write([]byte("echo hello-$((1+2))-coaming\n")); err != nil {
+		if _, err := s.Write([]byte("echo hello-$((1+2))-tierplan\n")); err != nil {
 			return err
 		}
-		out.awaitOutput(t, "hello-3-coaming")
+		out.awaitOutput(t, "hello-3-tierplan")
 
 		if err := s.Resize(ctx, 100, 30); err != nil {
 			return err

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/gitsync"
 )
 
 func gitsyncTokenHash(token string) string { return gitsync.TokenHash(token) }
@@ -41,7 +41,7 @@ func (h *hookFix) pendingSnapshots(t *testing.T) int {
 	return n
 }
 
-// TestWebhookTriggersCheck is the tracer: a push to GitHub reaches Coaming through a signed delivery and the stack shows
+// TestWebhookTriggersCheck is the tracer: a push to GitHub reaches TierPlan through a signed delivery and the stack shows
 // behind, with nothing deployed by the webhook.
 func TestWebhookTriggersCheck(t *testing.T) {
 	t.Parallel()

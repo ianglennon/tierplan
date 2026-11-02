@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx_test
 
@@ -20,10 +20,10 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/engine"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 func dockerFacts(version string) dockerx.VersionFacts {
@@ -378,7 +378,7 @@ func TestTheTransportDecidesWhereTheBytesGo(t *testing.T) {
 }
 
 func TestNewIgnoresDockerEnvironmentVariables(t *testing.T) {
-	// Pitfall 1: none of these may change how Coaming talks to Docker.
+	// Pitfall 1: none of these may change how TierPlan talks to Docker.
 	t.Setenv("DOCKER_API_VERSION", "1.20")
 	t.Setenv("DOCKER_HOST", "tcp://203.0.113.9:2375")
 	t.Setenv("DOCKER_CERT_PATH", "/nonexistent")
@@ -480,7 +480,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // ServiceCreate (Phase 6, RES-03) creates one service from a strictly decoded spec with QueryRegistry false and an optional
 // credential, once and never retried; the API judges the spec before it is called.
 // ServiceRemove (Phase 6, RES-02) removes one service by ID, once; it takes no options, and the API refuses a
-// service a stack owns and a Coaming agent service nobody confirmed before it is called.
+// service a stack owns and a TierPlan agent service nobody confirmed before it is called.
 // NodeUpdate (Phase 6, RES-05) changes one node's availability, role or labels, once, with the version the
 // caller read: it reads the node, sends its whole spec with only those fields changed and never retries; it
 // takes an ID and a NodeChange and cannot express any other change.
@@ -504,7 +504,7 @@ func TestConcurrentProbesDoNotRace(t *testing.T) {
 // that carry one label key and value, a config without its content; a stack deploy finds the objects it made with them.
 // ContainersWithLabel and VolumesWithLabel (Phase 7, STK-02) are reads of the same kind for the containers (stopped ones
 // too) and the volumes that carry one label key and value; the name-clash check of a standalone stack finds a Compose
-// project that Coaming does not manage with them.
+// project that TierPlan does not manage with them.
 // ComposeUp (Phase 7, STK-02) runs the Compose SDK's up for one project over this client wrapped in a guard that refuses
 // build, save, load, push, import, export, commit, copy out, exec, attach, every swarm call and a plugin install; it
 // takes a sandboxed project (no build, no file-backed secret or config) and two options, cannot name a path, and is never
@@ -1298,7 +1298,7 @@ func clusterManager() dockertest.FakeConfig {
 		},
 		ServiceRows: []dockertest.FakeService{
 			{ID: "s2", Name: "web", Mode: "replicated", Running: 2, Desired: 3, UpdateState: "completed", UpdatedAt: old},
-			{ID: "s1", Name: "coaming-agent", Mode: "global", Running: 4, Desired: 4},
+			{ID: "s1", Name: "tierplan-agent", Mode: "global", Running: 4, Desired: 4},
 			{ID: "s3", Name: "backup", Mode: "replicated-job", Running: 0, Desired: 1},
 		},
 		AgentTasks: []dockertest.FakeAgentTask{
@@ -1357,8 +1357,8 @@ func TestClusterReadsNodesServicesAndTheAgentTasksFromAManager(t *testing.T) {
 	if s := svc["web"]; s.Running != 2 || s.Desired != 3 || s.Mode != "replicated" || s.UpdateState != "completed" || !s.UpdatedAt.Equal(time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)) || s.UpdatedAt.Location() != time.UTC {
 		t.Errorf("web = %+v, want 2 of 3 replicated, completed, updated at 09:00 UTC", s)
 	}
-	if s := svc["coaming-agent"]; s.Mode != "global" || s.Running != 4 || s.Desired != 4 || s.UpdateState != "" {
-		t.Errorf("coaming-agent = %+v", s)
+	if s := svc["tierplan-agent"]; s.Mode != "global" || s.Running != 4 || s.Desired != 4 || s.UpdateState != "" {
+		t.Errorf("tierplan-agent = %+v", s)
 	}
 	if s := svc["backup"]; s.Mode != "replicated-job" {
 		t.Errorf("backup = %+v, want mode replicated-job", s)
@@ -1673,32 +1673,32 @@ func TestSnapshotStillFailsOnAnyOtherClusterError(t *testing.T) {
 
 // The agent service is found by its label, not only by the name the install
 // command gives it: a stack file deployed as `docker stack deploy ... <stack>`
-// names it <stack>_coaming-agent, and the stack name is the user's.
+// names it <stack>_tierplan-agent, and the stack name is the user's.
 
 func TestClusterFindsTheAgentServiceWhateverItIsNamed(t *testing.T) {
 	now := time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)
-	label := map[string]string{"coaming.agent": "true"}
+	label := map[string]string{"tierplan.agent": "true"}
 	cases := []struct {
 		name     string
 		services []dockertest.FakeService
 		wantNode string // the one node whose agent task must be reported, "" for none
 	}{
 		{"stack file install, named by the stack", []dockertest.FakeService{
-			{ID: "sa", Name: "coaming_coaming-agent", Mode: "global", Labels: label},
+			{ID: "sa", Name: "tierplan_tierplan-agent", Mode: "global", Labels: label},
 			{ID: "sw", Name: "web"},
 		}, "n1"},
 		{"stack file install under another stack name", []dockertest.FakeService{
-			{ID: "sa", Name: "monitoring_coaming-agent", Mode: "global", Labels: label},
+			{ID: "sa", Name: "monitoring_tierplan-agent", Mode: "global", Labels: label},
 		}, "n1"},
 		{"command install carrying the label", []dockertest.FakeService{
-			{ID: "sa", Name: "coaming-agent", Mode: "global", Labels: label},
+			{ID: "sa", Name: "tierplan-agent", Mode: "global", Labels: label},
 		}, "n1"},
 		{"command install from before the label", []dockertest.FakeService{
-			{ID: "sa", Name: "coaming-agent", Mode: "global"},
+			{ID: "sa", Name: "tierplan-agent", Mode: "global"},
 		}, "n1"},
 		{"a service that merely looks like the agent", []dockertest.FakeService{
-			{ID: "sa", Name: "my-coaming-agent-fork", Mode: "global"},
-			{ID: "sw", Name: "web", Labels: map[string]string{"coaming.agent": "false"}},
+			{ID: "sa", Name: "my-tierplan-agent-fork", Mode: "global"},
+			{ID: "sw", Name: "web", Labels: map[string]string{"tierplan.agent": "false"}},
 		}, ""},
 	}
 	for _, c := range cases {
@@ -1713,7 +1713,7 @@ func TestClusterFindsTheAgentServiceWhateverItIsNamed(t *testing.T) {
 					{ID: "t1", NodeID: "n1", State: "running", Created: now, Service: c.services[0].ID},
 				},
 			}
-			if len(c.services) > 0 && c.services[0].Name == "coaming-agent" {
+			if len(c.services) > 0 && c.services[0].Name == "tierplan-agent" {
 				cfg.AgentTasks[0].Service = "" // the install command's own default
 			}
 			got, err := newClient(t, dockertest.NewFake(t, cfg)).Cluster(context.Background())
@@ -1739,7 +1739,7 @@ func TestClusterDoesNotReportAnotherServicesTasksAsTheAgents(t *testing.T) {
 		SwarmState: "active", SwarmControl: true,
 		NodeRows: []dockertest.FakeNode{{ID: "n1", Hostname: "a", Role: "manager", Leader: true}, {ID: "n2", Hostname: "b"}},
 		ServiceRows: []dockertest.FakeService{
-			{ID: "sa", Name: "coaming_coaming-agent", Mode: "global", Labels: map[string]string{"coaming.agent": "true"}},
+			{ID: "sa", Name: "tierplan_tierplan-agent", Mode: "global", Labels: map[string]string{"tierplan.agent": "true"}},
 			{ID: "sw", Name: "web"},
 		},
 		AgentTasks: []dockertest.FakeAgentTask{

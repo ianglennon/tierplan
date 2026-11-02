@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -17,7 +17,7 @@ const ME = makeMe({
   permissions: { global: [], environments: { "*": ["environments.read"] } },
 });
 
-const UNREACHABLE = "Can't reach Coaming. Check your connection and try again.";
+const UNREACHABLE = "Can't reach TierPlan. Check your connection and try again.";
 const SOURCE_LINK = { name: "Source code (opens in a new tab)" };
 
 let instanceStatus = 500;

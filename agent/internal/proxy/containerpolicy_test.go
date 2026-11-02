@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package proxy
 
@@ -16,7 +16,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/coaming/proto/hostpath"
+	"github.com/ianglennon/tierplan/proto/hostpath"
 )
 
 // containerFindingsPrefix starts the paths in the text of a host-policy refusal.

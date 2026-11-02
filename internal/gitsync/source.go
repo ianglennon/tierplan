@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitsync
 
@@ -7,8 +7,8 @@ import (
 	"context"
 	"slices"
 
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 // SourceChange is where a git stack is to follow from now on: the repository, the branch, tag or commit, the folder and

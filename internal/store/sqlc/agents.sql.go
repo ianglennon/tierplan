@@ -249,7 +249,7 @@ func (q *Queries) InsertAgent(ctx context.Context, arg InsertAgentParams) error 
 
 const insertAgentEnvironment = `-- name: InsertAgentEnvironment :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 INSERT INTO environments (id, kind, name, socket_path, enabled, created_at, updated_at, name_auto)
 VALUES (?, 'agent', ?, '', 1, ?, ?, ?)

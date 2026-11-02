@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronDown } from "lucide-react";
 import { Fragment, type ReactNode, useRef, useState } from "react";
@@ -42,7 +42,7 @@ export function rowOf(d: ContainerDetail): ContainerRow {
     readOnly: d.readOnly,
     project: d.project,
     stack: d.stack,
-    coamingStackId: d.coamingStackId,
+    tierplanStackId: d.tierplanStackId,
     service: d.service,
   };
 }
@@ -66,7 +66,7 @@ interface HeaderActionsProps {
 // HeaderActions are the buttons in a container page's header, derived from its
 // state (D-07): the way forward first, then the rest under More. Start is the one
 // accent button, and only while the container is not running. Everything goes
-// through the list's ActionDialog and requests, so an action on one of Coaming's
+// through the list's ActionDialog and requests, so an action on one of TierPlan's
 // own containers asks for its name here as it does there (D-11). The buttons are
 // off while a request is out, and a caller who may not act sees them unavailable
 // with the reason; the server decides either way.

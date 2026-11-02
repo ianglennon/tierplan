@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx
 
@@ -66,7 +66,7 @@ type ServiceDetail struct {
 	PreviousSpec json.RawMessage
 	// UpdateStatus is nil for a service that was never updated or whose update left none.
 	UpdateStatus *ServiceUpdateStatus
-	// Agent is true for a Coaming agent service.
+	// Agent is true for a TierPlan agent service.
 	Agent bool
 	// Labels are the service's own labels, for the rules that look at who owns it.
 	Labels map[string]string
@@ -432,7 +432,7 @@ func (c *Client) ServiceRollback(ctx context.Context, id string, version uint64,
 // ServiceRemove removes the service id once and never retries: a remove whose answer was lost
 // may have happened. The swarm stops its tasks; its images, volumes, networks, secrets and
 // configs stay. A service the manager does not know is ErrServiceNotFound. The caller refuses
-// a service a stack owns and Coaming's own agent service before this is called.
+// a service a stack owns and TierPlan's own agent service before this is called.
 func (c *Client) ServiceRemove(ctx context.Context, id string) error {
 	if _, err := c.cur().ServiceRemove(ctx, id, client.ServiceRemoveOptions{}); err != nil {
 		if cerrdefs.IsNotFound(err) {

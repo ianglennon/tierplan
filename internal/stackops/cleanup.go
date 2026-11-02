@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 const CodeRemoveFailed = "remove_failed"
 
 func init() {
-	codeMessages[CodeRemoveFailed] = "Coaming couldn't remove this. It is still there."
+	codeMessages[CodeRemoveFailed] = "TierPlan couldn't remove this. It is still there."
 }
 
 // write runs one write on a manager, once, on a context the job's cancel cannot reach: the deploy

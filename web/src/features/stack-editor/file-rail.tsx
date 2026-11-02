@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { FilePlus, MoreHorizontal } from "lucide-react";
 import {
@@ -93,7 +93,7 @@ export function FileRail({
   const paths = files.map((f) => f.path);
 
   // compose.yaml has no menu, and a Viewer has none at all. In a git stack only an overlay file has one: the
-  // repository's files are not Coaming's to rename or delete.
+  // repository's files are not TierPlan's to rename or delete.
   const canAct = (file: WorkingFile) =>
     !readOnly && (git ? file.origin === "overlay" : file.path !== COMPOSE_FILE);
   const hasOverlay = files.some((f) => f.origin === "overlay");

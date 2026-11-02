@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package store owns Coaming's SQLite database: the connection pools, the
+// Package store owns TierPlan's SQLite database: the connection pools, the
 // embedded goose migrations that run at startup, and the generated sqlc
 // queries (D-82 to D-86).
 //
@@ -25,11 +25,11 @@ import (
 
 	_ "modernc.org/sqlite" // registers the pure-Go "sqlite" driver
 
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // DatabaseFile is the database's file name inside the data directory.
-const DatabaseFile = "coaming.db"
+const DatabaseFile = "tierplan.db"
 
 const (
 	// pragmas applied to every connection of both pools. The order matters
@@ -58,7 +58,7 @@ type Store struct {
 	schemaVersion atomic.Int64
 }
 
-// Open opens <dataDir>/coaming.db with WAL, a 5 second busy timeout and
+// Open opens <dataDir>/tierplan.db with WAL, a 5 second busy timeout and
 // foreign keys on. It does not migrate: call Migrate before using the store.
 func Open(ctx context.Context, dataDir string) (*Store, error) {
 	abs, err := filepath.Abs(filepath.Join(dataDir, DatabaseFile))
@@ -123,8 +123,8 @@ func restrictFiles(dbPath string) {
 // query as its parameters. It is the only place a SQLite file: URI is built.
 //
 // The path is made absolute first. A relative one would put its first segment
-// in the URI authority (file://.devdata/coaming.db), which SQLite refuses with
-// "invalid uri authority" (UAT gap G-03-4); COAMING_DATA_DIR is commonly
+// in the URI authority (file://.devdata/tierplan.db), which SQLite refuses with
+// "invalid uri authority" (UAT gap G-03-4); TIERPLAN_DATA_DIR is commonly
 // relative (./.devdata under make dev). url.URL escapes the characters in the
 // path that SQLite's URI parser treats as syntax (?, #, %), so an unusual
 // directory name still works.

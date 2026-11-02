@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -71,7 +71,7 @@ export function updatedServices(job: StackJob): number {
 // could not remove. An object a service uses stays and is not reported: it is not a failure.
 export interface Cleanup {
   removed: number;
-  // "network s1_front", "secret s1_tok_ab12": what stays on the swarm that Coaming could not remove.
+  // "network s1_front", "secret s1_tok_ab12": what stays on the swarm that TierPlan could not remove.
   stuck: string[];
 }
 
@@ -295,7 +295,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
   // A restore puts the deployed revision back to undo drift (D-23). It is a roll back to that revision with its own words.
   const restored = job.mode === "restore";
   // For a roll back to a chosen revision, or a restore: the revision it restores, which a retry restores again, and the
-  // sentence that says Coaming recorded the attempt as a revision of its own.
+  // sentence that says TierPlan recorded the attempt as a revision of its own.
   const restores = (rolledBack || restored) && job.revision ? job.revision : undefined;
   const recorded =
     (rolledBack || restored) && job.recordedRevision ? (
@@ -320,7 +320,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     );
   }
   if (job.state === "done" && restored && job.revision) {
-    // A restore says the stack matches the deployed revision again, and where Coaming recorded it (D-23).
+    // A restore says the stack matches the deployed revision again, and where TierPlan recorded it (D-23).
     return (
       <section className="flex flex-col gap-3">
         <h4 className="text-base font-semibold">{t("stackRestore.console.complete.title")}</h4>
@@ -345,7 +345,7 @@ export function DeployResult({ job, envId, stackId, name, envName }: DeployResul
     );
   }
   if (job.state === "done" && rolledBack && job.revision && job.recordedRevision) {
-    // A roll back to a chosen revision says which revision runs and which one Coaming recorded it as (D-04).
+    // A roll back to a chosen revision says which revision runs and which one TierPlan recorded it as (D-04).
     return (
       <section className="flex flex-col gap-3">
         <h4 className="text-base font-semibold">{t("stackDeploy.rollback.complete.title")}</h4>

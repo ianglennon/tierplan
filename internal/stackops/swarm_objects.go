@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -11,11 +11,11 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
 )
 
 // stepError is a failure of one step of a swarm deploy: the deploy code to end the item with, the
@@ -387,7 +387,7 @@ func (d Deps) ensureObjects(ctx context.Context, envID string, stack Stack, objs
 }
 
 // removeReplacedObjects removes the secrets and configs of the stack that no deploy uses any more:
-// those that carry this stack's ID and the coaming.stack.object label (so a made-from-a-file
+// those that carry this stack's ID and the tierplan.stack.object label (so a made-from-a-file
 // object, never one the user added by hand and never another stack's) and are not in keep. It
 // reads the stack's services first and removes an object only when no service spec still
 // references it (T-07-32); the manager refuses one a service of another owner references, and

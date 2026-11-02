@@ -163,14 +163,14 @@ func (q *Queries) ListNetworkKeeps(ctx context.Context, envID string) ([]Network
 
 const listNetworkSeen = `-- name: ListNetworkSeen :many
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 SELECT env_id, node_id, network_id, name, first_seen_at, last_in_use_at FROM network_seen
 WHERE env_id = ?
 ORDER BY node_id, network_id
 `
 
-// Every network of an environment Coaming has a clock for.
+// Every network of an environment TierPlan has a clock for.
 func (q *Queries) ListNetworkSeen(ctx context.Context, envID string) ([]NetworkSeen, error) {
 	rows, err := q.db.QueryContext(ctx, listNetworkSeen, envID)
 	if err != nil {

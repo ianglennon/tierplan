@@ -22,7 +22,7 @@
     },
     "step2": {
       "title": "Install the agent",
-      "body": "Run one of these on a swarm manager or on a standalone host. Coaming detects which it is."
+      "body": "Run one of these on a swarm manager or on a standalone host. TierPlan detects which it is."
     },
     "tabs": {
       "label": "Where to install",
@@ -41,14 +41,14 @@
     "helper": {
       "swarm": "Run it on any manager node. It creates a Docker secret for the join token and starts the agent as a global service, so nodes you add later enrol by themselves.",
       "standalone": "Run it on the host. It starts the agent container with the Docker socket mounted.",
-      "composeSwarm": "Save this as `coaming-agent.yml` and run `docker stack deploy -c coaming-agent.yml coaming-agent`.",
+      "composeSwarm": "Save this as `tierplan-agent.yml` and run `docker stack deploy -c tierplan-agent.yml tierplan-agent`.",
       "composeSwarmSecret": "Create the secret first with the command in the file's first line.",
-      "composeStandalone": "Save this as `coaming-agent.yml` and run `docker compose -f coaming-agent.yml up -d`."
+      "composeStandalone": "Save this as `tierplan-agent.yml` and run `docker compose -f tierplan-agent.yml up -d`."
     },
     "update": {
       "heading": "Update the join token on this swarm",
       "helper": "Docker secrets can't be edited, so this command removes the old secret and adds the new one.",
-      "serviceName": "It is for an agent installed with the command, whose service is named `coaming-agent`. If you installed from the stack file, the service is named after your stack, such as `coaming-agent_coaming-agent`; change the name in the command to match."
+      "serviceName": "It is for an agent installed with the command, whose service is named `tierplan-agent`. If you installed from the stack file, the service is named after your stack, such as `tierplan-agent_tierplan-agent`; change the name in the command to match."
     },
     "secretNotice": "This command contains a secret. It starts with a space so shells that ignore space-prefixed commands keep it out of history. Once your hosts are enrolled, rotate the token from Settings.",
     "token": {
@@ -63,23 +63,23 @@
       "pin": "Server certificate pin"
     },
     "errors": {
-      "create": "Couldn't create the environment. Try again, and check the Coaming logs if it keeps happening.",
-      "rotate": "Couldn't generate a new token. Try again, and check the Coaming logs if it keeps happening.",
+      "create": "Couldn't create the environment. Try again, and check the TierPlan logs if it keeps happening.",
+      "rotate": "Couldn't generate a new token. Try again, and check the TierPlan logs if it keeps happening.",
       "publicUrlRequired": {
-        "before": "Coaming doesn't know what address to give the agent. Set the public URL or the agent URL in",
+        "before": "TierPlan doesn't know what address to give the agent. Set the public URL or the agent URL in",
         "link": "Settings",
         "after": ", then try again."
       },
       "insecureAgentUrl": {
-        "before": "Agents can't connect to this Coaming: the address they'd dial is plain ws:// for another host, and agents refuse it. Set an https public URL or agent URL in",
+        "before": "Agents can't connect to this TierPlan: the address they'd dial is plain ws:// for another host, and agents refuse it. Set an https public URL or agent URL in",
         "link": "Settings",
-        "after": ", then try again. COAMING_AGENT_ALLOW_INSECURE=true on Coaming allows a plain address for development only."
+        "after": ", then try again. TIERPLAN_AGENT_ALLOW_INSECURE=true on TierPlan allows a plain address for development only."
       }
     },
     "waiting": {
       "heading": "Waiting for the first agent…",
       "body": "This updates by itself when the agent connects.",
-      "slow": "Still waiting? Check that the host can reach {{url}}, then look at the agent's log: `docker logs coaming-agent` (standalone) or `docker service logs coaming-agent` (swarm).",
+      "slow": "Still waiting? Check that the host can reach {{url}}, then look at the agent's log: `docker logs tierplan-agent` (standalone) or `docker service logs tierplan-agent` (swarm).",
       "connecting": "Agent connecting…",
       "connected": "Connected: {{type}}, {{node}}.",
       "type": {

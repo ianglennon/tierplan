@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -15,7 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // sharedWorkerShellAndLogs opens a shell and a log stream in a swarm task container

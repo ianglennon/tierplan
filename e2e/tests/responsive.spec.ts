@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The 375px check the Phase 3 UI-SPEC flagged as needing a visual test (UI
 // Considerations, "User detail, Backup and Access pages at 375px"): the page
@@ -86,7 +86,7 @@ test("the user page stacks its cards, keeps tables inside them and has 44px butt
 
 test("the Backup page stacks its cards and has 44px buttons", async ({ page }) => {
   await page.goto(at("/settings/backup"));
-  await expect(page.getByRole("heading", { name: "Back up and restore Coaming" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Back up and restore TierPlan" })).toBeVisible();
   for (const title of ["Download a backup", "Scheduled backups", "Restore from a backup"]) {
     await expect(page.getByRole("heading", { name: title, level: 3 })).toBeVisible();
   }
@@ -249,7 +249,7 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
 
     await openMenu("the menu opens again");
     await menu.getByRole("link", { name: "Registries", exact: true }).click();
-    await expect(phone).toHaveURL(/\/coaming\/registries/);
+    await expect(phone).toHaveURL(/\/tierplan\/registries/);
     await expect(menu).toBeHidden();
     await expect(phone.getByRole("button", { name: `Actions for ${name}` })).toBeVisible();
     await expectPhoneWidth(phone, "Registries");
@@ -293,7 +293,7 @@ test("a Viewer on a phone sees Registries, Volumes and Networks at the width of 
 });
 
 // The Containers, Volumes and Images lists keep every filter chip on the screen (G-06-2). They are
-// covered here, on the standalone host Coaming manages, and services.spec.ts covers Services and
+// covered here, on the standalone host TierPlan manages, and services.spec.ts covers Services and
 // Nodes, because those two lists need the swarm that only the services story creates. The chips'
 // counts arrive with each list's data and widen the chips, so a row is measured only once its last
 // chip reads its final text.

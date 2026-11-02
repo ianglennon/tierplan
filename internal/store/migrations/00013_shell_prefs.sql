@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
 -- How each user likes to open a shell in an image (OBS-03, D-26): the shell, the

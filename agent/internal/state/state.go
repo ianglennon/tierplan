@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package state is the agent's identity on its volume: the key it generated, the
-// certificate Coaming issued for it, and the IDs that name it. With these the
+// certificate TierPlan issued for it, and the IDs that name it. With these the
 // agent reconnects in hello mode and no longer needs its join token (D-01, D-03).
 //
 // Every file is private to the agent user (0600) and is replaced atomically, so
@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ianglennon/coaming/proto/authn"
+	"github.com/ianglennon/tierplan/proto/authn"
 )
 
 // File names inside the state directory.
@@ -37,7 +37,7 @@ const (
 	PinsFile = "pins.json"
 	// URLsFile holds the addresses the agent dials, newest first (D-19).
 	URLsFile = "urls.json"
-	// EnvURLFile holds the COAMING_AGENT_URL the agent last started with, so a
+	// EnvURLFile holds the TIERPLAN_AGENT_URL the agent last started with, so a
 	// different one on the next start is noticed (G-02-4b).
 	EnvURLFile = "env-url.json"
 
@@ -50,7 +50,7 @@ type State struct {
 	AgentID, EnvID string
 	// Key is the agent's Ed25519 private key. It never leaves the host.
 	Key ed25519.PrivateKey
-	// Cert is the DER certificate Coaming issued for Key.
+	// Cert is the DER certificate TierPlan issued for Key.
 	Cert []byte
 }
 
@@ -261,9 +261,9 @@ func ValidPin(s string) bool {
 // literal that is loopback once an IPv4-mapped address is unmapped), or allowPlain
 // is true. A plain address sends the join token, the proof and every Docker answer
 // unencrypted to a peer that was never authenticated, so it is dialed only on the
-// same machine or when the operator set COAMING_AGENT_ALLOW_INSECURE on the agent
+// same machine or when the operator set TIERPLAN_AGENT_ALLOW_INSECURE on the agent
 // itself (T-02-31). The loopback rule is authn.LoopbackHost in proto/authn, the
-// same one Coaming applies to the address it tells agents to dial, so the two ends
+// same one TierPlan applies to the address it tells agents to dial, so the two ends
 // cannot disagree about which plain address is local.
 func DialableURL(s string, allowPlain bool) bool {
 	if !ValidURL(s) {
@@ -525,7 +525,7 @@ type envURLRecord struct {
 	URL string `json:"url"`
 }
 
-// LoadEnvURL reads the COAMING_AGENT_URL the agent last started with. A directory
+// LoadEnvURL reads the TIERPLAN_AGENT_URL the agent last started with. A directory
 // with no env-url.json, or one holding something that is not a valid address,
 // has none: ok is false and the error nil. A file that cannot be read or parsed is
 // an error.
@@ -547,7 +547,7 @@ func LoadEnvURL(dir string) (addr string, ok bool, err error) {
 	return rec.URL, true, nil
 }
 
-// SaveEnvURL records the COAMING_AGENT_URL the agent started with, atomically and
+// SaveEnvURL records the TIERPLAN_AGENT_URL the agent started with, atomically and
 // private to the agent.
 func SaveEnvURL(dir, addr string) error {
 	data, err := json.MarshalIndent(envURLRecord{URL: addr}, "", "  ")
@@ -566,19 +566,19 @@ func SaveEnvURL(dir, addr string) error {
 }
 
 // StartURLs is the dial list an agent starts with, given the addresses it stored,
-// the COAMING_AGENT_URL it starts with now (envURL), the one it last started with
+// the TIERPLAN_AGENT_URL it starts with now (envURL), the one it last started with
 // (lastEnvURL) and whether it has a record of that (known). The bool is true when
-// the list differs from stored because the operator changed COAMING_AGENT_URL.
+// the list differs from stored because the operator changed TIERPLAN_AGENT_URL.
 //
 // With no live stored address the agent has only envURL. When the record exists
 // and differs from envURL, the operator started the agent with a new address on
-// purpose, most often to bring home an agent that was offline while Coaming's
+// purpose, most often to bring home an agent that was offline while TierPlan's
 // agent address changed (G-02-4b), so envURL goes first with no expiry, and the
 // live stored addresses follow with their expiries unchanged: if the new address
 // cannot be reached at all, the old ones are still tried, and the next verified
 // welcome reorders the list as usual (MergeURLs). Otherwise stored stays in charge:
-// after Coaming pushed an address the container still starts with its original
-// COAMING_AGENT_URL, and putting that first would dial an address the server now
+// after TierPlan pushed an address the container still starts with its original
+// TIERPLAN_AGENT_URL, and putting that first would dial an address the server now
 // refuses (D-19). No record is read as unchanged, which keeps the behaviour of
 // state written before the record existed.
 func StartURLs(stored []URLEntry, envURL, lastEnvURL string, known bool, now time.Time) ([]URLEntry, bool) {

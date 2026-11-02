@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 
@@ -219,7 +219,7 @@ async function settingsFailure(error: unknown, response: { status: number }): Pr
 }
 
 // The environment's small-subnet opt-in and entered pools, with the version a save must send back.
-// Docker is not asked: these are Coaming's own settings.
+// Docker is not asked: these are TierPlan's own settings.
 export function addressSettingsQuery(envId: string) {
   return queryOptions({
     queryKey: addressSettingsKey(envId),

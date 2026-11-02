@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/api"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/api"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The container stats stream (plan 06-32, RES-11, D-29 to D-31). Docker is a FakeDaemon
@@ -303,7 +303,7 @@ func TestContainerStatsStreamEndsWithClosedAccessLostWithinAHeartbeatOfLosingThe
 	awaitSamplersStopped(t, f.statsHub, "the sampler to stop")
 }
 
-// RES-11 prohibition (T-06-95): Coaming does not persist stats samples on the server. A
+// RES-11 prohibition (T-06-95): TierPlan does not persist stats samples on the server. A
 // sample of a container reaches the browser and nothing else: no audit row, no log line.
 func TestContainerStatsStreamStoresNothingAndLogsNothingOfASample(t *testing.T) {
 	t.Parallel()

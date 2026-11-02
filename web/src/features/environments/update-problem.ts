@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The problem types a refused update request answers with (409), each with a
 // sentence of its own under envsettings.updateErrors. Anything else is general.

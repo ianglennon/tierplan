@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, Outlet } from "@tanstack/react-router";
@@ -151,7 +151,7 @@ export function DetailLayout({ envId, containerId, node }: DetailLayoutProps) {
   }
 
   // A tab never hides: when it cannot be used it is shown unavailable, with why. The
-  // Shell tab needs the container shell permission, and is never for Coaming's own server
+  // Shell tab needs the container shell permission, and is never for TierPlan's own server
   // or an agent's container (D-36).
   const unavailableReason = (tab: ContainerTab): string | undefined => {
     if (tab.needs !== "containers.exec") return undefined;

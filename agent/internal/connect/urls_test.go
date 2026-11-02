@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/agent/internal/state"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/state"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // deadURL is an address nothing listens on: the dial is refused at once.
@@ -215,7 +215,7 @@ func TestAPushThatIsADowngradeOrNotAnAddressIsIgnoredAndTheOldAddressesStay(t *t
 	a.script = func(int, wire.Auth) reply {
 		return reply{heartbeatMs: 30, toAgent: []string{
 			pushLine(t, nil, "ws://insecure.example/agent/connect"), // plain, over a verified session
-			pushLine(t, nil, "https://coaming.example/agent/connect", "not a url", ""),
+			pushLine(t, nil, "https://tierplan.example/agent/connect", "not a url", ""),
 			pushLine(t, nil),
 			`{"t":"urls","urls":"not-a-list"}`,
 			fenceLine,
@@ -246,11 +246,11 @@ func TestAServerThatPushesTooManyAddressesGetsTheFirstFewKept(t *testing.T) {
 	}
 }
 
-// --- a changed COAMING_AGENT_URL (G-02-4b) ---
+// --- a changed TIERPLAN_AGENT_URL (G-02-4b) ---
 
 // strandedAgent is an enrolled agent whose stored list holds the refusing server
 // B, started with the accepting server C on a volume that records an older
-// COAMING_AGENT_URL.
+// TIERPLAN_AGENT_URL.
 func strandedAgent(t *testing.T, record string) (dir string, b, c *fakeServer, pins []string) {
 	t.Helper()
 	dir = t.TempDir()
@@ -297,7 +297,7 @@ func TestAnAgentStartedWithTheSameEnvironmentURLAsLastTimeStillDialsTheStoredOne
 	// done so between the two attempts at B.
 	b.authN(t, 2)
 	if n := c.attempts(); n != 0 {
-		t.Errorf("COAMING_AGENT_URL was dialed %d times although it did not change and an address pushed by Coaming is stored", n)
+		t.Errorf("TIERPLAN_AGENT_URL was dialed %d times although it did not change and an address pushed by TierPlan is stored", n)
 	}
 	if got := urlsOnDisk(t, dir); len(got) != 1 || got[0].URL != b.url() {
 		t.Errorf("urls.json = %+v, want it untouched", got)
@@ -309,7 +309,7 @@ func TestAnAgentWithNoRecordOfItsLastEnvironmentURLKeepsTheStoredOrderAndRecords
 	startAgent(t, Config{URL: c.url(), StateDir: dir, InstallPins: pins}, fastEnv())
 	b.authN(t, 2) // see the test above: C is not dialed between two attempts at B
 	if n := c.attempts(); n != 0 {
-		t.Errorf("COAMING_AGENT_URL was dialed %d times, want the stored list in charge on the start that has no record", n)
+		t.Errorf("TIERPLAN_AGENT_URL was dialed %d times, want the stored list in charge on the start that has no record", n)
 	}
 	// The start address is recorded before the first dial.
 	if rec, ok, _ := state.LoadEnvURL(dir); !ok || rec != c.url() {
@@ -410,7 +410,7 @@ func TestTheRecordedStartAddressIsNeverDialed(t *testing.T) {
 	if err := state.SaveURLs(dir, []state.URLEntry{{URL: srv.url()}}); err != nil {
 		t.Fatal(err)
 	}
-	// An older COAMING_AGENT_URL, plain and for another host, is only compared.
+	// An older TIERPLAN_AGENT_URL, plain and for another host, is only compared.
 	if err := state.SaveEnvURL(dir, plainElsewhere); err != nil {
 		t.Fatal(err)
 	}
@@ -437,12 +437,12 @@ func TestNewTargetRefusesWhatDialableURLRefuses(t *testing.T) {
 		allowPlain bool
 		ok         bool
 	}{
-		{"wss://coaming.example/agent/connect", false, true},
+		{"wss://tierplan.example/agent/connect", false, true},
 		{"ws://127.0.0.1:7480/agent/connect", false, true},
 		{plainElsewhere, false, false},
 		{plainElsewhere, true, true},
-		{"wss://user:pw@coaming.example/agent/connect", true, false},
-		{"https://coaming.example/agent/connect", true, false},
+		{"wss://user:pw@tierplan.example/agent/connect", true, false},
+		{"https://tierplan.example/agent/connect", true, false},
 	} {
 		_, err := newTarget(tc.url, tc.allowPlain)
 		if (err == nil) != tc.ok {

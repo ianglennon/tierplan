@@ -3,7 +3,7 @@
     "since": "since {{time}}",
     "unknown": {
       "text": "Connection problem ({{code}})",
-      "hint": "Look at the agent's log on the host and at the Coaming logs."
+      "hint": "Look at the agent's log on the host and at the TierPlan logs."
     },
     "commands": {
       "agentOfflineStandalone": {
@@ -23,14 +23,14 @@
       "agent_offline": {
         "text": "The agent on {{node}} isn't connected.",
         "textGeneric": "The agent isn't connected.",
-        "hint": "Check that it's running. It reconnects by itself when it can reach Coaming."
+        "hint": "Check that it's running. It reconnects by itself when it can reach TierPlan."
       },
       "tls_untrusted": {
-        "text": "The agent doesn't trust Coaming's certificate.",
+        "text": "The agent doesn't trust TierPlan's certificate.",
         "hint": "Use a certificate from a public CA, or reinstall the agent with the command from Show install command. It carries the certificate pin."
       },
       "auth_rejected": {
-        "text": "Coaming rejected the agent's credentials.",
+        "text": "TierPlan rejected the agent's credentials.",
         "hint": "Generate a new join token and reinstall the agent with the new command."
       },
       "cert_expired": {
@@ -58,22 +58,22 @@
         "hint": "Unblock it in Settings → Environments, in the nodes list."
       },
       "version_incompatible": {
-        "text": "Agent {{version}} can't talk to this Coaming.",
-        "textGeneric": "The agent can't talk to this Coaming.",
-        "older": "The agent is older than Coaming supports.",
-        "newer": "The agent is newer than this Coaming.",
+        "text": "Agent {{version}} can't talk to this TierPlan.",
+        "textGeneric": "The agent can't talk to this TierPlan.",
+        "older": "The agent is older than TierPlan supports.",
+        "newer": "The agent is newer than this TierPlan.",
         "hint": "Update the agent by hand.",
         "hintCommand": "Update the agent by hand:"
       },
       "clock_skew": {
         "text": "The clock on {{node}} is {{offset}} out of step.",
         "textGeneric": "The clock on a node is out of step.",
-        "hint": "Sync the host's clock (NTP). Coaming accepts up to 5 minutes of difference."
+        "hint": "Sync the host's clock (NTP). TierPlan accepts up to 5 minutes of difference."
       },
       "timeout": {
         "text": "{{node}} stopped answering.",
         "textGeneric": "A node stopped answering.",
-        "hint": "Check the network between the host and Coaming. The agent reconnects by itself."
+        "hint": "Check the network between the host and TierPlan. The agent reconnects by itself."
       },
       "not_a_manager": {
         "text": "No manager node is reporting.",
@@ -81,7 +81,7 @@
       },
       "no_quorum": {
         "text": "This swarm has lost quorum.",
-        "hint": "Bring a manager node back online. Coaming can't read cluster data until most managers are up. Node-local data still works."
+        "hint": "Bring a manager node back online. TierPlan can't read cluster data until most managers are up. Node-local data still works."
       },
       "cluster_changed": {
         "text": "This swarm was re-initialised.",
@@ -95,12 +95,12 @@
       "unsupported_engine": {
         "text": "{{engine}} {{version}} on {{node}} isn't supported.",
         "textGeneric": "Docker on a node isn't supported.",
-        "hint": "Coaming needs Docker Engine 24 or later. Upgrade Docker on that node. Its other data is left out until then."
+        "hint": "TierPlan needs Docker Engine 24 or later. Upgrade Docker on that node. Its other data is left out until then."
       },
       "agent_policy_denied": {
         "text": "The agent refused a request ({{endpoint}}).",
         "textGeneric": "The agent refused a request.",
-        "hint": "The host's agent policy doesn't allow it. This is recorded in the audit log. If you didn't expect it, check the Coaming server and the agent's settings."
+        "hint": "The host's agent policy doesn't allow it. This is recorded in the audit log. If you didn't expect it, check the TierPlan server and the agent's settings."
       },
       "duplicate_environment": {
         "text": "{{host}} already belongs to {{environment}}.",
@@ -122,23 +122,23 @@
       },
       "unreachable": {
         "text": "Docker isn't answering on the local socket.",
-        "hint": "Check that `/var/run/docker.sock` is mounted into Coaming and that the Docker daemon is running."
+        "hint": "Check that `/var/run/docker.sock` is mounted into TierPlan and that the Docker daemon is running."
       },
       "api_too_old": {
-        "text": "This Docker Engine is older than Coaming supports.",
-        "hint": "Coaming needs Docker Engine 24 or later. Upgrade Docker Engine, then retry."
+        "text": "This Docker Engine is older than TierPlan supports.",
+        "hint": "TierPlan needs Docker Engine 24 or later. Upgrade Docker Engine, then retry."
       },
       "podman": {
         "text": "Podman isn't supported.",
-        "hint": "Coaming manages Docker Engine only."
+        "hint": "TierPlan manages Docker Engine only."
       },
       "rootless": {
         "text": "This Docker setup isn't supported.",
-        "hint": "Coaming manages Docker Engine 24 or later."
+        "hint": "TierPlan manages Docker Engine 24 or later."
       },
       "docker_desktop": {
         "text": "This Docker setup isn't supported.",
-        "hint": "Coaming manages Docker Engine 24 or later."
+        "hint": "TierPlan manages Docker Engine 24 or later."
       },
       "address_space_full": {
         "textPool": "The address pool {{subject}} is {{percent}}% used.",

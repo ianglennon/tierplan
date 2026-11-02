@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 )
 
 // nodeView is the part of a node as the nodes routes answer it that these tests read.
@@ -403,7 +403,7 @@ func TestSwarmNodeRemove(t *testing.T) {
 }
 
 // sharedConstraintsMatchPlacement gives nodes labels with mixed case and a CIDR address, makes global services
-// with placement constraints and compares the nodes the swarm really puts tasks on with the evaluator Coaming shows
+// with placement constraints and compares the nodes the swarm really puts tasks on with the evaluator TierPlan shows
 // placement by (plan 06-37, RES-12, RESEARCH A10): a label's value matches without regard to case, its name does not,
 // a node without the label meets !=, node.ip takes a CIDR and its negation, and constraints are all required. A
 // constraint that matches nothing leaves a task with no suitable node, as the evaluator says.
@@ -467,7 +467,7 @@ func sharedConstraintsMatchPlacement(t *testing.T, f *swarmFix) {
 		}
 		slices.Sort(expectNames)
 
-		// What the evaluator says, from the nodes Coaming reads.
+		// What the evaluator says, from the nodes TierPlan reads.
 		code, body := f.srv.Do(http.MethodGet, base+"/placement?serviceId="+id, nil)
 		var pl struct {
 			Nodes []struct {

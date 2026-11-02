@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -14,10 +14,10 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
 )
 
 // envRecOf is a recorded answer in the shape the default caller's helpers return.
@@ -883,9 +883,9 @@ func loneService() dockertest.FakeService {
 	return dockertest.FakeService{ID: "svc-lone", Name: "lone", Mode: "replicated", Running: 1, Desired: 1, Image: "lone:1", Version: 2}
 }
 
-// agentService is Coaming's own agent, as the install command names it.
+// agentService is TierPlan's own agent, as the install command names it.
 func agentService() dockertest.FakeService {
-	return dockertest.FakeService{ID: "svc-agent", Name: "coaming-agent", Mode: "global", Running: 1, Desired: 1, Image: "coaming/agent:1", Version: 3}
+	return dockertest.FakeService{ID: "svc-agent", Name: "tierplan-agent", Mode: "global", Running: 1, Desired: 1, Image: "tierplan/agent:1", Version: 3}
 }
 
 func TestRemoveService(t *testing.T) {
@@ -952,7 +952,7 @@ func TestRemoveServiceOfAStandaloneHostIsNotASwarm(t *testing.T) {
 func TestRemoveAgentServiceNeedsItsName(t *testing.T) {
 	t.Parallel()
 	f, e := actionsEnv(t, nil, agentService())
-	for _, query := range []string{"", "confirm=lone", "confirm=Coaming-Agent"} {
+	for _, query := range []string{"", "confirm=lone", "confirm=TierPlan-Agent"} {
 		rec := f.removeService(t, e, "svc-agent", query)
 		if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "confirmation_required" {
 			t.Errorf("remove with %q = %d %s (%s), want 422 confirmation_required", query, rec.code, rec.body, rec.ptyp)
@@ -967,12 +967,12 @@ func TestRemoveAgentServiceNeedsItsName(t *testing.T) {
 	}
 	for _, r := range rows {
 		if r.Action != "service.removed" || r.Result != string(audit.ResultFailure) || r.Reason != "confirmation_required" ||
-			r.Details["agent"] != "true" || r.Details["confirmed"] != "false" || r.Details["name"] != "coaming-agent" {
+			r.Details["agent"] != "true" || r.Details["confirmed"] != "false" || r.Details["name"] != "tierplan-agent" {
 			t.Errorf("row = %+v, want a service.removed failure confirmation_required for the agent", r)
 		}
 	}
 
-	rec := f.removeService(t, e, "svc-agent", "confirm=coaming-agent")
+	rec := f.removeService(t, e, "svc-agent", "confirm=tierplan-agent")
 	if rec.code != http.StatusNoContent {
 		t.Fatalf("with its name: %d %s, want 204", rec.code, rec.body)
 	}

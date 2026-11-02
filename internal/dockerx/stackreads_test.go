@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx_test
 
@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 func stackReadsFake(t *testing.T) *dockertest.Fake {
@@ -71,7 +71,7 @@ func TestNetworksWithLabelListsOnlyTheNetworksThatCarryIt(t *testing.T) {
 
 func objectReadsFake(t *testing.T) *dockertest.Fake {
 	t.Helper()
-	shop := map[string]string{"com.docker.stack.namespace": "shop", "coaming.stack.id": "s1"}
+	shop := map[string]string{"com.docker.stack.namespace": "shop", "tierplan.stack.id": "s1"}
 	return dockertest.NewFake(t, dockertest.FakeConfig{
 		SwarmState: "active", SwarmControl: true,
 		Secrets: []dockertest.FakeSecret{
@@ -103,7 +103,7 @@ func TestSecretsWithLabelListsOnlyTheSecretsThatCarryIt(t *testing.T) {
 
 func TestConfigsWithLabelListsOnlyTheConfigsThatCarryItWithoutTheirContent(t *testing.T) {
 	c := newClient(t, objectReadsFake(t))
-	got, err := c.ConfigsWithLabel(context.Background(), "coaming.stack.id", "s1")
+	got, err := c.ConfigsWithLabel(context.Background(), "tierplan.stack.id", "s1")
 	if err != nil {
 		t.Fatalf("ConfigsWithLabel: %v", err)
 	}
@@ -127,7 +127,7 @@ func standaloneReadsFake(t *testing.T) *dockertest.Fake {
 	t.Helper()
 	return dockertest.NewFake(t, dockertest.FakeConfig{
 		Containers: []dockertest.FakeContainer{
-			{ID: "c1", Names: []string{"/shop-web-1"}, Image: "nginx:1", State: "running", Labels: map[string]string{"com.docker.compose.project": "shop", "coaming.stack.id": "s1"}},
+			{ID: "c1", Names: []string{"/shop-web-1"}, Image: "nginx:1", State: "running", Labels: map[string]string{"com.docker.compose.project": "shop", "tierplan.stack.id": "s1"}},
 			{ID: "c2", Names: []string{"/shop-job-1"}, Image: "busybox", State: "exited", Labels: map[string]string{"com.docker.compose.project": "shop"}},
 			{ID: "c3", Names: []string{"/blog-web-1"}, Image: "nginx:1", State: "running", Labels: map[string]string{"com.docker.compose.project": "blog"}},
 			{ID: "c4", Names: []string{"/lonely"}, Image: "busybox", State: "running"},

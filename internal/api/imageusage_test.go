@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // What uses an image (plan 05-15 task 1, RES-09, D-18, D-28). Docker is a fake daemon behind

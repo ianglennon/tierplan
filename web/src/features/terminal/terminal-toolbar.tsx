@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ExternalLink, Search } from "lucide-react";
 import { forwardRef, useCallback, useImperativeHandle, useRef, useState } from "react";
@@ -24,8 +24,8 @@ export const DEFAULT_FONT_SIZE: FontSize = 14;
 
 // The two terminal preferences kept in this browser (D-33, UI-SPEC accessibility). They
 // are the only things the terminal puts in storage: never what it shows or what is typed.
-export const FONT_SIZE_KEY = "coaming-terminal-font-size";
-export const SCREEN_READER_KEY = "coaming-terminal-screen-reader";
+export const FONT_SIZE_KEY = "tierplan-terminal-font-size";
+export const SCREEN_READER_KEY = "tierplan-terminal-screen-reader";
 
 function readStored(key: string): string | null {
   try {

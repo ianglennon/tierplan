@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import {
   type Dispatch,
@@ -20,7 +20,7 @@ export interface SelectionOptions<K> {
   orderedKeys: readonly K[];
   // Whether a key may be selected at all. It answers for every row the list
   // knows, collapsed groups included; a key it refuses is never added, and one
-  // that stops being eligible (a row that is gone, a container Coaming runs in)
+  // that stops being eligible (a row that is gone, a container TierPlan runs in)
   // leaves the selection.
   isEligible: (key: K) => boolean;
 }
@@ -70,7 +70,7 @@ export function useSelection<K>(
   orderRef.current = orderedKeys;
 
   // What is selected is what is still eligible: a row that went away or became
-  // one Coaming cannot touch leaves quietly.
+  // one TierPlan cannot touch leaves quietly.
   const selected = useMemo(() => {
     const out = new Set<K>();
     for (const k of raw) if (isEligible(k)) out.add(k);

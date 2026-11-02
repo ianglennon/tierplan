@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -14,14 +14,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // AddressSpaceDeps are the dependencies of the address-space routes of the networks phase.
@@ -67,8 +67,8 @@ type AddressSpaceBody struct {
 	NetworksTotal     int                 `json:"networksTotal" minimum:"0" doc:"How many networks the map holds, whatever the cap"`
 	NetworksTruncated bool                `json:"networksTruncated" doc:"True when networksTotal is more than the rows returned"`
 
-	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (Coaming cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time Coaming saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a Coaming stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
-	Kept            []KeptRowBody        `json:"kept" doc:"The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the coaming.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name"`
+	Orphans         []OrphanRowBody      `json:"orphans" doc:"The networks nothing uses any more, decided on the server (never in the browser): orphaned (it carries a stack or compose-project label and that stack is gone), unused (no stack ever owned it) and cant_tell (TierPlan cannot be sure, see orphansWithheld). A network is listed only after every node, every service spec and every live task were checked and it has been idle for 24 hours, counted from the later of its creation and the last time TierPlan saw it in use; at exactly 24 hours it is listed. The engine's own networks, networks in use, kept networks, networks a TierPlan stack declares external and networks of a stack with an operation running are never listed. A local network is judged per node, one row per node. Orphaned first, then unused, then cant_tell, each by name"`
+	Kept            []KeptRowBody        `json:"kept" doc:"The networks kept out of the orphan list: every keep a person made (whether or not the network exists now) and every existing network with the tierplan.keep=true label. A kept network is never listed as orphaned or unused. Ordered by name"`
 	OrphansWithheld *OrphansWithheldBody `json:"orphansWithheld,omitempty" doc:"Present when the check could not judge every network: which nodes did not report, whether no manager answered, and which stacks did not load. While it is present no network that depends on the missing part is called orphaned or unused. Absent when nothing was withheld"`
 }
 
@@ -80,17 +80,17 @@ type OrphanRowBody struct {
 	NodeID          string   `json:"nodeId" doc:"The ID of the node the network was read from; for a swarm-wide network, the manager in use"`
 	Scope           string   `json:"scope" enum:"swarm,local"`
 	Subnets         []string `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty when there is none"`
-	Class           string   `json:"class" enum:"orphaned,unused,cant_tell" doc:"orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: Coaming cannot be sure, because a node did not report, no manager answered or a stack did not load"`
+	Class           string   `json:"class" enum:"orphaned,unused,cant_tell" doc:"orphaned: its stack is gone. unused: no stack ever owned it. cant_tell: TierPlan cannot be sure, because a node did not report, no manager answered or a stack did not load"`
 	FormerOwner     string   `json:"formerOwner" doc:"The stack or compose project the network's labels name; empty for a network with no owner label"`
 	FormerOwnerKind string   `json:"formerOwnerKind" enum:"stack,project," doc:"What formerOwner is, or empty when the network has no owner label"`
-	IdleSince       string   `json:"idleSince" format:"date-time" doc:"When the network's idle time started: the later of its creation and the last time Coaming saw it in use"`
-	IdleSinceSource string   `json:"idleSinceSource" enum:"seen,created" doc:"seen when idleSince is the last time Coaming saw the network in use, created when it is the network's creation"`
+	IdleSince       string   `json:"idleSince" format:"date-time" doc:"When the network's idle time started: the later of its creation and the last time TierPlan saw it in use"`
+	IdleSinceSource string   `json:"idleSinceSource" enum:"seen,created" doc:"seen when idleSince is the last time TierPlan saw the network in use, created when it is the network's creation"`
 }
 
 // OrphansWithheldBody says what the orphan check could not see.
 type OrphansWithheldBody struct {
 	Nodes          []string `json:"nodes" doc:"The nodes that did not report, because of which a network was not judged"`
-	Stacks         []string `json:"stacks" doc:"The Coaming stacks that did not load, whose external networks are therefore not known"`
+	Stacks         []string `json:"stacks" doc:"The TierPlan stacks that did not load, whose external networks are therefore not known"`
 	ManagerMissing bool     `json:"managerMissing" doc:"True when a swarm's managers did not answer, so its services and tasks were not read"`
 }
 
@@ -109,7 +109,7 @@ type AddressMapRowBody struct {
 	Subnets            []string          `json:"subnets" doc:"The IPAM subnets in CIDR notation; empty for host and none and any network without one"`
 	Owner              string            `json:"owner" doc:"The stack (com.docker.stack.namespace) or compose project (com.docker.compose.project) label value; for a swarm network with neither, the first service by name whose spec names it; empty otherwise"`
 	OwnerKind          string            `json:"ownerKind" enum:"stack,project,service,none" doc:"What owner is: a stack, a compose project, a service, or none"`
-	OwnerStackID       string            `json:"ownerStackId" doc:"The ID of the Coaming stack of this environment the network belongs to, so the page can link to it. Empty when no Coaming stack of the environment owns it"`
+	OwnerStackID       string            `json:"ownerStackId" doc:"The ID of the TierPlan stack of this environment the network belongs to, so the page can link to it. Empty when no TierPlan stack of the environment owns it"`
 	AttachedContainers int               `json:"attachedContainers" doc:"Containers, running or not, on any reporting node that are attached to the network. A local network counts the containers of its own node"`
 	AttachedServices   int               `json:"attachedServices" doc:"Swarm services whose spec names the network, even with no running task, as of the last cluster read. Always 0 off a swarm and for a local network"`
 	Created            string            `json:"created,omitempty" format:"date-time"`
@@ -352,7 +352,7 @@ func mapRows(nets []envs.NetworkRow, use networkUsage, known stackIDs, overlays 
 }
 
 // mapRow is one network as the subnet map shows it. Only the owner label values and the ID of a
-// Coaming stack that owns the network leave the server; no other label does (T-10-16).
+// TierPlan stack that owns the network leave the server; no other label does (T-10-16).
 func mapRow(n envs.NetworkRow, use networkUsage, known stackIDs, usage map[string]*NetworkUsageBody) AddressMapRowBody {
 	scope := "local"
 	if n.Scope == dockerx.ScopeSwarm {

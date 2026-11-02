@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx
 
@@ -20,7 +20,7 @@ func forbidden(method string) error {
 	return fmt.Errorf("%w: %s", ErrComposeForbidden, method)
 }
 
-// guardClient is the engine client the Compose SDK is given. It is Coaming's own client with the calls
+// guardClient is the engine client the Compose SDK is given. It is TierPlan's own client with the calls
 // listed below overridden to fail before anything is sent: the agent's allowlist and host policy are the
 // second gate on a host that has an agent, and this is the first, and the only one on the server's own
 // socket. Everything else passes through to the embedded client, so the SDK sees one engine.
@@ -36,7 +36,7 @@ type guardClient struct {
 // it, and the SDK closes the client it was given when it is closed.
 func (guardClient) Close() error { return nil }
 
-// Building images: the Compose SDK builds an image from a build context. Coaming strips every `build` key before
+// Building images: the Compose SDK builds an image from a build context. TierPlan strips every `build` key before
 // it hands over a project and never builds an image (A5), and a build context would be read from the server's own
 // filesystem.
 func (guardClient) ImageBuild(_ context.Context, _ io.Reader, _ client.ImageBuildOptions) (client.ImageBuildResult, error) {
@@ -87,7 +87,7 @@ func (guardClient) ImageAttestations(_ context.Context, _ string, _ ...client.Im
 }
 
 // Reading or changing a container's filesystem or state beyond what a deploy needs: exporting, committing, diffing
-// and copying out of a container would read a stack's data into the Coaming server, and an in-place update would
+// and copying out of a container would read a stack's data into the TierPlan server, and an in-place update would
 // change a container the deploy did not recreate.
 func (guardClient) ContainerExport(_ context.Context, _ string, _ client.ContainerExportOptions) (client.ContainerExportResult, error) {
 	var zero client.ContainerExportResult
@@ -115,7 +115,7 @@ func (guardClient) ContainerUpdate(_ context.Context, _ string, _ client.Contain
 }
 
 // Exec and attach: a stack deploy never runs a process in a container or attaches to one. The shell and the
-// terminal are Coaming's own routes with their own permission.
+// terminal are TierPlan's own routes with their own permission.
 func (guardClient) ContainerAttach(_ context.Context, _ string, _ client.ContainerAttachOptions) (client.ContainerAttachResult, error) {
 	var zero client.ContainerAttachResult
 	return zero, forbidden("ContainerAttach")
@@ -169,7 +169,7 @@ func (guardClient) VolumePrune(_ context.Context, _ client.VolumePruneOptions) (
 }
 
 // Swarm: a standalone deploy has nothing to do with the swarm, and the swarm membership, nodes, services, tasks,
-// secrets and configs are changed only through Coaming's own typed routes.
+// secrets and configs are changed only through TierPlan's own typed routes.
 func (guardClient) SwarmInit(_ context.Context, _ client.SwarmInitOptions) (client.SwarmInitResult, error) {
 	var zero client.SwarmInitResult
 	return zero, forbidden("SwarmInit")
@@ -372,7 +372,7 @@ func (guardClient) PluginSet(_ context.Context, _ string, _ client.PluginSetOpti
 	return zero, forbidden("PluginSet")
 }
 
-// Registry sign-in and checkpoints: the SDK's registry credentials come from Coaming (Resolver.AuthFor), never
+// Registry sign-in and checkpoints: the SDK's registry credentials come from TierPlan (Resolver.AuthFor), never
 // from a login it makes, and checkpoint and restore is experimental.
 func (guardClient) RegistryLogin(_ context.Context, _ client.RegistryLoginOptions) (client.RegistryLoginResult, error) {
 	var zero client.RegistryLoginResult

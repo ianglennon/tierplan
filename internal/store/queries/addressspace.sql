@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors */
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors */
 
 -- name: ListNetworkSeen :many
--- Every network of an environment Coaming has a clock for.
+-- Every network of an environment TierPlan has a clock for.
 SELECT env_id, node_id, network_id, name, first_seen_at, last_in_use_at FROM network_seen
 WHERE env_id = ?
 ORDER BY node_id, network_id;

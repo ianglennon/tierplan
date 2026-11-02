@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { isRedirect } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,7 +16,7 @@ function stub(opts: { needsSetup?: boolean; me?: "in" | "out" | "broken" }) {
     vi.fn(async (req: Request) => {
       const path = new URL(req.url).pathname;
       if (path === "/api/instance") {
-        return Response.json({ instanceName: "Coaming", needsSetup: opts.needsSetup === true });
+        return Response.json({ instanceName: "TierPlan", needsSetup: opts.needsSetup === true });
       }
       if (path === "/api/me") {
         if (opts.me === "out") return Response.json({ status: 401 }, { status: 401 });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -203,7 +203,7 @@ describe("the Adopt page: what it says", () => {
     expect(await screen.findByRole("heading", { name: "Adopt legacy", level: 2 })).toBeTruthy();
     expect(
       await screen.findByText(
-        "Coaming builds a compose definition from what's running on Prod, checks it, and then manages the stack. Adopting doesn't change anything that is running.",
+        "TierPlan builds a compose definition from what's running on Prod, checks it, and then manages the stack. Adopting doesn't change anything that is running.",
       ),
     ).toBeTruthy();
     const note = screen
@@ -246,7 +246,7 @@ describe("the Adopt page: what it says", () => {
     expect(
       await screen.findByText("This stack looks like it was created by Portainer"),
     ).toBeTruthy();
-    expect(screen.getByText("Created by Coaming (another instance or a lost record)")).toBeTruthy();
+    expect(screen.getByText("Created by TierPlan (another instance or a lost record)")).toBeTruthy();
   });
 });
 
@@ -307,21 +307,21 @@ describe("the Adopt page: adopting", () => {
     expect(onAdopted).not.toHaveBeenCalled();
   });
 
-  it("is off, with the server's reason, for Coaming's own stack", async () => {
+  it("is off, with the server's reason, for TierPlan's own stack", async () => {
     unmanaged = {
       ...unmanaged,
-      owner: "coaming",
+      owner: "tierplan",
       adoptable: false,
-      reason: "This is Coaming's own stack.",
+      reason: "This is TierPlan's own stack.",
     };
     mount();
 
-    expect(await screen.findAllByText("This is Coaming's own stack.")).not.toHaveLength(0);
+    expect(await screen.findAllByText("This is TierPlan's own stack.")).not.toHaveLength(0);
     const button = await reasonedAdopt();
     expect(button.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(button);
 
-    expect(toasts.info).toHaveBeenCalledWith("This is Coaming's own stack.");
+    expect(toasts.info).toHaveBeenCalledWith("This is TierPlan's own stack.");
     expect(writes()).toEqual([]);
   });
 
@@ -377,7 +377,7 @@ describe("the Adopt page: what it says when the server refuses", () => {
     mount();
     fireEvent.click(await readyAdopt());
 
-    expect(await screen.findByText("legacy is already managed by Coaming.")).toBeTruthy();
+    expect(await screen.findByText("legacy is already managed by TierPlan.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open stack" }).getAttribute("href")).toBe(
       "/env/e1/stacks/s7",
     );
@@ -413,7 +413,7 @@ describe("the Adopt page: what it says when the server refuses", () => {
     fireEvent.click(await readyAdopt());
 
     expect(
-      await screen.findByText("Coaming couldn't rebuild legacy: the server's sentence"),
+      await screen.findByText("TierPlan couldn't rebuild legacy: the server's sentence"),
     ).toBeTruthy();
   });
 

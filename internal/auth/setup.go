@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package auth holds Coaming's sign-in machinery. This file is the first-run
+// Package auth holds TierPlan's sign-in machinery. This file is the first-run
 // setup gate: while no user exists, claiming the instance needs a one-time
 // token that only someone with access to the container log, the data volume or
 // `docker exec` can read (D-01).
@@ -26,11 +26,11 @@ import (
 	"sync/atomic"
 	"unicode"
 
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // SetupTokenFile is the name, inside the data directory, of the file holding
-// the active setup token for `coaming setup-token`.
+// the active setup token for `tierplan setup-token`.
 const SetupTokenFile = "setup-token"
 
 const (
@@ -91,7 +91,7 @@ func (g *SetupGate) Init(ctx context.Context) error {
 
 	g.log.Warn("setup required",
 		"setup_token", shown,
-		"hint", "open Coaming in a browser, or run: docker exec <container> coaming setup-token")
+		"hint", "open TierPlan in a browser, or run: docker exec <container> tierplan setup-token")
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (g *SetupGate) removeFile() error {
 	return nil
 }
 
-// ReadTokenFile returns the token recorded in dataDir, for `coaming
+// ReadTokenFile returns the token recorded in dataDir, for `tierplan
 // setup-token`. A missing file is reported as an error wrapping fs.ErrNotExist.
 func ReadTokenFile(dataDir string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(dataDir, SetupTokenFile)) //nolint:gosec // operator data directory

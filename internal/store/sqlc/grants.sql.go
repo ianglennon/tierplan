@@ -80,7 +80,7 @@ func (q *Queries) GetAssignment(ctx context.Context, id string) (RoleAssignment,
 
 const getAssignmentForSubjectScope = `-- name: GetAssignmentForSubjectScope :one
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
    Queries of grants: the role_assignments rows that give a user or a team a role
    on one environment (or on all of them) and the assignment_extras that ride on

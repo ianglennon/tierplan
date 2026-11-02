@@ -10,7 +10,7 @@
     "tasks": {
       "label": "Expected tasks",
       "placeholder": "20",
-      "helper": "Optional. Coaming recommends the smallest size that fits twice this number, plus service and node addresses and headroom.",
+      "helper": "Optional. TierPlan recommends the smallest size that fits twice this number, plus service and node addresses and headroom.",
       "helperReplicas_one": "Based on {{count}} replica.",
       "helperReplicas_other": "Based on {{count}} replicas.",
       "invalid": "Enter a whole number from 1 to 10000.",
@@ -19,7 +19,7 @@
       "tooMany": "{{n}} tasks need more than a /24 holds. Split the work across more than one network."
     },
     "how": {
-      "trigger": "How Coaming works this out",
+      "trigger": "How TierPlan works this out",
       "body": "Addresses needed = (2 × tasks + services + nodes) × 1.25, rounded up, plus 3 reserved. Twice the tasks covers a start-first update, where old and new tasks run together. Services is the number of services on the network (1 when unknown). Nodes is the number of nodes that can run its tasks (0 on a standalone host)."
     },
     "subnet": {
@@ -66,13 +66,13 @@
       "unmounted": "the agent can't read the host's routes. Mount the route file (see the agent install).",
       "unmountedFixName": "the command that adds the route mount",
       "unmountedStandalone": "Re-run the agent install command from this environment's settings to add the mount.",
-      "local": "Coaming's container can't read this host's routes. Add -v /proc/1/net/route:/host/route:ro to Coaming's docker run.",
+      "local": "TierPlan's container can't read this host's routes. Add -v /proc/1/net/route:/host/route:ro to TierPlan's docker run.",
       "offline": "the agent isn't connected.",
       "failed": "the agent's answer couldn't be read."
     },
     "createAnyway": {
       "label": "Create it anyway",
-      "helper": "Some setups, such as macvlan, share a range on purpose. Coaming records that you chose this.",
+      "helper": "Some setups, such as macvlan, share a range on purpose. TierPlan records that you chose this.",
       "announce": "Overlap accepted",
       "needsOnEnvironment": "{{need}} on {{name}}",
       "blocked": "Resolve the overlap, or tick Create it anyway."

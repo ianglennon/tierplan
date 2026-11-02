@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel
 
@@ -14,8 +14,8 @@ import (
 
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/coaming/internal/engine"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // StreamTransport carries Docker HTTP to one agent: every dial opens a stream in

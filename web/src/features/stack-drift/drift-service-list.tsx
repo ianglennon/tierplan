@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronRight } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
@@ -85,7 +85,7 @@ function ServiceRow({ service, defaultOpen, target, stackName }: RowProps) {
       ) : null}
     </>
   );
-  // Why the service differs, in muted text below its name: what the audit log knows, or that it changed outside Coaming.
+  // Why the service differs, in muted text below its name: what the audit log knows, or that it changed outside TierPlan.
   // It is never inside the row's button, because its time is a control of its own.
   const cause = (
     <p data-slot="drift-cause" className="basis-full text-xs text-muted-foreground">

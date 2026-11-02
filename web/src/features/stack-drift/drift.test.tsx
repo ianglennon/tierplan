@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -155,7 +155,7 @@ describe("a service scaled outside the stack", () => {
 
     expect(await screen.findByRole("heading", { name: "Drift in tracer" })).toBeTruthy();
     expect(screen.getByText(/compared with revision #4, deployed/)).toBeTruthy();
-    expect(screen.getByText(/^Coaming never fixes drift on its own/)).toBeTruthy();
+    expect(screen.getByText(/^TierPlan never fixes drift on its own/)).toBeTruthy();
     const list = await screen.findByRole("list", { name: "Services that drifted" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(2);
     expect(within(list).getByText("web")).toBeTruthy();

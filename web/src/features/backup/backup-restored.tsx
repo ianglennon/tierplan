@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { CircleCheck, Info } from "lucide-react";
 import { FullPageState } from "@/components/full-page-state";
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n/use-t";
 import { withBase } from "@/lib/base-path";
 
-// BackupRestored fills the page once Coaming has restarted into the backup: the
+// BackupRestored fills the page once TierPlan has restarted into the backup: the
 // session is gone, so the only way on is to sign in with an account from the
 // backup. The link is a plain page load, which also drops everything the old
 // session left in memory.

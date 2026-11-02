@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -41,15 +41,15 @@ describe("theme", () => {
     expect(getTheme()).toBe("system");
   });
 
-  it("remembers the choice in localStorage under coaming-theme", () => {
+  it("remembers the choice in localStorage under tierplan-theme", () => {
     stubSystem(false);
     setTheme("dark");
-    expect(window.localStorage.getItem("coaming-theme")).toBe("dark");
+    expect(window.localStorage.getItem("tierplan-theme")).toBe("dark");
     expect(getTheme()).toBe("dark");
   });
 
   it("ignores a stored value that is not a mode", () => {
-    window.localStorage.setItem("coaming-theme", "purple");
+    window.localStorage.setItem("tierplan-theme", "purple");
     expect(getTheme()).toBe("system");
   });
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Golden path 6 (plan 03-29, ROADMAP Phase 3 success criteria 1 to 4): the whole
 // team-access story in a real browser, behind the proxy. An instance admin
@@ -34,7 +34,7 @@ test("an invited user gets Viewer through a team, sees only that environment, an
   const username = retryName("viewer1", info);
   const team = retryName("readers", info);
 
-  // The two environments the previous specs left: the Docker host Coaming
+  // The two environments the previous specs left: the Docker host TierPlan
   // manages (granted below) and the revoked agent environment (never granted).
   const envs = await environmentsOf(page.context());
   const granted = envs.find((e) => e.isLocalSocket);
@@ -121,7 +121,7 @@ test("an invited user gets Viewer through a team, sees only that environment, an
       await viewer.getByRole("button", { name: "Set password" }).click();
 
       // No automatic sign-in: the page goes to sign-in with a notice.
-      await expect(viewer).toHaveURL(/\/coaming\/login/);
+      await expect(viewer).toHaveURL(/\/tierplan\/login/);
       await expect(viewer.getByText("Password set. Sign in to continue.")).toBeVisible();
       await viewer.getByLabel("Username").fill(username);
       await viewer.getByLabel("Password", { exact: true }).fill(VIEWER_PASSWORD);

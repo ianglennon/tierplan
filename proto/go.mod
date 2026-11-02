@@ -1,3 +1,3 @@
-module github.com/ianglennon/coaming/proto
+module github.com/ianglennon/tierplan/proto
 
 go 1.27

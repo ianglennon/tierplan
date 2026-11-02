@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # The exit gate's evidence check for phase 6.1 (D-20, D-18). It reads the attempts of
 # one CI run and passes only when the last N attempts (default 5) are all of one head
@@ -19,7 +19,7 @@
 #        scripts/ci-gate.sh --from-file FILE [N]
 # FILE is a JSON array of {attempt, head_sha, conclusion, jobs: [{name, conclusion,
 # started_at, completed_at}]}, the shape the gh path is converted to.
-# Environment: GITHUB_REPOSITORY (default ianglennon/coaming).
+# Environment: GITHUB_REPOSITORY (default ianglennon/tierplan).
 # Exit: 0 the evidence holds, 1 it does not, 2 usage or API error.
 set -euo pipefail
 
@@ -44,7 +44,7 @@ n="${1:-5}"
 [ "$#" -le 1 ] || usage
 case "${n}" in '' | *[!0-9]* | 0) echo "ci-gate: N must be a positive number, got '${n}'" >&2; usage ;; esac
 
-repo="${GITHUB_REPOSITORY:-ianglennon/coaming}"
+repo="${GITHUB_REPOSITORY:-ianglennon/tierplan}"
 
 if [ -n "${file}" ]; then
   if [ ! -r "${file}" ]; then

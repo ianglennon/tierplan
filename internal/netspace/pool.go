@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package netspace
 
@@ -21,7 +21,7 @@ type Pool struct {
 
 // Valid reports whether the pool can be counted: an IPv4 base, and a Size between the
 // base's mask and 30. A pool read from an engine is checked before it is used, because the
-// numbers come from a host Coaming does not control (T-10-03).
+// numbers come from a host TierPlan does not control (T-10-03).
 func (p Pool) Valid() bool {
 	return isV4(p.Base) && p.Size >= p.Base.Bits() && p.Size <= maxPoolSize
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration
 
 package agents_test
@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The git stack tracer of plan 09-33 (GIT-04, GIT-06, GIT-07): a stack made from a folder of a git repository lives its

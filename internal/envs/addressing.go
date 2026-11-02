@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -18,8 +18,8 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/netspace"
 )
 
 // Where the pool of a row came from (D-07 as amended on 2026-10-30).
@@ -187,7 +187,7 @@ type AddressSpaces struct {
 	// nothing sets it in production.
 	overlayReadHook func() (done func())
 
-	// facts are what Coaming's own stacks say about a network (WithStackFacts); nil until set.
+	// facts are what TierPlan's own stacks say about a network (WithStackFacts); nil until set.
 	facts StackFacts
 
 	// routes reads the routes of a standalone host (WithHostRoutes); nil until set, and no route
@@ -267,8 +267,8 @@ func (s *AddressSpaces) WithHostRoutes(h *HostRoutes) *AddressSpaces {
 
 // LockAllocation takes the environment's allocation lock and returns the function that gives it
 // back. A create that checks a subnet against the environment's networks and then makes the
-// network holds it across both, so two creates through Coaming cannot both pass the check with
-// the same subnet (NET-05). It does not stop a network made outside Coaming.
+// network holds it across both, so two creates through TierPlan cannot both pass the check with
+// the same subnet (NET-05). It does not stop a network made outside TierPlan.
 func (s *AddressSpaces) LockAllocation(envID string) (unlock func()) {
 	e := s.entry(envID)
 	e.alloc.Lock()
@@ -600,7 +600,7 @@ func rankOverlays(list []OverlayUsage) ([]OverlayUsage, *OverlayUsage) {
 	return list, nil
 }
 
-// isPolicyDenied reports whether err is an agent's refusal, which is a fault of Coaming's own
+// isPolicyDenied reports whether err is an agent's refusal, which is a fault of TierPlan's own
 // policy and not a manager that is missing.
 func isPolicyDenied(err error) bool {
 	var d *AgentPolicyDeniedError
@@ -962,7 +962,7 @@ func EncodeEnteredPools(pools []netspace.Pool) string {
 }
 
 // DecodeEnteredPools reads what EncodeEnteredPools stored. A pool that cannot be counted is
-// dropped rather than failing the read: the text is Coaming's own, but a damaged row must not
+// dropped rather than failing the read: the text is TierPlan's own, but a damaged row must not
 // take the page down.
 func DecodeEnteredPools(raw string) []netspace.Pool {
 	var list []enteredPool

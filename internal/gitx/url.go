@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx
 
@@ -52,7 +52,7 @@ type URL struct {
 	Path string
 }
 
-// ValidateURL accepts the addresses Coaming talks to and refuses everything else before go-git sees
+// ValidateURL accepts the addresses TierPlan talks to and refuses everything else before go-git sees
 // the address: transport.NewEndpoint accepts file://, bare paths and git:// (RESEARCH Pitfall 3).
 //
 // Accepted: https://host[:port]/path, ssh://[user@]host[:port]/path and the scp-like

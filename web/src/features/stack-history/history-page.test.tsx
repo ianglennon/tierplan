@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -176,7 +176,7 @@ function highlighted(row: HTMLElement) {
 // Retention (plan 08-06, STK-08, D-01): the note under the table, and the gone state naming the limit.
 describe("the retention note", () => {
   const NOTE =
-    "Coaming keeps the last 5 revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.";
+    "TierPlan keeps the last 5 revisions of each stack. The deployed revision and the last good one are always kept. Older revisions are deleted, along with their variables and secret files.";
 
   it("says how many revisions are kept and what always stays, under the table", async () => {
     kept = 5;
@@ -192,7 +192,7 @@ describe("the retention note", () => {
     mount();
 
     expect(
-      await screen.findByText(/^Coaming keeps the last 50 revisions of each stack\./),
+      await screen.findByText(/^TierPlan keeps the last 50 revisions of each stack\./),
     ).toBeTruthy();
   });
 
@@ -221,7 +221,7 @@ describe("the retention note", () => {
     expect(await screen.findByRole("heading", { name: "That revision is gone" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming keeps the last 5 revisions of each stack, and this one was deleted.",
+        "TierPlan keeps the last 5 revisions of each stack, and this one was deleted.",
       ),
     ).toBeTruthy();
   });
@@ -234,7 +234,7 @@ describe("the retention note", () => {
     expect(await screen.findByRole("heading", { name: "That revision is gone" })).toBeTruthy();
     expect(
       screen.getByText(
-        "Coaming keeps the last 7 revisions of each stack, and this one was deleted.",
+        "TierPlan keeps the last 7 revisions of each stack, and this one was deleted.",
       ),
     ).toBeTruthy();
   });

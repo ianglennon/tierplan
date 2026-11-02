@@ -4,7 +4,7 @@
       "title": "What happens on the first deploy",
       "checking": "Checking {{name}}…"
     },
-    "clean": "Nothing will change except Coaming's ownership labels.",
+    "clean": "Nothing will change except TierPlan's ownership labels.",
     "gaps": {
       "title_one": "{{count}} difference will change on the first deploy.",
       "title_other": "{{count}} differences will change on the first deploy.",
@@ -15,10 +15,10 @@
       "region": "Differences by service"
     },
     "ownershipOnly": {
-      "services_one": "{{count}} service will be recreated to take Coaming ownership labels (brief restart).",
-      "services_other": "{{count}} services will be recreated to take Coaming ownership labels (brief restart).",
-      "containers_one": "{{count}} container will be recreated to take Coaming ownership labels (brief restart).",
-      "containers_other": "{{count}} containers will be recreated to take Coaming ownership labels (brief restart).",
+      "services_one": "{{count}} service will be recreated to take TierPlan ownership labels (brief restart).",
+      "services_other": "{{count}} services will be recreated to take TierPlan ownership labels (brief restart).",
+      "containers_one": "{{count}} container will be recreated to take TierPlan ownership labels (brief restart).",
+      "containers_other": "{{count}} containers will be recreated to take TierPlan ownership labels (brief restart).",
       "show": "Show services"
     },
     "error": {
@@ -55,7 +55,7 @@
         "config": "Config"
       },
       "owned": "Owned by the stack",
-      "external": "External. Coaming doesn't change it.",
+      "external": "External. TierPlan doesn't change it.",
       "notStackOwned": "Not stack-owned. Move it to a stack file to rotate it."
     },
     "policy": {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 
@@ -138,7 +138,7 @@ function AgentCard({ detail, t, missing }: { detail: NodeDetail; t: Translate; m
   );
 }
 
-// EngineLabelsCard shows the labels set in the node's own Docker daemon settings. Coaming cannot
+// EngineLabelsCard shows the labels set in the node's own Docker daemon settings. TierPlan cannot
 // change them, so the card says where they are set. Keys and values are Docker's text.
 function EngineLabelsCard({ detail, t }: { detail: NodeDetail; t: Translate }) {
   const rows: KeyValueRow[] = Object.entries(detail.engineLabels)
@@ -170,7 +170,7 @@ function OverviewSkeleton() {
 }
 
 // NodeOverview is the first tab of a node's page (UI-SPEC "Nodes"): the node's facts, its system,
-// for a manager its manager status, the Coaming agent on it and its engine labels. Everything is
+// for a manager its manager status, the TierPlan agent on it and its engine labels. Everything is
 // text from the swarm and the daemon (T-06-41).
 export function NodeOverview({ envId, nodeId }: NodeOverviewProps) {
   const t = useT();

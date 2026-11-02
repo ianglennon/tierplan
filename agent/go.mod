@@ -1,4 +1,4 @@
-module github.com/ianglennon/coaming/agent
+module github.com/ianglennon/tierplan/agent
 
 go 1.27
 
@@ -7,7 +7,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/hashicorp/yamux v0.1.2
-	github.com/ianglennon/coaming/proto v0.0.0-00010101000000-000000000000
+	github.com/ianglennon/tierplan/proto v0.0.0-00010101000000-000000000000
 	github.com/moby/docker-image-spec v1.3.1
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
@@ -31,4 +31,4 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 )
 
-replace github.com/ianglennon/coaming/proto => ../proto
+replace github.com/ianglennon/tierplan/proto => ../proto

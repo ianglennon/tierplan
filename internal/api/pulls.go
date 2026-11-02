@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -19,14 +19,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
 )
 
 const (
@@ -201,7 +201,7 @@ type PullTargetBody struct {
 	Role      string `json:"role" doc:"manager or worker on a swarm, standalone on a single host"`
 	Arch      string `json:"arch" doc:"The node's CPU architecture by the registry's name: amd64, arm64, arm/v7. Empty when the node has not said"`
 	ReadOnly  bool   `json:"readOnly" doc:"True when the host's owner made it read-only: a pull there fails with host_read_only"`
-	Reachable bool   `json:"reachable" doc:"False when the node's agent is not connected to Coaming now"`
+	Reachable bool   `json:"reachable" doc:"False when the node's agent is not connected to TierPlan now"`
 }
 
 // PullTargetsBody is the answer to the targets route.
@@ -258,7 +258,7 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 		OperationID: "startPull", Method: http.MethodPost, Path: "/api/env/{envId}/images/pull",
 		Summary: "Pull an image on the nodes of an environment",
 		Description: "Starts a pull of the image on every node of the environment, or on the nodes named in nodeIds, and answers 202 with the job ID at once; the pull goes on if the browser closes. " +
-			"A node that is not connected to Coaming gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. " +
+			"A node that is not connected to TierPlan gets an item of its own that fails with node_unreachable, and a node whose host is read-only fails with host_read_only without a call to its engine: neither stops the others. " +
 			"The reference is normalised first: nginx:1.27 becomes docker.io/library/nginx:1.27 and no tag means latest. " +
 			"An unparsable reference is 422 ref_invalid and starts nothing. At most 5 pulls of one user run at once (429 too_many_pulls). " +
 			"Each node pulls once, is never retried, and writes one image.pulled audit row. Needs images.pull (Operator) on the environment.",
@@ -271,7 +271,7 @@ func RegisterPulls(r *httpx.Router, d PullsDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "listPullTargets", Method: http.MethodGet, Path: "/api/env/{envId}/images/pull-targets",
 		Summary: "The nodes a pull can run on",
-		Description: "Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to Coaming now. " +
+		Description: "Every node of the environment by name, with its role, its architecture by the registry's names (amd64, arm64), whether its host is read-only and whether it is connected to TierPlan now. " +
 			"A node whose agent is not connected is listed with reachable false. swarm is true when the environment is a swarm. Needs images.read.",
 		Tags: []string{"images"},
 	}, rbac.Requirement{Perm: rbac.PermImagesRead, Scope: rbac.ScopeEnvironment},
@@ -498,7 +498,7 @@ func startPull(ctx context.Context, d PullsDeps, in *PullStartInput) (*PullStart
 	}
 	nodes := pullCandidates(agg)
 	if len(nodes) == 0 {
-		return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to Coaming.")
+		return nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "No node of this environment is connected to TierPlan.")
 	}
 	if in.Body.NodeIDs != nil {
 		// Only this environment's own nodes may be named, and only by ID (T-05-13).

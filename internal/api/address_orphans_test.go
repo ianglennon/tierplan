@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The orphan delete and the keeps (plan 10-12, NET-04, D-11, D-12). Docker is a fake daemon behind
@@ -231,13 +231,13 @@ func TestUnkeepNetwork(t *testing.T) {
 func TestUnkeepLabelKept(t *testing.T) {
 	t.Parallel()
 	labelled := idleNet("l1", "labelled")
-	labelled.Labels = map[string]string{"coaming.keep": "true"}
+	labelled.Labels = map[string]string{"tierplan.keep": "true"}
 	f, e := dashEnv(t, orphanEngine(labelled))
 	rec := f.unkeep(t, e, "labelled", "")
 	if rec.code != http.StatusConflict || rec.ptyp != "kept_by_label" {
 		t.Fatalf("unkeep: %d %q, want 409 kept_by_label: %s", rec.code, rec.ptyp, rec.body)
 	}
-	if !strings.Contains(string(rec.body), "Kept by the coaming.keep label on the network. Remove the label to stop keeping it.") {
+	if !strings.Contains(string(rec.body), "Kept by the tierplan.keep label on the network. Remove the label to stop keeping it.") {
 		t.Errorf("body = %s", rec.body)
 	}
 	if n := len(f.keepAudits(t, audit.ActionNetworkUnkept)); n != 0 {
@@ -280,7 +280,7 @@ func TestKeepNeedsEnvAdmin(t *testing.T) {
 func TestAddressSpaceKeptList(t *testing.T) {
 	t.Parallel()
 	labelled := idleNet("l1", "labelled")
-	labelled.Labels = map[string]string{"coaming.keep": "true"}
+	labelled.Labels = map[string]string{"tierplan.keep": "true"}
 	f, e := dashEnv(t, orphanEngine(idleNet("a1", "alpha"), labelled))
 	if rec := f.keep(t, e, `{"targets":[{"name":"alpha"},{"name":"vanished","nodeId":"`+e.ID+`"}]}`); rec.code != http.StatusOK {
 		t.Fatalf("keep: %d %s", rec.code, rec.body)
@@ -422,7 +422,7 @@ func TestDeleteOrphanNotOrphaned(t *testing.T) {
 	}
 }
 
-// No manager answered, so Coaming cannot tell whether anything on the swarm uses the network.
+// No manager answered, so TierPlan cannot tell whether anything on the swarm uses the network.
 func TestDeleteOrphanNodeMissing(t *testing.T) {
 	t.Parallel()
 	s := swarmWith(t, dockertest.FakeNetwork{ID: "spare-id", Name: "spare", Driver: "overlay", Scope: "swarm", Created: longAgo})
@@ -511,7 +511,7 @@ func TestDeleteOrphanInspectTooLarge(t *testing.T) {
 	if rec.code != http.StatusConflict || rec.ptyp != "inspect_too_large" {
 		t.Fatalf("%d %q, want 409 inspect_too_large: %s", rec.code, rec.ptyp, rec.body)
 	}
-	if !strings.Contains(string(rec.body), "Coaming didn't delete idle: its details are over 64 KB, too large to save in the audit log first.") {
+	if !strings.Contains(string(rec.body), "TierPlan didn't delete idle: its details are over 64 KB, too large to save in the audit log first.") {
 		t.Errorf("body = %s", rec.body)
 	}
 	if len(f.fake.Writes()) != 0 {

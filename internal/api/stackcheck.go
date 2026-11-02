@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -11,11 +11,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
 )
 
 // StackCheckRequest is the body of POST .../check: the working copy to check, in the save shape.
@@ -89,7 +89,7 @@ func registerStackCheck(r *httpx.Router, d StacksDeps, checkLimiter *streamLimit
 		OperationID: "checkStack", Method: http.MethodPost, Path: "/api/env/{envId}/stacks/{stackId}/check",
 		Summary: "Check a stack's working copy",
 		Description: "Checks the files and variables in the body, as the editor holds them, and answers every problem with its file, line and column. " +
-			"The check works only on the bytes it is sent: it reads no file from the Coaming server, fetches nothing and writes nothing. " +
+			"The check works only on the bytes it is sent: it reads no file from the TierPlan server, fetches nothing and writes nothing. " +
 			"include, extends and label_file are refused, and every env_file and file: reference must name one of the stack's own files. " +
 			"An explicit network subnet is compared with the networks and address pools the environment already shows (a read-only look at the environment's cached listing): a warning when it overlaps another network of the environment or lies outside every pool. " +
 			"The stack's own networks are left out of the comparison, and when the environment cannot be read the check answers without these two warnings. " +

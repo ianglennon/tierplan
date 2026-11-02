@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -18,11 +18,11 @@ import (
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/stacks/rebuild"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/rebuild"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // The modes of a review: a deploy of the draft, an update of the images of some services (D-16), a roll back to a
@@ -93,13 +93,13 @@ func ValidateUpdateServices(project *types.Project, target stacks.Target, stackN
 	return nil
 }
 
-// ChangeExternal is the change of an object the stack only names: Coaming never touches it.
+// ChangeExternal is the change of an object the stack only names: TierPlan never touches it.
 const ChangeExternal = "external"
 
 // The sentences of the Other resources table of a review (UI-SPEC, Review).
 const (
 	detailNewVersion = "New version. The old one is removed after the deploy."
-	detailExternal   = "External. Coaming doesn't touch it."
+	detailExternal   = "External. TierPlan doesn't touch it."
 	detailRemoved    = "Removed from the stack. Deleted with the deploy."
 	detailNetwork    = "Differs from the file. A network can't be changed in place, so the deploy leaves it as it is."
 )
@@ -210,7 +210,7 @@ type Summary struct {
 	// ImagesPinned counts the services that keep or carry a digest, ImagesNew the ones whose
 	// digest was just looked up.
 	ImagesPinned, ImagesNew int
-	// OwnershipOnly counts the services of an adopt check that differ from what runs in nothing but Coaming's
+	// OwnershipOnly counts the services of an adopt check that differ from what runs in nothing but TierPlan's
 	// ownership labels (D-16). They are not in Services.Changed.
 	OwnershipOnly int
 	// RevertsDrift counts the outside changes a deploy, an update or a roll back puts back (D-25).
@@ -256,7 +256,7 @@ type Review struct {
 	// Concurrent is set when the last good revision is newer than the one the draft started from.
 	Concurrent *Concurrent
 	// Adoption is set while the stack is adopted and has not been deployed yet: the first deploy takes ownership by
-	// adding Coaming's labels to every service (D-16).
+	// adding TierPlan's labels to every service (D-16).
 	Adoption *AdoptionReview
 	// RevertsDrift are the changes made outside the stack that this deploy would put back, apart from the draft's own
 	// changes (D-25). It is empty for a restore, which is the drift itself, and when nothing would be reverted.
@@ -434,7 +434,7 @@ func (d Deps) Review(ctx context.Context, in ReviewInput) (rv Review, err error)
 	}
 	rv.Services = stacks.DiffServices(desired, running, masker)
 	if own := OwnershipOf(in.Stack); own.Adopted && own.Pending {
-		// The first deploy of an adopted stack puts Coaming's labels on every service, which recreates it: a service
+		// The first deploy of an adopted stack puts TierPlan's labels on every service, which recreates it: a service
 		// that differs in nothing else is told apart from a real change (D-16).
 		stacks.MarkOwnershipOnly(rv.Services, desired, running)
 		rv.Adoption = &AdoptionReview{Pending: true}
@@ -574,7 +574,7 @@ func reviewRefs(stack Stack, objs []stacks.ObjectContent, live []objectRow) obje
 
 // liveSpecs reads the spec of each service the swarm holds for this stack, by name, with the
 // networks it attaches named as the compose file names them: the swarm stores a network by ID. A
-// service of the namespace that Coaming does not own is left out; the name-clash check refuses
+// service of the namespace that TierPlan does not own is left out; the name-clash check refuses
 // the stack for it.
 func liveSpecs(live liveStack, stack Stack) (map[string]swarm.ServiceSpec, error) {
 	own := OwnershipOf(stack)
@@ -840,7 +840,7 @@ func ConvertDetail(err error) string {
 	case errors.As(err, &nc):
 		return "Service " + nc.Service + " uses " + strings.Join(nc.Fields, ", ") + ", which a swarm stack can't deploy."
 	case errors.Is(err, convert.ErrNoImage):
-		return "A service has no image. Coaming deploys images, it does not build them."
+		return "A service has no image. TierPlan deploys images, it does not build them."
 	}
 	return strings.TrimPrefix(err.Error(), "convert: ")
 }

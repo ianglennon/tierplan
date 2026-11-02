@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup_test
 
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/backup"
+	"github.com/ianglennon/tierplan/internal/backup"
 )
 
 func TestMarkerRoundTripsAndIsPrivate(t *testing.T) {
@@ -77,9 +77,9 @@ func TestRollbackPutsTheSnapshotBackAndDropsTheRestoredJournal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("coaming.db", "restored")
-	write("coaming.db-wal", "journal")
-	write("coaming.db-shm", "shm")
+	write("tierplan.db", "restored")
+	write("tierplan.db-wal", "journal")
+	write("tierplan.db-shm", "shm")
 	write("backups/prerestore-20260304T050607Z.db", "old")
 	if err := backup.WriteMarker(dir, filepath.Join(dir, "backups", "prerestore-20260304T050607Z.db"), time.Now()); err != nil {
 		t.Fatal(err)
@@ -89,10 +89,10 @@ func TestRollbackPutsTheSnapshotBackAndDropsTheRestoredJournal(t *testing.T) {
 	if err := backup.RollbackRestore(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(filepath.Join(dir, "coaming.db")); string(got) != "old" { //nolint:gosec // a file in the test directory
-		t.Fatalf("coaming.db = %q, want the snapshot", got)
+	if got, _ := os.ReadFile(filepath.Join(dir, "tierplan.db")); string(got) != "old" { //nolint:gosec // a file in the test directory
+		t.Fatalf("tierplan.db = %q, want the snapshot", got)
 	}
-	for _, gone := range []string{"coaming.db-wal", "coaming.db-shm", backup.PendingMarker, "backups/prerestore-20260304T050607Z.db"} {
+	for _, gone := range []string{"tierplan.db-wal", "tierplan.db-shm", backup.PendingMarker, "backups/prerestore-20260304T050607Z.db"} {
 		if _, err := os.Stat(filepath.Join(dir, gone)); err == nil {
 			t.Errorf("%s still exists", gone)
 		}
@@ -101,7 +101,7 @@ func TestRollbackPutsTheSnapshotBackAndDropsTheRestoredJournal(t *testing.T) {
 
 func TestRollbackWithoutASnapshotOnDiskChangesNothing(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "coaming.db"), []byte("restored"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tierplan.db"), []byte("restored"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := backup.WriteMarker(dir, filepath.Join(dir, "backups", "prerestore-20260304T050607Z.db"), time.Now()); err != nil {
@@ -111,8 +111,8 @@ func TestRollbackWithoutASnapshotOnDiskChangesNothing(t *testing.T) {
 	if err := backup.RollbackRestore(dir, m); err == nil {
 		t.Fatal("RollbackRestore succeeded with no snapshot to go back to")
 	}
-	if got, _ := os.ReadFile(filepath.Join(dir, "coaming.db")); string(got) != "restored" { //nolint:gosec // a file in the test directory
-		t.Fatalf("coaming.db = %q, want it untouched", got)
+	if got, _ := os.ReadFile(filepath.Join(dir, "tierplan.db")); string(got) != "restored" { //nolint:gosec // a file in the test directory
+		t.Fatalf("tierplan.db = %q, want it untouched", got)
 	}
 	if _, pending, _ := backup.ReadMarker(dir); !pending {
 		t.Fatal("the marker was removed although nothing was rolled back")
@@ -121,7 +121,7 @@ func TestRollbackWithoutASnapshotOnDiskChangesNothing(t *testing.T) {
 
 func TestRollbackOfARestoreThatReplacedNothingRemovesTheRestoredDatabase(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "coaming.db"), []byte("restored"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tierplan.db"), []byte("restored"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := backup.WriteMarker(dir, "", time.Now()); err != nil {
@@ -131,7 +131,7 @@ func TestRollbackOfARestoreThatReplacedNothingRemovesTheRestoredDatabase(t *test
 	if err := backup.RollbackRestore(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "coaming.db")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "tierplan.db")); err == nil {
 		t.Fatal("the restored database was kept")
 	}
 }
@@ -139,7 +139,7 @@ func TestRollbackOfARestoreThatReplacedNothingRemovesTheRestoredDatabase(t *test
 func TestRollbackMovesTheSnapshotsWriteAheadLogBackWithIt(t *testing.T) {
 	dir := t.TempDir()
 	for name, content := range map[string]string{
-		"coaming.db": "restored", "coaming.db-wal": "restored-journal",
+		"tierplan.db": "restored", "tierplan.db-wal": "restored-journal",
 		"backups/prerestore-20260304T050607Z.db": "old", "backups/prerestore-20260304T050607Z.db-wal": "old-journal",
 	} {
 		p := filepath.Join(dir, name)
@@ -157,7 +157,7 @@ func TestRollbackMovesTheSnapshotsWriteAheadLogBackWithIt(t *testing.T) {
 	if err := backup.RollbackRestore(dir, m); err != nil {
 		t.Fatal(err)
 	}
-	for name, want := range map[string]string{"coaming.db": "old", "coaming.db-wal": "old-journal"} {
+	for name, want := range map[string]string{"tierplan.db": "old", "tierplan.db-wal": "old-journal"} {
 		if got, _ := os.ReadFile(filepath.Join(dir, name)); string(got) != want { //nolint:gosec // a file in the test directory
 			t.Fatalf("%s = %q, want %q", name, got, want)
 		}

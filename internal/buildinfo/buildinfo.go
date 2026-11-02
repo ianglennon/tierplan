@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Package buildinfo reports which Coaming build is running and where its
+// Package buildinfo reports which TierPlan build is running and where its
 // source lives (AGPL section 13, D-61, D-62).
 package buildinfo
 
@@ -12,13 +12,13 @@ import (
 
 // These are set at link time:
 //
-//	-ldflags "-X github.com/ianglennon/coaming/internal/buildinfo.Version=v0.1.0
-//	          -X github.com/ianglennon/coaming/internal/buildinfo.Commit=<full sha>
-//	          -X github.com/ianglennon/coaming/internal/buildinfo.SourceURL=<fork url>"
+//	-ldflags "-X github.com/ianglennon/tierplan/internal/buildinfo.Version=v0.1.0
+//	          -X github.com/ianglennon/tierplan/internal/buildinfo.Commit=<full sha>
+//	          -X github.com/ianglennon/tierplan/internal/buildinfo.SourceURL=<fork url>"
 var (
 	Version   = ""
 	Commit    = ""
-	SourceURL = "https://github.com/ianglennon/coaming"
+	SourceURL = "https://github.com/ianglennon/tierplan"
 )
 
 // Info is the resolved build identity served at /api/version.
@@ -55,7 +55,7 @@ func Get() Info {
 func resolve(version, commit, sourceURL, vcsRevision string, vcsModified bool) Info {
 	src := strings.TrimRight(strings.TrimSpace(sourceURL), "/")
 	if src == "" {
-		src = "https://github.com/ianglennon/coaming"
+		src = "https://github.com/ianglennon/tierplan"
 	}
 
 	full := strings.TrimSpace(commit)
@@ -83,7 +83,7 @@ func resolve(version, commit, sourceURL, vcsRevision string, vcsModified bool) I
 		name = "dev"
 	}
 	// Release tooling commonly strips the v from a tag. The footer,
-	// /api/version and `coaming version` must read "v0.1.0 (abc1234)" whatever
+	// /api/version and `tierplan version` must read "v0.1.0 (abc1234)" whatever
 	// packaged the binary (WR-13, D-61).
 	if name[0] >= '0' && name[0] <= '9' {
 		name = "v" + name

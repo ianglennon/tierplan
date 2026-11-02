@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronRight, CircleCheck, CircleX, Info, TriangleAlert } from "lucide-react";
 import { useState } from "react";
@@ -32,7 +32,7 @@ interface AdoptCheckCardProps {
   showToken?: number;
 }
 
-// OwnershipOnlyRow says how many services (containers on a host) differ from what runs in nothing but Coaming's
+// OwnershipOnlyRow says how many services (containers on a host) differ from what runs in nothing but TierPlan's
 // ownership labels, which the first deploy puts on by recreating them, and lists their names under "Show services".
 function OwnershipOnlyRow({
   names,

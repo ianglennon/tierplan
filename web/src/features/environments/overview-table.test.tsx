@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import {
   createMemoryHistory,
@@ -520,7 +520,7 @@ describe("EnvOverviewTable under 768px", () => {
     expect(within(first).getByRole("link", { name: "edge" }).className).toContain("after:absolute");
     // Line 3 is ReasonText's compact variant: the text and the hint, two lines.
     expect(
-      within(first).getByText(/It reconnects by itself when it can reach Coaming\./),
+      within(first).getByText(/It reconnects by itself when it can reach TierPlan\./),
     ).toBeTruthy();
     const line = within(first).getByText("The agent isn't connected.").closest("p");
     expect(line?.textContent).not.toContain("reconnects by itself");

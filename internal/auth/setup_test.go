@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package auth_test
 
@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
 )
 
 var tokenShape = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{8}){3}$`)
@@ -74,7 +74,7 @@ func TestInitWithNoUsersWritesLogsAndRequiresSetup(t *testing.T) {
 		t.Fatalf("setup-token mode = %o, want 600", st.Mode().Perm())
 	}
 	out := logs.String()
-	if !strings.Contains(out, "setup required") || !strings.Contains(out, tok) || !strings.Contains(out, "coaming setup-token") {
+	if !strings.Contains(out, "setup required") || !strings.Contains(out, tok) || !strings.Contains(out, "tierplan setup-token") {
 		t.Fatalf("log must carry the message, the token and the CLI hint, got %s", out)
 	}
 	// No leftover temporary files in the data directory.
@@ -232,7 +232,7 @@ func TestNoEnvironmentVariableCanPrefillTheToken(t *testing.T) {
 	// The names are assembled so that the repository-wide grep for bypass
 	// settings (the plan 09 acceptance check) matches nothing, this file included.
 	setup := "SET" + "UP"
-	for _, name := range []string{"COAMING_" + setup + "_TOKEN", "COAMING_SKIP_" + setup, "COAMING_" + setup + "_BYPASS", setup + "_TOKEN"} {
+	for _, name := range []string{"TIERPLAN_" + setup + "_TOKEN", "TIERPLAN_SKIP_" + setup, "TIERPLAN_" + setup + "_BYPASS", setup + "_TOKEN"} {
 		t.Setenv(name, planted)
 	}
 	g, _, dir, _ := newGate(t)

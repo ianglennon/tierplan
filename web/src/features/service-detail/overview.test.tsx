@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -110,13 +110,13 @@ describe("the Overview cards", () => {
     expect(c.getByText("shop")).toBeTruthy();
   });
 
-  it("links the Stack row to the Coaming stack", async () => {
-    await overview(serviceDetail({ stack: "shop", coamingStackId: "stk-1" }));
+  it("links the Stack row to the TierPlan stack", async () => {
+    await overview(serviceDetail({ stack: "shop", tierplanStackId: "stk-1" }));
     const link = within(card("Service")).getByRole("link", { name: "shop" });
     expect(link.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/stacks/stk-1`);
   });
 
-  it("links the Stack row to the read-only page of a stack Coaming does not manage", async () => {
+  it("links the Stack row to the read-only page of a stack TierPlan does not manage", async () => {
     await overview(serviceDetail({ stack: "legacy" }));
     const c = within(card("Service"));
     expect(c.getByRole("link", { name: "legacy" }).getAttribute("href")).toBe(

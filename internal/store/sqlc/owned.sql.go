@@ -117,7 +117,7 @@ func (q *Queries) GetOwnedResource(ctx context.Context, arg GetOwnedResourcePara
 
 const insertOwnedResource = `-- name: InsertOwnedResource :exec
 /* SPDX-License-Identifier: AGPL-3.0-or-later
-   SPDX-FileCopyrightText: 2026 The Coaming Authors
+   SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
    Queries of the owned-resources registry (internal/access/owned.go): automations
    that act on a user's authority and pause when the user no longer qualifies

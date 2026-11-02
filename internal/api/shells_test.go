@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -15,12 +15,12 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/shells"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/shells"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The browser shell (plan 04-22, OBS-03, RESEARCH Pattern 5). Docker is a FakeDaemon
@@ -406,12 +406,12 @@ func TestShellWebSocketAcceptsTheInstancesPublicOriginAndNoOther(t *testing.T) {
 	t.Parallel()
 	f := newShellFix(t, nil)
 	// Behind a proxy the Host is the proxy's own, so the public origin is what counts.
-	f.inst.Apply("", "http://coaming.example")
+	f.inst.Apply("", "http://tierplan.example")
 	s := f.session(t)
 
 	_, status, ptype, err := f.dial(t, f.cookie, s.WSPath, "http://other.example")
 	dialRefused(t, "another origin", status, ptype, err, http.StatusForbidden)
-	c, status, _, err := f.dial(t, f.cookie, s.WSPath, "http://coaming.example")
+	c, status, _, err := f.dial(t, f.cookie, s.WSPath, "http://tierplan.example")
 	if err != nil {
 		t.Fatalf("the public origin: %v (status %d)", err, status)
 	}
@@ -697,12 +697,12 @@ func TestShellRefusesAStoppedContainerWithContainerNotRunningAndMakesNoExec(t *t
 	f.refusedNothingStarted(t)
 }
 
-func TestShellRefusesCoamingsOwnServerAndAnAgentContainerWithOwnContainerFromAFreshInspect(t *testing.T) {
+func TestShellRefusesTierPlansOwnServerAndAnAgentContainerWithOwnContainerFromAFreshInspect(t *testing.T) {
 	t.Parallel()
 	f := newShellFixOn(t, actionEngine(), nil)
 	// By name, by full ID and by the short ID the server knows itself by: the rule reads
 	// the container from the engine, so how it was named does not matter.
-	for _, ref := range []string{"coaming", selfCtr, selfID, "coaming-agent", agentID} {
+	for _, ref := range []string{"tierplan", selfCtr, selfID, "tierplan-agent", agentID} {
 		rec := f.open(t, ref, openBody)
 		if rec.code != http.StatusConflict || rec.ptyp != "own_container" {
 			t.Errorf("%s: %d %q, want 409 own_container: %s", ref, rec.code, rec.ptyp, rec.body)
@@ -1090,7 +1090,7 @@ func TestActiveShellsAnAdminEndingAShellClosesItTellsItsBrowserAndAuditsBothSide
 func TestActiveShellsAnAdminOfAnotherEnvironmentCannotSeeOrEndThisOnesShells(t *testing.T) {
 	t.Parallel()
 	f := newShellFix(t, nil)
-	f.inst.Apply("Coaming", "https://example.com/coaming")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
 	other, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("add the second environment: %d %s", rec.code, rec.body)

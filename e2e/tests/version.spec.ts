@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The version and "Source code" footer on every route (PLAT-05, AGPL section
 // 13), exactly one of it at a time on the expanded sidebar, the collapsed rail

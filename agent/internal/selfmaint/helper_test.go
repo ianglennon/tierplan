@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package selfmaint
 
@@ -24,15 +24,15 @@ import (
 	"github.com/moby/moby/api/types/network"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 const (
 	oldLong  = "aaaaaaaaaaaa" + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	oldShort = "aaaaaaaaaaaa"
 	helperID = "cccccccccccc" + "dddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	stateDir = "/var/lib/coaming-agent"
+	stateDir = "/var/lib/tierplan-agent"
 	sockPath = "/var/run/docker.sock"
 )
 
@@ -40,8 +40,8 @@ const (
 func oldImageConfig() *dockerspec.DockerOCIImageConfig {
 	return &dockerspec.DockerOCIImageConfig{ImageConfig: ocispec.ImageConfig{
 		Env:        []string{"PATH=/usr/local/bin:/usr/bin", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"},
-		Entrypoint: []string{"/usr/local/bin/coaming-agent"},
-		Labels:     map[string]string{"org.opencontainers.image.version": "0.2.0", "org.opencontainers.image.title": "Coaming agent"},
+		Entrypoint: []string{"/usr/local/bin/tierplan-agent"},
+		Labels:     map[string]string{"org.opencontainers.image.version": "0.2.0", "org.opencontainers.image.title": "TierPlan agent"},
 		Volumes:    map[string]struct{}{stateDir: {}},
 	}}
 }
@@ -51,21 +51,21 @@ func oldImageConfig() *dockerspec.DockerOCIImageConfig {
 func oldAgent(f *fakeEngine) *container.InspectResponse {
 	f.images["sha256:old"] = image.InspectResponse{ID: "sha256:old", Config: oldImageConfig()}
 	return f.addContainer(container.InspectResponse{
-		ID: oldLong, Name: "/coaming-agent", Image: "sha256:old",
+		ID: oldLong, Name: "/tierplan-agent", Image: "sha256:old",
 		State: &container.State{Running: true, Status: "running"},
 		Config: &container.Config{
 			Hostname:   oldShort, // the engine's default: the short container ID
 			Image:      ownImage,
-			Env:        []string{"COAMING_AGENT_URL=wss://coaming.example/agent/connect", "COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/t", "PATH=/usr/local/bin:/usr/bin", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"},
-			Entrypoint: []string{"/usr/local/bin/coaming-agent"},
+			Env:        []string{"TIERPLAN_AGENT_URL=wss://tierplan.example/agent/connect", "TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/t", "PATH=/usr/local/bin:/usr/bin", "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"},
+			Entrypoint: []string{"/usr/local/bin/tierplan-agent"},
 			Labels: map[string]string{
-				"coaming.agent": "true", "owner": "ops",
-				"org.opencontainers.image.version": "0.2.0", "org.opencontainers.image.title": "Coaming agent",
+				"tierplan.agent": "true", "owner": "ops",
+				"org.opencontainers.image.version": "0.2.0", "org.opencontainers.image.title": "TierPlan agent",
 			},
 			Volumes: map[string]struct{}{stateDir: {}},
 		},
 		HostConfig: &container.HostConfig{
-			Binds:          []string{sockPath + ":" + sockPath, "coaming-agent:" + stateDir},
+			Binds:          []string{sockPath + ":" + sockPath, "tierplan-agent:" + stateDir},
 			RestartPolicy:  container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 			ReadonlyRootfs: true,
 			CapDrop:        []string{"ALL"},
@@ -75,13 +75,13 @@ func oldAgent(f *fakeEngine) *container.InspectResponse {
 		},
 		Mounts: []container.MountPoint{
 			{Type: mount.TypeBind, Source: sockPath, Destination: sockPath, RW: true},
-			{Type: mount.TypeVolume, Name: "coaming-agent", Source: "/var/lib/docker/volumes/coaming-agent/_data", Destination: stateDir, Driver: "local", RW: true},
+			{Type: mount.TypeVolume, Name: "tierplan-agent", Source: "/var/lib/docker/volumes/tierplan-agent/_data", Destination: stateDir, Driver: "local", RW: true},
 		},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{
 			"bridge": {
 				Aliases: []string{oldShort}, NetworkID: "net1", EndpointID: "ep1",
 				IPAddress: netip.MustParseAddr("172.17.0.2"), Gateway: netip.MustParseAddr("172.17.0.1"), IPPrefixLen: 16,
-				DNSNames: []string{"coaming-agent", oldShort},
+				DNSNames: []string{"tierplan-agent", oldShort},
 			},
 		}},
 	})
@@ -90,8 +90,8 @@ func oldAgent(f *fakeEngine) *container.InspectResponse {
 // helperSelf registers the helper container: the new image, labelled as a helper.
 func helperSelf(f *fakeEngine) {
 	f.addContainer(container.InspectResponse{
-		ID: helperID, Name: "/coaming-agent-helper-1", State: &container.State{Running: true, Status: "running"},
-		Config: &container.Config{Hostname: helperID[:12], Image: newImage, Labels: map[string]string{"coaming.agent": "true", "coaming.agent.helper": "true"}},
+		ID: helperID, Name: "/tierplan-agent-helper-1", State: &container.State{Running: true, Status: "running"},
+		Config: &container.Config{Hostname: helperID[:12], Image: newImage, Labels: map[string]string{"tierplan.agent": "true", "tierplan.agent.helper": "true"}},
 	})
 }
 
@@ -162,19 +162,19 @@ func TestRecreateReplacesTheAgentWithTheSameConfigurationAndTheNewImage(t *testi
 		t.Fatalf("want one new container, got %d", len(f.creates))
 	}
 	cr := f.creates[0]
-	if cr.Name != "coaming-agent" {
+	if cr.Name != "tierplan-agent" {
 		t.Fatalf("the new container is named %q, want the old one's name", cr.Name)
 	}
 	if cr.Req.Image != newImage {
 		t.Fatalf("the new container runs %q, want the helper's own image %q", cr.Req.Image, newImage)
 	}
 	// The operator's configuration is carried over.
-	for _, want := range []string{"COAMING_AGENT_URL=wss://coaming.example/agent/connect", "COAMING_AGENT_JOIN_TOKEN_FILE=/run/secrets/t"} {
+	for _, want := range []string{"TIERPLAN_AGENT_URL=wss://tierplan.example/agent/connect", "TIERPLAN_AGENT_JOIN_TOKEN_FILE=/run/secrets/t"} {
 		if !slices.Contains(cr.Req.Env, want) {
 			t.Errorf("env %q was not carried over: %v", want, cr.Req.Env)
 		}
 	}
-	if cr.Req.Labels["coaming.agent"] != "true" || cr.Req.Labels["owner"] != "ops" {
+	if cr.Req.Labels["tierplan.agent"] != "true" || cr.Req.Labels["owner"] != "ops" {
 		t.Errorf("the operator's labels were not carried over: %v", cr.Req.Labels)
 	}
 	if gotHC := normalisedHostConfig(t, cr.Req.HostConfig); gotHC != wantHC {
@@ -230,8 +230,8 @@ func TestRecreateReplacesTheAgentWithTheSameConfigurationAndTheNewImage(t *testi
 	if !reflect.DeepEqual(ops, want) {
 		t.Fatalf("writes:\n got: %v\nwant: %v", ops, want)
 	}
-	if q := f.writeWithPrefix("POST /containers/" + oldLong + "/rename"); !strings.Contains(q, "name=coaming-agent-old") {
-		t.Errorf("the old container was renamed with %q, want name=coaming-agent-old", q)
+	if q := f.writeWithPrefix("POST /containers/" + oldLong + "/rename"); !strings.Contains(q, "name=tierplan-agent-old") {
+		t.Errorf("the old container was renamed with %q, want name=tierplan-agent-old", q)
 	}
 }
 
@@ -286,8 +286,8 @@ func assertRolledBack(t *testing.T, f *fakeEngine) {
 	if old == nil {
 		t.Fatal("the old container is gone after a rollback")
 	}
-	if old.Name != "/coaming-agent" || !old.State.Running {
-		t.Fatalf("the old container is %q running=%v, want /coaming-agent running", old.Name, old.State.Running)
+	if old.Name != "/tierplan-agent" || !old.State.Running {
+		t.Fatalf("the old container is %q running=%v, want /tierplan-agent running", old.Name, old.State.Running)
 	}
 	for _, w := range f.writes() {
 		if strings.HasPrefix(w, "DELETE /containers/"+oldLong) {
@@ -362,7 +362,7 @@ func TestAMarkerFromBeforeTheStartIsNotASuccess(t *testing.T) {
 
 func TestRecreateTouchesNothingWhenTheOldNameIsTaken(t *testing.T) {
 	f, r, _ := recreateFixture(t, true, testsupport.Deadline)
-	f.addContainer(container.InspectResponse{ID: "e" + strings.Repeat("0", 63), Name: "/coaming-agent-old", State: &container.State{}, Config: &container.Config{}})
+	f.addContainer(container.InspectResponse{ID: "e" + strings.Repeat("0", 63), Name: "/tierplan-agent-old", State: &container.State{}, Config: &container.Config{}})
 	if err := r.run(context.Background()); err == nil || errors.Is(err, ErrRolledBack) {
 		t.Fatalf("want a plain error, got %v", err)
 	}
@@ -371,18 +371,18 @@ func TestRecreateTouchesNothingWhenTheOldNameIsTaken(t *testing.T) {
 			t.Fatalf("something was changed after the rename failed: %v", f.writes())
 		}
 	}
-	if old := f.containers[oldLong]; old.Name != "/coaming-agent" || !old.State.Running {
+	if old := f.containers[oldLong]; old.Name != "/tierplan-agent" || !old.State.Running {
 		t.Fatalf("the old container was disturbed: %q running=%v", old.Name, old.State.Running)
 	}
 }
 
 func TestRecreateRefusesATargetThatIsNotAnAgentOrNotOfTheHelpersRepository(t *testing.T) {
 	for name, mutate := range map[string]func(f *fakeEngine){
-		"no label":            func(f *fakeEngine) { delete(f.containers[oldLong].Config.Labels, "coaming.agent") },
-		"label false":         func(f *fakeEngine) { f.containers[oldLong].Config.Labels["coaming.agent"] = "false" },
+		"no label":            func(f *fakeEngine) { delete(f.containers[oldLong].Config.Labels, "tierplan.agent") },
+		"label false":         func(f *fakeEngine) { f.containers[oldLong].Config.Labels["tierplan.agent"] = "false" },
 		"another repository":  func(f *fakeEngine) { f.containers[oldLong].Config.Image = "ghcr.io/evil/agent:1" },
-		"the helper itself":   func(f *fakeEngine) { f.containers[oldLong].Config.Labels["coaming.agent.helper"] = "true" },
-		"helper not a helper": func(f *fakeEngine) { delete(f.containers[helperID].Config.Labels, "coaming.agent.helper") },
+		"the helper itself":   func(f *fakeEngine) { f.containers[oldLong].Config.Labels["tierplan.agent.helper"] = "true" },
+		"helper not a helper": func(f *fakeEngine) { delete(f.containers[helperID].Config.Labels, "tierplan.agent.helper") },
 		"helper foreign repo": func(f *fakeEngine) { f.containers[helperID].Config.Image = "ghcr.io/evil/agent:1" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -416,7 +416,7 @@ func TestRecreateKeepsEveryLabelWhenTheOldImageIsGone(t *testing.T) {
 		t.Fatalf("recreate failed: %v", err)
 	}
 	l := f.creates[0].Req.Labels
-	if l["coaming.agent"] != "true" || l["owner"] != "ops" {
+	if l["tierplan.agent"] != "true" || l["owner"] != "ops" {
 		t.Errorf("labels = %v", l)
 	}
 	// Without the old image to compare with, the image's own metadata labels are
@@ -461,13 +461,13 @@ func TestStandaloneUpdatePullsTheImageAndStartsAHelperThatRecreatesTheAgent(t *t
 	if h.Image != newImage {
 		t.Errorf("the helper runs %q, want %q", h.Image, newImage)
 	}
-	if h.Labels["coaming.agent"] != "true" || h.Labels["coaming.agent.helper"] != "true" {
+	if h.Labels["tierplan.agent"] != "true" || h.Labels["tierplan.agent.helper"] != "true" {
 		t.Errorf("helper labels = %v", h.Labels)
 	}
 	if want := []string{"helper", "recreate", "--target", oldLong}; !reflect.DeepEqual([]string(h.Cmd), want) {
 		t.Errorf("helper command = %v, want %v (the full ID of the agent's own container)", h.Cmd, want)
 	}
-	if !slices.Contains(h.Env, "COAMING_AGENT_SOCKET="+f.sock) || !slices.Contains(h.Env, "COAMING_AGENT_STATE_DIR="+stateDir) {
+	if !slices.Contains(h.Env, "TIERPLAN_AGENT_SOCKET="+f.sock) || !slices.Contains(h.Env, "TIERPLAN_AGENT_STATE_DIR="+stateDir) {
 		t.Errorf("helper env = %v", h.Env)
 	}
 	hc := h.HostConfig
@@ -493,7 +493,7 @@ func TestStandaloneUpdatePullsTheImageAndStartsAHelperThatRecreatesTheAgent(t *t
 	if sock == nil || sock.Type != mount.TypeBind || sock.Source != sockPath {
 		t.Errorf("the helper needs the Docker socket: %+v", hc.Mounts)
 	}
-	if state == nil || state.Type != mount.TypeVolume || state.Source != "coaming-agent" {
+	if state == nil || state.Type != mount.TypeVolume || state.Source != "tierplan-agent" {
 		t.Errorf("the helper needs the agent's state volume by name: %+v", hc.Mounts)
 	}
 	if len(hc.Mounts) != 2 {
@@ -507,7 +507,7 @@ func TestStandaloneUpdatePullsTheImageAndStartsAHelperThatRecreatesTheAgent(t *t
 		ops[2] != "POST /containers/"+f.creates[0].ID+"/start" {
 		t.Fatalf("writes = %v", ops)
 	}
-	if !strings.HasPrefix(f.creates[0].Name, "coaming-agent-helper-") {
+	if !strings.HasPrefix(f.creates[0].Name, "tierplan-agent-helper-") {
 		t.Errorf("helper name %q", f.creates[0].Name)
 	}
 	if c := f.containers[oldLong]; c == nil || !c.State.Running {
@@ -577,7 +577,7 @@ func TestStandaloneUpdateOfAForeignRepositoryPullsNothing(t *testing.T) {
 func TestOnlyOneHelperIsEverStartedForTwoUpdatesInARow(t *testing.T) {
 	f, m := standaloneFixture(t, nil)
 	f.onStart = func(f *fakeEngine, c *container.InspectResponse) {
-		if c.Config.Labels["coaming.agent.helper"] == "true" {
+		if c.Config.Labels["tierplan.agent.helper"] == "true" {
 			c.State.Running = true
 		}
 	}
@@ -617,7 +617,7 @@ func removeFixture(t *testing.T, mut func(*RemoveVolumeOptions)) (*fakeEngine, R
 	oldAgent(f)
 	helperSelf(f)
 	opts := RemoveVolumeOptions{
-		SocketPath: f.sock, ContainerID: oldLong, Volume: "coaming-agent",
+		SocketPath: f.sock, ContainerID: oldLong, Volume: "tierplan-agent",
 		Timeout: testsupport.Deadline, Poll: 2 * time.Millisecond, Log: quietLog(),
 	}
 	if mut != nil {
@@ -648,11 +648,11 @@ func TestRemoveVolumeWaitsForTheContainerToGoAndThenRemovesOnlyTheVolume(t *test
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
-	if !reflect.DeepEqual(f.volumeDeletes, []string{"coaming-agent"}) {
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"tierplan-agent"}) {
 		t.Fatalf("volumes removed: %v", f.volumeDeletes)
 	}
 	removes := f.writes()
-	if len(removes) != 1 || !strings.HasPrefix(removes[0], "DELETE /volumes/coaming-agent") {
+	if len(removes) != 1 || !strings.HasPrefix(removes[0], "DELETE /volumes/tierplan-agent") {
 		t.Fatalf("the helper wrote %v, want only the volume removal (it did not touch the container: it waits for it to go)", removes)
 	}
 }
@@ -674,7 +674,7 @@ func TestRemoveVolumeWithRemoveContainerRemovesTheAgentThenTheVolume(t *testing.
 		t.Fatalf("the helper failed: %v", err)
 	}
 	w := f.writes()
-	iC, iV := indexOf(w, "DELETE /containers/"+oldLong, "force=1"), indexOf(w, "DELETE /volumes/coaming-agent", "")
+	iC, iV := indexOf(w, "DELETE /containers/"+oldLong, "force=1"), indexOf(w, "DELETE /volumes/tierplan-agent", "")
 	if iC < 0 || iV < 0 || iC > iV {
 		t.Fatalf("want a forced removal of the agent container and then of its volume, got %v", w)
 	}
@@ -719,7 +719,7 @@ func TestRemoveVolumeRetriesWhileTheVolumeIsStillInUse(t *testing.T) {
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
-	if !reflect.DeepEqual(f.volumeDeletes, []string{"coaming-agent"}) {
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"tierplan-agent"}) {
 		t.Fatalf("volumes removed: %v", f.volumeDeletes)
 	}
 }
@@ -758,7 +758,7 @@ func TestRemoveVolumeProceedsWhenTheContainerWasAlreadyGoneBeforeItStarted(t *te
 	if err := RemoveVolumeAfter(context.Background(), opts); err != nil {
 		t.Fatalf("the helper failed: %v", err)
 	}
-	if !reflect.DeepEqual(f.volumeDeletes, []string{"coaming-agent"}) {
+	if !reflect.DeepEqual(f.volumeDeletes, []string{"tierplan-agent"}) {
 		t.Fatalf("volumes removed: %v", f.volumeDeletes)
 	}
 }
@@ -766,7 +766,7 @@ func TestRemoveVolumeProceedsWhenTheContainerWasAlreadyGoneBeforeItStarted(t *te
 func TestRemoveVolumeRefusesATargetThatIsNotAnAgentOrIsAHelper(t *testing.T) {
 	for name, mut := range map[string]func(*container.InspectResponse){
 		"not labelled": func(c *container.InspectResponse) { c.Config.Labels = map[string]string{"owner": "ops"} },
-		"a helper":     func(c *container.InspectResponse) { c.Config.Labels["coaming.agent.helper"] = "true" },
+		"a helper":     func(c *container.InspectResponse) { c.Config.Labels["tierplan.agent.helper"] = "true" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, opts := removeFixture(t, func(o *RemoveVolumeOptions) { o.RemoveContainer = true })

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel
 
@@ -17,9 +17,9 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 const (
@@ -435,7 +435,7 @@ const (
 const agentHub = "system:agent-hub"
 
 // denied handles an agent telling the server that its policy refused a request
-// (D-29): it means a bug in Coaming or a server that asks for more than it
+// (D-29): it means a bug in TierPlan or a server that asks for more than it
 // should, so it is remembered on the session for the node list and audited. Only
 // the audit is limited; the session always shows the latest denial.
 func (h *Hub) denied(s *Session, d wire.Denied) {

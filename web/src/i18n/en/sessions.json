@@ -5,7 +5,7 @@
       "sessions": "Sessions"
     },
     "title": "Your sessions",
-    "body": "Everywhere you're signed in to Coaming.",
+    "body": "Everywhere you're signed in to TierPlan.",
     "tableLabel": "Sessions",
     "columns": {
       "device": "Device",
@@ -27,7 +27,7 @@
     "revoke": "Revoke",
     "revokePending": "Revoking…",
     "revoked": "Session revoked.",
-    "revokeFailed": "Couldn't revoke that session. It may already have ended. Try again, and check the Coaming logs if it keeps happening.",
+    "revokeFailed": "Couldn't revoke that session. It may already have ended. Try again, and check the TierPlan logs if it keeps happening.",
     "others": {
       "button": "Sign out everywhere else",
       "title": "Sign out everywhere else?",
@@ -36,11 +36,11 @@
       "confirm": "Sign out everywhere else",
       "pending": "Signing out…",
       "done": "Signed out everywhere else.",
-      "failed": "Couldn't sign out the other sessions. Try again, and check the Coaming logs if it keeps happening."
+      "failed": "Couldn't sign out the other sessions. Try again, and check the TierPlan logs if it keeps happening."
     },
     "profile": {
       "title": "Profile",
-      "description": "How you appear in Coaming.",
+      "description": "How you appear in TierPlan.",
       "note": "To change your password, use Change password in the user menu.",
       "cancel": "Cancel",
       "loading": "Loading your profile",
@@ -56,7 +56,7 @@
       "confirm": "End all sessions",
       "pending": "Ending…",
       "done": "{{username}} is signed out everywhere.",
-      "failed": "Couldn't end {{username}}'s sessions. Try again, and check the Coaming logs if it keeps happening.",
+      "failed": "Couldn't end {{username}}'s sessions. Try again, and check the TierPlan logs if it keeps happening.",
       "gone": "{{username}} no longer exists."
     }
   }

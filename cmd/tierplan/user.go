@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -14,13 +14,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/coaming/internal/access"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 func newUserCmd() *cobra.Command {
@@ -31,7 +31,7 @@ func newUserCmd() *cobra.Command {
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "unlock <name>",
-		Short: "Clear a locked account, for example: docker exec <container> coaming user unlock admin",
+		Short: "Clear a locked account, for example: docker exec <container> tierplan user unlock admin",
 		Long: "Clears the failed-sign-in count and the lock of a user, so they can sign in at once instead of waiting for the lock to expire.\n" +
 			"This is the only way back in when the only admin has been locked out, and it needs access to the container, so it is audited as system:cli.\n" +
 			"Exits 0 when the account was unlocked and 1 when there is no such user.",
@@ -42,10 +42,10 @@ func newUserCmd() *cobra.Command {
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "reset-password <name>",
-		Short: "Print a one-time password reset link, for example: docker exec <container> coaming user reset-password admin",
-		Long: "Ends every session of a user and prints a one-time link that lets them choose a new password, built from the public URL and base path Coaming has stored.\n" +
+		Short: "Print a one-time password reset link, for example: docker exec <container> tierplan user reset-password admin",
+		Long: "Ends every session of a user and prints a one-time link that lets them choose a new password, built from the public URL and base path TierPlan has stored.\n" +
 			"This is the way back in when the only instance admin has forgotten their password, and it needs access to the container, so it is audited as system:cli.\n" +
-			"When no public URL is stored the link has no address in front of it: open it on your Coaming address.\n" +
+			"When no public URL is stored the link has no address in front of it: open it on your TierPlan address.\n" +
 			"Exits 0 when the link was printed and 1 when there is no such user or the user is disabled.",
 		Args: cobra.ExactArgs(1),
 		// The one-line answer is the output; cobra's "Error:" prefix would only repeat it.
@@ -71,7 +71,7 @@ type userTools struct {
 	fail func(err error) error
 }
 
-// openUserTools opens the data directory for a `coaming user` subcommand. The
+// openUserTools opens the data directory for a `tierplan user` subcommand. The
 // returned func closes the store.
 func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) {
 	cfg, err := loadConfig(cmd)
@@ -91,7 +91,7 @@ func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) 
 	// break the chain the server keeps.
 	v, err := vault.Load(cfg.EncryptionKey, cfg.DataDir)
 	if errors.Is(err, vault.ErrNoKey) {
-		return nil, nil, fail(fmt.Errorf("no encryption key: set COAMING_ENCRYPTION_KEY (or _FILE), or point COAMING_DATA_DIR at the "+
+		return nil, nil, fail(fmt.Errorf("no encryption key: set TIERPLAN_ENCRYPTION_KEY (or _FILE), or point TIERPLAN_DATA_DIR at the "+
 			"directory that holds %s (looked in %s)", vault.KeyFile, cfg.DataDir))
 	}
 	if err != nil {
@@ -101,7 +101,7 @@ func openUserTools(cmd *cobra.Command, name string) (*userTools, func(), error) 
 	// Open would create an empty database; working in a path that has none is a mistake to report.
 	dbPath := filepath.Join(cfg.DataDir, store.DatabaseFile)
 	if _, err := os.Stat(dbPath); err != nil {
-		return nil, nil, fail(fmt.Errorf("no database at %s: set COAMING_DATA_DIR to the directory Coaming stores its data in", dbPath))
+		return nil, nil, fail(fmt.Errorf("no database at %s: set TIERPLAN_DATA_DIR to the directory TierPlan stores its data in", dbPath))
 	}
 	st, err := store.Open(ctx, cfg.DataDir)
 	if err != nil {
@@ -170,7 +170,7 @@ func runUserResetPassword(cmd *cobra.Command, name string) error {
 	case errors.Is(err, access.ErrNotFound):
 		return notFound()
 	case errors.Is(err, access.ErrUserDisabled):
-		fmt.Fprintf(cmd.ErrOrStderr(), "%s is disabled: enable them in Coaming first\n", name)
+		fmt.Fprintf(cmd.ErrOrStderr(), "%s is disabled: enable them in TierPlan first\n", name)
 		return errUserDisabled
 	case err != nil:
 		return tools.fail(err)
@@ -179,7 +179,7 @@ func runUserResetPassword(cmd *cobra.Command, name string) error {
 	url := access.LinkURL(inst.PublicURL(), inst.BasePath(), link.Token)
 	if inst.PublicURL() == "" {
 		// Without an address the link is only the part after it. Say where it goes.
-		fmt.Fprintf(cmd.OutOrStdout(), "Open it on your Coaming address: %s\n", url)
+		fmt.Fprintf(cmd.OutOrStdout(), "Open it on your TierPlan address: %s\n", url)
 		return nil
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), url)

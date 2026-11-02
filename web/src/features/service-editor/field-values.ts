@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // What the Form tab's text fields stand for in a spec: whole numbers, port numbers, cores as
 // NanoCPUs and memory as bytes. A function answers null for text that is not such a value, and

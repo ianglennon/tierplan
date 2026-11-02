@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -18,13 +18,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/engine"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // Errors of the registry. The API maps each to a stable problem type.
@@ -34,7 +34,7 @@ var (
 	// ErrEngineUnreachable means a socket exists but nothing Docker answers on
 	// it, usually a permission problem.
 	ErrEngineUnreachable = errors.New("envs: the Docker engine did not answer")
-	// ErrUnsupportedEngine means the engine is one Coaming does not manage and
+	// ErrUnsupportedEngine means the engine is one TierPlan does not manage and
 	// the caller did not ask to add it anyway.
 	ErrUnsupportedEngine = errors.New("envs: the Docker engine is not supported")
 	// ErrLocalExists means the local host is already an environment.
@@ -96,7 +96,7 @@ type Environment struct {
 	// re-initialised, while that change waits for an admin to adopt it (D-14).
 	// Empty when no change is recorded.
 	PendingClusterID string
-	// AutoUpdate is whether Coaming updates the environment's agents itself. It is
+	// AutoUpdate is whether TierPlan updates the environment's agents itself. It is
 	// meaningful for an agent environment only.
 	AutoUpdate bool
 	// FoldOffered is true on the local environment and on the swarm environment when
@@ -176,7 +176,7 @@ type Service struct {
 }
 
 // NewService returns the registry. dockerHost is the raw DOCKER_HOST setting
-// (empty means the default socket). selfID is Coaming's own container ID from
+// (empty means the default socket). selfID is TierPlan's own container ID from
 // ReadSelfContainerID, empty when it does not run in a container.
 func NewService(s *store.Store, w *audit.Writer, m *Monitor, dockerHost string, selfID string, now func() time.Time) *Service {
 	if now == nil {
@@ -386,7 +386,7 @@ func (s *Service) Known(ctx context.Context, id string) bool {
 	return err == nil
 }
 
-// SelfContainerID is the ID of Coaming's own container, or empty (D-27).
+// SelfContainerID is the ID of TierPlan's own container, or empty (D-27).
 func (s *Service) SelfContainerID() string { return s.selfID }
 
 func (s *Service) ctx() context.Context {
@@ -943,7 +943,7 @@ var _ httpx.EnvResolver = (*Service)(nil)
 var ErrAgentPolicyDenied = errors.New("envs: the agent refused the request by policy")
 
 // ErrAgentHostPolicy means an agent refused a service spec because it gives tasks
-// host access and the host owner did not set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES
+// host access and the host owner did not set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES
 // (D-36). It is an ErrAgentPolicyDenied as well.
 var ErrAgentHostPolicy = errors.New("envs: the agent refused the service spec: it gives tasks host access")
 

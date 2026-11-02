@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
 -- The identity of an agent environment (ENV-02, D-11, D-12, D-14, D-23).

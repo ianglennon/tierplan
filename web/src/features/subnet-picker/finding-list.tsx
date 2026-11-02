@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronRight, CircleX, Info, TriangleAlert } from "lucide-react";
 import { useState } from "react";
@@ -167,7 +167,7 @@ interface RouteCheckNotesProps {
 
 // RouteCheckNotes says, node by node, why host routes were not checked: an agent too old to
 // report them, one that cannot read the route file because it is not mounted (with the fix),
-// Coaming's own container, an agent that is not connected, an answer that could not be read. More
+// TierPlan's own container, an agent that is not connected, an answer that could not be read. More
 // than three nodes in one state are one line with their number. It is a note, never a stop.
 export function RouteCheckNotes({ checks, envType }: RouteCheckNotesProps) {
   const t = useT();

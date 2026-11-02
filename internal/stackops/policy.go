@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -8,12 +8,12 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/rbac/compose"
-	"github.com/ianglennon/coaming/internal/rbac/swarmspec"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/rbac/compose"
+	"github.com/ianglennon/tierplan/internal/rbac/swarmspec"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
 )
 
 // CodeNeedsAdmin is the code of the blocking problem for a host-escalation setting the caller may

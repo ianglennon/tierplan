@@ -36,9 +36,9 @@
     },
     "console": {
       "title": "Rolling back {{name}} to #{{revision}}",
-      "complete": "{{name}} is running the content of revision #{{revision}}. Coaming recorded it as revision #{{recorded}}.",
+      "complete": "{{name}} is running the content of revision #{{revision}}. TierPlan recorded it as revision #{{recorded}}.",
       "openHistory": "Open history",
-      "failedRecorded": "Coaming recorded the failed attempt as revision #{{recorded}}.",
+      "failedRecorded": "TierPlan recorded the failed attempt as revision #{{recorded}}.",
       "errors": {
         "notGood": "That revision can't be rolled back to. Pick a revision that finished well.",
         "gone": "That revision is gone. Open the history and pick another."

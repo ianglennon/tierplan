@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Check, CircleX, Copy, Download } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -45,7 +45,7 @@ export interface RenderedViewProps {
 // RenderedView is the stack as it will be deployed (STK-04, D-18): the compose file with its
 // variables filled in and its images shown as the pins they will run, every secret as <hidden>,
 // read only. It renders when the pane opens, again after a save and after a pause of 1.5 s in
-// typing. The text is held in component state and never in the query cache, and Coaming never
+// typing. The text is held in component state and never in the query cache, and TierPlan never
 // changes the person's file: this is a view the server computes from a copy.
 export function RenderedView({
   envId,

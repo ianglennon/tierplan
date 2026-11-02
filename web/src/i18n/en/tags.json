@@ -47,7 +47,7 @@
     },
     "caption_one": "Showing {{count}} tag",
     "caption_other": "Showing {{count}} tags",
-    "capped": "The repository has more tags than Coaming reads, so only the first {{count}} are listed.",
+    "capped": "The repository has more tags than TierPlan reads, so only the first {{count}} are listed.",
     "selected": "Selected",
     "empty": {
       "noMatch": {
@@ -66,7 +66,7 @@
     },
     "errors": {
       "login_refused": {
-        "message": "Coaming couldn't sign in to {{host}} with credential “{{name}}” ({{scope}}). Test it.",
+        "message": "TierPlan couldn't sign in to {{host}} with credential “{{name}}” ({{scope}}). Test it.",
         "action": "Test credential"
       },
       "needs_login": {
@@ -137,7 +137,7 @@
       "repository": "Repository",
       "empty": {
         "title": "No repository to browse",
-        "body": "This image has no name or registry digest, so Coaming can't tell where it came from."
+        "body": "This image has no name or registry digest, so TierPlan can't tell where it came from."
       }
     },
     "missing": {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -153,7 +153,7 @@ describe("environment layout full-page states", () => {
       problem(503, "environment_offline", { since: "2026-10-01T14:05:00Z", reason: "unreachable" });
     renderAt("/env/e1");
     expect(await screen.findByRole("heading", { name: "Docker isn't reachable" })).toBeTruthy();
-    const body = screen.getByText(/Coaming lost its connection to Lab host at \d{1,2}:\d{2}/);
+    const body = screen.getByText(/TierPlan lost its connection to Lab host at \d{1,2}:\d{2}/);
     expect(body.textContent).toContain("/var/run/docker.sock is mounted");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(document.title).toBe("Docker isn't reachable · Lab");
@@ -162,7 +162,7 @@ describe("environment layout full-page states", () => {
   it("leaves the time out when the engine never answered", async () => {
     stub.summary = () => problem(503, "environment_offline", { reason: "unreachable" });
     renderAt("/env/e1");
-    const body = await screen.findByText(/Coaming lost its connection to Lab host\./);
+    const body = await screen.findByText(/TierPlan lost its connection to Lab host\./);
     expect(body.textContent).not.toMatch(/ at \d/);
   });
 
@@ -189,7 +189,7 @@ describe("environment layout full-page states", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Docker Engine 23.0.1 (API 1.42) is below the minimum Coaming supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
+        "Docker Engine 23.0.1 (API 1.42) is below the minimum TierPlan supports, Docker Engine 24. Upgrade Docker Engine, then retry.",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
@@ -203,7 +203,7 @@ describe("environment layout full-page states", () => {
       });
     renderAt("/env/e1");
     expect(await screen.findByRole("heading", { name: "Podman isn't supported" })).toBeTruthy();
-    expect(screen.getByText("Coaming manages Docker Engine only.")).toBeTruthy();
+    expect(screen.getByText("TierPlan manages Docker Engine only.")).toBeTruthy();
   });
 
   it("renders the not-found copy for an unknown environment and the permission page on 403", async () => {
@@ -350,7 +350,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     renderAt("/env/e1");
     expect(await screen.findByRole("heading", { name: "No agent has connected yet" })).toBeTruthy();
     expect(
-      screen.getByText("Install the Coaming agent on a host to start managing Lab host."),
+      screen.getByText("Install the TierPlan agent on a host to start managing Lab host."),
     ).toBeTruthy();
     expect(document.title).toBe("No agent has connected yet · Lab");
     fireEvent.click(screen.getByRole("button", { name: "Show install command" }));
@@ -384,7 +384,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     const heading = await screen.findByRole("heading", { name: "Reconnecting to Lab host…" });
     expect(
       screen.getByText(
-        "Coaming just started and is waiting for the agent to reconnect. This usually takes under a minute.",
+        "TierPlan just started and is waiting for the agent to reconnect. This usually takes under a minute.",
       ),
     ).toBeTruthy();
     const page = heading.closest("[data-slot=empty]");
@@ -407,12 +407,12 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     renderAt("/env/e1");
     expect(await screen.findByRole("heading", { name: "Lab host isn't reachable" })).toBeTruthy();
     expect(
-      screen.getByText(/Coaming lost contact with the agent on Lab host at \d{1,2}:\d{2}/),
+      screen.getByText(/TierPlan lost contact with the agent on Lab host at \d{1,2}:\d{2}/),
     ).toBeTruthy();
     expect(screen.getByText("A node stopped answering.")).toBeTruthy();
     expect(screen.getByText(/The agent reconnects by itself\./)).toBeTruthy();
     // Phase 1's local-socket wording never appears for an agent environment.
-    expect(screen.queryByText(/docker\.sock is mounted into the Coaming container/)).toBeNull();
+    expect(screen.queryByText(/docker\.sock is mounted into the TierPlan container/)).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
@@ -444,8 +444,8 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
       problem(503, "environment_offline", { state: "offline", reason: "agent_offline" });
     renderAt("/env/e1");
     await screen.findByRole("heading", { name: "Lab host isn't reachable" });
-    expect(screen.getByText("docker service ps coaming-agent")).toBeTruthy();
-    expect(screen.queryByText("docker ps --filter name=coaming-agent")).toBeNull();
+    expect(screen.getByText("docker service ps tierplan-agent")).toBeTruthy();
+    expect(screen.queryByText("docker ps --filter name=tierplan-agent")).toBeNull();
   });
 
   it("offers Open node settings and Remove environment for a revoked environment, by permission", async () => {
@@ -458,7 +458,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
       await screen.findByRole("heading", { name: "This environment was revoked" }),
     ).toBeTruthy();
     expect(
-      screen.getByText("An admin revoked every agent on Lab host, so Coaming can't reach it."),
+      screen.getByText("An admin revoked every agent on Lab host, so TierPlan can't reach it."),
     ).toBeTruthy();
     const settings = screen.getByRole("link", { name: "Open node settings" });
     expect(settings.getAttribute("href")).toBe("/settings/environments/e1");
@@ -489,7 +489,7 @@ describe("agent environment full-page states (ENV-08, D-33)", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "The agents on Lab host now report a different cluster, so Coaming refused them. Nothing was changed on the old environment.",
+        "The agents on Lab host now report a different cluster, so TierPlan refused them. Nothing was changed on the old environment.",
       ),
     ).toBeTruthy();
     const remove = screen.getByRole("link", { name: "Remove environment" });

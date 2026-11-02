@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The framing of a container's log stream (plan 04-19, OBS-01, D-15, Pitfall 12).

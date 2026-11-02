@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -13,16 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // sharedSwarmCases are the swarm tests that leave the swarm itself as they found it:
 // they make their own services, secrets, configs, networks and volumes, and install
 // and remove agents, but never stop, remove, demote or promote a node, leave the swarm
 // or need a shape other than three managers and a worker. They take turns on one swarm
-// (TestSwarmShared). Each still gets its own Coaming and agent environment, so no
+// (TestSwarmShared). Each still gets its own TierPlan and agent environment, so no
 // audit row, agent row or detector state passes from one to the next. A test that
 // changes the swarm itself stays a TestSwarm function with a swarm of its own.
 var sharedSwarmCases = []struct {
@@ -68,7 +68,7 @@ var sharedSwarmCases = []struct {
 	{"WorkerShellAndLogs", sharedWorkerShellAndLogs},
 }
 
-// sharedCaseOptions are the server options a shared case starts its Coaming with, by case
+// sharedCaseOptions are the server options a shared case starts its TierPlan with, by case
 // name, over the defaults every case gets. A case missing here gets the defaults. They are
 // the Go-level test hooks of servertest, never settings of a real server.
 var sharedCaseOptions = map[string]func(*servertest.Options){
@@ -83,7 +83,7 @@ var sharedCaseOptions = map[string]func(*servertest.Options){
 // a worker, in an order shuffled like -shuffle shuffles tests. After each case the swarm
 // is reset to the state it started in and checked; a swarm that does not pass the
 // check is removed and a new one started, so a case never runs on what another left.
-// COAMING_SWARM_SHARED_SEED replays an order: the seed is logged at the start.
+// TIERPLAN_SWARM_SHARED_SEED replays an order: the seed is logged at the start.
 func TestSwarmShared(t *testing.T) {
 	var sw *dockertest.Swarm
 	var base dockertest.SwarmBaseline
@@ -102,7 +102,7 @@ func TestSwarmShared(t *testing.T) {
 	fresh()
 
 	// resetOrReplace brings the swarm back to its baseline before the next case. The last
-	// case's Coaming has stopped (its cleanup ran when the subtest ended), so its agents
+	// case's TierPlan has stopped (its cleanup ran when the subtest ended), so its agents
 	// are disconnected; the reset removes them with everything else. A swarm that fails
 	// the reset is removed and a new one started, so no case runs on what another left.
 	resetOrReplace := func() {
@@ -144,7 +144,7 @@ func TestSwarmShared(t *testing.T) {
 }
 
 // sharedOrder is the order to run n cases in. It follows go test's -shuffle: off keeps
-// the listed order, a number is the seed, and on picks one. COAMING_SWARM_SHARED_SEED
+// the listed order, a number is the seed, and on picks one. TIERPLAN_SWARM_SHARED_SEED
 // overrides all three, to replay an order from a log.
 func sharedOrder(t *testing.T, n int) []int {
 	t.Helper()
@@ -156,7 +156,7 @@ func sharedOrder(t *testing.T, n int) []int {
 	if f := flag.Lookup("test.shuffle"); f != nil {
 		setting = f.Value.String()
 	}
-	if env := os.Getenv("COAMING_SWARM_SHARED_SEED"); env != "" {
+	if env := os.Getenv("TIERPLAN_SWARM_SHARED_SEED"); env != "" {
 		setting = env
 	}
 	if setting == "off" {
@@ -168,6 +168,6 @@ func sharedOrder(t *testing.T, n int) []int {
 		seed = time.Now().UnixNano()
 	}
 	rand.New(rand.NewPCG(uint64(seed), 0)).Shuffle(n, func(i, j int) { order[i], order[j] = order[j], order[i] }) //nolint:gosec // a test order that must replay from its seed, not a secret
-	t.Logf("shared swarm cases shuffled with seed %d (replay with COAMING_SWARM_SHARED_SEED=%d)", seed, seed)
+	t.Logf("shared swarm cases shuffled with seed %d (replay with TIERPLAN_SWARM_SHARED_SEED=%d)", seed, seed)
 	return order
 }

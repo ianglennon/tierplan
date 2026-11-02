@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link, useBlocker, useNavigate } from "@tanstack/react-router";
@@ -224,7 +224,7 @@ export function ServiceEditorPage({
     name: "",
     mode: "replicated",
     stack: "",
-    coamingStackId: "",
+    tierplanStackId: "",
     agent: false,
     masked: false,
     spec: defaultServiceSpec(),
@@ -541,7 +541,7 @@ export function ServiceEditorPage({
           serviceId={serviceId}
           name={data.name}
           stack={data.stack}
-          coamingStackId={data.coamingStackId}
+          tierplanStackId={data.tierplanStackId}
           spec={current}
         />
       </div>

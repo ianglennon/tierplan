@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -30,10 +30,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/agent/internal/state"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/state"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // certPair is a certificate with its key.
@@ -206,7 +206,7 @@ func TestTLSPinOfACAIsNotEnoughWhenTheLeafDoesNotChainToIt(t *testing.T) {
 }
 
 func TestTLSWithPinsStillTrustsACertificateFromTheSystemRoots(t *testing.T) {
-	// An administrator who moves Coaming from its self-signed certificate to a
+	// An administrator who moves TierPlan from its self-signed certificate to a
 	// public one must not strand agents that stored the old pin.
 	ca := issue(t, "test root", true, nil)
 	leaf := issue(t, "server", false, &ca)
@@ -277,7 +277,7 @@ func TestTLSVerifyConnectionRefusesAnEmptyPeerCertificateList(t *testing.T) {
 }
 
 func TestTheDialClientUsesTheEnvironmentProxy(t *testing.T) {
-	c := newHTTPClient(nil, nil, nil, "coaming.example")
+	c := newHTTPClient(nil, nil, nil, "tierplan.example")
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok || tr.Proxy == nil {
 		t.Fatalf("transport = %#v, want an http.Transport with a proxy function", c.Transport)

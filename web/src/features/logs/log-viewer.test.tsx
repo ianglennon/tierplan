@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
@@ -506,7 +506,7 @@ describe("timestamps", () => {
     await connect();
     clickToggle("Timestamps");
     clickToggle("Wrap");
-    expect(JSON.parse(localStorage.getItem("coaming.logs.view") ?? "{}")).toEqual({
+    expect(JSON.parse(localStorage.getItem("tierplan.logs.view") ?? "{}")).toEqual({
       wrap: true,
       timestamps: true,
       utc: false,
@@ -1088,7 +1088,7 @@ describe("the pop-out", () => {
 
   it("carries the choices this browser remembers when the address names none", async () => {
     localStorage.setItem(
-      "coaming.logs.view",
+      "tierplan.logs.view",
       JSON.stringify({ wrap: true, timestamps: true, utc: false }),
     );
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
@@ -1286,7 +1286,7 @@ describe("a service's log", () => {
       fireEvent.click(toggle);
     });
     expect(onParamsChange).toHaveBeenCalledWith(expect.objectContaining({ prefix: false }));
-    expect(JSON.parse(localStorage.getItem("coaming.logs.view") ?? "{}").taskNames).toBe(false);
+    expect(JSON.parse(localStorage.getItem("tierplan.logs.view") ?? "{}").taskNames).toBe(false);
   });
 
   it("hides the prefixes from the DOM when the address says prefix is off", async () => {
@@ -1301,7 +1301,7 @@ describe("a service's log", () => {
   });
 
   it("starts with the prefixes off when this browser remembers that", async () => {
-    localStorage.setItem("coaming.logs.view", JSON.stringify({ taskNames: false }));
+    localStorage.setItem("tierplan.logs.view", JSON.stringify({ taskNames: false }));
     renderService();
     await connectService();
     await send([svcLine(1, "t1", 1, "alpha")]);
@@ -1629,7 +1629,7 @@ describe("a service's markers and filters", () => {
     await frame("node", { kind: "down", node: "beta", at: at(3) });
     expect(
       screen.getByRole("separator", {
-        name: "— beta is down, so new lines from its tasks can't reach Coaming. —",
+        name: "— beta is down, so new lines from its tasks can't reach TierPlan. —",
       }),
     ).toBeTruthy();
     await frame("node", { kind: "back", node: "beta", at: at(4) });

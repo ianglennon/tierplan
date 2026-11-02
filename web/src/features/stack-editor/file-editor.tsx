@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { EditorView } from "@codemirror/view";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
@@ -45,7 +45,7 @@ interface FileEditorProps {
   // replaces the old without recreating the editor.
   problems?: readonly LintProblem[];
   // The variables typing "${" offers (plan 07-10). Only compose.yaml has them: it is the one file
-  // Coaming interpolates. A new list is used the next time the list opens; the editor is not
+  // TierPlan interpolates. A new list is used the next time the list opens; the editor is not
   // recreated.
   variableNames?: readonly VarName[];
   onChange: (content: string) => void;

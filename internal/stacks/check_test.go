@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -16,9 +16,9 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/lint"
-	"github.com/ianglennon/coaming/internal/stacks/stackstest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/stacks/stackstest"
 )
 
 func checkOf(t *testing.T, compose string) stacks.CheckResult {
@@ -643,7 +643,7 @@ const trailingBackslashSecret = "hunter2-foxtrot'hunter2-golf\\"
 var trailingBackslashParts = []string{"hunter2-foxtrot", "hunter2-golf"}
 
 // distinctiveEscapedValue holds a double quote, a backslash and a single quote between letters and digits that
-// match no word of Coaming's own text, so the leak check can scan every message for it.
+// match no word of TierPlan's own text, so the leak check can scan every message for it.
 const distinctiveEscapedValue = "Zq9\"xkw\\mpr'Vb7"
 
 var distinctiveEscapedParts = []string{"Zq9", "xkw", "mpr", "Vb7"}

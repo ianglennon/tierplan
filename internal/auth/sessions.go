@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package auth
 
@@ -15,9 +15,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Cookie names (D-12, D-32, D-50). The __Host- prefix makes a browser accept the
@@ -27,13 +27,13 @@ import (
 // required, Path and Domain are free). Over plain http either prefix would make
 // the browser drop the cookie, so the bare name is used.
 const (
-	hostCookieName   = "__Host-coaming_session"
-	secureCookieName = "__Secure-coaming_session"
-	plainCookieName  = "coaming_session"
+	hostCookieName   = "__Host-tierplan_session"
+	secureCookieName = "__Secure-tierplan_session"
+	plainCookieName  = "tierplan_session"
 )
 
 // csrfLabel is the vault subkey label the CSRF tokens are keyed with (D-36).
-const csrfLabel = "coaming/csrf/v1"
+const csrfLabel = "tierplan/csrf/v1"
 
 const (
 	sessionIDBytes = 32 // 256 bits
@@ -133,7 +133,7 @@ func CookieName(scope CookieScope) string {
 }
 
 // cookiePath is "/" at the root and the base path under one, so a browser sends
-// the cookie only to Coaming's own path and not to a neighbour on the same host.
+// the cookie only to TierPlan's own path and not to a neighbour on the same host.
 func cookiePath(scope CookieScope) string {
 	if scope.BasePath == "" {
 		return "/"
@@ -176,7 +176,7 @@ func ClearCookie(scope CookieScope) http.Cookie {
 
 // CSRFToken is the per-session token the SPA sends as X-CSRF-Token on every
 // mutating request (D-36): HMAC-SHA256 of the session's ID hash under the
-// vault's coaming/csrf/v1 subkey, in unpadded base64url. It needs no storage,
+// vault's tierplan/csrf/v1 subkey, in unpadded base64url. It needs no storage,
 // is stable for the life of the session and reveals neither the session ID nor
 // its hash.
 func (m *Sessions) CSRFToken(idHash []byte) string {

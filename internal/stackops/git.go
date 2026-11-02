@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops
 
@@ -18,9 +18,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // What started the deploy of a revision that no person started.
@@ -569,7 +569,7 @@ func (r Repo) SetGitEvent(ctx context.Context, stackID, kind, detail string, at 
 
 // RefreshDraftFromGit replaces the files of a git stack's draft that came from the repository with those of a newer
 // commit, when the draft is still at version: the draft's repository files (origin repo) are dropped and repoFiles take
-// their place, a file of Coaming's own (overlay, or one a person added) and the variables are kept, the compose files
+// their place, a file of TierPlan's own (overlay, or one a person added) and the variables are kept, the compose files
 // are the source's, and the commit, tree and source the draft records are rev. A path both a kept file and a
 // repository file hold goes to the repository file, as an import does (D-09); gitsync refuses the refresh before it gets
 // here (overlay_clash), so a sealed overlay is never dropped by a pull. The version of the draft goes up by one.
@@ -756,7 +756,7 @@ func (r Repo) FinalizeConvert(ctx context.Context, stackID string) (bool, error)
 	return true, nil
 }
 
-// Detach turns a git stack back into an inline stack you edit in Coaming (D-25), in one transaction: the files of rev (the
+// Detach turns a git stack back into an inline stack you edit in TierPlan (D-25), in one transaction: the files of rev (the
 // revision that is deployed) become the stack's draft as inline files, the variables and the ordered compose file list are
 // kept, the stack's source kind is inline, and its git settings (polling, webhook, auto-deploy) and sync state are deleted,
 // so the poller no longer lists it and no webhook address is routed to it. inTx runs in the same transaction, so the

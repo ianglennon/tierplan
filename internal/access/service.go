@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package access is the service layer behind every user, team, grant and
 // session operation (AUTH-04 and the rest of Phase 3). The API routes call it
@@ -16,14 +16,14 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // DefaultInviteTTL is how long an invite or reset link works when
-// COAMING_INVITE_TTL does not say otherwise (D-24).
+// TIERPLAN_INVITE_TTL does not say otherwise (D-24).
 const DefaultInviteTTL = 72 * time.Hour
 
 // Errors the service returns. They are stable so the API can map each to a

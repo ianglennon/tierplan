@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // nonLoopbackIPv4 is an address of this machine that is up, is not loopback and
@@ -62,7 +62,7 @@ var envPair = regexp.MustCompile(`-e '([A-Z0-9_]+)=([^']*)'`)
 // dev-go plus make dev-swarm (T-02-31): a development server with a plain agent
 // address on a non-loopback interface, and an agent started from exactly the
 // command it generates. The agent refuses plain ws:// to another host unless
-// COAMING_AGENT_ALLOW_INSECURE=true is set on it, so the generated command has
+// TIERPLAN_AGENT_ALLOW_INSECURE=true is set on it, so the generated command has
 // to carry the switch, and the same agent without it must stop at start.
 func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	if testing.Short() {
@@ -73,8 +73,8 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		t.Skip("this machine has no non-loopback IPv4 address")
 	}
 
-	agentBin := filepath.Join(t.TempDir(), "coaming-agent")
-	build := exec.Command("go", "build", "-o", agentBin, "./cmd/coaming-agent") //nolint:gosec // the agent module is built from this repository
+	agentBin := filepath.Join(t.TempDir(), "tierplan-agent")
+	build := exec.Command("go", "build", "-o", agentBin, "./cmd/tierplan-agent") //nolint:gosec // the agent module is built from this repository
 	build.Dir = "../../agent"
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -90,9 +90,9 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	ts.Listener = ln
 	addr := ln.Addr().String()
 	cfg := testConfig(t, map[string]string{
-		"COAMING_DATA_DIR":             t.TempDir() + "/data",
-		"COAMING_PUBLIC_URL":           "http://" + addr,
-		"COAMING_AGENT_ALLOW_INSECURE": "true",
+		"TIERPLAN_DATA_DIR":             t.TempDir() + "/data",
+		"TIERPLAN_PUBLIC_URL":           "http://" + addr,
+		"TIERPLAN_AGENT_ALLOW_INSECURE": "true",
 	})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -150,18 +150,18 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	in := created.Install
 
 	// The texts: the plain address and the agent's switch, side by side.
-	wantURL := "-e 'COAMING_AGENT_URL=ws://" + addr + "/agent/connect'"
+	wantURL := "-e 'TIERPLAN_AGENT_URL=ws://" + addr + "/agent/connect'"
 	if !strings.Contains(in.Standalone.Command, wantURL) {
 		t.Fatalf("the standalone command lacks %s:\n%s", wantURL, in.Standalone.Command)
 	}
-	if !strings.Contains(in.Standalone.Command, "-e 'COAMING_AGENT_ALLOW_INSECURE=true'") {
+	if !strings.Contains(in.Standalone.Command, "-e 'TIERPLAN_AGENT_ALLOW_INSECURE=true'") {
 		t.Errorf("the standalone command lacks the agent's switch:\n%s", in.Standalone.Command)
 	}
-	if !strings.Contains(in.Swarm.Command, "--env 'COAMING_AGENT_ALLOW_INSECURE=true'") {
+	if !strings.Contains(in.Swarm.Command, "--env 'TIERPLAN_AGENT_ALLOW_INSECURE=true'") {
 		t.Errorf("the swarm command lacks the agent's switch:\n%s", in.Swarm.Command)
 	}
 	for name, text := range map[string]string{"stack file": in.Swarm.StackFile, "compose file": in.Standalone.ComposeFile} {
-		if !strings.Contains(text, `COAMING_AGENT_ALLOW_INSECURE: "true"`) {
+		if !strings.Contains(text, `TIERPLAN_AGENT_ALLOW_INSECURE: "true"`) {
 			t.Errorf("the %s lacks the agent's switch:\n%s", name, text)
 		}
 	}
@@ -181,8 +181,8 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 		log = &lockedBuffer{}
 		cmd := exec.CommandContext(ctx, agentBin) //nolint:gosec // the binary this test just built
 		cmd.Env = []string{
-			"COAMING_AGENT_SOCKET=" + fake.SocketPath(),
-			"COAMING_AGENT_STATE_DIR=" + stateDir,
+			"TIERPLAN_AGENT_SOCKET=" + fake.SocketPath(),
+			"TIERPLAN_AGENT_STATE_DIR=" + stateDir,
 			"PATH=" + os.Getenv("PATH"),
 		}
 		for _, p := range pairs {
@@ -220,7 +220,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	// agent logs its enrolment when the welcome arrives, so the line can trail the
 	// status by a moment on a loaded machine.
 	testsupport.Poll(t, 30*time.Second, "the agent's log to say it enrolled", func() (bool, string) { // testsupport: external, the agent process writing its log
-		return strings.Contains(log.String(), "enrolled with Coaming"), log.String()
+		return strings.Contains(log.String(), "enrolled with TierPlan"), log.String()
 	})
 	if !strings.Contains(log.String(), "allow_insecure=true") {
 		t.Errorf("the agent's start line does not show allow_insecure=true:\n%s", log.String())
@@ -231,7 +231,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	stop()
 
 	// The same command without the agent's switch: the agent stops at start.
-	done2, _, log2, _ := start("COAMING_AGENT_ALLOW_INSECURE", t.TempDir())
+	done2, _, log2, _ := start("TIERPLAN_AGENT_ALLOW_INSECURE", t.TempDir())
 	select {
 	case err := <-done2:
 		var ee *exec.ExitError
@@ -241,7 +241,7 @@ func TestTheDevelopmentInstallCommandConnectsOverPlainWS(t *testing.T) {
 	case <-time.After(testsupport.Deadline):
 		t.Fatalf("the agent without the switch did not exit; output:\n%s", log2.String())
 	}
-	if !strings.Contains(log2.String(), "COAMING_AGENT_ALLOW_INSECURE") {
+	if !strings.Contains(log2.String(), "TIERPLAN_AGENT_ALLOW_INSECURE") {
 		t.Errorf("the refusal does not name the switch:\n%s", log2.String())
 	}
 	if strings.Contains(log2.String(), in.JoinToken) {

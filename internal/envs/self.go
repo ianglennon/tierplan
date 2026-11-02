@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package envs
 
@@ -30,7 +30,7 @@ var identityMounts = map[string]bool{
 }
 
 // DetectSelfContainerID returns the ID of the container this process runs in,
-// so the UI can badge it "Coaming (this instance)" (D-27). mountinfo is
+// so the UI can badge it "TierPlan (this instance)" (D-27). mountinfo is
 // /proc/self/mountinfo.
 //
 // The full 64-character ID comes from the mount that supplies /etc/hostname,
@@ -61,7 +61,7 @@ func DetectSelfContainerID(mountinfo io.Reader, hostname string) string {
 }
 
 // ReadSelfContainerID reads /proc/self/mountinfo and the hostname and applies
-// DetectSelfContainerID. It returns empty when Coaming does not run in a
+// DetectSelfContainerID. It returns empty when TierPlan does not run in a
 // container, or the files cannot be read. It must run before the privilege
 // drop (A9): mountinfo is world-readable, but the call is kept next to the
 // other start-up probes.

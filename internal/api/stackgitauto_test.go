@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // A git stack's auto-deploy (plan 09-25, GIT-07, D-18 to D-21, D-29): off until a user turns it on, and then a commit
@@ -529,7 +529,7 @@ func TestAutoDeployRevertedBellItem(t *testing.T) {
 	envAdmin := a.f.asRoleOn(t, "u-env-admin", a.env, "admin")
 	a.turnOn(t, operator)
 
-	// Somebody scales web outside Coaming; the commit then changes the image of web and leaves its replicas alone.
+	// Somebody scales web outside TierPlan; the commit then changes the image of web and leaves its replicas alone.
 	a.f.editLiveService(t, a.e, "web", "web", scaleTo(5))
 	head := a.commitCompose(t, gitCompose("1.28"), "newer web")
 	if out := a.checkNow(t, operator, a.stackID, a.ended); out != gitsync.OutcomeBehind {

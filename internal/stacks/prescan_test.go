@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The raw-YAML prescan (plan 07-06, STK-01, D-05, A4; T-07-26, T-07-27): what a compose file may
@@ -224,7 +224,7 @@ func TestPrescanReadsEveryDocument(t *testing.T) {
 	}
 }
 
-// The hostile corpus: each file is a way to read the Coaming server's disk or to make it fetch or
+// The hostile corpus: each file is a way to read the TierPlan server's disk or to make it fetch or
 // work without end. Each yields a blocking problem, and the file never reaches the loader.
 
 func TestHostileCorpusYieldsBlockingProblemsAndLoadsNothing(t *testing.T) {

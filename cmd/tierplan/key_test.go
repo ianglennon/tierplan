@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // seedSecrets puts a sealed CA key and a sealed schedule passphrase, both under
@@ -59,8 +59,8 @@ func TestKeyRotateThenVerifyMovesSecretsAndChainAndServerStartsOnTheNewKey(t *te
 	if err != nil {
 		t.Fatalf("key rotate: %v (stderr %q)", err, errOut)
 	}
-	if !strings.Contains(out, oldV.KeyID()) || !strings.Contains(out, "The old key is kept as coaming.key.old") {
-		t.Fatalf("output = %q, want the old key ID and the note about coaming.key.old", out)
+	if !strings.Contains(out, oldV.KeyID()) || !strings.Contains(out, "The old key is kept as tierplan.key.old") {
+		t.Fatalf("output = %q, want the old key ID and the note about tierplan.key.old", out)
 	}
 
 	both, err := vault.Load("", dir)
@@ -147,10 +147,10 @@ func TestKeyRotateRefusesWhenAnOldKeyFileIsThereAndChangesNothing(t *testing.T) 
 
 	_, errOut, err := runCLI(t, dir, "key", "rotate")
 	if err == nil {
-		t.Fatal("key rotate succeeded with coaming.key.old present")
+		t.Fatal("key rotate succeeded with tierplan.key.old present")
 	}
-	if !strings.Contains(errOut, "coaming.key.old somewhere safe first") {
-		t.Fatalf("stderr = %q, want it to ask the admin to move coaming.key.old", errOut)
+	if !strings.Contains(errOut, "tierplan.key.old somewhere safe first") {
+		t.Fatalf("stderr = %q, want it to ask the admin to move tierplan.key.old", errOut)
 	}
 	if !bytes.Equal(fileBytes(t, dir, vault.KeyFile), keyBefore) || !bytes.Equal(fileBytes(t, dir, vault.OldKeyFile), oldBefore) {
 		t.Error("a refused rotation changed a key file")
@@ -164,7 +164,7 @@ func TestKeyRotateRefusesWhenAnOldKeyFileIsThereAndChangesNothing(t *testing.T) 
 	}
 }
 
-func TestKeyRotateRefusesWhileCoamingIsRunningAndChangesNothing(t *testing.T) {
+func TestKeyRotateRefusesWhileTierPlanIsRunningAndChangesNothing(t *testing.T) {
 	dir := t.TempDir() + "/data"
 	srv := buildServer(t, dir)
 	keyBefore := fileBytes(t, dir, vault.KeyFile)
@@ -174,7 +174,7 @@ func TestKeyRotateRefusesWhileCoamingIsRunningAndChangesNothing(t *testing.T) {
 	if err == nil {
 		t.Fatal("key rotate succeeded beside a running server")
 	}
-	if !strings.Contains(errOut, "Coaming is running") || !strings.Contains(errOut, "docker run --rm") {
+	if !strings.Contains(errOut, "TierPlan is running") || !strings.Contains(errOut, "docker run --rm") {
 		t.Fatalf("stderr = %q, want the running notice and the one-off container command", errOut)
 	}
 	if !bytes.Equal(fileBytes(t, dir, vault.KeyFile), keyBefore) || srv.Vault().KeyID() != kid {
@@ -207,12 +207,12 @@ func TestKeyRotateDiscardsAStaleNewKeyFromAnInterruptedRunAndRotates(t *testing.
 	}
 }
 
-// runCLIWithKey is runCLI with COAMING_ENCRYPTION_KEY set to key.
+// runCLIWithKey is runCLI with TIERPLAN_ENCRYPTION_KEY set to key.
 func runCLIWithKey(t *testing.T, dir string, key []byte, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	t.Setenv("COAMING_DATA_DIR", dir)
-	t.Setenv("COAMING_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("COAMING_ENCRYPTION_KEY_FILE", "")
+	t.Setenv("TIERPLAN_DATA_DIR", dir)
+	t.Setenv("TIERPLAN_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("TIERPLAN_ENCRYPTION_KEY_FILE", "")
 	var out, errb bytes.Buffer
 	root := newRoot()
 	root.SetOut(&out)
@@ -246,7 +246,7 @@ func TestKeyRotateEnvWritesTheNewKeyFileAndNeverPrintsTheKey(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("%s: %v, %v; want mode 600", vault.NewKeyFile, info, err)
 	}
-	want := "Set COAMING_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile) + ", restart Coaming, then delete the file."
+	want := "Set TIERPLAN_ENCRYPTION_KEY to the contents of " + filepath.Join(dir, vault.NewKeyFile) + ", restart TierPlan, then delete the file."
 	if !strings.Contains(out, want) {
 		t.Fatalf("output = %q, want %q", out, want)
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { EditorView } from "@codemirror/view";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -19,7 +19,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-function renderState(coamingStackId?: string) {
+function renderState(tierplanStackId?: string) {
   return render(
     <TestRouter>
       <StackOwnedState
@@ -27,7 +27,7 @@ function renderState(coamingStackId?: string) {
         serviceId={SERVICE_ID}
         name="api"
         stack="shop"
-        coamingStackId={coamingStackId}
+        tierplanStackId={tierplanStackId}
         spec={editSpec()}
       />
     </TestRouter>,
@@ -51,7 +51,7 @@ describe("StackOwnedState", () => {
     expect(back.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/services/${SERVICE_ID}`);
   });
 
-  it("offers Open stack beside Back to {name} when Coaming manages the stack", () => {
+  it("offers Open stack beside Back to {name} when TierPlan manages the stack", () => {
     renderState("stk-1");
     const open = screen.getByRole("link", { name: "Open stack" });
     expect(open.getAttribute("href")).toBe(`/env/${SERVICE_ENV}/stacks/stk-1`);
@@ -63,7 +63,7 @@ describe("StackOwnedState", () => {
     expect(screen.getByRole("heading", { name: "api is managed by stack shop" })).toBeTruthy();
   });
 
-  it("offers no Open stack for a stack Coaming does not manage", () => {
+  it("offers no Open stack for a stack TierPlan does not manage", () => {
     renderState();
     expect(screen.queryByRole("link", { name: "Open stack" })).toBeNull();
     expect(screen.getByRole("link", { name: "Back to api" })).toBeTruthy();

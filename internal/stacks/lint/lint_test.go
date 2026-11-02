@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package lint_test
 
@@ -10,8 +10,8 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
 )
 
 // checkOf runs the whole check of a compose file on a target, the way the editor does.
@@ -70,7 +70,7 @@ func TestSwarmWarnsAtTheLineOfABuildThatHasAnImage(t *testing.T) {
 	}
 }
 
-func TestStandaloneSaysBuildIsIgnoredBecauseCoamingDoesNotBuild(t *testing.T) {
+func TestStandaloneSaysBuildIsIgnoredBecauseTierPlanDoesNotBuild(t *testing.T) {
 	t.Parallel()
 	const compose = `services:
   web:
@@ -85,7 +85,7 @@ func TestStandaloneSaysBuildIsIgnoredBecauseCoamingDoesNotBuild(t *testing.T) {
 	if p.Severity != stacks.SeverityWarning || p.Code != stacks.CodeIgnoredOnTarget || p.Line != 4 {
 		t.Errorf("problem = %+v, want a warning ignored_on_target at line 4", p)
 	}
-	if want := "`build` is ignored. Coaming doesn't build images; it deploys the image named in `image`."; p.Message != want {
+	if want := "`build` is ignored. TierPlan doesn't build images; it deploys the image named in `image`."; p.Message != want {
 		t.Errorf("message = %q, want %q", p.Message, want)
 	}
 }
@@ -181,7 +181,7 @@ func TestAMovingImageIsAWarningAtItsLineOnBothTargets(t *testing.T) {
 					t.Fatalf("problems = %+v, want exactly one", res.Problems)
 				}
 				p := res.Problems[0]
-				want := "“" + image + "” can move: it has no tag or uses :latest. Coaming keeps the running digest on redeploys, but picks one when the service is new or the reference changes."
+				want := "“" + image + "” can move: it has no tag or uses :latest. TierPlan keeps the running digest on redeploys, but picks one when the service is new or the reference changes."
 				if p.Severity != stacks.SeverityWarning || p.Code != stacks.CodeMovingTag || p.Line != 3 || p.Message != want {
 					t.Errorf("problem = %+v, want a moving_tag warning at line 3 saying %q", p, want)
 				}
@@ -285,7 +285,7 @@ func TestANetworkTheAgentAcceptsHasNoFinding(t *testing.T) {
 	}
 }
 
-func TestAnExternalNetworkIsNotJudgedBecauseCoamingNeverCreatesIt(t *testing.T) {
+func TestAnExternalNetworkIsNotJudgedBecauseTierPlanNeverCreatesIt(t *testing.T) {
 	t.Parallel()
 	ix, err := stacks.NewPositionIndex([]byte("networks:\n  n:\n    ipam:\n      options:\n        a: b\n"))
 	if err != nil {

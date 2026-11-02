@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package server
 
@@ -15,13 +15,13 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The server's shutdown ends every open browser shell (plan 04-22): http.Server.Shutdown
@@ -30,7 +30,7 @@ func TestBuildShutdownEndsAnOpenShellTellsItsBrowserWhyAndAuditsTheEnd(t *testin
 	fake := dockertest.NewFake(t, dockertest.FakeConfig{Hostname: "node-1", Containers: []dockertest.FakeContainer{
 		{ID: "aaaaaaaaaaaa11111111111111111111111111111111111111111111111111", Names: []string{"/web"}, Image: "nginx:1.27", State: "running", Status: "Up 2 hours"},
 	}})
-	cfg := testConfig(t, map[string]string{"COAMING_DATA_DIR": t.TempDir() + "/data", "DOCKER_HOST": "unix://" + fake.SocketPath()})
+	cfg := testConfig(t, map[string]string{"TIERPLAN_DATA_DIR": t.TempDir() + "/data", "DOCKER_HOST": "unix://" + fake.SocketPath()})
 	srv, err := Build(context.Background(), cfg, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)

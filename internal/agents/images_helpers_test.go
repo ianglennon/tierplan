@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build integration || swarm
 
 package agents_test
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // pullItem is one node of a pull job as far as these tests read it.

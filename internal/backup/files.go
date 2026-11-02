@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -17,17 +17,17 @@ import (
 	"time"
 )
 
-// scheduledName is the one name a scheduled backup has: coaming-backup- then the
+// scheduledName is the one name a scheduled backup has: tierplan-backup- then the
 // UTC date and time to the minute. Nothing else in the backups folder (the
-// pre-migration snapshots coaming-<time>.db, the pre-restore snapshots
+// pre-migration snapshots tierplan-<time>.db, the pre-restore snapshots
 // prerestore-<time>.db, a backup someone copied in by hand) matches it, and
 // nothing that does not match it is listed, served or deleted (T-03-112,
 // T-03-113, RESEARCH Pitfall 9).
-var scheduledName = regexp.MustCompile(`^coaming-backup-[0-9]{8}-[0-9]{4}\.coaming$`)
+var scheduledName = regexp.MustCompile(`^tierplan-backup-[0-9]{8}-[0-9]{4}\.tierplan$`)
 
 // scheduledNamePrefix, scheduledNameLayout and scheduledNameSuffix build that name.
 const (
-	scheduledNamePrefix = "coaming-backup-"
+	scheduledNamePrefix = "tierplan-backup-"
 	scheduledNameLayout = "20060102-1504"
 	scheduledNameSuffix = FileExtension
 )
@@ -38,13 +38,13 @@ func ScheduledName(t time.Time) string {
 }
 
 // manualNamePrefix and manualNameLayout build the name of a backup made by hand
-// with the coaming backup command and no --out. It differs from a scheduled
+// with the tierplan backup command and no --out. It differs from a scheduled
 // backup's name in its prefix and has seconds, so the scheduled pattern never
 // matches it: retention does not count or delete it, and the backups listing and
 // download do not offer it. It is meant to be copied off the host, not kept by
-// Coaming (T-03-113).
+// TierPlan (T-03-113).
 const (
-	manualNamePrefix = "coaming-manual-"
+	manualNamePrefix = "tierplan-manual-"
 	manualNameLayout = "20060102-150405"
 )
 
@@ -158,7 +158,7 @@ func isEscape(err error) bool {
 // pruneScheduled keeps the newest keep scheduled backups in dir and removes the
 // rest. It looks only at the files ListBackupFiles lists, regular files named
 // exactly like a scheduled backup, so it never removes a pre-migration snapshot
-// (coaming-<time>.db), a pre-restore snapshot (prerestore-<time>.db) or anything
+// (tierplan-<time>.db), a pre-restore snapshot (prerestore-<time>.db) or anything
 // else someone keeps in the folder (T-03-113, RESEARCH Pitfall 9). A folder that
 // does not exist holds nothing to remove.
 func pruneScheduled(dir string, keep int) error {
@@ -177,7 +177,7 @@ func pruneScheduled(dir string, keep int) error {
 
 // staleWorkAge is how old a leftover work file must be before the startup sweep
 // removes it. An export takes seconds; the margin keeps the sweep from deleting
-// the work of a backup another process (the coaming backup command) is making
+// the work of a backup another process (the tierplan backup command) is making
 // right now.
 const staleWorkAge = time.Hour
 
@@ -185,8 +185,8 @@ const staleWorkAge = time.Hour
 // temporary file and Export names its work directory; the scheduler names its own
 // (tempPrefix, tempSuffix).
 const (
-	workDirPrefix   = ".coaming-backup-"
-	exportTmpPrefix = ".coaming-export-"
+	workDirPrefix   = ".tierplan-backup-"
+	exportTmpPrefix = ".tierplan-export-"
 	exportTmpSuffix = ".tmp"
 )
 

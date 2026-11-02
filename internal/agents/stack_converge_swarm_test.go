@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The real-swarm cases of plans 07-46 and 07-49 for UAT gaps G-07-2 and G-07-5: a deploy whose
 // service the swarm will not start again, and one whose network has no free addresses, each ends
-// the deploy on the reason instead of on the converge timeout. They deploy through Coaming's API
+// the deploy on the reason instead of on the converge timeout. They deploy through TierPlan's API
 // and real agents, as the 07-11 and 07-34 stack cases do, and name the image by digest from the
 // swarm's own registry, so no lookup runs and no node pulls from Docker Hub.
 
@@ -137,7 +137,7 @@ func sharedStackDeployTasksFailed(t *testing.T, f *swarmFix) {
 
 	const stack = "convfail"
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	id := f.createStackCoaming(t, stack, fmt.Sprintf(convergeFailComposeFmt, image))
+	id := f.createStackTierPlan(t, stack, fmt.Sprintf(convergeFailComposeFmt, image))
 	job := f.deployStackUntilEnded(t, id)
 
 	raw, _ := json.Marshal(job)
@@ -182,7 +182,7 @@ networks:
 // The case asserts the outcome and never a count of tasks.
 //
 // It holds the window before any node has a local instance of the network: the tasks sit in
-// preparing for about 30 s and Coaming's first read comes sooner, so a full-ID inspect still falls
+// preparing for about 30 s and TierPlan's first read comes sooner, so a full-ID inspect still falls
 // through to the swarm. sharedStackDeployNetworkFullOnEveryNode holds the steady state of UAT
 // G-07-8, where every manager holds the network locally. Both stay, because between them they
 // cover both answers of the engine's lookup.
@@ -198,7 +198,7 @@ func sharedStackDeployNetworkFull(t *testing.T, f *swarmFix) {
 
 	const stack = "netfull"
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	id := f.createStackCoaming(t, stack, fmt.Sprintf(networkFullComposeFmt, image))
+	id := f.createStackTierPlan(t, stack, fmt.Sprintf(networkFullComposeFmt, image))
 	job := f.deployStackUntilEnded(t, id)
 
 	raw, _ := json.Marshal(job)
@@ -260,7 +260,7 @@ networks:
 // sharedStackDeployNetworkFullOnEveryNode holds UAT G-07-8 on a real Engine 29 swarm in its steady
 // state (decisions D-13 and D-14): every manager already holds the stack network locally when a
 // redeploy adds a service too wide for it. sharedStackDeployNetworkFull cannot hold that. Its
-// tasks sit in preparing for about 30 s, Coaming's first read comes before any node has a local
+// tasks sit in preparing for about 30 s, TierPlan's first read comes before any node has a local
 // instance of the network, and a full-ID inspect still falls through to the swarm. Here a global
 // anchor service runs a task, and so holds an endpoint of the network, on all 4 nodes, and the
 // case waits until each manager's full-ID inspect lists a local endpoint before it redeploys.
@@ -286,8 +286,8 @@ func sharedStackDeployNetworkFullOnEveryNode(t *testing.T, f *swarmFix) {
 
 	const stack = "netlocal"
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	id := f.createStackCoaming(t, stack, fmt.Sprintf(netEveryNodeAnchorFmt, image))
-	f.deployStackCoaming(t, id)
+	id := f.createStackTierPlan(t, stack, fmt.Sprintf(netEveryNodeAnchorFmt, image))
+	f.deployStackTierPlan(t, id)
 
 	netID := strings.TrimSpace(sh(t, mgr, "docker network inspect --format '{{.ID}}' "+stack+"_default"))
 	for _, m := range f.sw.Managers {
@@ -301,7 +301,7 @@ func sharedStackDeployNetworkFullOnEveryNode(t *testing.T, f *swarmFix) {
 		})
 	}
 
-	f.saveStackCoaming(t, id, paritySource{Compose: fmt.Sprintf(netEveryNodeWideFmt, image)})
+	f.saveStackTierPlan(t, id, paritySource{Compose: fmt.Sprintf(netEveryNodeWideFmt, image)})
 	job := f.deployStackUntilEnded(t, id)
 
 	raw, _ := json.Marshal(job)

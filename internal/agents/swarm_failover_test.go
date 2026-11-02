@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // These suites are the real-swarm evidence for ENV-09 and ENV-05: what the
@@ -182,11 +182,11 @@ func (f *swarmFix) feed(t *testing.T) []feedRow {
 	return list.Items
 }
 
-// coamingRows are the feed rows Coaming wrote itself with this action.
-func coamingRows(rows []feedRow, action string) []feedRow {
+// tierplanRows are the feed rows TierPlan wrote itself with this action.
+func tierplanRows(rows []feedRow, action string) []feedRow {
 	var out []feedRow
 	for _, r := range rows {
-		if r.Type == "coaming" && r.Action == action {
+		if r.Type == "tierplan" && r.Action == action {
 			out = append(out, r)
 		}
 	}
@@ -213,7 +213,7 @@ func (f *swarmFix) waitRefusal(t *testing.T, reason string, d time.Duration) {
 // before it is replaced.
 func agentContainerLog(t *testing.T, n *dockertest.Node) string {
 	t.Helper()
-	out, _ := n.Sh(execCtx(t, time.Minute), "for c in $(docker ps -aq --filter label=coaming.agent=true); do docker logs $c 2>&1; done")
+	out, _ := n.Sh(execCtx(t, time.Minute), "for c in $(docker ps -aq --filter label=tierplan.agent=true); do docker logs $c 2>&1; done")
 	return out
 }
 
@@ -251,7 +251,7 @@ func TestSwarmManagerFailover(t *testing.T) {
 			t.Fatalf("summary call %d after the leader stopped = %d %s, want 200 and no error shown to anyone", calls, code, body)
 		}
 		_ = sum
-		for _, r := range coamingRows(f.feed(t), "failover") {
+		for _, r := range tierplanRows(f.feed(t), "failover") {
 			if strings.HasPrefix(r.Name, wantFeed) {
 				row = r
 			}
@@ -310,7 +310,7 @@ func TestSwarmManagerFailover(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.waitSwarmOnlineWithin(t, 4, recoverWait)
-	if rows := coamingRows(f.feed(t), "failover"); len(rows) != 1 {
+	if rows := tierplanRows(f.feed(t), "failover"); len(rows) != 1 {
 		t.Errorf("failover rows in the feed after the node returned = %+v, want exactly one", rows)
 	}
 	if audits := f.audit(t, "environment.failover"); len(audits) != 1 {
@@ -457,19 +457,19 @@ func sharedRevokeBlocksReenrol(t *testing.T, f *swarmFix) {
 	// A restarted task has no identity on its volume any more. It enrols with the
 	// token, is refused blocked again and stays up waiting: no exit, so no restart
 	// loop (and no tight loop of enrolments either).
-	sh(t, worker, "docker rm -f $(docker ps -aq --filter label=coaming.agent=true)")
+	sh(t, worker, "docker rm -f $(docker ps -aq --filter label=tierplan.agent=true)")
 	f.srv.WaitFor("swarm to start the agent task again", 90*time.Second, func() (bool, string) {
-		out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=coaming.agent=true")
+		out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=tierplan.agent=true")
 		return strings.TrimSpace(out) != "", out
 	})
 	f.srv.WaitFor("the restarted agent to say it was refused blocked", 60*time.Second, func() (bool, string) {
-		out, _ := worker.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=coaming.agent=true); do docker logs $c 2>&1; done")
+		out, _ := worker.Sh(execCtx(t, time.Minute), "for c in $(docker ps -q --filter label=tierplan.agent=true); do docker logs $c 2>&1; done")
 		return strings.Contains(out, "code=blocked"), out
 	})
 	// The blocked agent's container must stay up for a bounded window after it logged
 	// code=blocked (it waits, it does not exit); no event marks the window's end.
 	time.Sleep(10 * time.Second) //nolint:forbidigo // an observation window that is the behaviour under test
-	if out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=coaming.agent=true"); strings.TrimSpace(out) == "" {
+	if out, _ := worker.Sh(execCtx(t, time.Minute), "docker ps -q --filter label=tierplan.agent=true"); strings.TrimSpace(out) == "" {
 		t.Errorf("the blocked agent's container is not running; it must wait, not exit:\n%s", agentContainerLog(t, worker))
 	}
 	if n := len(f.srv.Agents(f.env.ID)); n != 4 {

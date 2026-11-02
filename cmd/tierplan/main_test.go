@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package main
 
@@ -8,14 +8,14 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/server"
+	"github.com/ianglennon/tierplan/internal/server"
 )
 
-// The image HEALTHCHECK runs `coaming healthcheck` as root every 30 seconds.
+// The image HEALTHCHECK runs `tierplan healthcheck` as root every 30 seconds.
 // That command reads no data, so it must not make the privilege drop walk and
 // chown /data (WR-08).
 func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
-	t.Setenv("COAMING_DATA_DIR", "/srv/coaming-data")
+	t.Setenv("TIERPLAN_DATA_DIR", "/srv/tierplan-data")
 	root := newRoot()
 
 	for _, tc := range []struct {
@@ -24,7 +24,7 @@ func TestHealthcheckNeverPreparesTheDataDirectory(t *testing.T) {
 	}{
 		{"healthcheck", ""},
 		{"version", ""},
-		{"serve", "/srv/coaming-data"},
+		{"serve", "/srv/tierplan-data"},
 	} {
 		cmd, _, err := root.Find([]string{tc.command})
 		if err != nil || cmd.Name() != tc.command {

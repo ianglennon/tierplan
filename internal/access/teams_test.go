@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package access_test
 
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/access"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/access"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // Teams and their membership (plan 03-17, AUTH-05, D-11, D-25, D-27). Negative

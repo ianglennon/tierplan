@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-// Command coaming is the Coaming server and its small command line.
+// Command tierplan is the TierPlan server and its small command line.
 package main
 
 import (
@@ -17,12 +17,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/engine"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/privdrop"
-	"github.com/ianglennon/coaming/internal/server"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/engine"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/privdrop"
+	"github.com/ianglennon/tierplan/internal/server"
 )
 
 func main() {
@@ -32,23 +32,23 @@ func main() {
 }
 
 func newRoot() *cobra.Command {
-	// selfID is Coaming's own container ID, read before the privilege drop.
+	// selfID is TierPlan's own container ID, read before the privilege drop.
 	var selfID string
 
 	serve := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the Coaming server",
+		Short: "Run the TierPlan server",
 		Args:  cobra.NoArgs,
 		RunE:  func(cmd *cobra.Command, _ []string) error { return runServe(cmd, selfID) },
 	}
 
 	root := &cobra.Command{
-		Use:           "coaming",
-		Short:         "Coaming: manage Docker Swarm clusters and standalone hosts",
+		Use:           "tierplan",
+		Short:         "TierPlan: manage Docker Swarm clusters and standalone hosts",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: false,
-		// Runs before every subcommand, so `docker exec <c> coaming user unlock`
+		// Runs before every subcommand, so `docker exec <c> tierplan user unlock`
 		// is as unprivileged as the server (D-17, RESEARCH A8).
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 			var err error
@@ -123,7 +123,7 @@ func writeOpenAPI(w io.Writer) error {
 // it only probes /healthz (WR-08).
 var noDataDir = map[string]bool{"version": true, "openapi": true, "permissions": true, "help": true, "completion": true, "healthcheck": true}
 
-// dropPrivileges reads Coaming's own container ID and then, when started as
+// dropPrivileges reads TierPlan's own container ID and then, when started as
 // root, joins the Docker socket's group, fixes /data and becomes UID and GID
 // 1000. The order matters: after the user change the process is non-dumpable
 // and some /proc/self entries stop being readable (RESEARCH A9, D-27).
@@ -178,7 +178,7 @@ func runServe(cmd *cobra.Command, selfID string) error {
 // finishRun turns what Run returned into the process's end. A restore asks for a
 // restart by returning a *server.RestartError: the swap runs here, with the
 // database closed and the data-directory lock still held, and then the process is
-// replaced by a new Coaming ("exec") or ends with status 0 ("exit"), leaving the
+// replaced by a new TierPlan ("exec") or ends with status 0 ("exit"), leaving the
 // start to the container's restart policy.
 func finishRun(err error, mode string) error {
 	var re *server.RestartError

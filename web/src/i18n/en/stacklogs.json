@@ -6,8 +6,8 @@
     "followingContainers_one": "Following {{count}} container",
     "followingContainers_other": "Following {{count}} containers",
     "cap": {
-      "tasks": "This stack has {{count}} tasks. Coaming follows {{cap}} at a time. Filter by service, node or task to see the others.",
-      "containers": "This stack has {{count}} containers. Coaming follows {{cap}} at a time. Filter by service or container to see the others."
+      "tasks": "This stack has {{count}} tasks. TierPlan follows {{cap}} at a time. Filter by service, node or task to see the others.",
+      "containers": "This stack has {{count}} containers. TierPlan follows {{cap}} at a time. Filter by service or container to see the others."
     },
     "marker": {
       "replacedContainer": "— {{service}} replaced: container {{old}} → {{new}} —"

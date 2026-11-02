@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -14,12 +14,12 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The adopt check (plan 08-14, D-16, D-20): the review of the rebuilt definition against what runs. An ownership
@@ -38,11 +38,11 @@ func (corpusObjects) Config(name string) (string, string, bool) {
 	return "cid_" + name, name + ".h2", name == "app_config" || name == "nginx_conf"
 }
 
-// withoutCoamingLabels removes Coaming's labels from a map: docker stack deploy puts none on what it makes.
-func withoutCoamingLabels(labels map[string]string) map[string]string {
+// withoutTierPlanLabels removes TierPlan's labels from a map: docker stack deploy puts none on what it makes.
+func withoutTierPlanLabels(labels map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range labels {
-		if !strings.HasPrefix(k, "coaming.") {
+		if !strings.HasPrefix(k, "tierplan.") {
 			out[k] = v
 		}
 	}
@@ -51,7 +51,7 @@ func withoutCoamingLabels(labels map[string]string) map[string]string {
 
 // corpusRig stands the converted corpus file (internal/stacks/convert/testdata/compose/<file>) on a fake swarm as
 // docker stack deploy would leave it under the namespace shop: its services, networks, secrets and configs, with the
-// namespace labels and none of Coaming's. edit changes each service's spec before it is stood up.
+// namespace labels and none of TierPlan's. edit changes each service's spec before it is stood up.
 func corpusRig(t *testing.T, file string, edit func(short string, spec *swarm.ServiceSpec)) *swarmRig {
 	t.Helper()
 	return corpusRigTuned(t, file, edit, nil)
@@ -91,9 +91,9 @@ func composeRigTuned(t *testing.T, content []byte, edit func(short string, spec 
 	var services []dockertest.FakeService
 	for _, sp := range plan.Services {
 		spec := sp.Spec
-		spec.Labels = withoutCoamingLabels(spec.Labels)
+		spec.Labels = withoutTierPlanLabels(spec.Labels)
 		cs := *spec.TaskTemplate.ContainerSpec
-		cs.Labels = withoutCoamingLabels(cs.Labels)
+		cs.Labels = withoutTierPlanLabels(cs.Labels)
 		cs.Image += "@" + rebuildDigest
 		spec.TaskTemplate.ContainerSpec = &cs
 		spec.TaskTemplate.Networks = slices.Clone(spec.TaskTemplate.Networks)
@@ -114,7 +114,7 @@ func composeRigTuned(t *testing.T, content []byte, edit func(short string, spec 
 	return newSwarmRig(t, func(c *dockertest.FakeConfig) {
 		for _, n := range plan.Networks {
 			c.Networks = append(c.Networks, dockertest.FakeNetwork{
-				ID: "net-" + n.Name, Name: n.Name, Driver: n.Driver, Scope: "swarm", Labels: withoutCoamingLabels(n.Labels),
+				ID: "net-" + n.Name, Name: n.Name, Driver: n.Driver, Scope: "swarm", Labels: withoutTierPlanLabels(n.Labels),
 				Attachable: n.Attachable, Internal: n.Internal,
 			})
 		}
@@ -143,7 +143,7 @@ func (r *swarmRig) checkOf(t *testing.T, target stacks.Target, reveal bool) (sta
 }
 
 // TestAdoptReviewCleanRoundTrip: a stack docker stack deploy made, converted back from what it runs, differs from
-// what runs only in Coaming's ownership labels: every service is ownership-only and the check is Clean (D-20).
+// what runs only in TierPlan's ownership labels: every service is ownership-only and the check is Clean (D-20).
 func TestAdoptReviewCleanRoundTrip(t *testing.T) {
 	t.Parallel()
 	rig := corpusRig(t, "deploy.yaml", nil)
@@ -210,7 +210,7 @@ func TestAdoptReviewListsGaps(t *testing.T) {
 }
 
 // TestAdoptReviewStandaloneOwnershipOnly: a docker compose up project differs from its rebuilt definition only in the
-// config hash its first deploy writes (Coaming's labels are in it), so its service is ownership-only.
+// config hash its first deploy writes (TierPlan's labels are in it), so its service is ownership-only.
 func TestAdoptReviewStandaloneOwnershipOnly(t *testing.T) {
 	t.Parallel()
 	rig := hostRig(t, stackopstest.Foreign(t, "shop", foreignProject))
@@ -229,7 +229,7 @@ func TestAdoptReviewStandaloneOwnershipOnly(t *testing.T) {
 }
 
 // legacy2 is a stack made by docker stack deploy with its default --resolve-image=always and a named volume. Its
-// file is what the person wrote: the web image carries a variable, there is no label of Coaming's anywhere (G-08-4).
+// file is what the person wrote: the web image carries a variable, there is no label of TierPlan's anywhere (G-08-4).
 const legacy2Compose = `services:
   web:
     image: nginx:${TAG}
@@ -267,15 +267,15 @@ func legacy2Rig(t *testing.T) *swarmRig {
 	if len(stored) != 2 {
 		t.Fatalf("fixture holds %d services, want 2", len(stored))
 	}
-	// The fixture stays shaped like the CLI's output: none of Coaming's labels on a service, a container or a mount.
+	// The fixture stays shaped like the CLI's output: none of TierPlan's labels on a service, a container or a mount.
 	var front string
 	var services []dockertest.FakeService
 	for _, s := range stored {
 		spec := s.Spec
 		for where, labels := range map[string]map[string]string{"service": spec.Labels, "container": spec.TaskTemplate.ContainerSpec.Labels} {
 			for k := range labels {
-				if strings.HasPrefix(k, "coaming.") {
-					t.Fatalf("fixture %s %s label %q is one of Coaming's", spec.Name, where, k)
+				if strings.HasPrefix(k, "tierplan.") {
+					t.Fatalf("fixture %s %s label %q is one of TierPlan's", spec.Name, where, k)
 				}
 			}
 		}
@@ -284,8 +284,8 @@ func legacy2Rig(t *testing.T) *swarmRig {
 				continue
 			}
 			for k := range m.VolumeOptions.Labels {
-				if strings.HasPrefix(k, "coaming.") {
-					t.Fatalf("fixture %s mount %s label %q is one of Coaming's", spec.Name, m.Target, k)
+				if strings.HasPrefix(k, "tierplan.") {
+					t.Fatalf("fixture %s mount %s label %q is one of TierPlan's", spec.Name, m.Target, k)
 				}
 			}
 		}
@@ -341,7 +341,7 @@ func gapPaths(t *testing.T, gaps []stacks.ServiceChange) []string {
 
 // TestAdoptCheckOfADockerStackDeployStackWithPlatformsAndANamedVolume (G-08-4): the stack docker stack deploy made
 // with its default --resolve-image=always holds the platforms of each image, and its named volume's mount carries no
-// label of Coaming's. Neither is something a compose file can say, so the check of what runs and the check of the
+// label of TierPlan's. Neither is something a compose file can say, so the check of what runs and the check of the
 // file the stack was made from are both clean: the services differ in nothing but the ownership labels (D-12, D-20).
 func TestAdoptCheckOfADockerStackDeployStackWithPlatformsAndANamedVolume(t *testing.T) {
 	t.Parallel()

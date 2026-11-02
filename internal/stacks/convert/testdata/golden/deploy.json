@@ -8,7 +8,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-deploy",
+        "tierplan.stack.id": "id-deploy",
         "com.docker.stack.namespace": "deploy"
       },
       "DriverOpts": null,
@@ -24,7 +24,7 @@
       "Spec": {
         "Name": "deploy_api",
         "Labels": {
-          "coaming.stack.id": "id-deploy",
+          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "registry.example.com/api:2.1",
           "com.docker.stack.namespace": "deploy",
           "team": "platform"
@@ -33,7 +33,7 @@
           "ContainerSpec": {
             "Image": "registry.example.com/api:2.1",
             "Labels": {
-              "coaming.stack.id": "id-deploy",
+              "tierplan.stack.id": "id-deploy",
               "com.docker.stack.namespace": "deploy"
             },
             "Hostname": "api-host",
@@ -216,7 +216,7 @@
       "Spec": {
         "Name": "deploy_bare",
         "Labels": {
-          "coaming.stack.id": "id-deploy",
+          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "busybox:1",
           "com.docker.stack.namespace": "deploy"
         },
@@ -224,7 +224,7 @@
           "ContainerSpec": {
             "Image": "busybox:1",
             "Labels": {
-              "coaming.stack.id": "id-deploy",
+              "tierplan.stack.id": "id-deploy",
               "com.docker.stack.namespace": "deploy"
             },
             "Privileges": {
@@ -260,7 +260,7 @@
       "Spec": {
         "Name": "deploy_legacy",
         "Labels": {
-          "coaming.stack.id": "id-deploy",
+          "tierplan.stack.id": "id-deploy",
           "com.docker.stack.image": "img:1",
           "com.docker.stack.namespace": "deploy"
         },
@@ -268,7 +268,7 @@
           "ContainerSpec": {
             "Image": "img:1",
             "Labels": {
-              "coaming.stack.id": "id-deploy",
+              "tierplan.stack.id": "id-deploy",
               "com.docker.stack.namespace": "deploy"
             },
             "Privileges": {

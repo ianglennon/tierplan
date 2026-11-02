@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package audit
 
@@ -12,9 +12,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // verifyBatch is how many rows Verify reads per query, so a large log is
@@ -99,7 +99,7 @@ func Verify(ctx context.Context, s *store.Store, v *vault.Vault) (VerifyResult, 
 			}
 			if key == nil {
 				setBroken(row, fmt.Sprintf("unknown key id %s: this vault does not hold the key that signed the entry "+
-					"(check COAMING_ENCRYPTION_KEY or %s)", row.KeyID, vault.KeyFile))
+					"(check TIERPLAN_ENCRYPTION_KEY or %s)", row.KeyID, vault.KeyFile))
 				prevMAC = row.Hmac
 				continue
 			}

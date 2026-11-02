@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitx
 
@@ -13,10 +13,10 @@ import (
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
-// ErrProtocolRefused is what a call over a protocol Coaming does not offer fails with: http (it
+// ErrProtocolRefused is what a call over a protocol TierPlan does not offer fails with: http (it
 // would send a token in clear text), git, file (it would read the server's own filesystem) and a
 // redirect to any of them. The connection is never made.
 var ErrProtocolRefused = errors.New("gitx: this protocol is not allowed")
@@ -55,7 +55,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-// refusedTransport is the transport of every protocol Coaming does not offer.
+// refusedTransport is the transport of every protocol TierPlan does not offer.
 type refusedTransport struct{}
 
 func (refusedTransport) NewUploadPackSession(*transport.Endpoint, transport.AuthMethod) (transport.UploadPackSession, error) {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // The text the pool guidance gives a person to copy (D-23). Everything here is pure: nothing is sent
 // anywhere and nothing is run. A value only reaches a command or a snippet as a canonical IPv4 CIDR

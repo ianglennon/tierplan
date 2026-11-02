@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -14,11 +14,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The log of a standalone stack (plan 07-29, STK-10, D-22): each container of the stack's Compose
@@ -55,7 +55,7 @@ func (c stackContainer) live() bool {
 
 // containersOf reads the containers the stack owns from a host's list, by Ownership: those of its Compose
 // project that carry its ID (every one of the project for a stack found by its labels), and those the host CLI
-// added to the project without Coaming's labels (docker compose up --scale) beside a container the stack owns
+// added to the project without TierPlan's labels (docker compose up --scale) beside a container the stack owns
 // (stackops.SplitProject, G-08-6). Another stack's containers and a project the stack owns none of stay out, and
 // so do one-off containers and containers with no service label.
 func containersOf(st stackops.Stack, all []dockerx.ContainerRow) []stackContainer {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package swarmops
 
@@ -12,13 +12,13 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/redact"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/redact"
 )
 
 var (
 	// ErrImageRequired means a new service names no image: unlike an edit there is no current one to
-	// keep, and Coaming pins the image it creates the service with (D-04, D-08).
+	// keep, and TierPlan pins the image it creates the service with (D-04, D-08).
 	ErrImageRequired = errors.New("swarmops: a new service needs an image")
 	// ErrNameInvalid means the new service's name is not one Docker accepts: 1 to 63 letters, numbers,
 	// dot, dash and underscore.
@@ -26,7 +26,7 @@ var (
 )
 
 // NameTakenError is a new service's name that the swarm has already. It is dockerx.ErrServiceNameTaken
-// through errors.Is, whether Coaming saw the name in the list or the manager refused the create.
+// through errors.Is, whether TierPlan saw the name in the list or the manager refused the create.
 type NameTakenError struct{ Name string }
 
 func (e *NameTakenError) Error() string {

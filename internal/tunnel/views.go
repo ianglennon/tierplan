@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package tunnel
 
@@ -33,12 +33,12 @@ type AgentLive struct {
 	ClockOffset  time.Duration
 	ClockWarning bool
 	// ReadOnly is true while the connected agent reported that its host owner set
-	// COAMING_AGENT_READ_ONLY. It is a fact of the live session, so it is false for
+	// TIERPLAN_AGENT_READ_ONLY. It is a fact of the live session, so it is false for
 	// an agent that is not connected: nothing is known then, and nothing can be
 	// written anyway.
 	ReadOnly bool
 	// PrivilegedServices is true while the connected agent reported that its host
-	// owner set COAMING_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
+	// owner set TIERPLAN_AGENT_ALLOW_PRIVILEGED_SERVICES, so it forwards service specs
 	// that give tasks host access. Like ReadOnly it is a fact of the live session.
 	PrivilegedServices bool
 	// HostNet is what the connected agent reported about reading its host's routes:

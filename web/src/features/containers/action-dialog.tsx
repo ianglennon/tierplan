@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronRight, TriangleAlert } from "lucide-react";
 import { useId, useRef, useState } from "react";
@@ -49,11 +49,11 @@ import { cn } from "@/lib/utils";
 const TOUCH_HEIGHT = "h-11 md:h-8";
 
 // The destructive fill, used only where the UI-SPEC says: Kill, Remove, and any
-// action on Coaming's own containers.
+// action on TierPlan's own containers.
 const DESTRUCTIVE = "bg-destructive-fill text-white hover:bg-destructive-fill/90";
 
 // The actions that go through a dialog. Restart and Pause only do so for one of
-// Coaming's own containers; for any other they run at once.
+// TierPlan's own containers; for any other they run at once.
 export type DialogVerb = "stop" | "kill" | "remove" | "restart" | "pause";
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
@@ -284,7 +284,7 @@ interface ActionDialogProps {
 }
 
 // ActionDialog is the confirmation for Stop, Kill and Remove of one or many
-// containers, and for any action on one of Coaming's own (D-07 to D-12,
+// containers, and for any action on one of TierPlan's own (D-07 to D-12,
 // UI-SPEC "Container action dialogs"). Focus starts on Cancel. A refusal or
 // failure stays inside the dialog as an alert and never raises a toast over it;
 // if the dialog was closed while the request was out, the answer arrives as a

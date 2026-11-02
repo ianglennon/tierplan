@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitsync
 
@@ -10,10 +10,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 var (
@@ -52,13 +52,13 @@ type ImportRequest struct {
 	Name   string
 	Target stacks.Target
 	Vars   []stacks.Var
-	// Overlays are the files Coaming holds for paths the repository does not have (D-09). They are stored sealed, as
+	// Overlays are the files TierPlan holds for paths the repository does not have (D-09). They are stored sealed, as
 	// secret files with origin overlay. An overlay for a path the repository holds is not stored: it would shadow the
 	// repository's file, so it is reported as the blocking problem overlay_clash and the repository's file stands.
 	Overlays []Overlay
 }
 
-// Overlay is a file of Coaming's own for a path the repository lacks.
+// Overlay is a file of TierPlan's own for a path the repository lacks.
 type Overlay struct {
 	Path    string
 	Content []byte

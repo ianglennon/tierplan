@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { ChevronRight, Info } from "lucide-react";
 import { useId, useState } from "react";
@@ -13,7 +13,7 @@ import { useT } from "@/i18n/use-t";
 import { cn } from "@/lib/utils";
 
 interface OwnershipOnlyGroupProps {
-  // The services of the review that differ from what runs in nothing but Coaming's ownership labels.
+  // The services of the review that differ from what runs in nothing but TierPlan's ownership labels.
   services: StackReviewService[];
   // "standalone" words the group for the containers of a host and not the services of a swarm.
   context?: "standalone";
@@ -43,7 +43,7 @@ function ServiceName({ name }: { name: string }) {
 
 // OwnershipRow is one service of the group: its name, the muted word "labels" and its task count; it expands to the
 // difference, which is the label rows and nothing else, captioned "Labels on {service}". A container of a standalone
-// host has no label rows to show (Coaming's labels change its configuration hash, not a setting) and no task count, so
+// host has no label rows to show (TierPlan's labels change its configuration hash, not a setting) and no task count, so
 // its row says what the recreate is for instead of a diff with nothing in it.
 function OwnershipRow({
   service,
@@ -96,7 +96,7 @@ function OwnershipRow({
 }
 
 // OwnershipOnlyGroup is the collapsible card "Ownership labels only" above the changed services in the Changes tab
-// (UI-SPEC "Review additions", D-16): the services the first deploy of an adopted stack recreates to put Coaming's
+// (UI-SPEC "Review additions", D-16): the services the first deploy of an adopted stack recreates to put TierPlan's
 // labels on, and changes in nothing else. It is closed by default, a headed region, and draws nothing when no service
 // is ownership-only. A service with a real change as well is not in it: it is in the normal list.
 export function OwnershipOnlyGroup({ services, context }: OwnershipOnlyGroupProps) {

@@ -37,7 +37,7 @@
       "errors": {
         "name": "Enter a name.",
         "taken": "That team name is already taken.",
-        "server": "Something went wrong on the server. Try again, and check the Coaming logs if it keeps happening.",
+        "server": "Something went wrong on the server. Try again, and check the TierPlan logs if it keeps happening.",
         "tooLong": "Use 64 characters or fewer."
       }
     },
@@ -72,7 +72,7 @@
         "done_one": "{{count}} member added to {{team}}.",
         "done_other": "{{count}} members added to {{team}}.",
         "doneNone": "Everyone you picked was already in {{team}}.",
-        "failed": "Couldn't add members. Try again, and check the Coaming logs if it keeps happening.",
+        "failed": "Couldn't add members. Try again, and check the TierPlan logs if it keeps happening.",
         "gone": "One of those users or this team no longer exists. The list has been refreshed.",
         "pick": "Pick people to add"
       },
@@ -95,7 +95,7 @@
       "list": "Teams",
       "done": "{{username}} added to {{team}}.",
       "unchanged": "{{username}} is already in {{team}}.",
-      "failed": "Couldn't add {{username}} to the team. Try again, and check the Coaming logs if it keeps happening.",
+      "failed": "Couldn't add {{username}} to the team. Try again, and check the TierPlan logs if it keeps happening.",
       "empty": "{{username}} isn't in any team.",
       "actionsFor": "Actions for {{team}}",
       "remove": "Remove from team…"
@@ -116,7 +116,7 @@
       "save": "Save changes",
       "saving": "Saving…",
       "saved": "Team renamed.",
-      "failed": "Couldn't rename the team. Try again, and check the Coaming logs if it keeps happening.",
+      "failed": "Couldn't rename the team. Try again, and check the TierPlan logs if it keeps happening.",
       "gone": "This team no longer exists."
     },
     "danger": {
@@ -150,7 +150,7 @@
       "pending": "Deleting…",
       "cancel": "Cancel",
       "done": "Team {{team}} deleted.",
-      "failed": "Couldn't delete {{team}}. Try again, and check the Coaming logs if it keeps happening.",
+      "failed": "Couldn't delete {{team}}. Try again, and check the TierPlan logs if it keeps happening.",
       "gone": "{{team}} no longer exists. The list has been refreshed."
     },
     "remove": {
@@ -160,7 +160,7 @@
       "pending": "Removing…",
       "cancel": "Cancel",
       "done": "{{username}} removed from {{team}}.",
-      "failed": "Couldn't remove {{username}} from {{team}}. Try again, and check the Coaming logs if it keeps happening.",
+      "failed": "Couldn't remove {{username}} from {{team}}. Try again, and check the TierPlan logs if it keeps happening.",
       "gone": "{{username}} is no longer in {{team}}. The list has been refreshed."
     }
   }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -171,7 +171,7 @@ describe("TestFromEnv", () => {
     expect(runButton().textContent).toBe("Run test from Lab");
     expect(
       screen.getByText(
-        "Runs on a node of Lab through its agent, so it also catches firewall, DNS and CA problems that Coaming's own server can't see.",
+        "Runs on a node of Lab through its agent, so it also catches firewall, DNS and CA problems that TierPlan's own server can't see.",
       ),
     ).toBeTruthy();
     expect(posts()).toHaveLength(0);
@@ -298,7 +298,7 @@ describe("TestFromEnv", () => {
       ],
       [
         "pull_failed",
-        "Docker on alpha gave an answer Coaming doesn't recognise. The server log has it.",
+        "Docker on alpha gave an answer TierPlan doesn't recognise. The server log has it.",
       ],
       [
         "registry_http_fallback",
@@ -307,7 +307,7 @@ describe("TestFromEnv", () => {
       ["node_unavailable", "alpha isn't reachable right now. Try again when it's back."],
       [
         "something_new",
-        "Docker on alpha gave an answer Coaming doesn't recognise. The server log has it.",
+        "Docker on alpha gave an answer TierPlan doesn't recognise. The server log has it.",
       ],
     ];
     for (const [code, reason] of cases) {

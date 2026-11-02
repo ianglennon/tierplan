@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package gitconn keeps git credentials and the repositories that use them (Phase 9 D-01, D-02),
 // modelled on registry credentials: two layers (the instance's and one environment's), a token
@@ -20,10 +20,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Errors a Store returns. Callers match them with errors.Is.

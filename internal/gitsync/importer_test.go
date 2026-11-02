@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package gitsync_test
 
@@ -13,16 +13,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/gitconn"
-	"github.com/ianglennon/coaming/internal/gitsync"
-	"github.com/ianglennon/coaming/internal/gitx"
-	"github.com/ianglennon/coaming/internal/gitx/gittest"
-	"github.com/ianglennon/coaming/internal/registry"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/storetest"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/gitconn"
+	"github.com/ianglennon/tierplan/internal/gitsync"
+	"github.com/ianglennon/tierplan/internal/gitx"
+	"github.com/ianglennon/tierplan/internal/gitx/gittest"
+	"github.com/ianglennon/tierplan/internal/registry"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/storetest"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Importing a stack from a repository folder (plan 09-10, GIT-02, D-27): the files the compose files need and

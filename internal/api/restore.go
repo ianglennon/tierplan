@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,14 +16,14 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/backup"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/backup"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // Stable problem types of the restore routes. The Settings page and the setup
@@ -152,11 +152,11 @@ type RestoreCountsBody struct {
 type RestoreSummaryBody struct {
 	InstanceName     string            `json:"instanceName" doc:"The instance the backup was made on"`
 	Created          time.Time         `json:"created" doc:"When the backup was made"`
-	AppVersion       string            `json:"appVersion" doc:"The Coaming release that made it"`
+	AppVersion       string            `json:"appVersion" doc:"The TierPlan release that made it"`
 	Schema           int64             `json:"schema" doc:"The database schema version of the backup"`
 	Counts           RestoreCountsBody `json:"counts" doc:"What the backup holds"`
 	PublicURL        string            `json:"publicUrl" doc:"The public URL stored in the backup, empty when it had none"`
-	Older            bool              `json:"older" doc:"True when the backup is from an older Coaming and is upgraded while restoring"`
+	Older            bool              `json:"older" doc:"True when the backup is from an older TierPlan and is upgraded while restoring"`
 	PublicURLDiffers bool              `json:"publicUrlDiffers" doc:"True when the backup's public URL is not the address in use now"`
 	ChainVerified    bool              `json:"chainVerified" doc:"False when the audit log did not verify when the backup was made"`
 }
@@ -169,7 +169,7 @@ type RestoreSummaryOutput struct {
 
 // RestoreApplyBody answers an accepted restore.
 type RestoreApplyBody struct {
-	Restarting bool `json:"restarting" doc:"Always true: Coaming is swapping the database and restarting, and everyone is signed out"`
+	Restarting bool `json:"restarting" doc:"Always true: TierPlan is swapping the database and restarting, and everyone is signed out"`
 }
 
 // RestoreApplyOutput wraps RestoreApplyBody for huma.
@@ -240,7 +240,7 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		Summary:     "Check an uploaded backup",
 		Description: "Opens the uploaded file with the passphrase and answers what is in it, without changing anything. " +
 			"422 " + problemBackupUnreadable + " for a wrong passphrase or a damaged file, 422 " + problemNotABackup + " for a file that is not a backup, " +
-			"409 " + problemBackupNewer + " for a backup from a newer Coaming, 404 " + problemUploadNotFound + " for an upload that is gone or expired, " +
+			"409 " + problemBackupNewer + " for a backup from a newer TierPlan, 404 " + problemUploadNotFound + " for an upload that is gone or expired, " +
 			"409 " + problemRestoreBusy + " while another check or restore runs, 429 " + problemRateLimited + " when the caller has used their attempts. " +
 			"Audited as backup.checked; a refused check is recorded too, with result failure and a reason (unreadable, not_a_backup, newer, rate_limited). Needs backup.manage.",
 		Tags: []string{"backup"},
@@ -261,10 +261,10 @@ func RegisterRestore(r *httpx.Router, d RestoreDeps) {
 		Path:          "/api/backup/restore/apply",
 		DefaultStatus: http.StatusAccepted,
 		Summary:       "Restore an uploaded backup over this instance",
-		Description: "Replaces everything in this Coaming with the uploaded backup. The backup is opened, migrated to this version, " +
+		Description: "Replaces everything in this TierPlan with the uploaded backup. The backup is opened, migrated to this version, " +
 			"re-keyed to this instance's master key and verified on a private copy first; nothing live changes until all of that has " +
-			"worked. Then Coaming saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts " +
-			"itself. The answer is 202 and Coaming is unreachable for a moment; everyone is signed out, including the caller. " +
+			"worked. Then TierPlan saves the current database as backups/prerestore-<time>.db, swaps the restored one in and restarts " +
+			"itself. The answer is 202 and TierPlan is unreachable for a moment; everyone is signed out, including the caller. " +
 			"confirm must be this instance's name (422 " + problemConfirmMismatch + "). The same refusals as the check apply and leave " +
 			"everything as it was, and 429 " + problemRateLimited + " when the caller has used their attempts. Audited in the restored log as " +
 			"audit.reanchored then backup.restored; a refused restore is recorded in this log as backup.failed (stage restore_apply) with a reason. Needs backup.manage.",
@@ -359,12 +359,12 @@ func (a *restoreAPI) restoreProblem(step string, err error) error {
 	switch {
 	case errors.As(err, &newer):
 		return httpx.Problem(http.StatusConflict, problemBackupNewer,
-			"This backup was made by a newer Coaming ("+newer.AppVersion+"). Upgrade this Coaming to "+newer.AppVersion+" or newer, then try again.")
+			"This backup was made by a newer TierPlan ("+newer.AppVersion+"). Upgrade this TierPlan to "+newer.AppVersion+" or newer, then try again.")
 	case errors.Is(err, backup.ErrNewerBackup), errors.Is(err, backup.ErrNewerFormat):
 		return httpx.Problem(http.StatusConflict, problemBackupNewer,
-			"This backup was made by a newer Coaming. Upgrade this Coaming, then try again.")
+			"This backup was made by a newer TierPlan. Upgrade this TierPlan, then try again.")
 	case errors.Is(err, backup.ErrNotBackup):
-		return httpx.Problem(http.StatusUnprocessableEntity, problemNotABackup, "That isn't a Coaming backup file.")
+		return httpx.Problem(http.StatusUnprocessableEntity, problemNotABackup, "That isn't a TierPlan backup file.")
 	case errors.Is(err, backup.ErrUnreadable), errors.Is(err, backup.ErrHeaderLimits):
 		// A wrong passphrase and a damaged file cannot be told apart, and the
 		// answer must not help someone guess.
@@ -372,10 +372,10 @@ func (a *restoreAPI) restoreProblem(step string, err error) error {
 			"Couldn't open this backup. Check the passphrase, and that the file isn't damaged.")
 	case errors.Is(err, backup.ErrTooLarge):
 		return httpx.Problem(http.StatusRequestEntityTooLarge, problemUploadTooLarge,
-			"This file is larger than the "+byteSize(a.Uploads.Max())+" Coaming accepts (COAMING_BACKUP_MAX_UPLOAD).")
+			"This file is larger than the "+byteSize(a.Uploads.Max())+" TierPlan accepts (TIERPLAN_BACKUP_MAX_UPLOAD).")
 	case errors.Is(err, backup.ErrIncomplete):
 		return httpx.Problem(http.StatusBadRequest, problemUploadIncomplete,
-			"The upload was cut off. If Coaming runs behind a reverse proxy, check its upload size limit.")
+			"The upload was cut off. If TierPlan runs behind a reverse proxy, check its upload size limit.")
 	case errors.Is(err, backup.ErrRestoreBusy):
 		return httpx.Problem(http.StatusConflict, problemRestoreBusy,
 			"Another restore is in progress. Wait for it to finish, or for its upload to expire in 15 minutes.")

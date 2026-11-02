@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Link } from "@tanstack/react-router";
 import {
@@ -27,9 +27,9 @@ import { type EventDTO, type EventType, useEnvEvents } from "@/features/dashboar
 import { TruncatedText } from "@/features/resources/resource-table";
 import { useT } from "@/i18n/use-t";
 
-// A row of Coaming's own, such as a manager failover, has no Docker type and so no
+// A row of TierPlan's own, such as a manager failover, has no Docker type and so no
 // icon: a label stands in. It has no filter either and shows under All only.
-type DockerEventType = Exclude<EventType, "coaming">;
+type DockerEventType = Exclude<EventType, "tierplan">;
 type Filter = "all" | DockerEventType;
 
 const FILTERS: readonly Filter[] = ["all", "container", "image", "network", "volume"];
@@ -53,8 +53,8 @@ const SHORT_ID = 12;
 // rendered as text only (T-01-91).
 function EventRow({ event, showNode }: { event: EventDTO; showNode?: boolean }) {
   const t = useT();
-  if (event.type === "coaming") {
-    // The message is written by Coaming, from names agents reported; rendered as text.
+  if (event.type === "tierplan") {
+    // The message is written by TierPlan, from names agents reported; rendered as text.
     return (
       <li className="flex items-start gap-3 border-b py-2 last:border-b-0">
         <span className="w-20 shrink-0 pt-0.5 text-xs text-muted-foreground">
@@ -64,7 +64,7 @@ function EventRow({ event, showNode }: { event: EventDTO; showNode?: boolean }) 
         <span className="w-4 shrink-0" aria-hidden="true" />
         <p className="min-w-0 flex-1 text-sm font-semibold">
           <span className="mr-2 text-xs font-semibold text-muted-foreground">
-            {t("dashboard.events.filters.coaming")}
+            {t("dashboard.events.filters.tierplan")}
           </span>
           {event.name}
         </p>

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The address-space route (plan 10-01, NET-02, D-02, D-03, D-07 as amended, T-10-02). Docker is a
@@ -309,7 +309,7 @@ func mapRowNamed(t *testing.T, got addressSpace, name, node string) mapRow {
 }
 
 // mapSwarm is a swarm whose managers share these networks: an ingress, a stack overlay
-// (alpha_default, linked to a Coaming stack), a forged one that only claims the stack's name, a
+// (alpha_default, linked to a TierPlan stack), a forged one that only claims the stack's name, a
 // service-only overlay, and per node a host network; mgr-2 also has a compose project's bridge.
 // tune runs on the networks before the agents connect. The returned function gives the stack's
 // networks their label once the stack exists (its ID is only known then) and refreshes the reads.
@@ -353,7 +353,7 @@ func mapSwarm(t *testing.T, extra func(host string, nets []dockertest.FakeNetwor
 			cfg.Networks = slices.Clone(cfg.Networks)
 			for i, n := range cfg.Networks {
 				if n.Name == "alpha_default" {
-					cfg.Networks[i].Labels = map[string]string{"com.docker.stack.namespace": "alpha", "coaming.stack.id": id}
+					cfg.Networks[i].Labels = map[string]string{"com.docker.stack.namespace": "alpha", "tierplan.stack.id": id}
 				}
 			}
 			m.fake.Reconfigure(cfg)
@@ -395,7 +395,7 @@ func TestAddressSpaceMapRows(t *testing.T) {
 
 	alpha := mapRowNamed(t, got, "alpha_default", "")
 	if alpha.Scope != "swarm" || alpha.Node != "Cluster" || alpha.Owner != "alpha" || alpha.OwnerKind != "stack" || alpha.OwnerStackID != stackID {
-		t.Errorf("alpha_default = %+v, want a swarm network owned by the Coaming stack %s", alpha, stackID)
+		t.Errorf("alpha_default = %+v, want a swarm network owned by the TierPlan stack %s", alpha, stackID)
 	}
 	if alpha.Usage == nil || alpha.Usage.Used != 8 || alpha.Usage.Capacity != 256 || alpha.Usage.State != "normal" {
 		t.Errorf("alpha_default usage = %+v, want 8 of 256", alpha.Usage)
@@ -429,7 +429,7 @@ func TestAddressSpaceMapRows(t *testing.T) {
 		}
 	}
 	// Nothing but the owner values leaves: the label sets stay on the server.
-	if strings.Contains(string(raw.body), "coaming.stack.id") || strings.Contains(string(raw.body), "com.docker.compose.project") {
+	if strings.Contains(string(raw.body), "tierplan.stack.id") || strings.Contains(string(raw.body), "com.docker.compose.project") {
 		t.Errorf("a label key leaked into the answer: %s", raw.body)
 	}
 }

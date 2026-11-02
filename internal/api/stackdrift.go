@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -11,12 +11,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // StackDriftCauseBody is why a service, or a stack, differs from the deployed revision when the audit log or the adoption
@@ -48,7 +48,7 @@ type StackDriftServiceBody struct {
 	Next          map[string]any       `json:"next" nullable:"true" doc:"What runs now, masked the same way. Null for a missing service"`
 	HiddenChanges []string             `json:"hiddenChanges" doc:"Paths of settings whose value changed to or from one that is hidden. The values are never sent"`
 	Settings      int                  `json:"settings" doc:"How many settings differ between current and next, hidden ones included"`
-	Cause         *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the service differs, when the audit log (a scale, roll back or edit from Coaming since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside Coaming"`
+	Cause         *StackDriftCauseBody `json:"cause,omitempty" doc:"Why the service differs, when the audit log (a scale, roll back or edit from TierPlan since the revision deployed) or the adoption knows; left out when it does not, which a reader says is a change made outside TierPlan"`
 }
 
 // StackDriftBody is how what runs compares with the deployed revision of a stack.
@@ -60,8 +60,8 @@ type StackDriftBody struct {
 	CheckedAt  string                  `json:"checkedAt" doc:"When the stack was read, RFC 3339 UTC"`
 	Count      int                     `json:"count" doc:"How many settings differ in all: the settings of each changed service plus one for each missing or extra service"`
 	Services   []StackDriftServiceBody `json:"services" doc:"The services that differ, in name order (changed and missing ones, then extra ones)"`
-	Cause      *StackDriftCauseBody    `json:"cause,omitempty" doc:"The cause to name for the stack: the newest action of Coaming's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known"`
-	Causes     int                     `json:"causes" doc:"How many drifted services an action of Coaming's own explains"`
+	Cause      *StackDriftCauseBody    `json:"cause,omitempty" doc:"The cause to name for the stack: the newest action of TierPlan's own on a drifted service, or an adoption's difference when there is none; left out when nothing is known"`
+	Causes     int                     `json:"causes" doc:"How many drifted services an action of TierPlan's own explains"`
 }
 
 // StackDriftSummaryBody is the drift a stack's page can say without the services: the newest check that is still about
@@ -107,7 +107,7 @@ func registerStackDrift(r *httpx.Router, d StacksDeps, lim *streamLimiter) {
 		OperationID: "getStackDrift", Method: http.MethodGet, Path: "/api/env/{envId}/stacks/{stackId}/drift",
 		Summary: "How what runs compares with the deployed revision",
 		Description: "Drift is any difference between the stack's deployed revision (the newest one that deployed, converted with the images it stored) and what the swarm runs: replicas, image, environment, ports, labels, mounts, placement, and services added or missing under the stack's ownership. " +
-			"What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, Coaming's own coaming.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. " +
+			"What the swarm adds by itself is not drift (the spec version, the update status, the counter that forces new tasks, TierPlan's own tierplan.* labels). A stopped stack is state stopped, and a stack with no revision that deployed is not_deployed. " +
 			"The newest check is answered unless fresh is true or there is none; callers that ask for a fresh check of one stack at the same moment share one read. Nothing is changed on any engine. " +
 			"The answer holds the live settings of running services, so for a caller without secrets.reveal on the environment every environment value, command, argument, health check command and log option is <hidden>, " +
 			"and a setting that differs only in such a value is listed by its path in hiddenChanges, with no value. " +
@@ -191,7 +191,7 @@ func acceptStackDrift(ctx context.Context, d StacksDeps, in *StackDriftAcceptInp
 	case errors.As(err, &failed):
 		return nil, rebuildNotAccepted(failed.Reason)
 	case errors.Is(err, stackops.ErrRebuildTarget):
-		return nil, rebuildNotAccepted("Coaming can't rebuild this kind of stack")
+		return nil, rebuildNotAccepted("TierPlan can't rebuild this kind of stack")
 	default:
 		return nil, targetProblem(d, env.ID, err)
 	}

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { Ellipsis, Info, Pin, Trash2 } from "lucide-react";
 import { Fragment, useCallback, useMemo, useState } from "react";
@@ -150,7 +150,7 @@ export function OrphansCard({ envId, envName, orphans, withheld, swarm }: Orphan
   // The columns: select, Network, Node (swarm), Subnet, Former stack, Idle since, actions.
   const columnCount = swarm ? 7 : 6;
 
-  // Only Orphaned and Unused rows can be chosen: Coaming never acts on a network it cannot be
+  // Only Orphaned and Unused rows can be chosen: TierPlan never acts on a network it cannot be
   // sure of.
   const selectable = useMemo(() => [...groups.orphaned, ...groups.unused].map(orphanKey), [groups]);
   const isEligible = useCallback((key: string) => selectable.includes(key), [selectable]);

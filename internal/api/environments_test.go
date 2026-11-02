@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -14,16 +14,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/tunnel"
-	"github.com/ianglennon/coaming/internal/tunnel/tunneltest"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/tunnel/tunneltest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // The environment endpoints (plan 16, ENV-04, PLAT-06, D-19, D-20, D-23, D-25,
@@ -416,7 +416,7 @@ type installBody struct {
 func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com/coaming")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"Production"}`)
 	if rec.code != http.StatusCreated {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -431,7 +431,7 @@ func TestEnvironmentAddAgentAnswers201WithTheJoinTokenAndTheAgentURL(t *testing.
 	if got.Install == nil || !strings.HasPrefix(got.Install.JoinToken, "cmjt_"+got.ID+"_") {
 		t.Fatalf("install = %+v", got.Install)
 	}
-	if got.Install.AgentURL != "wss://example.com/coaming/agent/connect" {
+	if got.Install.AgentURL != "wss://example.com/tierplan/agent/connect" {
 		t.Errorf("agent URL = %q", got.Install.AgentURL)
 	}
 	if entries := f.audits(t, audit.ActionEnvironmentAdded); len(entries) != 1 || entries[0].TargetID != got.ID || entries[0].ActorID != "id-admin" {
@@ -469,7 +469,7 @@ func TestEnvironmentAddAgentWithoutAPublicURLIs409(t *testing.T) {
 func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com")
+	f.inst.Apply("TierPlan", "https://example.com")
 	rec := f.req(t, http.MethodPost, "/api/environments", `{"kind":"agent","name":"`+strings.Repeat("x", 65)+`"}`)
 	if rec.code != http.StatusUnprocessableEntity || rec.ptyp != "invalid_name" {
 		t.Fatalf("status = %d, type %q: %s", rec.code, rec.ptyp, rec.body)
@@ -479,7 +479,7 @@ func TestEnvironmentAddAgentRejectsAnInvalidName(t *testing.T) {
 func TestEnvironmentAddAgentNeedsTheCreatePermission(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com")
+	f.inst.Apply("TierPlan", "https://example.com")
 	f.addUser(t, "viewer", false)
 	cookie, csrf := f.signIn(t, "viewer", false)
 	rec := f.call(t, authReq{method: http.MethodPost, path: "/api/environments", body: `{"kind":"agent"}`, cookie: cookie, csrf: csrf})
@@ -674,17 +674,17 @@ func (f *envFix) addAgent(t *testing.T) (fullInstall, *envRec) {
 func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com/coaming")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
 	f.tlsPin = "sha256/PINPINPIN"
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated || got.Install == nil {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
 	}
 	in := got.Install
-	if !strings.HasPrefix(in.JoinToken, "cmjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "coaming-agent-token-g1" {
+	if !strings.HasPrefix(in.JoinToken, "cmjt_"+got.ID+"_") || in.Generation != 1 || in.SecretName != "tierplan-agent-token-g1" {
 		t.Errorf("token %q generation %d secret %q", in.JoinToken, in.Generation, in.SecretName)
 	}
-	if in.AgentURL != "wss://example.com/coaming/agent/connect" || in.Pin != "sha256/PINPINPIN" {
+	if in.AgentURL != "wss://example.com/tierplan/agent/connect" || in.Pin != "sha256/PINPINPIN" {
 		t.Errorf("agent URL %q pin %q", in.AgentURL, in.Pin)
 	}
 	if want := agents.AgentImage(buildinfo.Get().Version); in.Image != want {
@@ -693,18 +693,18 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 	for name, want := range map[string]struct{ text, sub string }{
 		"swarm command":      {in.Swarm.Command, "--mode global"},
 		"swarm stack file":   {in.Swarm.StackFile, "external: true"},
-		"standalone command": {in.Standalone.Command, "docker run -d --name coaming-agent"},
+		"standalone command": {in.Standalone.Command, "docker run -d --name tierplan-agent"},
 		"compose file":       {in.Standalone.ComposeFile, "restart: unless-stopped"},
-		"swarm cleanup":      {in.ManualCleanup.Swarm, "docker service rm coaming-agent"},
-		"standalone cleanup": {in.ManualCleanup.Standalone, "docker rm -f coaming-agent"},
+		"swarm cleanup":      {in.ManualCleanup.Swarm, "docker service rm tierplan-agent"},
+		"standalone cleanup": {in.ManualCleanup.Standalone, "docker rm -f tierplan-agent"},
 	} {
 		if !strings.Contains(want.text, want.sub) {
 			t.Errorf("%s lacks %q:\n%s", name, want.sub, want.text)
 		}
 	}
 	for name, text := range map[string]string{"swarm command": in.Swarm.Command, "standalone command": in.Standalone.Command} {
-		if !strings.Contains(text, in.JoinToken) || !strings.Contains(text, "COAMING_AGENT_PIN=sha256/PINPINPIN") ||
-			!strings.Contains(text, "COAMING_AGENT_URL=wss://example.com/coaming/agent/connect") {
+		if !strings.Contains(text, in.JoinToken) || !strings.Contains(text, "TIERPLAN_AGENT_PIN=sha256/PINPINPIN") ||
+			!strings.Contains(text, "TIERPLAN_AGENT_URL=wss://example.com/tierplan/agent/connect") {
 			t.Errorf("%s does not carry the token, the pin and the endpoint:\n%s", name, text)
 		}
 	}
@@ -713,10 +713,10 @@ func TestEnvironmentAddAgentAnswersTheFullInstallObject(t *testing.T) {
 	}
 }
 
-func TestEnvironmentAddAgentLeavesThePinOutWhenCoamingServesNoSelfSignedCertificate(t *testing.T) {
+func TestEnvironmentAddAgentLeavesThePinOutWhenTierPlanServesNoSelfSignedCertificate(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com")
+	f.inst.Apply("TierPlan", "https://example.com")
 	f.tlsPin = ""
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated || got.Install == nil {
@@ -726,7 +726,7 @@ func TestEnvironmentAddAgentLeavesThePinOutWhenCoamingServesNoSelfSignedCertific
 		t.Errorf("the answer names a pin: %s", rec.body)
 	}
 	for _, text := range []string{got.Install.Swarm.Command, got.Install.Swarm.StackFile, got.Install.Standalone.Command, got.Install.Standalone.ComposeFile} {
-		if strings.Contains(text, "COAMING_AGENT_PIN") {
+		if strings.Contains(text, "TIERPLAN_AGENT_PIN") {
 			t.Errorf("a text carries a pin although there is none:\n%s", text)
 		}
 	}
@@ -735,13 +735,13 @@ func TestEnvironmentAddAgentLeavesThePinOutWhenCoamingServesNoSelfSignedCertific
 func TestEnvironmentAddAgentUsesTheAgentURLWhenOneIsSet(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com/coaming")
-	f.inst.ApplyAgentURL("https://coaming.lan:7480")
+	f.inst.Apply("TierPlan", "https://example.com/tierplan")
+	f.inst.ApplyAgentURL("https://tierplan.lan:7480")
 	got, rec := f.addAgent(t)
-	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "wss://coaming.lan:7480/agent/connect" {
+	if rec.code != http.StatusCreated || got.Install == nil || got.Install.AgentURL != "wss://tierplan.lan:7480/agent/connect" {
 		t.Fatalf("status = %d: %s, want the agent URL's endpoint", rec.code, rec.body)
 	}
-	if !strings.Contains(got.Install.Swarm.Command, "COAMING_AGENT_URL=wss://coaming.lan:7480/agent/connect") {
+	if !strings.Contains(got.Install.Swarm.Command, "TIERPLAN_AGENT_URL=wss://tierplan.lan:7480/agent/connect") {
 		t.Errorf("the swarm command does not dial the agent URL:\n%s", got.Install.Swarm.Command)
 	}
 }
@@ -757,7 +757,7 @@ func TestEnvironmentAddAgentWithOnlyAnAgentURLIsAllowed(t *testing.T) {
 }
 
 // With the development switch off, an address that is plain ws:// for a host that
-// is not this machine is one agents refuse at start (plan 02-41), so Coaming hands
+// is not this machine is one agents refuse at start (plan 02-41), so TierPlan hands
 // out no install for it: 409 insecure_agent_url, before any state changes
 // (G-02-R4-3, T-02-144, T-02-145). The agent URL and the public URL are both
 // judged, whichever supplies the address.
@@ -768,7 +768,7 @@ func TestEnvironmentAddAgentRefusesAPlainAddressForAnotherHostWithoutTheSwitch(t
 		apply func(f *envFix)
 	}{
 		{"only an agent URL", func(f *envFix) { f.inst.ApplyAgentURL("http://10.0.0.5:7480") }},
-		{"only a public URL", func(f *envFix) { f.inst.Apply("Coaming", "http://10.0.0.5:7480") }},
+		{"only a public URL", func(f *envFix) { f.inst.Apply("TierPlan", "http://10.0.0.5:7480") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
@@ -815,7 +815,7 @@ func TestEnvironmentAddAgentNeedsAUsableURLAndCreatesNothingWithoutOne(t *testin
 func TestEnvironmentAddAgentNeverPutsTheJoinTokenInTheAudit(t *testing.T) {
 	t.Parallel()
 	f := newEnvFix(t, dockertest.FakeConfig{})
-	f.inst.Apply("Coaming", "https://example.com")
+	f.inst.Apply("TierPlan", "https://example.com")
 	got, rec := f.addAgent(t)
 	if rec.code != http.StatusCreated || got.Install == nil {
 		t.Fatalf("status = %d: %s", rec.code, rec.body)
@@ -1407,12 +1407,12 @@ func TestOverviewOfALocalSwarmManagerDoesNotGuessItsNodeCount(t *testing.T) {
 	}
 }
 
-// The agent's own COAMING_AGENT_ALLOW_INSECURE is in the install texts only while
+// The agent's own TIERPLAN_AGENT_ALLOW_INSECURE is in the install texts only while
 // the server's switch is on and the address is plain ws:// (T-02-31). A production
 // install, wss:// or a server without the switch, never carries it.
 func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t *testing.T) {
 	t.Parallel()
-	const name = "COAMING_AGENT_ALLOW_INSECURE"
+	const name = "TIERPLAN_AGENT_ALLOW_INSECURE"
 	cases := []struct {
 		label string
 		allow bool
@@ -1421,7 +1421,7 @@ func TestEnvironmentAddAgentCarriesTheAgentSwitchOnlyWhileTheServerSwitchIsOn(t 
 	}{
 		{"switch off, http agent URL on this machine", false, "http://127.0.0.1:7480", false},
 		{"switch on, http agent URL", true, "http://10.0.0.5:7480", true},
-		{"switch on, https agent URL", true, "https://coaming.example.com", false},
+		{"switch on, https agent URL", true, "https://tierplan.example.com", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {

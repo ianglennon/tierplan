@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SPDX-FileCopyrightText: 2026 The Coaming Authors
+# SPDX-FileCopyrightText: 2026 The TierPlan Authors
 #
 # SPDX header gate (D-68). Every tracked .go, .ts, .tsx and .sql file must carry
 # both SPDX lines in its first 5 lines. Usage:
@@ -25,7 +25,7 @@ EXEMPT_PREFIXES=(
 )
 
 LICENSE_LINE="SPDX-License-Identifier: AGPL-3.0-or-later"
-COPYRIGHT_LINE="SPDX-FileCopyrightText: 2026 The Coaming Authors"
+COPYRIGHT_LINE="SPDX-FileCopyrightText: 2026 The TierPlan Authors"
 
 use_exemptions=1
 if [ "${1:-}" = "--with-exemptions" ]; then

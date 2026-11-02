@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package dockerx
 
@@ -27,10 +27,10 @@ type EventRow struct {
 	Time     time.Time
 	TimeNano int64
 	// Type is container, image, network, volume, service, node, secret or config;
-	// Coaming's own rows have the type coaming.
+	// TierPlan's own rows have the type tierplan.
 	Type string
 	// Scope is local for what happened on this node and swarm for what happened to
-	// the cluster, which every manager reports; empty for a row of Coaming's own.
+	// the cluster, which every manager reports; empty for a row of TierPlan's own.
 	Scope string
 	// Action is what happened, for example start, die, pull or connect.
 	Action string

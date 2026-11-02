@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks_test
 
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The rules a stack made from a git repository adds (D-09, D-10): an overlay may fill a path the
@@ -122,7 +122,7 @@ func TestGitLintLFSPointer(t *testing.T) {
 		t.Fatalf("git_lfs_pointer problems = %+v, want exactly one (for the repository file, not the overlay)", got)
 	}
 	if got[0].Severity != stacks.SeverityError || got[0].File != "app.env" ||
-		got[0].Message != "app.env is a Git LFS pointer. Coaming doesn't support Git LFS." {
+		got[0].Message != "app.env is a Git LFS pointer. TierPlan doesn't support Git LFS." {
 		t.Errorf("problem = %+v", got[0])
 	}
 }
@@ -151,7 +151,7 @@ func TestSubmoduleProblem(t *testing.T) {
 	t.Parallel()
 	p := stacks.SubmoduleProblem("vendor/lib")
 	if p.Severity != stacks.SeverityError || p.Code != stacks.CodeSubmodule || p.File != "vendor/lib" ||
-		p.Message != "vendor/lib is a submodule. Coaming doesn't support submodules." {
+		p.Message != "vendor/lib is a submodule. TierPlan doesn't support submodules." {
 		t.Errorf("SubmoduleProblem = %+v", p)
 	}
 }

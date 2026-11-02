@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -109,7 +109,7 @@ type Failure =
   | { kind: "row"; row: number; type: string };
 
 // AddressPoolsCard is "Address pools" on a standalone host's settings page (D-07 as amended): an
-// optional override. Coaming reads the pools the daemon reports, or Docker's defaults when it sets
+// optional override. TierPlan reads the pools the daemon reports, or Docker's defaults when it sets
 // none; pools entered here replace them. It saves on its own, and only an Env Admin can change it.
 export function AddressPoolsCard({ envId, envName, canEdit }: AddressPoolsCardProps) {
   const t = useT();

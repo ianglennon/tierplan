@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -18,12 +18,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 const (
@@ -75,7 +75,7 @@ type NetworksDeps struct {
 	// checked against a pool.
 	AddressSpaces *envs.AddressSpaces
 	Audit         *audit.Writer
-	// SelfContainerID is Coaming's own container ID; empty when it cannot tell. A
+	// SelfContainerID is TierPlan's own container ID; empty when it cannot tell. A
 	// connect or disconnect of that container, or of an agent's, needs its name typed.
 	SelfContainerID string
 	// AllocationWait is how a swarm network create waits for the swarm to allocate the network. The
@@ -133,7 +133,7 @@ type NetworkConnectRequest struct {
 	Alias       string `json:"alias,omitempty" maxLength:"253" pattern:"^[A-Za-z0-9][A-Za-z0-9_.-]*$" doc:"Another name other containers on the network can use to reach this one"`
 	IPv4        string `json:"ipv4,omitempty" maxLength:"45" doc:"An IPv4 address to give the container on the network, inside one of its subnets"`
 	IPv6        string `json:"ipv6,omitempty" maxLength:"45" doc:"An IPv6 address to give the container on the network, inside one of its subnets"`
-	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to connect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to connect TierPlan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkConnectInput is the path and body of the connect route.
@@ -150,7 +150,7 @@ type NetworkConnectInput struct {
 type NetworkDisconnectRequest struct {
 	NodeID      string `json:"nodeId,omitempty" maxLength:"128" doc:"The node the container is on: the nodeId of its attachment on the network page or of its row in the containers list. Left out only on an environment of one node"`
 	ContainerID string `json:"containerId" minLength:"1" maxLength:"128" doc:"The container ID"`
-	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to disconnect Coaming's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
+	Confirm     string `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to disconnect TierPlan's own server or an agent container (else 422 confirmation_required, and nothing is sent)"`
 }
 
 // NetworkDisconnectInput is the path and body of the disconnect route.
@@ -257,7 +257,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"An overlay network off a swarm is 422 overlay_needs_swarm, and attachable on anything but an overlay network on a swarm is 422 attachable_overlay_only. " +
 			"subnet, gateway and ipRange are checked as CIDR before anything is sent: 422 subnet_invalid, gateway_outside_subnet or iprange_outside_subnet. " +
 			"A subnet that overlaps another network of this environment (by the scope rule of the subnet map) is 422 subnet_overlap naming it, unless createAnyway is true. An overlay network that overlaps another swarm network is 422 subnet_overlap_swarm whatever createAnyway says, because the swarm cannot allocate it. The check and the create run under one lock per environment, and an override is audited with overlap_override and overlaps. " +
-			"A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network Coaming could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. " +
+			"A swarm network is read back after the create until the swarm has allocated it: one still not allocated after about 6 seconds (the stub the managers keep when the subnet overlaps a swarm network TierPlan could not see, or the pools are full) is removed again and the answer is 422 network_not_allocated; the audit log holds network.created with code not_allocated and network.removed with source allocation_check. " +
 			"A subnet the engine refuses at once because it overlaps another network is 422 subnet_refused. " +
 			"409 name_taken when the engine has the name already, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not a connected node of the environment. " +
 			"Needs networks.manage (Admin) on the environment. Every attempt is audited as network.created, with result failure and the code when the engine or the host refused it.",
@@ -328,7 +328,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 			"A local-scope network takes only containers of its own node (422 node_mismatch); a swarm overlay must be attachable (422 network_not_attachable); " +
 			"an address that is not an IPv4 or IPv6 address, or that the network does not accept, is 422 address_invalid; a container already on the network is 409 already_connected. " +
 			"A worker that has not learned an overlay network yet answers 409 network_unavailable_on_node with the engine's own words. " +
-			"Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). " +
+			"TierPlan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent; such a connect is audited before the call (stage initiated) and after it (stage completed). " +
 			"404 network_not_found or container_not_found, 409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.connected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -347,7 +347,7 @@ func RegisterNetworks(r *httpx.Router, d NetworksDeps) {
 		Description: "Disconnects one container from one network, once, never retried and never forced. " +
 			"The call goes to the node the container is on, named by nodeId. " +
 			"A container that is not on the network is 409 not_connected; 404 network_not_found or container_not_found, " +
-			"Coaming's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting Coaming off its own network does, is answered 204 and audited as stage connection_lost with result success. " +
+			"TierPlan's own server container and any agent container are protected, as they are for stop and remove: send confirm, the container's name, or the request is 422 confirmation_required and nothing is sent. Such a disconnect is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call, which is what cutting TierPlan off its own network does, is answered 204 and audited as stage connection_lost with result success. " +
 			"409 host_read_only on a read-only host, 503 node_unavailable when the node is not connected. " +
 			"Needs networks.connect (Operator) on the environment. Every attempt on a network and container that exist is audited as network.disconnected, with result failure and the code when it was refused.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusNoContent,
@@ -395,7 +395,7 @@ func createNetwork(ctx context.Context, d NetworksDeps, p *rbac.Principal, envID
 		return nil, httpx.Problem(http.StatusUnprocessableEntity, problemAttachableOverlayOnly,
 			"Only an overlay network on a swarm can be attachable.")
 	}
-	// The check of the subnet and the create are one step: two creates through Coaming cannot
+	// The check of the subnet and the create are one step: two creates through TierPlan cannot
 	// both pass the check with the same subnet (NET-05). The lock is taken before the networks
 	// are read, so the second create sees the first one's network.
 	if body.Subnet != "" && d.AddressSpaces != nil {
@@ -585,7 +585,7 @@ func networkCreateProblem(log *slog.Logger, envID, name, subnet string, err erro
 func notAllocatedMessage(na *dockerx.NotAllocatedError) string {
 	msg := "The swarm didn't give " + na.Name + " an address range"
 	if na.Removed {
-		msg += ", so Coaming removed it again."
+		msg += ", so TierPlan removed it again."
 	} else {
 		msg += "."
 	}
@@ -595,7 +595,7 @@ func notAllocatedMessage(na *dockerx.NotAllocatedError) string {
 		msg += " The swarm's address pools may be full. Open the Address space page to free some."
 	}
 	if !na.Removed {
-		msg += " Coaming couldn't remove it, so delete " + na.Name + " on the Networks page."
+		msg += " TierPlan couldn't remove it, so delete " + na.Name + " on the Networks page."
 	}
 	return msg
 }
@@ -607,9 +607,9 @@ func networkWriteProblem(log *slog.Logger, envID string, err error) (string, err
 	switch {
 	case errors.Is(err, envs.ErrHostReadOnly):
 		return codeHostReadOnly, httpx.Problem(http.StatusConflict, codeHostReadOnly,
-			"This host is read-only. Its owner turned changes off on the host itself, so Coaming can only read from it.")
+			"This host is read-only. Its owner turned changes off on the host itself, so TierPlan can only read from it.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return problemNodeUnavailable, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
+		return problemNodeUnavailable, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
 	}
 	var denied *envs.AgentPolicyDeniedError
 	if errors.As(envs.ClassifyDockerError(err), &denied) {
@@ -944,7 +944,7 @@ func (d NetworksDeps) readNetwork(ctx context.Context, envID string, in *Network
 	case dockerx.IsNotFound(err):
 		return agg, row, detail, nil, httpx.Problem(http.StatusNotFound, problemNetworkNotFound, "This network does not exist. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return agg, row, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
+		return agg, row, detail, nil, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
 	}
 	return agg, row, detail, nil, snapshotProblem(d.Log, envID, err)
 }
@@ -1148,7 +1148,7 @@ func recordEndpoint(ctx context.Context, d NetworksDeps, p *rbac.Principal, envI
 	recordNetwork(ctx, d, p, envID, userAgent, action, row.ID, row.Name, rec, details)
 }
 
-// ownedAttempt says that a connect or disconnect is of one of Coaming's own containers,
+// ownedAttempt says that a connect or disconnect is of one of TierPlan's own containers,
 // and at which stage of its audit trail the row is. The zero value is an ordinary
 // container, whose rows carry neither.
 type ownedAttempt struct {
@@ -1168,13 +1168,13 @@ func (o ownedAttempt) addTo(details map[string]string) {
 	}
 }
 
-// isSelfContainer says whether id is Coaming's own container: the ID, or a prefix of
-// it of at least minSelfIDLen characters, starts with the one Coaming found for itself.
+// isSelfContainer says whether id is TierPlan's own container: the ID, or a prefix of
+// it of at least minSelfIDLen characters, starts with the one TierPlan found for itself.
 func isSelfContainer(selfID, id string) bool {
 	return len(selfID) >= minSelfIDLen && strings.HasPrefix(id, selfID)
 }
 
-// ownContainerGate decides whether a connect or disconnect of ct is of one of Coaming's
+// ownContainerGate decides whether a connect or disconnect of ct is of one of TierPlan's
 // own containers, from a fresh inspect of it: the list can be seconds old, and neither
 // its flag nor anything the client sent is trusted (D-11). For the server's own container
 // or an agent's, it requires the container's name typed (422 confirmation_required, so

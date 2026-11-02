@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -20,12 +20,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/jobs"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/stackstest"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/jobs"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/stackstest"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // The deploy console follows a deploy over server-sent events (plan 07-17, STK-07, D-13). The hub is
@@ -660,7 +660,7 @@ func TestStackDeployRefusedByTheAgentsHostPolicySaysSo(t *testing.T) {
 	f, e := stackEnv(t, func(c *dockertest.FakeConfig) {
 		c.ServiceCreateError = "agent_policy_denied: host_policy: POST /v1.56/services/create"
 	})
-	// Coaming's own policy lets an env Admin ask for host access; the agent is what refuses.
+	// TierPlan's own policy lets an env Admin ask for host access; the agent is what refuses.
 	admin := f.caller(t, e, "envadmin-1", "admin")
 	st := newStack(t, admin, "hostpol")
 	job := f.awaitDeploy(t, f.deployDraft(t, admin, st.ID, hostAccessCompose))
@@ -2213,7 +2213,7 @@ func adoptionPending(t *testing.T, f *envFix, envID, stackID string) bool {
 }
 
 // TestDeployEndClearsThePendingAdoption: the first deploy of an adopted stack ends the pending window when it ends
-// good, and only then; a deploy that stops leaves the adoption pending, since not every service carries Coaming's
+// good, and only then; a deploy that stops leaves the adoption pending, since not every service carries TierPlan's
 // labels yet (D-16).
 func TestDeployEndClearsThePendingAdoption(t *testing.T) {
 	t.Parallel()
@@ -2351,7 +2351,7 @@ func TestRestoreRedeploysTheDeployedRevision(t *testing.T) {
 	f.deployGood(t, operator, st.ID, composeWeb127)
 	f.deployGood(t, operator, st.ID, composeWeb128)
 	pin128 := f.revisions(t, st.ID)[1].Pins
-	// Somebody outside Coaming scaled the service, and the tag has moved on the registry since the deploy.
+	// Somebody outside TierPlan scaled the service, and the tag has moved on the registry since the deploy.
 	f.editLiveService(t, e, "rs", "web", scaleTo(4))
 	f.fake.SetDistributionDigest("docker.io/library/nginx:1.28-alpine", "sha256:"+strings.Repeat("b", 64))
 	lookups, updates := len(f.fake.DistributionRefs()), len(f.fake.ServiceUpdates())

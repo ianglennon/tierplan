@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package audit_test
 
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/audit"
+	"github.com/ianglennon/tierplan/internal/audit"
 )
 
 // Reading the audit log: filters, deterministic paging, the actor list and

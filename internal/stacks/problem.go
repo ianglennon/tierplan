@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stacks
 
 import (
 	"sort"
 
-	"github.com/ianglennon/coaming/internal/stacks/lint"
+	"github.com/ianglennon/tierplan/internal/stacks/lint"
 )
 
 // Severity says how a Problem stops a stack: an error blocks the deploy, a warning only informs.

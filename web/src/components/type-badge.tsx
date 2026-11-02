@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { EnvironmentItem } from "@/api/environments";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ interface TypeBadgeProps {
 }
 
 // TypeBadge names what an environment is (UI-SPEC TypeBadge, D-32): "Swarm" or
-// "Standalone", plus a second outline badge "Local socket" for the host Coaming
+// "Standalone", plus a second outline badge "Local socket" for the host TierPlan
 // runs on. The engine roles (manager, worker) belong to the node list, not
 // here. Neither badge ever truncates, and nothing shows until the type is known.
 export function TypeBadge({ envType, type, isLocalSocket }: TypeBadgeProps) {

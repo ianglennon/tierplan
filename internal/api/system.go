@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package api holds the typed HTTP operations, grouped by area.
 package api
@@ -11,9 +11,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/buildinfo"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/buildinfo"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 // VersionBody is the public build identity (AGPL section 13, D-61, D-62).
@@ -59,7 +59,7 @@ func RegisterSystem(r *httpx.Router, deps SystemDeps) {
 		OperationID: "getVersion",
 		Method:      http.MethodGet,
 		Path:        "/api/version",
-		Summary:     "Get the running Coaming version and source link",
+		Summary:     "Get the running TierPlan version and source link",
 		Tags:        []string{"system"},
 	}, rbac.Public, func(_ context.Context, _ *struct{}) (*VersionOutput, error) {
 		info := buildinfo.Get()

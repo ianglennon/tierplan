@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 // Package stackopstest stands a deployed standalone stack on a fake engine, for the tests of the packages
 // that review and deploy stacks. It is test support and is imported by tests only.
@@ -20,9 +20,9 @@ import (
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // Digest is a made-up image digest: sha256: and 64 copies of c.
@@ -174,7 +174,7 @@ func (h *Hosted) Apply(c *dockertest.FakeConfig) {
 }
 
 // Foreign stands a project that someone ran with the docker compose command on a fake standalone host, the
-// way the CLI leaves it (plan 08-12): no label of Coaming's on a container, a network or a volume, the image
+// way the CLI leaves it (plan 08-12): no label of TierPlan's on a container, a network or a volume, the image
 // of each service as the file wrote it, the config hash of each service computed on the file as loaded, and
 // on each network and volume the com.docker.compose.config-hash label of its config, computed with the SDK's
 // own functions on the config as loaded. A service with a scale has that many containers, a depends_on

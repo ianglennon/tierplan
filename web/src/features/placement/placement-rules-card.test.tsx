@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,7 +54,7 @@ describe("PlacementRulesCard", () => {
       <PlacementRulesCard service={service({ constraints: ["node.role=worker"] })} nodes={NODES} />,
     );
     expect(within(card()).getByText("node.role=worker")).toBeTruthy();
-    expect(within(card()).getByText("Coaming can't read this constraint.")).toBeTruthy();
+    expect(within(card()).getByText("TierPlan can't read this constraint.")).toBeTruthy();
     expect(within(card()).queryByText(/Matches/)).toBeNull();
   });
 

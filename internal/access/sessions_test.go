@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package access_test
 
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/access"
+	"github.com/ianglennon/tierplan/internal/access"
 )
 
 // Sessions: listing, revoking one, revoking the others, revoking all (plan

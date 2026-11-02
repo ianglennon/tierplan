@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/config"
+	"github.com/ianglennon/tierplan/internal/config"
 )
 
 // The session routes (plan 03-15, AUTH-04, D-23). Negative cases are mandatory

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -643,7 +643,7 @@ describe("Disconnect…", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   });
 
-  it("asks for the container's name when the server says it is Coaming's own, and sends it as confirm", async () => {
+  it("asks for the container's name when the server says it is TierPlan's own, and sends it as confirm", async () => {
     me = makeMe({ envs: { [ENV]: "operator" } });
     withRows();
     disconnectAnswer = () => problem(422, "confirmation_required");

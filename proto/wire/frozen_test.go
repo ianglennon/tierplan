@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package wire
 
@@ -53,8 +53,8 @@ func withExtra(t *testing.T, line []byte) []byte {
 }
 
 func TestFrozenMessagesMatchTheirGoldenFiles(t *testing.T) {
-	golden(t, "update", Update{T: TypeUpdate, ID: "req-1", Image: "ghcr.io/ianglennon/coaming-agent:0.2.1"})
-	golden(t, "update_digest", Update{T: TypeUpdate, Image: "ghcr.io/ianglennon/coaming-agent@sha256:" + strings.Repeat("a", 64)})
+	golden(t, "update", Update{T: TypeUpdate, ID: "req-1", Image: "ghcr.io/ianglennon/tierplan-agent:0.2.1"})
+	golden(t, "update_digest", Update{T: TypeUpdate, Image: "ghcr.io/ianglennon/tierplan-agent@sha256:" + strings.Repeat("a", 64)})
 	golden(t, "uninstall", Uninstall{T: TypeUninstall, ID: "req-2", RemoveData: true})
 	golden(t, "uninstall_service", Uninstall{T: TypeUninstall, ID: "req-3", RemoveData: true, Service: true})
 	golden(t, "update_result", UpdateResult{T: TypeUpdateResult, ID: "req-1", OK: true})
@@ -82,10 +82,10 @@ func TestFrozenMessageTypeNamesDoNotChange(t *testing.T) {
 func TestFrozenMessagesIgnoreUnknownFieldsAndKeepTheKnownOnes(t *testing.T) {
 	t.Run("update", func(t *testing.T) {
 		var m Update
-		if err := json.Unmarshal(withExtra(t, golden(t, "update", Update{T: TypeUpdate, ID: "req-1", Image: "ghcr.io/ianglennon/coaming-agent:0.2.1"})), &m); err != nil {
+		if err := json.Unmarshal(withExtra(t, golden(t, "update", Update{T: TypeUpdate, ID: "req-1", Image: "ghcr.io/ianglennon/tierplan-agent:0.2.1"})), &m); err != nil {
 			t.Fatalf("an unknown field must not fail the parse: %v", err)
 		}
-		if m.T != TypeUpdate || m.ID != "req-1" || m.Image != "ghcr.io/ianglennon/coaming-agent:0.2.1" {
+		if m.T != TypeUpdate || m.ID != "req-1" || m.Image != "ghcr.io/ianglennon/tierplan-agent:0.2.1" {
 			t.Fatalf("known fields lost: %+v", m)
 		}
 	})

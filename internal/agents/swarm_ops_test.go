@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/server/servertest"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/server/servertest"
 )
 
 // extraAgent runs a second standalone agent on a node, from an install command,
@@ -22,7 +22,7 @@ import (
 // in the command.
 func extraAgent(t *testing.T, n *dockertest.Node, command string) {
 	t.Helper()
-	cmd := strings.NewReplacer("--name coaming-agent", "--name extra-agent", "-v coaming-agent:", "-v extra-agent:").Replace(command)
+	cmd := strings.NewReplacer("--name tierplan-agent", "--name extra-agent", "-v tierplan-agent:", "-v extra-agent:").Replace(command)
 	sh(t, n, cmd)
 }
 
@@ -135,7 +135,7 @@ func sharedRotateToken(t *testing.T, f *swarmFix) {
 	for _, n := range f.sw.Nodes() {
 		// The volume is in use until the task's container is gone.
 		dockertest.Wait(t, 60*time.Second, "the agent container to leave "+n.Hostname, func() (bool, string) {
-			out, _ := n.Sh(execCtx(t, time.Minute), "docker ps -aq --filter label=coaming.agent=true")
+			out, _ := n.Sh(execCtx(t, time.Minute), "docker ps -aq --filter label=tierplan.agent=true")
 			return strings.TrimSpace(out) == "", out
 		})
 		sh(t, n, lines[1])
@@ -150,7 +150,7 @@ func sharedRotateToken(t *testing.T, f *swarmFix) {
 
 // TestSwarmStackFileInstall installs the agent from the generated stack file instead
 // of the command: the secret with the one-line command in its first comment, the
-// file deployed as a stack. The service is <stack>_coaming-agent, which the agent
+// file deployed as a stack. The service is <stack>_tierplan-agent, which the agent
 // lookup must still find by its label (02-09, 02-14, the label fix).
 func TestSwarmStackFileInstall(t *testing.T) {
 	f := startSwarmFix(t, 3, 1)
@@ -163,20 +163,20 @@ func TestSwarmStackFileInstall(t *testing.T) {
 		t.Fatalf("the stack file does not start with the secret command: %q", first)
 	}
 	sh(t, mgr, " "+secretCmd)
-	if err := mgr.WriteFile(execCtx(t, time.Minute), "/tmp/coaming-agent.yml", []byte(stack)); err != nil {
+	if err := mgr.WriteFile(execCtx(t, time.Minute), "/tmp/tierplan-agent.yml", []byte(stack)); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("stack deploy: %s", quiet(sh(t, mgr, "docker stack deploy -c /tmp/coaming-agent.yml coaming 2>&1")))
+	t.Logf("stack deploy: %s", quiet(sh(t, mgr, "docker stack deploy -c /tmp/tierplan-agent.yml tierplan 2>&1")))
 
 	got := f.waitSwarmOnline(t, 4)
 	if got.EnvType != "swarm" {
 		t.Errorf("envType = %q, want swarm", got.EnvType)
 	}
-	if names := strings.TrimSpace(sh(t, mgr, "docker service ls --format '{{.Name}}'")); names != "coaming_coaming-agent" {
-		t.Errorf("services = %q, want coaming_coaming-agent", names)
+	if names := strings.TrimSpace(sh(t, mgr, "docker service ls --format '{{.Name}}'")); names != "tierplan_tierplan-agent" {
+		t.Errorf("services = %q, want tierplan_tierplan-agent", names)
 	}
 	// The hardening carried over to the stack file, with no flag the service form has and it lacks.
-	spec := inspectService(t, mgr, "coaming_coaming-agent")
+	spec := inspectService(t, mgr, "tierplan_tierplan-agent")
 	ct := spec.TaskTemplate.ContainerSpec
 	if spec.Mode.Global == nil || !ct.ReadOnly || !slices.Equal(sorted(ct.CapabilityDrop), []string{"ALL"}) || !slices.Equal(sorted(stripCap(ct.CapabilityAdd)), []string{"SETGID", "SETUID"}) {
 		t.Errorf("stack service = mode %+v readonly %v caps drop %v add %v, want global, read-only, drop ALL add SETUID SETGID", spec.Mode, ct.ReadOnly, ct.CapabilityDrop, ct.CapabilityAdd)
@@ -201,10 +201,10 @@ func TestSwarmStackFileInstall(t *testing.T) {
 		}
 	}
 	// The state volume keeps the name the install gives it, not the stack's prefix.
-	if vols := strings.Fields(sh(t, mgr, "docker volume ls -q")); !slices.Equal(vols, []string{"coaming-agent"}) {
-		t.Errorf("volumes on the manager = %v, want only coaming-agent", vols)
+	if vols := strings.Fields(sh(t, mgr, "docker volume ls -q")); !slices.Equal(vols, []string{"tierplan-agent"}) {
+		t.Errorf("volumes on the manager = %v, want only tierplan-agent", vols)
 	}
-	if ports := strings.TrimSpace(sh(t, f.sw.Workers[0], "docker ps --filter label=coaming.agent=true --format '{{.Ports}}'")); ports != "" {
+	if ports := strings.TrimSpace(sh(t, f.sw.Workers[0], "docker ps --filter label=tierplan.agent=true --format '{{.Ports}}'")); ports != "" {
 		t.Errorf("the stack-file agent publishes %q", ports)
 	}
 }

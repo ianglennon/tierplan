@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 //go:build swarm
 
 package agents_test
@@ -16,13 +16,13 @@ import (
 
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
 )
 
 // The real-swarm proof of UAT gap G-10-8 (plans 10-28, 10-29, 10-31, 10-32): a swarm's allocator
 // accepts a network whose subnet overlaps another swarm network and then never gives it addresses,
-// so a service on it never starts. Coaming refuses that overlap whatever createAnyway says, reads
+// so a service on it never starts. TierPlan refuses that overlap whatever createAnyway says, reads
 // every swarm network it creates back, and removes one the swarm never allocated. Each answer
 // below is held against what the managers themselves list.
 
@@ -142,7 +142,7 @@ func sharedSubnetOverlap(t *testing.T, f *swarmFix) {
 		t.Errorf("the refused bridge exists on the worker: %v", ids)
 	}
 
-	// g. The read-back itself, in both directions, outside Coaming's overlap check.
+	// g. The read-back itself, in both directions, outside TierPlan's overlap check.
 	cli := dockerxFor(t, mgr)
 	ctx := execCtx(t, 5*time.Minute)
 	_, _, err := cli.NetworkCreateAllocated(ctx, dockerx.NetworkCreateSpec{Name: "cm-raw-stub", Driver: "overlay", Scope: dockerx.ScopeSwarm, Subnet: "10.231.0.128/25"}, dockerx.AllocationWait{})
@@ -159,7 +159,7 @@ func sharedSubnetOverlap(t *testing.T, f *swarmFix) {
 		t.Errorf("remove cm-raw-ok: %v", err)
 	}
 
-	// h. A network Coaming cannot yet see: either its view already holds it and says
+	// h. A network TierPlan cannot yet see: either its view already holds it and says
 	// subnet_overlap_swarm, or the read-back catches the stub and says network_not_allocated.
 	if _, _, err := cli.NetworkCreate(ctx, dockerx.NetworkCreateSpec{Name: "cm-raw-c", Driver: "overlay", Scope: dockerx.ScopeSwarm, Subnet: "10.233.0.0/24"}); err != nil {
 		t.Fatalf("create cm-raw-c: %v", err)
@@ -167,9 +167,9 @@ func sharedSubnetOverlap(t *testing.T, f *swarmFix) {
 	code, raw = f.srv.Do(http.MethodPost, networks, map[string]any{"name": "cm-ov-d", "driver": "overlay", "subnet": "10.233.0.0/25", "createAnyway": true})
 	if code != http.StatusUnprocessableEntity || (problemType(raw) != "subnet_overlap_swarm" && problemType(raw) != "network_not_allocated" &&
 		!strings.Contains(string(raw), "subnet_overlap_swarm") && !strings.Contains(string(raw), "network_not_allocated")) {
-		t.Fatalf("an overlay over a network Coaming has not read: %d %s, want 422 subnet_overlap_swarm or network_not_allocated", code, raw)
+		t.Fatalf("an overlay over a network TierPlan has not read: %d %s, want 422 subnet_overlap_swarm or network_not_allocated", code, raw)
 	}
-	t.Logf("an overlay over a network Coaming has not read: 422 %s", problemType(raw))
+	t.Logf("an overlay over a network TierPlan has not read: 422 %s", problemType(raw))
 	requireNoNetwork(t, f, "cm-ov-d")
 
 	// i. A stack whose network overlaps the overlay fails at the networks step, with nothing left.
@@ -179,7 +179,7 @@ func sharedSubnetOverlap(t *testing.T, f *swarmFix) {
 	image := addr + "/subnetovl/app@" + digest
 	const stack = "cmovl"
 	t.Cleanup(func() { removeStackCLI(t, f, stack) })
-	id := f.createStackCoaming(t, stack, fmt.Sprintf(subnetOverlapComposeFmt, image))
+	id := f.createStackTierPlan(t, stack, fmt.Sprintf(subnetOverlapComposeFmt, image))
 	job := f.deployStackUntilEnded(t, id)
 	rawJob, _ := json.Marshal(job)
 	t.Logf("the stack deploy job: %s", rawJob)

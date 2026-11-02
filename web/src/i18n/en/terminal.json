@@ -3,8 +3,8 @@
     "name": "Terminal in {{name}}",
     "launcher": {
       "heading": "Open a shell in {{name}}",
-      "body": "You get a terminal inside the container. Nothing you type or see is recorded. Coaming records that the session happened.",
-      "bodyNode": "You get a terminal inside the container, on {{node}}. Nothing you type or see is recorded. Coaming records that the session happened.",
+      "body": "You get a terminal inside the container. Nothing you type or see is recorded. TierPlan records that the session happened.",
+      "bodyNode": "You get a terminal inside the container, on {{node}}. Nothing you type or see is recorded. TierPlan records that the session happened.",
       "open": "Open shell",
       "opening": "Opening shell…",
       "shell": {
@@ -64,17 +64,17 @@
       "hostReadOnly": "This host is read-only (set on the host). Logs still work.",
       "notRunning": "Start the container to open a shell.",
       "busy": "This host's agent is serving as many logs and shells as it can. Close one and try again.",
-      "noShell": "Coaming couldn't find bash or sh in this container."
+      "noShell": "TierPlan couldn't find bash or sh in this container."
     },
     "refusal": {
       "readOnly": {
         "heading": "Shells are off on this host",
         "body": "This host is read-only (set on the host). Logs still work."
       },
-      "ownContainer": "Coaming doesn't open shells in its own containers.",
+      "ownContainer": "TierPlan doesn't open shells in its own containers.",
       "noShell": {
         "heading": "No shell in this image",
-        "body": "Coaming couldn't find bash or sh in this container. If the image has one somewhere else, enter its path."
+        "body": "TierPlan couldn't find bash or sh in this container. If the image has one somewhere else, enter its path."
       },
       "limit_one": "You already have {{count}} shell open, which is the most allowed. Close one to open another.",
       "limit_other": "You already have {{count}} shells open, which is the most allowed. Close one to open another."

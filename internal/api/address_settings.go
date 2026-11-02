@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -15,12 +15,12 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // The address-space settings of one environment (plan 10-21, NET-06, D-21, D-07 as amended): the
@@ -138,7 +138,7 @@ func registerAddressSettings(r *httpx.Router, d AddressSpaceDeps) {
 	httpx.Register(r, huma.Operation{
 		OperationID: "setAddressPools", Method: http.MethodPut, Path: "/api/env/{envId}/address-space/pools",
 		Summary: "Enter the address pools of a standalone host",
-		Description: "An override for a standalone host whose daemon's pools Coaming cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). " +
+		Description: "An override for a standalone host whose daemon's pools TierPlan cannot read or should not trust: when pools are saved they replace what the daemon reports, and the rows read source entered (always estimated). " +
 			"At most 16 pools. Each base is an IPv4 CIDR with no host bits set (422 pool_base_invalid) and each size runs from the base's own mask to 30 (422 pool_size_invalid); no two pools may overlap (422 pool_overlap). " +
 			"Each 422 names the row in its error location. A swarm has its own pools, so it is 409 not_standalone. An empty list removes the override. " +
 			"version is the one read with the settings: a save made against any other version is 409 settings_changed and names who saved last. A save that changes nothing answers 200 and writes nothing. " +

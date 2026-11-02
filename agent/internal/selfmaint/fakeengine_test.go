@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package selfmaint
 
@@ -24,7 +24,7 @@ import (
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/system"
 
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // fakeEngine is a small Docker Engine API on a Unix socket: enough of the

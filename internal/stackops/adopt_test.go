@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -16,14 +16,14 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/swarm"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/dockerx/dockertest"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stackops/stackopstest"
-	"github.com/ianglennon/coaming/internal/stacks"
-	"github.com/ianglennon/coaming/internal/stacks/convert"
-	"github.com/ianglennon/coaming/internal/vault"
-	"github.com/ianglennon/coaming/proto/testsupport"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/dockerx/dockertest"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stackops/stackopstest"
+	"github.com/ianglennon/tierplan/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/stacks/convert"
+	"github.com/ianglennon/tierplan/internal/vault"
+	"github.com/ianglennon/tierplan/proto/testsupport"
 )
 
 // Adoption (plan 08-13, STK-13, D-14): the commit reads what runs, rebuilds the definition itself and stores it as
@@ -245,20 +245,20 @@ func TestAdoptStaleFingerprint(t *testing.T) {
 	}
 }
 
-func TestAdoptRefusesCoamingAndAgentStacks(t *testing.T) {
+func TestAdoptRefusesTierPlanAndAgentStacks(t *testing.T) {
 	t.Parallel()
 	own := map[string]string{stacks.LabelSwarmNamespace: "selfns"}
-	agent := map[string]string{stacks.LabelSwarmNamespace: "swarmstack", "coaming.agent": "true"}
+	agent := map[string]string{stacks.LabelSwarmNamespace: "swarmstack", "tierplan.agent": "true"}
 	dotted := map[string]string{stacks.LabelSwarmNamespace: "my.stack"}
 	rig := newSwarmRig(t, nil,
-		dockertest.FakeService{ID: "s1", Name: "selfns_server", Mode: "replicated", Running: 1, Desired: 1, Image: "coaming:1", Labels: own},
-		dockertest.FakeService{ID: "s2", Name: "swarmstack_agent", Mode: "global", Running: 1, Desired: 1, Image: "coaming-agent:1", Labels: agent},
+		dockertest.FakeService{ID: "s1", Name: "selfns_server", Mode: "replicated", Running: 1, Desired: 1, Image: "tierplan:1", Labels: own},
+		dockertest.FakeService{ID: "s2", Name: "swarmstack_agent", Mode: "global", Running: 1, Desired: 1, Image: "tierplan-agent:1", Labels: agent},
 		dockertest.FakeService{ID: "s3", Name: "my.stack_web", Mode: "replicated", Running: 1, Desired: 1, Image: "nginx:1.27", Labels: dotted},
 	)
 	repo := adoptRepo(t, rig)
 	self := stackops.SelfMarks{Namespace: "selfns"}
 
-	for name, want := range map[string]string{"selfns": stackops.OwnerCoaming, "swarmstack": stackops.OwnerAgent, "my.stack": ""} {
+	for name, want := range map[string]string{"selfns": stackops.OwnerTierPlan, "swarmstack": stackops.OwnerAgent, "my.stack": ""} {
 		_, err := rig.adopt(t, repo, stacks.TargetSwarm, name, self)
 
 		var refused *stackops.NotAdoptableError
@@ -281,7 +281,7 @@ func TestAdoptRefusesCoamingAndAgentStacks(t *testing.T) {
 	}
 }
 
-// TestAdoptRefusesAStackCoamingAlreadyManages and a name nothing carries.
+// TestAdoptRefusesAStackTierPlanAlreadyManages and a name nothing carries.
 func TestAdoptRefusesAManagedOrAMissingName(t *testing.T) {
 	t.Parallel()
 	rig := objectsRig(t)
@@ -575,7 +575,7 @@ func composeOnly(text string, vars ...stacks.Var) stacks.WorkingCopy {
 }
 
 // TestAdoptCheckPasteMatches: the file the stack was deployed from, pasted back, differs from what runs in nothing but
-// Coaming's ownership labels.
+// TierPlan's ownership labels.
 func TestAdoptCheckPasteMatches(t *testing.T) {
 	t.Parallel()
 	t.Run("swarm", func(t *testing.T) {

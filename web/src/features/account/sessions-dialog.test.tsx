@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -97,7 +97,7 @@ describe("the Sessions dialog (D-23)", () => {
   it("lists each session with its device, address and last activity, and marks the current one", async () => {
     renderDialog();
     const d = await dialog();
-    expect(within(d).getByText("Everywhere you're signed in to Coaming.")).toBeTruthy();
+    expect(within(d).getByText("Everywhere you're signed in to TierPlan.")).toBeTruthy();
     for (const h of ["Device", "IP address", "Last active"]) {
       expect(within(d).getByRole("columnheader", { name: h })).toBeTruthy();
     }

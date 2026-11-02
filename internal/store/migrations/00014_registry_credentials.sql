@@ -1,8 +1,8 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
--- SPDX-FileCopyrightText: 2026 The Coaming Authors
+-- SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 -- +goose Up
--- Registry credentials (IMG-01, D-01 to D-05): the sign-in Coaming uses when it pulls an
+-- Registry credentials (IMG-01, D-01 to D-05): the sign-in TierPlan uses when it pulls an
 -- image or lists a repository's tags. A row with a NULL env_id is an instance credential,
 -- one with an env_id belongs to that environment only and goes with it. A credential
 -- applies to a registry host plus an optional namespace prefix (host 'ghcr.io', prefix

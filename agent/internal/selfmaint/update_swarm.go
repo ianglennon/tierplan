@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package selfmaint
 
@@ -14,7 +14,7 @@ import (
 
 	"github.com/moby/moby/client"
 
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 // maxServiceJSON bounds what is read of a service inspection.

@@ -1,4 +1,4 @@
-module github.com/ianglennon/coaming
+module github.com/ianglennon/tierplan
 
 go 1.27
 
@@ -15,7 +15,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/yamux v0.1.2
-	github.com/ianglennon/coaming/proto v0.0.0-00010101000000-000000000000
+	github.com/ianglennon/tierplan/proto v0.0.0-00010101000000-000000000000
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.1
 	github.com/moby/sys/mountinfo v0.7.2
@@ -171,4 +171,4 @@ require (
 	tags.cncf.io/container-device-interface v1.1.1 // indirect
 )
 
-replace github.com/ianglennon/coaming/proto => ./proto
+replace github.com/ianglennon/tierplan/proto => ./proto

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package registry_test
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/registry"
+	"github.com/ianglennon/tierplan/internal/registry"
 )
 
 // D-05, Task 1 answer "short-mask": a secret shorter than 12 characters keeps no last

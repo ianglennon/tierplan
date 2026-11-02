@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
@@ -132,7 +132,7 @@ describe("FolderBrowser", () => {
     const sub = await screen.findByRole("button", { name: /^vendor/ });
     expect(sub.getAttribute("aria-disabled")).toBe("true");
     const text = document.getElementById(sub.getAttribute("aria-describedby") ?? "none");
-    expect(text?.textContent).toBe("Coaming doesn't support submodules.");
+    expect(text?.textContent).toBe("TierPlan doesn't support submodules.");
     const lnk = screen.getByRole("button", { name: /^latest/ });
     expect(lnk.getAttribute("aria-disabled")).toBe("true");
     expect(

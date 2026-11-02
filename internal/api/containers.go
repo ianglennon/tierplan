@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -22,14 +22,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/redact"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/tunnel"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/tunnel"
 )
 
 // Result values and codes of one target of a container action. A code is a stable
@@ -37,7 +37,7 @@ import (
 const (
 	actionDone    = "done"
 	actionFailed  = "failed"
-	actionSkipped = "skipped" // a target the request did not act on and did not fail: Coaming's own container in a bulk
+	actionSkipped = "skipped" // a target the request did not act on and did not fail: TierPlan's own container in a bulk
 
 	codeOwnContainer     = "own_container"
 	codeNodeUnreachable  = "node_unreachable"
@@ -52,7 +52,7 @@ const (
 	codeConfirmationRequired = "confirmation_required"
 	maxActionDetail          = 300
 	containerTargetType      = "container"
-	ownerLabelAgent          = "coaming.agent"
+	ownerLabelAgent          = "tierplan.agent"
 	ownerLabelAgentValue     = "true"
 
 	// A target's fresh inspect gets inspectTimeout. Its write gets writeTimeout, or for a
@@ -71,7 +71,7 @@ const (
 	problemContainerNotFound = "container_not_found"
 	problemNodeUnavailable   = "node_unavailable"
 
-	// The audit stages of an action on one of Coaming's own containers: the attempt is
+	// The audit stages of an action on one of TierPlan's own containers: the attempt is
 	// recorded before the call, because the call may take the recorder down, and again
 	// after it (RESEARCH Pitfall 10).
 	stageInitiated      = "initiated"
@@ -95,7 +95,7 @@ type ContainersDeps struct {
 	// Checker decides the second-permission checks (volumes.delete on remove) and the
 	// masking of the detail (secrets.reveal).
 	Checker *rbac.Checker
-	// SelfContainerID is Coaming's own container ID; empty when it cannot tell.
+	// SelfContainerID is TierPlan's own container ID; empty when it cannot tell.
 	SelfContainerID string
 	// Clusters is the cluster reader whose last read says which containers are in a restart
 	// loop and which are muted (RES-13). Nil says none are.
@@ -119,14 +119,14 @@ type ContainerActionRequest struct {
 	BulkID  string                  `json:"bulkId,omitempty" format:"uuid" doc:"Groups the audit rows of one bulk request. Send a UUID to name the bulk yourself; with more than one target and none sent, the server makes one (a UUIDv7) and answers it"`
 	Timeout *int                    `json:"timeout,omitempty" minimum:"0" maximum:"86400" doc:"Seconds a stop or restart waits before it kills the container. Only with exactly one target (else 422 options_single_only); ignored by the other actions"`
 	Signal  string                  `json:"signal,omitempty" pattern:"^[A-Z0-9+]{1,16}$" doc:"The signal a stop, restart or kill sends, for example SIGTERM. Only with exactly one target (else 422 options_single_only); ignored by the other actions"`
-	Confirm string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to stop, kill, restart or pause Coaming's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
+	Confirm string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to stop, kill, restart or pause TierPlan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
 	Targets []ContainerActionTarget `json:"targets" minItems:"1" maxItems:"25" doc:"The containers to act on, at most 25. Each is acted on and answered separately; one that fails never stops the others"`
 }
 
 // ContainerRemoveRequest is the body of POST /api/env/{envId}/containers/remove.
 type ContainerRemoveRequest struct {
 	BulkID        string                  `json:"bulkId,omitempty" format:"uuid" doc:"Groups the audit rows of one bulk request, as for the actions route"`
-	Confirm       string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to remove Coaming's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
+	Confirm       string                  `json:"confirm,omitempty" maxLength:"256" doc:"The container's name, typed. Needed to remove TierPlan's own server or an agent container, which only a single-target request may do (else 422 confirmation_required); with more than one target it is refused 422 options_single_only"`
 	Force         bool                    `json:"force" doc:"Remove a running container too. Without it a running container is refused with container_running"`
 	RemoveVolumes bool                    `json:"removeVolumes" doc:"Also remove the container's anonymous volumes; named volumes are never removed. Needs the delete volumes permission on top of containers.remove"`
 	Targets       []ContainerActionTarget `json:"targets" minItems:"1" maxItems:"25" doc:"The containers to remove, at most 25. Each is answered separately; one that fails never stops the others"`
@@ -150,15 +150,15 @@ type ContainerActionInput struct {
 
 // ContainerActionResult is the answer for one target.
 type ContainerActionResult struct {
-	// own and stage are for the audit row only: which of Coaming's own containers this is,
+	// own and stage are for the audit row only: which of TierPlan's own containers this is,
 	// and how far an action on it got. They are not part of the contract.
 	own, stage string
 
 	NodeID string `json:"nodeId" doc:"The node ID the request named"`
 	ID     string `json:"id" doc:"The container ID or name the request named"`
 	Name   string `json:"name" doc:"The container name when the engine could be asked; otherwise the ID or name the request named"`
-	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of Coaming's own containers in a bulk"`
-	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,connection_lost,action_failed" doc:"Why a target failed. own_container (with result skipped): Coaming's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of Coaming's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set COAMING_AGENT_READ_ONLY on the node's agent, so Coaming refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
+	Result string `json:"result" enum:"done,failed,skipped" doc:"done: the engine accepted the action. failed: it was refused or could not be sent; code says why. skipped: not acted on because it is one of TierPlan's own containers in a bulk"`
+	Code   string `json:"code,omitempty" enum:"own_container,node_unreachable,not_found,host_read_only,agent_policy_denied,container_running,connection_lost,action_failed" doc:"Why a target failed. own_container (with result skipped): TierPlan's own server or an agent container in a request with more than one target, which is never acted on in a bulk; one is acted on alone with its name typed. connection_lost (with result done): the call to one of TierPlan's own containers ended because the connection dropped, which is what stopping it does; the action is taken as accepted, so refresh to see. node_unreachable: the node is not a connected node of this environment, or its engine did not answer; nothing was sent. not_found: the engine has no such container. container_running: a remove of a running container without force; nothing was sent. host_read_only: the host owner set TIERPLAN_AGENT_READ_ONLY on the node's agent, so TierPlan refused before sending anything. agent_policy_denied: the node's agent refused the call by its own policy, which is what an agent older than this server does for a call it does not know. action_failed: the engine refused it; detail has its message"`
 	Detail string `json:"detail,omitempty" doc:"The engine's message for action_failed, at most 300 characters; for the other codes a plain sentence"`
 }
 
@@ -255,12 +255,12 @@ type ContainerDetailBody struct {
 	LogConfig ContainerLogConfigBody `json:"logConfig"`
 	Masked    bool                   `json:"masked" doc:"True when any value was withheld from env, logConfig.options, command or entrypoint"`
 
-	IsSelf         bool   `json:"isSelf" doc:"True for the container Coaming itself runs in"`
-	SelfKind       string `json:"selfKind" enum:",server,agent" doc:"server for the container Coaming itself runs in, agent for a Coaming agent's container, empty otherwise"`
+	IsSelf         bool   `json:"isSelf" doc:"True for the container TierPlan itself runs in"`
+	SelfKind       string `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container, empty otherwise"`
 	Project        string `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack          string `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service        string `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
-	CoamingStackID string `json:"coamingStackId" doc:"The ID of the Coaming stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (coaming.stack.id). Empty for a stack or project Coaming does not manage"`
+	TierPlanStackID string `json:"tierplanStackId" doc:"The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage"`
 
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
 	Muted       bool                      `json:"muted" doc:"True when a user muted the container's restart-loop alerts, whether or not it is in a loop now. The mute is keyed by node and name"`
@@ -297,7 +297,7 @@ func decodeInspect(b []byte) (map[string]any, error) {
 }
 
 // RegisterContainers registers the container action route. Every target is routed
-// by node ID through the aggregator's one write path (WriteOnNode), is checked against Coaming's
+// by node ID through the aggregator's one write path (WriteOnNode), is checked against TierPlan's
 // own containers from a fresh inspect, and gets exactly one audit row (D-14). A
 // write is never retried (P2 D-42).
 func RegisterContainers(r *httpx.Router, d ContainersDeps) {
@@ -328,7 +328,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			}
 			reveal := redact.CanReveal(ctx, d.Checker, p, env.ID)
 			body := containerDetailBody(detail, nodeID, node, isSelf(detail.ID), reveal)
-			body.CoamingStackID = loadStackIDs(ctx, d.Store, env.ID, d.Log).confirmedFor(containerStack(detail.Labels), detail.Labels)
+			body.TierPlanStackID = loadStackIDs(ctx, d.Store, env.ID, d.Log).confirmedFor(containerStack(detail.Labels), detail.Labels)
 			loops, muted := containerLoopsOf(d.Clusters, env.ID)
 			key := envs.ContainerLoopKey(nodeID, detail.Name)
 			if l, flagged := loops[key]; flagged {
@@ -379,10 +379,10 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			"A target is routed by node ID, never by display name. A target that fails never stops the others, and nothing is retried. " +
 			"At most 4 calls run at once on one node and 16 targets at once overall. " +
 			"With more than one target (or a bulkId sent) every audit row of the request carries the same bulk detail, a UUIDv7 the server makes when the client sends none, and the response returns it. " +
-			"Coaming's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
+			"TierPlan's own server container and any agent container are protected: to stop, kill, restart or pause one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
 			"in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. " +
 			"An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. " +
-			"A node whose agent runs read-only (COAMING_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. " +
+			"A node whose agent runs read-only (TIERPLAN_AGENT_READ_ONLY) is refused with host_read_only before any call; an agent that refuses by its own policy, such as one older than the server, is agent_policy_denied. " +
 			"Each target is audited as container.started, container.stopped, container.restarted, container.killed, container.paused or container.unpaused, with result failure and the code when it failed. " +
 			"Needs containers.control (Operator) on the environment.",
 		Tags: []string{"environments"}, DefaultStatus: http.StatusOK,
@@ -399,7 +399,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			}
 			if in.Body.Confirm != "" && !single {
 				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemOptionsSingleOnly,
-					"a typed name confirms one container at a time; Coaming's own containers are never acted on in a bulk")
+					"a typed name confirms one container at a time; TierPlan's own containers are never acted on in a bulk")
 			}
 			spec := verbSpecs[in.Body.Action]
 			opts := dockerx.ActionOptions{Timeout: in.Body.Timeout, Signal: in.Body.Signal}
@@ -435,7 +435,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			"A running container is refused with container_running unless force is true, and nothing is sent for it. " +
 			"Named volumes are never removed. removeVolumes also removes the container's anonymous volumes, and needs the delete volumes permission on top of containers.remove: " +
 			"a caller without it is refused 403 before any call and the refusal is audited as permission.denied. " +
-			"Coaming's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
+			"TierPlan's own server container and any agent container are protected: to remove one, send a single-target request whose confirm is the container's name (else 422 confirmation_required, and nothing is sent); " +
 			"in a request with more than one target such a container is skipped with code own_container and never acted on. Start and unpause need no confirm. " +
 			"An action on one of them is audited before the call (stage initiated) and after it (stage completed), and a connection that drops during the call is answered done with code connection_lost and audited as stage connection_lost with result success. " +
 			"Each target is audited as container.removed with its force and volumes choices. " +
@@ -455,7 +455,7 @@ func RegisterContainers(r *httpx.Router, d ContainersDeps) {
 			single := len(in.Body.Targets) == 1
 			if in.Body.Confirm != "" && !single {
 				return nil, httpx.Problem(http.StatusUnprocessableEntity, problemOptionsSingleOnly,
-					"a typed name confirms one container at a time; Coaming's own containers are never acted on in a bulk")
+					"a typed name confirms one container at a time; TierPlan's own containers are never acted on in a bulk")
 			}
 			bulkID, err := bulkIDFor(in.Body.BulkID, len(in.Body.Targets))
 			if err != nil {
@@ -549,7 +549,7 @@ func inspectOn(ctx context.Context, src nodeInspector, log *slog.Logger, envID, 
 	case dockerx.IsNotFound(err):
 		return detail, nil, nodeID, node, httpx.Problem(http.StatusNotFound, problemContainerNotFound, "This container does not exist on that node. It may have been removed.")
 	case errors.Is(err, envs.ErrNodeUnavailable), errors.Is(err, envs.ErrNotFound):
-		return detail, nil, nodeID, node, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to Coaming.")
+		return detail, nil, nodeID, node, httpx.Problem(http.StatusServiceUnavailable, problemNodeUnavailable, "The node is not connected to TierPlan.")
 	default:
 		return detail, nil, nodeID, node, snapshotProblem(log, envID, err)
 	}
@@ -646,15 +646,15 @@ type containerOp struct {
 	remove bool
 	rm     dockerx.RemoveOptions
 	// single is true for a request with exactly one target, the only kind that may act on
-	// one of Coaming's own containers; confirm is the name typed for it.
+	// one of TierPlan's own containers; confirm is the name typed for it.
 	single  bool
 	confirm string
-	// initiate records the audit row written before a call to one of Coaming's own
+	// initiate records the audit row written before a call to one of TierPlan's own
 	// containers.
 	initiate func(t ContainerActionTarget, name, own string) error
 }
 
-// disruptive reports whether op, done to one of Coaming's own containers, can cut Coaming
+// disruptive reports whether op, done to one of TierPlan's own containers, can cut TierPlan
 // off from a host. A start and an unpause cannot (D-11).
 func (op containerOp) disruptive() bool {
 	if op.remove {
@@ -874,9 +874,9 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 	recorded := false // the initiated row of an action on an own container is written
 	if res.own != "" && op.disruptive() {
 		if !op.single {
-			// A bulk, and a select-all, never reaches Coaming's own containers (D-12).
+			// A bulk, and a select-all, never reaches TierPlan's own containers (D-12).
 			res.Result, res.Code = actionSkipped, codeOwnContainer
-			res.Detail = "This is Coaming's own container. It is not acted on in a bulk; act on it alone, typing its name."
+			res.Detail = "This is TierPlan's own container. It is not acted on in a bulk; act on it alone, typing its name."
 			return res
 		}
 		if own.Name == "" || op.confirm != own.Name {
@@ -919,7 +919,7 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 			// Stopping the process that serves this call ends the call. The action is
 			// taken as accepted, not as a failure; the list shows what happened.
 			res.stage, res.Result, res.Code = stageConnectionLost, actionDone, codeConnectionLost
-			res.Detail = "The connection ended while the action ran, which is what it does to Coaming's own container. Refresh to see the outcome."
+			res.Detail = "The connection ended while the action ran, which is what it does to TierPlan's own container. Refresh to see the outcome."
 			return res
 		}
 		return failCall(err)
@@ -931,7 +931,7 @@ func actOnOne(ctx context.Context, d ContainersDeps, isSelf func(string) bool, e
 // isConnectionLost reports whether err is the end of a connection rather than an answer
 // from the engine: a dropped tunnel, a closed or reset socket, an unexpected end of stream,
 // or a broken pipe (the connection closed while a request body was still being written,
-// as a network disconnect that cuts Coaming off can do).
+// as a network disconnect that cuts TierPlan off can do).
 func isConnectionLost(err error) bool {
 	return errors.Is(err, tunnel.ErrAgentGone) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.Is(err, net.ErrClosed)
@@ -947,7 +947,7 @@ func confirmationRequired(single bool, results []ContainerActionResult) error {
 }
 
 // initiator returns the function that writes the initiated row of an action on one of
-// Coaming's own containers. The row carries what the final row would, with stage
+// TierPlan's own containers. The row carries what the final row would, with stage
 // initiated, and the result success because nothing has failed yet.
 func initiator(ctx context.Context, d ContainersDeps, p *rbac.Principal, envID, userAgent, action, bulkID string, extra map[string]string) func(ContainerActionTarget, string, string) error {
 	return func(t ContainerActionTarget, name, own string) error {
@@ -970,9 +970,9 @@ func initiator(ctx context.Context, d ContainersDeps, p *rbac.Principal, envID, 
 func actionError(err error) (code, detail string) {
 	switch denied := (*envs.AgentPolicyDeniedError)(nil); {
 	case errors.Is(err, envs.ErrHostReadOnly):
-		return codeHostReadOnly, "This host is read-only: its owner set COAMING_AGENT_READ_ONLY on the agent, so Coaming cannot change anything on it."
+		return codeHostReadOnly, "This host is read-only: its owner set TIERPLAN_AGENT_READ_ONLY on the agent, so TierPlan cannot change anything on it."
 	case errors.Is(err, envs.ErrNodeUnavailable):
-		return codeNodeUnreachable, "The node is not connected to Coaming."
+		return codeNodeUnreachable, "The node is not connected to TierPlan."
 	case errors.Is(err, envs.ErrNotFound):
 		return codeNodeUnreachable, "The environment could not be found."
 	case errors.Is(err, envs.ErrOffline), errors.Is(err, envs.ErrUnsupported), errors.Is(err, tunnel.ErrAgentGone):

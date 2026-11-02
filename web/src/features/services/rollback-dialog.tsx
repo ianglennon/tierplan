@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert } from "lucide-react";
@@ -99,7 +99,7 @@ function RollbackBody({ envId, target, onClose }: BodyProps) {
   const inFlight = useRef(false);
   const data = spec.data;
   const stack = target.stack || data?.stack;
-  const coamingStackId = target.coamingStackId || data?.coamingStackId;
+  const tierplanStackId = target.tierplanStackId || data?.tierplanStackId;
   const ready = data !== undefined && data.previousSpec !== undefined;
 
   async function submit(event: { preventDefault: () => void }) {
@@ -169,13 +169,13 @@ function RollbackBody({ envId, target, onClose }: BodyProps) {
           <TriangleAlert aria-hidden="true" />
           <AlertDescription className="text-foreground">
             {t("services.rollback.stackWarning")}
-            {coamingStackId ? (
+            {tierplanStackId ? (
               <>
                 {" "}
                 <StackLink
                   envId={envId}
                   name={t("stackLinks.open")}
-                  coamingStackId={coamingStackId}
+                  tierplanStackId={tierplanStackId}
                 />
               </>
             ) : null}

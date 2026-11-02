@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -17,11 +17,11 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
 )
 
 // Stable problem types of the environment data routes. The SPA maps each to a
@@ -39,7 +39,7 @@ const (
 const maxListRows = 500
 
 // minSelfIDLen is the shortest container ID prefix trusted to identify
-// Coaming's own container: the 12 characters Docker uses as the default
+// TierPlan's own container: the 12 characters Docker uses as the default
 // hostname.
 const minSelfIDLen = 12
 
@@ -60,8 +60,8 @@ type DashboardDeps struct {
 	// Checker says whether the caller may read services, which the restart-loop count needs.
 	// Nil leaves the count out.
 	Checker *rbac.Checker
-	// SelfContainerID is Coaming's own container ID, for the isSelf flag. Empty
-	// when Coaming does not run in a container, or cannot tell.
+	// SelfContainerID is TierPlan's own container ID, for the isSelf flag. Empty
+	// when TierPlan does not run in a container, or cannot tell.
 	SelfContainerID string
 	// Store holds the stacks a stack label is confirmed against (T-07-146). Nil links no stack.
 	Store *store.Store
@@ -140,7 +140,7 @@ type EnvironmentSummaryBody struct {
 	ByNode          []NodeCountsBody       `json:"byNode" doc:"Each node that answered, by name, with its own counts; a standalone host or the local socket is one node"`
 	NotReporting    []string               `json:"notReporting" doc:"Nodes that should have answered and did not: no agent connected, or its read failed or timed out. Their rows are left out of the counts, so when this is not empty the counts are not the whole cluster"`
 	IsWorker        bool                   `json:"isWorker" doc:"True on a swarm worker, which can show only its own containers, images, volumes and networks (D-24)"`
-	SelfContainerID string                 `json:"selfContainerId,omitempty" doc:"The ID of Coaming's own container, when it can tell (D-27)"`
+	SelfContainerID string                 `json:"selfContainerId,omitempty" doc:"The ID of TierPlan's own container, when it can tell (D-27)"`
 	FetchedAt       string                 `json:"fetchedAt" format:"date-time" doc:"When the counts were read from Docker; they are cached for a few seconds"`
 	RestartLoops    *RestartLoopCountsBody `json:"restartLoops,omitempty" doc:"Swarm managers only, and only for a caller who may read services: how many services are in a restart loop, from the last cluster read. Absent on a standalone host, on a worker, and while the swarm has not been read or has lost its quorum"`
 }
@@ -170,14 +170,14 @@ type ContainerItem struct {
 	Image          string   `json:"image" doc:"The image the container was created from"`
 	Created        string   `json:"created,omitempty" format:"date-time"`
 	Ports          []string `json:"ports" doc:"Ports as 0.0.0.0:8080->80/tcp, or 80/tcp when not published"`
-	IsSelf         bool     `json:"isSelf" doc:"True for the container Coaming itself runs in (D-27)"`
+	IsSelf         bool     `json:"isSelf" doc:"True for the container TierPlan itself runs in (D-27)"`
 	Health         string   `json:"health" enum:"none,starting,healthy,unhealthy" doc:"The container's health: none when it has no healthcheck"`
-	SelfKind       string   `json:"selfKind" enum:",server,agent" doc:"server for the container Coaming itself runs in, agent for a Coaming agent's container (marked by the label coaming.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
+	SelfKind       string   `json:"selfKind" enum:",server,agent" doc:"server for the container TierPlan itself runs in, agent for a TierPlan agent's container (marked by the label tierplan.agent=true), empty otherwise. Only adds care in the UI; the action endpoint decides again from a fresh inspect"`
 	ReadOnly       bool     `json:"readOnly" doc:"True when the host of this container's node is read-only, so no change to it will be accepted"`
 	Project        string   `json:"project" doc:"The compose project (com.docker.compose.project); empty when the container has none"`
 	Stack          string   `json:"stack" doc:"The swarm stack namespace (com.docker.stack.namespace); empty when the container has none"`
 	Service        string   `json:"service" doc:"The swarm service name (com.docker.swarm.service.name); empty when the container has none"`
-	CoamingStackID string   `json:"coamingStackId" doc:"The ID of the Coaming stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (coaming.stack.id). Empty for a stack or project Coaming does not manage"`
+	TierPlanStackID string   `json:"tierplanStackId" doc:"The ID of the TierPlan stack the container belongs to: set only when this environment holds a stack with that ID under the stack or project name the container carries (tierplan.stack.id). Empty for a stack or project TierPlan does not manage"`
 	// RestartLoop is present while the container keeps dying and is restarted by its policy.
 	// A task container of a swarm service never has one: the service does.
 	RestartLoop *ContainerRestartLoopBody `json:"restartLoop,omitempty" doc:"Present while the container is in a restart loop: it died with a non-zero exit code the environment's threshold of times inside its window. Absent otherwise"`
@@ -362,7 +362,7 @@ func problemResponses(r *httpx.Router) map[string]*huma.Response {
 	return map[string]*huma.Response{
 		"503": {Description: "environment_offline: the environment cannot be read. Carries its state (pending, reconnecting, offline, revoked or cluster_changed), the reason code and since.", Content: media},
 		"502": {Description: "agent_policy_denied: the environment's agent refused a read by its own policy. The detail names the endpoint.", Content: media},
-		"409": {Description: "environment_unsupported: the engine answers but Coaming does not manage it. Carries the state, the engine and the reason.", Content: media},
+		"409": {Description: "environment_unsupported: the engine answers but TierPlan does not manage it. Carries the state, the engine and the reason.", Content: media},
 	}
 }
 
@@ -392,7 +392,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		case err == nil:
 			return agg, health, nil
 		case errors.As(err, &denied):
-			// Not an outage: the host's policy refused it, which is either a Coaming
+			// Not an outage: the host's policy refused it, which is either a TierPlan
 			// bug or a server asking for more than it should.
 			d.Log.Warn("an agent refused a read of an environment", "environment", envID, "endpoint", denied.Endpoint)
 			return agg, health, httpx.Problem(http.StatusBadGateway, problemAgentPolicyDenied,
@@ -425,7 +425,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 		return huma.Operation{
 			OperationID: id, Method: http.MethodGet, Path: path, Summary: summary,
 			Description: description + " 503 environment_offline (with the state, a reason code and since) when the environment cannot be read: no agent has enrolled, the server is waiting for its agents, they are all revoked or offline, or the swarm was re-initialised; " +
-				"409 environment_unsupported (with the engine) when it is not one Coaming manages, " +
+				"409 environment_unsupported (with the engine) when it is not one TierPlan manages, " +
 				"502 agent_policy_denied (the detail names the endpoint) when the agent refuses a read by its own policy.",
 			Tags: []string{"environments"}, Responses: responses,
 		}
@@ -478,7 +478,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 	httpx.Register(r, op("listContainers", "/api/env/{envId}/containers",
 		"List the containers of an environment",
 		"Every container, stopped ones included, by name. On a swarm: those of every node that answered, each with its node, so a name used on two nodes is two rows; the nodes that did not answer are named in notReporting. "+
-			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for Coaming's own containers) and readOnly (its host refuses changes)."),
+			"Read-only rows: no variables or mounts, and of the labels only the compose project, stack and service. Optionally only one node's (node) and a search (q) and a status filter (status). Both run on the server before the 500-row cap, so at most 500 rows come back after them, with total the number that matched, unfilteredTotal the number before the search and the filter, and statusCounts the chip numbers, counted before them too. Each row carries its health, selfKind (server or agent for TierPlan's own containers) and readOnly (its host refuses changes)."),
 		need(rbac.PermContainersRead),
 		func(ctx context.Context, in *ContainerListInput) (*ContainerListOutput, error) {
 			agg, _, err := read(ctx, in.EnvID)
@@ -508,7 +508,7 @@ func RegisterDashboard(r *httpx.Router, d DashboardDeps) {
 					Created: rfc3339(c.Created), Ports: c.Ports, IsSelf: isSelf(c.ID),
 					Health: c.Health, SelfKind: selfKindOf(isSelf(c.ID), c.Labels), ReadOnly: readOnly[c.NodeID],
 					Project: c.Labels[labelProject], Stack: c.Labels[labelStack], Service: c.Labels[labelService],
-					CoamingStackID: known.confirmedFor(containerStack(c.Labels), c.Labels),
+					TierPlanStackID: known.confirmedFor(containerStack(c.Labels), c.Labels),
 				}
 			})
 			return &ContainerListOutput{CacheControl: "no-store", Body: ContainerListBody{
@@ -631,10 +631,10 @@ func offlineProblem(since time.Time, reason string) error {
 // with its own copy, which it keys by state and reason.
 var notOnlineDetail = map[envs.State]string{
 	envs.StatePending:        "No agent has connected to this environment yet.",
-	envs.StateReconnecting:   "Coaming has just started and is waiting for the agents of this environment to reconnect.",
+	envs.StateReconnecting:   "TierPlan has just started and is waiting for the agents of this environment to reconnect.",
 	envs.StateRevoked:        "Every agent of this environment was revoked.",
 	envs.StateClusterChanged: "The swarm behind this environment was re-initialised.",
-	envs.StateOffline:        "Coaming cannot reach this environment.",
+	envs.StateOffline:        "TierPlan cannot reach this environment.",
 }
 
 // notOnlineProblem is the problem for an environment that cannot be read: 409
@@ -649,7 +649,7 @@ func notOnlineProblem(e envs.ErrNotOnline) error {
 		return &EnvironmentProblem{
 			ErrorModel: huma.ErrorModel{
 				Type: problemEnvironmentUnsupported, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
-				Detail: "Coaming does not manage the Docker engine on this host.",
+				Detail: "TierPlan does not manage the Docker engine on this host.",
 			},
 			State:  string(envs.StateUnsupported),
 			Since:  rfc3339(h.Since),

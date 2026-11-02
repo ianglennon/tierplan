@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package backup
 
@@ -19,9 +19,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/vault"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/vault"
 )
 
 // metaKept is the one app_meta row a backup keeps: the HMAC of the newest audit
@@ -129,7 +129,7 @@ func Export(ctx context.Context, st *store.Store, live *vault.Vault, workDir str
 		return ExportResult{}, err
 	}
 
-	dir, err := os.MkdirTemp(workDir, ".coaming-backup-*")
+	dir, err := os.MkdirTemp(workDir, ".tierplan-backup-*")
 	if err != nil {
 		return ExportResult{}, fmt.Errorf("create backup work directory: %w", err)
 	}

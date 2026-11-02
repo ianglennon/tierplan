@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -16,12 +16,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"golang.org/x/time/rate"
 
-	"github.com/ianglennon/coaming/internal/agents"
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/envs"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/netspace"
-	"github.com/ianglennon/coaming/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/agents"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/netspace"
+	"github.com/ianglennon/tierplan/internal/rbac"
 )
 
 const (
@@ -101,8 +101,8 @@ type SubnetFindingBody struct {
 type RouteCheckBody struct {
 	Node   string `json:"node" doc:"The node's name"`
 	NodeID string `json:"nodeId,omitempty" doc:"The node's ID; absent for a standalone host"`
-	State  string `json:"state" enum:"ok,old_agent,unmounted,offline,failed" doc:"ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or Coaming itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes"`
-	Local  bool   `json:"local" doc:"True for the host Coaming itself runs on, read from the route file mounted into Coaming's own container"`
+	State  string `json:"state" enum:"ok,old_agent,unmounted,offline,failed" doc:"ok: the routes were read. old_agent: the agent is older than this check and cannot report routes. unmounted: the agent (or TierPlan itself, with local true) cannot read the host's route file because it is not mounted. offline: the node's agent is not connected. failed: the read errored or its answer was not a valid list of routes"`
+	Local  bool   `json:"local" doc:"True for the host TierPlan itself runs on, read from the route file mounted into TierPlan's own container"`
 	Fix    string `json:"fix,omitempty" doc:"With unmounted on a swarm agent, the command that adds the route mount to the agent service. Absent otherwise: the wording of the standalone and local fixes is the interface's"`
 }
 

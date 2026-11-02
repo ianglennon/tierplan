@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package stackops_test
 
@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/dockerx"
-	"github.com/ianglennon/coaming/internal/stackops"
-	"github.com/ianglennon/coaming/internal/stacks"
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/stackops"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
-// Discovery (plan 08-08, STK-12, D-07): stacks Coaming did not make, found by their labels in what the lists
+// Discovery (plan 08-08, STK-12, D-07): stacks TierPlan did not make, found by their labels in what the lists
 // already hold.
 
 func foreignService(stack, name string, running, desired uint64, labels map[string]string) dockerx.ServiceRow {
@@ -93,7 +93,7 @@ func TestDiscoverSkipsManagedNames(t *testing.T) {
 	t.Parallel()
 	managed := []stackops.Stack{{ID: "stack-web", Name: "web", Target: stacks.TargetSwarm}}
 	h := stackops.Held{Services: []dockerx.ServiceRow{
-		// A stack Coaming is deploying for the first time: its namespace is the managed stack's name and no
+		// A stack TierPlan is deploying for the first time: its namespace is the managed stack's name and no
 		// label carries its ID yet.
 		foreignService("web", "web_app", 0, 1, nil),
 		foreignService("old", "old_app", 1, 1, nil),
@@ -153,7 +153,7 @@ func TestDiscoverFoldsCaseOnASwarm(t *testing.T) {
 
 func TestDiscoverFlagsOrphanPortainerSelfAgent(t *testing.T) {
 	t.Parallel()
-	t.Run("an orphan Coaming ID is the smallest one and never a link", func(t *testing.T) {
+	t.Run("an orphan TierPlan ID is the smallest one and never a link", func(t *testing.T) {
 		t.Parallel()
 		h := stackops.Held{Services: []dockerx.ServiceRow{
 			foreignService("lost", "lost_a", 1, 1, map[string]string{stacks.LabelStackID: "stack-zzz"}),
@@ -184,12 +184,12 @@ func TestDiscoverFlagsOrphanPortainerSelfAgent(t *testing.T) {
 			t.Error("PortainerMarked disagrees with the markers")
 		}
 	})
-	t.Run("Coaming's own project by its container, the agent's by its label", func(t *testing.T) {
+	t.Run("TierPlan's own project by its container, the agent's by its label", func(t *testing.T) {
 		t.Parallel()
 		self := "0123456789abcdef0123456789abcdef"
 		h := stackops.Held{Containers: []dockerx.ContainerRow{
-			foreignContainer(self, "coaming", "server", "running", nil),
-			foreignContainer("agentcontainer0001", "edge", "agent", "running", map[string]string{"coaming.agent": "true"}),
+			foreignContainer(self, "tierplan", "server", "running", nil),
+			foreignContainer("agentcontainer0001", "edge", "agent", "running", map[string]string{"tierplan.agent": "true"}),
 			foreignContainer("someoneelse00001", "blog", "web", "running", nil),
 		}}
 		got := stackops.Discover(h, nil, stacks.TargetStandalone, stackops.SelfMarks{ContainerID: self[:12]})
@@ -197,16 +197,16 @@ func TestDiscoverFlagsOrphanPortainerSelfAgent(t *testing.T) {
 		for _, d := range got {
 			owners[d.Name] = d.Owner
 		}
-		if !reflect.DeepEqual(owners, map[string]string{"coaming": stackops.OwnerCoaming, "edge": stackops.OwnerAgent, "blog": ""}) {
+		if !reflect.DeepEqual(owners, map[string]string{"tierplan": stackops.OwnerTierPlan, "edge": stackops.OwnerAgent, "blog": ""}) {
 			t.Errorf("owners = %v", owners)
 		}
 	})
 	t.Run("a swarm's own namespace and its agent service", func(t *testing.T) {
 		t.Parallel()
-		agent := foreignService("agents", "agents_coaming-agent", 3, 3, nil)
+		agent := foreignService("agents", "agents_tierplan-agent", 3, 3, nil)
 		agent.Agent = true
 		h := stackops.Held{Services: []dockerx.ServiceRow{
-			foreignService("tools", "tools_coaming", 1, 1, nil),
+			foreignService("tools", "tools_tierplan", 1, 1, nil),
 			agent,
 			foreignService("blog", "blog_app", 1, 1, nil),
 		}}
@@ -215,11 +215,11 @@ func TestDiscoverFlagsOrphanPortainerSelfAgent(t *testing.T) {
 		for _, d := range got {
 			owners[d.Name] = d.Owner
 		}
-		if !reflect.DeepEqual(owners, map[string]string{"tools": stackops.OwnerCoaming, "agents": stackops.OwnerAgent, "blog": ""}) {
+		if !reflect.DeepEqual(owners, map[string]string{"tools": stackops.OwnerTierPlan, "agents": stackops.OwnerAgent, "blog": ""}) {
 			t.Errorf("owners = %v", owners)
 		}
 	})
-	t.Run("a short ID is not taken to be Coaming's own", func(t *testing.T) {
+	t.Run("a short ID is not taken to be TierPlan's own", func(t *testing.T) {
 		t.Parallel()
 		h := stackops.Held{Containers: []dockerx.ContainerRow{foreignContainer("abc123456789", "p", "s", "running", nil)}}
 		got := stackops.Discover(h, nil, stacks.TargetStandalone, stackops.SelfMarks{ContainerID: "abc"})
@@ -303,7 +303,7 @@ func TestDiscoverUnusualNames(t *testing.T) {
 			t.Errorf("MyApp = %+v, want adoptable", d)
 		}
 		for _, name := range []string{"My App", "Shop.Front", long} {
-			want := "Coaming can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
+			want := "TierPlan can't adopt " + name + ": a stack name on a swarm takes only " + stacks.NameRuleText(stacks.TargetSwarm) + "."
 			if d := by[name]; d.Adoptable() || d.NameReason != want {
 				t.Errorf("%q = adoptable %v reason %q, want not adoptable with %q", name, d.Adoptable(), d.NameReason, want)
 			}
@@ -320,7 +320,7 @@ func TestDiscoverUnusualNames(t *testing.T) {
 		for _, d := range got {
 			by[d.Name] = d
 		}
-		want := "Coaming can't adopt shop.front: a stack name on a standalone host takes only " + stacks.NameRuleText(stacks.TargetStandalone) + "."
+		want := "TierPlan can't adopt shop.front: a stack name on a standalone host takes only " + stacks.NameRuleText(stacks.TargetStandalone) + "."
 		if d := by["shop.front"]; d.Adoptable() || d.NameReason != want {
 			t.Errorf("shop.front = adoptable %v reason %q, want not adoptable with %q", d.Adoptable(), d.NameReason, want)
 		}
@@ -332,8 +332,8 @@ func TestDiscoverUnusualNames(t *testing.T) {
 		t.Parallel()
 		h := stackops.Held{Services: []dockerx.ServiceRow{foreignService("Bay.Plan", "Bay.Plan_srv", 1, 1, nil)}}
 		got := stackops.Discover(h, nil, stacks.TargetSwarm, stackops.SelfMarks{Namespace: "Bay.Plan"})
-		if len(got) != 1 || got[0].Owner != stackops.OwnerCoaming || got[0].Adoptable() {
-			t.Fatalf("Discover = %+v, want Coaming's own stack, not adoptable", got)
+		if len(got) != 1 || got[0].Owner != stackops.OwnerTierPlan || got[0].Adoptable() {
+			t.Fatalf("Discover = %+v, want TierPlan's own stack, not adoptable", got)
 		}
 	})
 }

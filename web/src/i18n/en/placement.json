@@ -66,7 +66,7 @@
     },
     "error": {
       "title": "Couldn't load placement.",
-      "body": "Coaming couldn't ask a manager where the tasks run.",
+      "body": "TierPlan couldn't ask a manager where the tasks run.",
       "retry": "Retry loading placement"
     },
     "grid": {
@@ -94,7 +94,7 @@
       "matches_one": "Matches {{matched, number}} of {{count, number}} node",
       "matches_other": "Matches {{matched, number}} of {{count, number}} nodes",
       "matchesNone": "Matches no nodes",
-      "unreadable": "Coaming can't read this constraint.",
+      "unreadable": "TierPlan can't read this constraint.",
       "spread": "Spread over {{label}}",
       "maxReplicas": "Max replicas per node: {{count, number}}",
       "empty": "No placement rules. Tasks can run on any node."

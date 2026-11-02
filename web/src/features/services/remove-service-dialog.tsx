@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { TriangleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -45,8 +45,8 @@ interface RemoveServiceDialogProps {
 
 // RemoveServiceDialog is "Remove {name}?" (D-13): Swarm stops the service's tasks and deletes it,
 // and what it used stays. Focus starts on Cancel, the dialog cannot be dismissed while the request
-// is out, and a refusal stays inside it in words. Coaming's own agent service adds a warning and
-// the typed name: removing it cuts Coaming off from every node it runs on (UI-SPEC default 10).
+// is out, and a refusal stays inside it in words. TierPlan's own agent service adds a warning and
+// the typed name: removing it cuts TierPlan off from every node it runs on (UI-SPEC default 10).
 // The server asks for the name too, so a stale page cannot skip it. A service that is already gone
 // is said in a toast and the dialog closes, since the refreshed list no longer shows it.
 export function RemoveServiceDialog({

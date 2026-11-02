@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package httpx_test
 
@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ianglennon/coaming/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/httpx"
 )
 
 // seen records the path and raw path the wrapped handler received.
@@ -28,17 +28,17 @@ func TestStripBasePath(t *testing.T) {
 	cases := []struct {
 		name, base, target, want string
 	}{
-		{"exact base", "/coaming", "/coaming", "/"},
-		{"base with slash", "/coaming", "/coaming/", "/"},
-		{"api under base", "/coaming", "/coaming/api/version", "/api/version"},
-		{"api without base", "/coaming", "/api/version", "/api/version"},
-		{"sibling prefix is not the base", "/coaming", "/coamingx/api", "/coamingx/api"},
-		{"healthz stays unprefixed", "/coaming", "/healthz", "/healthz"},
-		{"readyz stays unprefixed", "/coaming", "/readyz", "/readyz"},
+		{"exact base", "/tierplan", "/tierplan", "/"},
+		{"base with slash", "/tierplan", "/tierplan/", "/"},
+		{"api under base", "/tierplan", "/tierplan/api/version", "/api/version"},
+		{"api without base", "/tierplan", "/api/version", "/api/version"},
+		{"sibling prefix is not the base", "/tierplan", "/tierplanx/api", "/tierplanx/api"},
+		{"healthz stays unprefixed", "/tierplan", "/healthz", "/healthz"},
+		{"readyz stays unprefixed", "/tierplan", "/readyz", "/readyz"},
 		{"no base changes nothing", "", "/api/version", "/api/version"},
-		{"no base keeps a coaming segment", "", "/coaming/api", "/coaming/api"},
-		{"nested base", "/tools/coaming", "/tools/coaming/assets/app.js", "/assets/app.js"},
-		{"nested base exact", "/tools/coaming", "/tools/coaming", "/"},
+		{"no base keeps a tierplan segment", "", "/tierplan/api", "/tierplan/api"},
+		{"nested base", "/tools/tierplan", "/tools/tierplan/assets/app.js", "/assets/app.js"},
+		{"nested base exact", "/tools/tierplan", "/tools/tierplan", "/"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,25 +50,25 @@ func TestStripBasePath(t *testing.T) {
 }
 
 func TestStripBasePathStripsRawPathConsistently(t *testing.T) {
-	got := serveThrough(t, "/coaming", "/coaming/api/a%2Fb")
+	got := serveThrough(t, "/tierplan", "/tierplan/api/a%2Fb")
 	if got.path != "/api/a/b" || got.raw != "/api/a%2Fb" {
 		t.Fatalf("path %q raw %q, want /api/a/b and /api/a%%2Fb", got.path, got.raw)
 	}
-	got = serveThrough(t, "/coaming", "/coaming")
+	got = serveThrough(t, "/tierplan", "/tierplan")
 	if got.path != "/" {
 		t.Fatalf("exact base path = %q, want /", got.path)
 	}
-	got = serveThrough(t, "/coaming", "/other/a%2Fb")
+	got = serveThrough(t, "/tierplan", "/other/a%2Fb")
 	if got.path != "/other/a/b" || got.raw != "/other/a%2Fb" {
 		t.Fatalf("an unprefixed path must be unchanged, got path %q raw %q", got.path, got.raw)
 	}
 }
 
 func TestStripBasePathDoesNotMutateTheCallersRequest(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/coaming/api/version", nil)
-	h := httpx.StripBasePath(func() string { return "/coaming" })(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	req := httptest.NewRequest(http.MethodGet, "/tierplan/api/version", nil)
+	h := httpx.StripBasePath(func() string { return "/tierplan" })(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	h.ServeHTTP(httptest.NewRecorder(), req)
-	if req.URL.Path != "/coaming/api/version" {
+	if req.URL.Path != "/tierplan/api/version" {
 		t.Fatalf("the caller's request was mutated: %q", req.URL.Path)
 	}
 }

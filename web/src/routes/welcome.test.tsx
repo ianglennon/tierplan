@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -141,7 +141,7 @@ describe("/welcome (wizard step 4)", () => {
 
     expect(await screen.findByRole("heading", { name: "Manage this Docker host?" })).toBeTruthy();
     expect(screen.getAllByText("Step 4 of 4").length).toBeGreaterThan(0);
-    expect(screen.getByRole("heading", { level: 1, name: "Coaming" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "TierPlan" })).toBeTruthy();
     expect(screen.getByText("Docker Engine 29.8.2")).toBeTruthy();
     expect(screen.getByText("Standalone")).toBeTruthy();
     expect(document.title).toBe("Welcome · Lab");

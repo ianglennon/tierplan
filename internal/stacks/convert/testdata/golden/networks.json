@@ -8,7 +8,7 @@
       "Internal": true,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-networks",
+        "tierplan.stack.id": "id-networks",
         "com.docker.stack.namespace": "networks",
         "tier": "data"
       },
@@ -32,7 +32,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-networks",
+        "tierplan.stack.id": "id-networks",
         "com.docker.stack.namespace": "networks"
       },
       "DriverOpts": null,
@@ -72,7 +72,7 @@
       "Spec": {
         "Name": "networks_app",
         "Labels": {
-          "coaming.stack.id": "id-networks",
+          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "app:1",
           "com.docker.stack.namespace": "networks"
         },
@@ -80,7 +80,7 @@
           "ContainerSpec": {
             "Image": "app:1",
             "Labels": {
-              "coaming.stack.id": "id-networks",
+              "tierplan.stack.id": "id-networks",
               "com.docker.stack.namespace": "networks"
             },
             "Privileges": {
@@ -127,7 +127,7 @@
       "Spec": {
         "Name": "networks_db",
         "Labels": {
-          "coaming.stack.id": "id-networks",
+          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "postgres:16",
           "com.docker.stack.namespace": "networks"
         },
@@ -135,7 +135,7 @@
           "ContainerSpec": {
             "Image": "postgres:16",
             "Labels": {
-              "coaming.stack.id": "id-networks",
+              "tierplan.stack.id": "id-networks",
               "com.docker.stack.namespace": "networks"
             },
             "Privileges": {
@@ -171,7 +171,7 @@
       "Spec": {
         "Name": "networks_edge",
         "Labels": {
-          "coaming.stack.id": "id-networks",
+          "tierplan.stack.id": "id-networks",
           "com.docker.stack.image": "edge:1",
           "com.docker.stack.namespace": "networks"
         },
@@ -179,7 +179,7 @@
           "ContainerSpec": {
             "Image": "edge:1",
             "Labels": {
-              "coaming.stack.id": "id-networks",
+              "tierplan.stack.id": "id-networks",
               "com.docker.stack.namespace": "networks"
             },
             "Privileges": {

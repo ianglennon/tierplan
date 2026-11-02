@@ -8,7 +8,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-full",
+        "tierplan.stack.id": "id-full",
         "com.docker.stack.namespace": "full"
       },
       "DriverOpts": null,
@@ -23,7 +23,7 @@
       "Internal": false,
       "External": false,
       "Labels": {
-        "coaming.stack.id": "id-full",
+        "tierplan.stack.id": "id-full",
         "com.docker.stack.namespace": "full"
       },
       "DriverOpts": null,
@@ -51,7 +51,7 @@
       "Spec": {
         "Name": "full_plain",
         "Labels": {
-          "coaming.stack.id": "id-full",
+          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "busybox:1",
           "com.docker.stack.namespace": "full"
         },
@@ -59,7 +59,7 @@
           "ContainerSpec": {
             "Image": "busybox:1",
             "Labels": {
-              "coaming.stack.id": "id-full",
+              "tierplan.stack.id": "id-full",
               "com.docker.stack.namespace": "full"
             },
             "Privileges": {
@@ -95,7 +95,7 @@
       "Spec": {
         "Name": "full_web",
         "Labels": {
-          "coaming.stack.id": "id-full",
+          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "nginx:1.27-alpine",
           "com.docker.stack.namespace": "full",
           "team": "web"
@@ -104,7 +104,7 @@
           "ContainerSpec": {
             "Image": "nginx:1.27-alpine",
             "Labels": {
-              "coaming.stack.id": "id-full",
+              "tierplan.stack.id": "id-full",
               "com.docker.stack.namespace": "full",
               "tier": "front"
             },
@@ -187,7 +187,7 @@
       "Spec": {
         "Name": "full_worker",
         "Labels": {
-          "coaming.stack.id": "id-full",
+          "tierplan.stack.id": "id-full",
           "com.docker.stack.image": "registry.example.com/worker:3",
           "com.docker.stack.namespace": "full"
         },
@@ -195,7 +195,7 @@
           "ContainerSpec": {
             "Image": "registry.example.com/worker:3",
             "Labels": {
-              "coaming.stack.id": "id-full",
+              "tierplan.stack.id": "id-full",
               "com.docker.stack.namespace": "full"
             },
             "Env": [

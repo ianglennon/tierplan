@@ -1,10 +1,10 @@
 {
   "common": {
     "brand": {
-      "wordmark": "Coaming"
+      "wordmark": "TierPlan"
     },
     "versionFooter": {
-      "label": "Coaming {{display}}",
+      "label": "TierPlan {{display}}",
       "source": "Source code",
       "sourceAria": "Source code (opens in a new tab)"
     },
@@ -16,7 +16,7 @@
       "logout": "Log out"
     },
     "errors": {
-      "unreachable": "Can't reach Coaming. Check your connection and try again.",
+      "unreachable": "Can't reach TierPlan. Check your connection and try again.",
       "retry": "Retry"
     },
     "notFound": {

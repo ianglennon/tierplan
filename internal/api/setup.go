@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api
 
@@ -17,14 +17,14 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 
-	"github.com/ianglennon/coaming/internal/audit"
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/httpx"
-	"github.com/ianglennon/coaming/internal/instance"
-	"github.com/ianglennon/coaming/internal/rbac"
-	"github.com/ianglennon/coaming/internal/store"
-	"github.com/ianglennon/coaming/internal/store/sqlc"
+	"github.com/ianglennon/tierplan/internal/audit"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/httpx"
+	"github.com/ianglennon/tierplan/internal/instance"
+	"github.com/ianglennon/tierplan/internal/rbac"
+	"github.com/ianglennon/tierplan/internal/store"
+	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
 // Problem types the setup endpoints emit. The SPA maps them to the copy in
@@ -116,7 +116,7 @@ type VerifySetupTokenInput struct {
 type SetupDefaultsBody struct {
 	DefaultInstanceName string `json:"defaultInstanceName" doc:"The server's hostname"`
 	PublicURL           string `json:"publicUrl" doc:"The configured public URL, empty when none is set"`
-	PublicURLLocked     bool   `json:"publicUrlLocked" doc:"True when COAMING_PUBLIC_URL fixes the public URL"`
+	PublicURLLocked     bool   `json:"publicUrlLocked" doc:"True when TIERPLAN_PUBLIC_URL fixes the public URL"`
 }
 
 // VerifySetupTokenOutput wraps SetupDefaultsBody for huma.
@@ -135,7 +135,7 @@ type CompleteSetupInput struct {
 		Username     string `json:"username" maxLength:"128" doc:"3 to 32 characters from a-z, 0-9, dot, dash and underscore; stored lower-case"`
 		Password     string `json:"password" maxLength:"1024" doc:"At least 12 characters, not on the common-password list and not containing the username"`
 		InstanceName string `json:"instanceName" maxLength:"256" doc:"Display name, 1 to 64 characters"`
-		PublicURL    string `json:"publicUrl" maxLength:"2048" doc:"The address people use to reach Coaming; ignored when COAMING_PUBLIC_URL fixes it"`
+		PublicURL    string `json:"publicUrl" maxLength:"2048" doc:"The address people use to reach TierPlan; ignored when TIERPLAN_PUBLIC_URL fixes it"`
 	}
 }
 
@@ -152,7 +152,7 @@ type CompleteSetupBody struct {
 	CSRFToken       string        `json:"csrfToken" doc:"Sent as X-CSRF-Token on every mutating request"`
 	InstanceName    string        `json:"instanceName" doc:"The stored instance name"`
 	PublicURL       string        `json:"publicUrl" doc:"The public URL in effect"`
-	PublicURLLocked bool          `json:"publicUrlLocked" doc:"True when COAMING_PUBLIC_URL fixed the public URL and the submitted one was ignored"`
+	PublicURLLocked bool          `json:"publicUrlLocked" doc:"True when TIERPLAN_PUBLIC_URL fixed the public URL and the submitted one was ignored"`
 }
 
 // CompleteSetupOutput carries the session cookie with the body.
@@ -204,7 +204,7 @@ func RegisterSetup(r *httpx.Router, d SetupDeps) {
 		}
 		host, err := d.Hostname()
 		if err != nil || host == "" {
-			host = "coaming"
+			host = "tierplan"
 		}
 		return &VerifySetupTokenOutput{Body: SetupDefaultsBody{
 			DefaultInstanceName: host,
@@ -469,7 +469,7 @@ func (d SetupDeps) validate(in *CompleteSetupInput) (completion, []*huma.ErrorDe
 	}
 
 	if d.Instance.Locked() {
-		// COAMING_PUBLIC_URL wins (D-04): what was submitted is not even looked at.
+		// TIERPLAN_PUBLIC_URL wins (D-04): what was submitted is not even looked at.
 		c.publicURL = d.Instance.PublicURL()
 	} else {
 		u, err := config.NormalisePublicURL(strings.TrimSpace(in.Body.PublicURL))

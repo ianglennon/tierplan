@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import type { StackSortKey } from "@/features/stacks/list-search";
 import type { StackRow } from "@/features/stacks/stack-columns";
 
 // The order the State column sorts in, the priority of UI-SPEC "Color" and the server's own: an
 // operation under way, then stopped, deploy failed, not running, degraded, running, and a stack never
-// deployed last. A state Coaming could not read sits with deploy failed.
+// deployed last. A state TierPlan could not read sits with deploy failed.
 const STATE_RANK: Record<StackRow["state"], number> = {
   removing: 0,
   deploying: 1,

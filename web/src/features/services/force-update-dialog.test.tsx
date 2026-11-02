@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -26,7 +26,7 @@ const web: ServiceItem = {
   updateState: "",
   image: "localhost:5000/private/web:1",
   stack: "",
-  coamingStackId: "",
+  tierplanStackId: "",
   agent: false,
   updatedAt: "2026-10-01T10:00:00Z",
   ports: [],
@@ -111,7 +111,7 @@ describe("ForceUpdateDialog", () => {
     const dialog = screen.getByRole("dialog", { name: "Force update web?" });
     expect(
       within(dialog).getByText(
-        "Swarm replaces every task, a batch at a time, using the service's update settings. Coaming looks up the image again, so a tag that has moved is picked up.",
+        "Swarm replaces every task, a batch at a time, using the service's update settings. TierPlan looks up the image again, so a tag that has moved is picked up.",
       ),
     ).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeTruthy();
@@ -171,8 +171,8 @@ describe("ForceUpdateDialog", () => {
     expect(screen.queryByText(/belongs to stack/)).toBeNull();
   });
 
-  it("links the stack's name in the warning when Coaming manages the stack, the text unchanged", () => {
-    mount({ target: { ...web, stack: "shop", coamingStackId: "stk-shop" } });
+  it("links the stack's name in the warning when TierPlan manages the stack, the text unchanged", () => {
+    mount({ target: { ...web, stack: "shop", tierplanStackId: "stk-shop" } });
     const link = screen.getByRole("link", { name: "shop" });
     expect(link.getAttribute("href")).toBe("/env/e1/stacks/stk-shop");
     expect(link.closest('[role="status"]')?.textContent).toBe(
@@ -180,7 +180,7 @@ describe("ForceUpdateDialog", () => {
     );
   });
 
-  it("keeps the stack's name as text in the warning when Coaming does not manage the stack", () => {
+  it("keeps the stack's name as text in the warning when TierPlan does not manage the stack", () => {
     mount({ target: { ...web, stack: "shop" } });
     expect(screen.queryByRole("link", { name: "shop" })).toBeNull();
   });
@@ -214,7 +214,7 @@ describe("ForceUpdateDialog", () => {
     [503, "no_quorum", /The swarm has lost its quorum/],
     [503, "registry_unresolved", /couldn't read the registry credential/],
     [409, "host_read_only", /This host is read-only/],
-    [409, "agent_host_policy", /don't let Coaming change services with host access/],
+    [409, "agent_host_policy", /don't let TierPlan change services with host access/],
     [403, "forbidden", /You no longer have permission/],
     [502, "force_update_failed", /Something went wrong on the server/],
   ])("words a %i %s in the dialog and never shows the code", async (status, type, words) => {
@@ -250,7 +250,7 @@ describe("ForceUpdateDialog", () => {
     mount();
     fireEvent.click(confirm());
     expect((await screen.findByRole("alert")).textContent).toMatch(
-      /The connection dropped before Coaming answered/,
+      /The connection dropped before TierPlan answered/,
     );
   });
 });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package connect
 
@@ -29,10 +29,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/hashicorp/yamux"
 
-	"github.com/ianglennon/coaming/agent/internal/state"
-	"github.com/ianglennon/coaming/proto/authn"
-	"github.com/ianglennon/coaming/proto/testsupport"
-	"github.com/ianglennon/coaming/proto/wire"
+	"github.com/ianglennon/tierplan/agent/internal/state"
+	"github.com/ianglennon/tierplan/proto/authn"
+	"github.com/ianglennon/tierplan/proto/testsupport"
+	"github.com/ianglennon/tierplan/proto/wire"
 )
 
 func fakeEngine(t *testing.T, h http.HandlerFunc) string {
@@ -55,7 +55,7 @@ func fakeEngine(t *testing.T, h http.HandlerFunc) string {
 }
 
 func TestRunRefusesAnAddressThatIsNotAWebSocketURL(t *testing.T) {
-	for _, bad := range []string{"", "https://coaming.example/agent/connect", "not a url", "wss://"} {
+	for _, bad := range []string{"", "https://tierplan.example/agent/connect", "not a url", "wss://"} {
 		err := Run(context.Background(), Config{URL: bad, JoinToken: "x"})
 		if err == nil || strings.Contains(err.Error(), "cmjt") {
 			t.Errorf("Run(%q) = %v, want an error about the address", bad, err)
@@ -84,16 +84,16 @@ func (rt *recordingTransport) seen() []string {
 
 // A plain ws:// address for a host that is not loopback sends the join token to a
 // peer the agent never authenticated, so Run refuses it at once and never dials
-// unless the agent itself carries COAMING_AGENT_ALLOW_INSECURE (T-02-31).
+// unless the agent itself carries TIERPLAN_AGENT_ALLOW_INSECURE (T-02-31).
 func TestRunRefusesPlainWSToAnotherHostWithoutTheSwitchAndNeverDials(t *testing.T) {
 	rt := &recordingTransport{}
 	ctx := testsupport.Context(t)
 	err := Run(ctx, Config{
-		URL: "ws://coaming.example/agent/connect", JoinToken: "cmjt_tok",
+		URL: "ws://tierplan.example/agent/connect", JoinToken: "cmjt_tok",
 		HTTPClient: &http.Client{Transport: rt}, SocketPath: filepath.Join(t.TempDir(), "none.sock"),
 	})
-	if err == nil || !strings.Contains(err.Error(), "COAMING_AGENT_ALLOW_INSECURE") || !strings.Contains(err.Error(), "COAMING_AGENT_URL") {
-		t.Fatalf("Run = %v, want an error naming COAMING_AGENT_URL and COAMING_AGENT_ALLOW_INSECURE", err)
+	if err == nil || !strings.Contains(err.Error(), "TIERPLAN_AGENT_ALLOW_INSECURE") || !strings.Contains(err.Error(), "TIERPLAN_AGENT_URL") {
+		t.Fatalf("Run = %v, want an error naming TIERPLAN_AGENT_URL and TIERPLAN_AGENT_ALLOW_INSECURE", err)
 	}
 	if strings.Contains(err.Error(), "cmjt_tok") {
 		t.Errorf("the error carries the token: %v", err)
@@ -719,7 +719,7 @@ func TestARevokedAgentWithNoJoinTokenWaitsTheMaximumAndSaysOnceThatItNeedsAToken
 	}
 }
 
-// D-31: after Coaming is restored from a backup, an agent that was installed after
+// D-31: after TierPlan is restored from a backup, an agent that was installed after
 // the backup holds a certificate the restored environment issued but does not
 // know, and is refused unknown_agent. With a join token the agent drops that
 // identity and enrols again, exactly as for revoked.
@@ -787,7 +787,7 @@ func TestAnUnknownAgentRefusalWithNoJoinTokenWaitsTheMaximumAndSaysOnceWhatToDo(
 			t.Errorf("wait %d = %v, want the 60s maximum", i+1, d)
 		}
 	}
-	const hint = "this agent was enrolled after the backup this Coaming was restored from; reinstall it with the environment's install command"
+	const hint = "this agent was enrolled after the backup this TierPlan was restored from; reinstall it with the environment's install command"
 	if n := strings.Count(logs.String(), "code=unknown_agent"); n != 1 {
 		t.Errorf("the code unknown_agent was logged %d times, want once:\n%s", n, logs.String())
 	}
@@ -808,13 +808,13 @@ func TestAnUnknownAgentRefusalWithNoJoinTokenWaitsTheMaximumAndSaysOnceWhatToDo(
 func TestTheHintForUnknownAgentNamesTheBackupAndTheInstallCommand(t *testing.T) {
 	r := &runner{}
 	got := r.hint(wire.ReasonUnknownAgent)
-	const want = "this agent was enrolled after the backup this Coaming was restored from; reinstall it with the environment's install command"
+	const want = "this agent was enrolled after the backup this TierPlan was restored from; reinstall it with the environment's install command"
 	if got != want {
 		t.Errorf("hint = %q, want %q", got, want)
 	}
 }
 
-// An enrolled agent that Coaming refuses auth_rejected is most often one whose
+// An enrolled agent that TierPlan refuses auth_rejected is most often one whose
 // address changed while it was away; the hint says how it is brought back with
 // its identity (G-02-4b).
 func TestAnEnrolledAgentRefusedAuthRejectedIsToldToStartWithTheNewAddressAndKeepItsIdentity(t *testing.T) {
@@ -831,8 +831,8 @@ func TestAnEnrolledAgentRefusedAuthRejectedIsToldToStartWithTheNewAddressAndKeep
 	if n := strings.Count(logs.String(), "code=auth_rejected"); n != 1 {
 		t.Fatalf("the code auth_rejected was logged %d times, want once:\n%s", n, logs.String())
 	}
-	if !strings.Contains(logs.String(), "COAMING_AGENT_URL") || !strings.Contains(logs.String(), "keeps its identity") {
-		t.Errorf("the hint should name COAMING_AGENT_URL and say the agent keeps its identity:\n%s", logs.String())
+	if !strings.Contains(logs.String(), "TIERPLAN_AGENT_URL") || !strings.Contains(logs.String(), "keeps its identity") {
+		t.Errorf("the hint should name TIERPLAN_AGENT_URL and say the agent keeps its identity:\n%s", logs.String())
 	}
 }
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 The Coaming Authors
+// SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
 package api_test
 
@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ianglennon/coaming/internal/auth"
-	"github.com/ianglennon/coaming/internal/config"
-	"github.com/ianglennon/coaming/internal/instance"
+	"github.com/ianglennon/tierplan/internal/auth"
+	"github.com/ianglennon/tierplan/internal/config"
+	"github.com/ianglennon/tierplan/internal/instance"
 )
 
 // Settings: instance name and public URL (plan 26, D-03, D-04, AUTH-08).
@@ -214,7 +214,7 @@ func TestPatchSettingsValidatesEveryField(t *testing.T) {
 	}{
 		{"empty name", map[string]string{"instanceName": "   "}, "body.instanceName", "instance_name_required"},
 		{"65 characters", map[string]string{"instanceName": strings.Repeat("é", 65)}, "body.instanceName", "instance_name_too_long"},
-		{"relative url", map[string]string{"publicUrl": "/coaming"}, "body.publicUrl", "invalid_public_url"},
+		{"relative url", map[string]string{"publicUrl": "/tierplan"}, "body.publicUrl", "invalid_public_url"},
 		{"empty url", map[string]string{"publicUrl": ""}, "body.publicUrl", "invalid_public_url"},
 		{"url with credentials", map[string]string{"publicUrl": "https://user@host.example"}, "body.publicUrl", "invalid_public_url"},
 		{"url under /api", map[string]string{"publicUrl": "https://host.example/api"}, "body.publicUrl", "invalid_public_url"},
@@ -290,10 +290,10 @@ func TestGetSettingsReportsTheAgentURLTheLockAndTheEndpoint(t *testing.T) {
 	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentURLLocked || s.AgentEndpoint != "" {
 		t.Fatalf("nothing set: %+v, want an empty agent URL, unlocked, and no endpoint", s)
 	}
-	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com/coaming"}); rec.Code != http.StatusOK {
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com/tierplan"}); rec.Code != http.StatusOK {
 		t.Fatalf("seed: %d %s", rec.Code, rec.Body)
 	}
-	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentEndpoint != "wss://example.com/coaming/agent/connect" {
+	if _, s := f.getSettings(t, cookie); s.AgentURL != "" || s.AgentEndpoint != "wss://example.com/tierplan/agent/connect" {
 		t.Fatalf("public URL only: %+v, want the endpoint from the public URL", s)
 	}
 
@@ -311,24 +311,24 @@ func TestPatchSettingsStoresTheAgentURLAndAuditsIt(t *testing.T) {
 	cookie, csrf := f.signIn(t, "admin", false)
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://example.com"})
 
-	rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://coaming.lan:7480/"})
+	rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://tierplan.lan:7480/"})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	var got settingsResp
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.AgentURL != "https://coaming.lan:7480" || got.AgentEndpoint != "wss://coaming.lan:7480/agent/connect" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || got.AgentURL != "https://tierplan.lan:7480" || got.AgentEndpoint != "wss://tierplan.lan:7480/agent/connect" {
 		t.Fatalf("body = %s (%v), want the normalised agent URL and its endpoint", rec.Body, err)
 	}
-	if f.inst.AgentURL() != "https://coaming.lan:7480" || f.inst.AgentEndpoint() != "wss://coaming.lan:7480/agent/connect" {
+	if f.inst.AgentURL() != "https://tierplan.lan:7480" || f.inst.AgentEndpoint() != "wss://tierplan.lan:7480/agent/connect" {
 		t.Fatalf("the cached agent URL = %q, endpoint %q, want them at once", f.inst.AgentURL(), f.inst.AgentEndpoint())
 	}
 	var stored string
-	if err := f.st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://coaming.lan:7480" {
+	if err := f.st.Read.QueryRow(`SELECT value FROM settings WHERE key = 'agent_url'`).Scan(&stored); err != nil || stored != "https://tierplan.lan:7480" {
 		t.Fatalf("stored = %q, %v", stored, err)
 	}
 	d := f.auditDetails(t, "settings.updated")
 	last := d[len(d)-1]
-	if last["agent_url_from"] != "" || last["agent_url_to"] != "https://coaming.lan:7480" {
+	if last["agent_url_from"] != "" || last["agent_url_to"] != "https://tierplan.lan:7480" {
 		t.Fatalf("details = %v, want the agent URL field with its old and new value", last)
 	}
 	if _, ok := last["public_url_from"]; ok {
@@ -344,7 +344,7 @@ func TestPatchSettingsStoresTheAgentURLAndAuditsIt(t *testing.T) {
 		t.Fatalf("after clearing: agent URL %q endpoint %q", f.inst.AgentURL(), f.inst.AgentEndpoint())
 	}
 	d = f.auditDetails(t, "settings.updated")
-	if last := d[len(d)-1]; last["agent_url_from"] != "https://coaming.lan:7480" || last["agent_url_to"] != "" {
+	if last := d[len(d)-1]; last["agent_url_from"] != "https://tierplan.lan:7480" || last["agent_url_to"] != "" {
 		t.Fatalf("details = %v, want the cleared agent URL audited", last)
 	}
 }
@@ -353,7 +353,7 @@ func TestPatchSettingsRefusesAnInvalidAgentURL(t *testing.T) {
 	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
-	for _, bad := range []string{"/agent", "coaming.lan", "ftp://coaming.lan", "https://user@coaming.lan", "https://coaming.lan/api"} {
+	for _, bad := range []string{"/agent", "tierplan.lan", "ftp://tierplan.lan", "https://user@tierplan.lan", "https://tierplan.lan/api"} {
 		rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": bad})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)
@@ -405,9 +405,9 @@ func TestPatchSettingsWithTheSameAgentURLIsANoOp(t *testing.T) {
 	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
-	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://coaming.lan:7480"})
+	f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://tierplan.lan:7480"})
 	before := len(f.audits(t, "settings.updated"))
-	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://COAMING.lan:7480/"}); rec.Code != http.StatusOK {
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://TIERPLAN.lan:7480/"}); rec.Code != http.StatusOK {
 		t.Fatalf("no-op: %d %s", rec.Code, rec.Body)
 	}
 	if after := len(f.audits(t, "settings.updated")); after != before {
@@ -521,11 +521,11 @@ func TestSavingANewAgentURLPushesItFirstWithTheCurrentPinsToConnectedAgents(t *t
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://pub.example"})
 	base := len(fake.pushed())
 
-	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://coaming.lan:7480"}); rec.Code != http.StatusOK {
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://tierplan.lan:7480"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 	got := fake.pushed()
-	if len(got) != base+1 || len(got[base]) != 1 || got[base][0] != "wss://coaming.lan:7480/agent/connect" {
+	if len(got) != base+1 || len(got[base]) != 1 || got[base][0] != "wss://tierplan.lan:7480/agent/connect" {
 		t.Fatalf("pushes = %v, want one more with the new endpoint", got)
 	}
 	if pins := fake.pushPins[base]; len(pins) != 1 || pins[0] != "sha256/x" {
@@ -540,9 +540,9 @@ func TestChangingThePublicURLPushesTheNewEndpointWhenItIsWhatAgentsDial(t *testi
 	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://old.example"})
 	base := len(fake.pushed())
 
-	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://new.example/coaming"})
+	f.patchSettings(t, cookie, csrf, map[string]string{"publicUrl": "https://new.example/tierplan"})
 	got := fake.pushed()
-	if len(got) != base+1 || got[base][0] != "wss://new.example/coaming/agent/connect" {
+	if len(got) != base+1 || got[base][0] != "wss://new.example/tierplan/agent/connect" {
 		t.Fatalf("pushes = %v, want the endpoint of the new public URL", got)
 	}
 }
@@ -598,7 +598,7 @@ func TestAChangeWithNoAgentSourceStillSaves(t *testing.T) {
 	t.Parallel()
 	f := newAuthFixture(t, config.Config{})
 	cookie, csrf := f.signIn(t, "admin", false)
-	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://coaming.lan:7480"}); rec.Code != http.StatusOK {
+	if rec := f.patchSettings(t, cookie, csrf, map[string]string{"agentUrl": "https://tierplan.lan:7480"}); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body)
 	}
 }
@@ -656,7 +656,7 @@ func TestPatchSettingsRefusesAPlainAgentURLForAnotherHostWithoutTheSwitch(t *tes
 	}
 	audits, pushes := len(f.audits(t, "settings.updated")), len(fake.pushed())
 
-	for _, bad := range []string{"http://10.0.0.5:7480", "http://coaming.lan:7480", "http://[2001:db8::1]:7480"} {
+	for _, bad := range []string{"http://10.0.0.5:7480", "http://tierplan.lan:7480", "http://[2001:db8::1]:7480"} {
 		rec := f.patchSettings(t, cookie, csrf, map[string]string{"instanceName": "Changed", "agentUrl": bad})
 		if rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%q: status = %d: %s, want 422", bad, rec.Code, rec.Body)

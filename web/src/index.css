@@ -4,7 +4,7 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Coaming override (UI-SPEC Typography): every font-medium renders at 600, so
+/* TierPlan override (UI-SPEC Typography): every font-medium renders at 600, so
    the rendered weights are only 400 and 600. */
 @theme {
   --font-weight-medium: 600;
