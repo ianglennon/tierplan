@@ -218,6 +218,9 @@ type Input struct {
 // manage, a plain docker run container) is reported until the environment opts in to removing them,
 // and a container of a project that still exists is never touched. Each waits for the grace period.
 //
+// A node whose engine clock differs from the snapshot's read time by more than ClockSkewTolerance
+// has its containers and images left alone (cant_tell, clock_skew), whatever the rules above say.
+//
 // A network is judged by ClassifyNetwork from the orphan check's report, an image by ClassifyImage
 // from the snapshot's images, containers and service specs.
 //
@@ -246,12 +249,71 @@ func Build(in Input, p Policy, now time.Time) Plan {
 		}
 	}
 	addImages(&plan, s, p, now)
+	withholdSkewed(&plan, skewedNodes(s))
 	if in.Networks != nil {
 		addNetworks(&plan, *in.Networks, p, now)
 	}
 	sortItems(plan.Items)
 	sortItems(plan.NotRemoved)
 	return plan
+}
+
+// skewedNodes names the nodes whose engine reported a time that differs from the time the snapshot
+// was read by more than ClockSkewTolerance, in either direction (RESEARCH Pitfall 11). A container's
+// finish time and an image's build time are the node's clock; against a wrong one every age is wrong.
+// A node that did not report its time, and a snapshot with no read time, give no skew: they are judged
+// as before.
+func skewedNodes(s Snapshot) map[string]bool {
+	if s.ReadAt.IsZero() {
+		return nil
+	}
+	var skewed map[string]bool
+	for id, at := range s.NodeTimes {
+		if at.IsZero() {
+			continue
+		}
+		if d := at.Sub(s.ReadAt); d > ClockSkewTolerance || d < -ClockSkewTolerance {
+			if skewed == nil {
+				skewed = map[string]bool{}
+			}
+			skewed[id] = true
+		}
+	}
+	return skewed
+}
+
+// withholdSkewed leaves alone the containers and images of the nodes in skewed: what the planner
+// would remove, hold back by grace or report becomes cant_tell (clock_skew) in the list of what was
+// not removed. What a person or a label protects, and what was already cant_tell, keeps its class.
+func withholdSkewed(plan *Plan, skewed map[string]bool) {
+	if len(skewed) == 0 {
+		return
+	}
+	judge := func(it Item) (Item, bool) {
+		if !skewed[it.NodeID] || (it.Type != KindContainer && it.Type != KindImage) {
+			return it, false
+		}
+		switch it.Class {
+		case ClassRemovable, ClassGrace, ClassReported:
+			it.Class = ClassCantTell
+			it.Reason = Reason{Code: ReasonClockSkew, Service: it.Reason.Service, Slot: it.Reason.Slot, Project: it.Reason.Project, Stack: it.Reason.Stack, Node: it.Reason.Node}
+			it.Age = 0
+			return it, true
+		}
+		return it, false
+	}
+	items := plan.Items[:0:0]
+	for _, it := range plan.Items {
+		if out, changed := judge(it); changed {
+			plan.NotRemoved = append(plan.NotRemoved, out)
+			continue
+		}
+		items = append(items, it)
+	}
+	plan.Items = items
+	for i, it := range plan.NotRemoved {
+		plan.NotRemoved[i], _ = judge(it)
+	}
 }
 
 // addNetworks adds the networks of the orphan check to the plan. A report that is not complete
