@@ -126,6 +126,7 @@
       "selectItem": "Select {{name}}",
       "selectAll": "Select all in {{group}}",
       "withheldNetworks": "TierPlan won't judge networks while {{nodes}} isn't reporting.",
+      "withheldNetworksNoManager": "TierPlan won't judge networks because no manager answered.",
       "notRemoved": {
         "title": "Not removed ({{count}})",
         "caption": "Reported only, or protected. Nothing here is touched.",

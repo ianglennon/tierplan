@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 The TierPlan Authors
 
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, Info } from "lucide-react";
+import { ChevronDown, CircleCheck, Info, TriangleAlert } from "lucide-react";
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -17,6 +17,8 @@ import {
 import type { StackLock } from "@/api/stacks";
 import { NeedsTooltip } from "@/components/needs-tooltip";
 import { RelativeTime } from "@/components/relative-time";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -27,11 +29,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { NodesBanner } from "@/features/environments/nodes-banner";
 import { ageText, formatSize, reasonText, summaryLine } from "@/features/janitor/preview-summary";
 import { SelectCheckbox, TruncatedText } from "@/features/resources/resource-table";
+import { OperationLockAlert } from "@/features/stacks/operation-lock-alert";
 import { useNeeds } from "@/hooks/use-needs";
 import { useT } from "@/i18n/use-t";
 import { toastError } from "@/lib/toast";
@@ -145,6 +150,9 @@ export function CleanupPreviewSheet({
   const needs = useNeeds("janitor.run", envId);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const asked = useRef(false);
+  // The operation that held the environment when Remove was last refused. It is shown at the top of the
+  // sheet and the commit stays off until the preview is asked for again.
+  const [lock, setLock] = useState<StackLock | undefined>();
 
   useEffect(() => {
     if (asked.current) return;
@@ -199,8 +207,21 @@ export function CleanupPreviewSheet({
   const permissionReason = needs.allowed
     ? undefined
     : t("janitor.needsOn", { need: needs.reason ?? t("needs.role.admin"), name: envName });
+  const lockReason = lock
+    ? lock.kind === "janitor"
+      ? t("janitor.refused.janitor", { env: envName })
+      : t("janitor.lock.waiting", { stack: lock.stackName })
+    : undefined;
   const removeReason =
-    permissionReason ?? (ticked.size === 0 ? t("janitor.preview.footer.tickOne") : undefined);
+    permissionReason ??
+    lockReason ??
+    (ticked.size === 0 ? t("janitor.preview.footer.tickOne") : undefined);
+
+  // Asking again is a fresh look: the ticks start over and a lock that was seen is forgotten.
+  function ask() {
+    setLock(undefined);
+    preview.mutate();
+  }
 
   async function remove() {
     if (start.isPending || ticked.size === 0) return;
@@ -216,10 +237,11 @@ export function CleanupPreviewSheet({
       });
     } catch (e) {
       if (e instanceof JanitorRequestError && e.operationLocked) {
-        const lock = lockOfError(e);
-        onLocked?.(lock);
+        const held = lockOfError(e);
+        setLock(held);
+        onLocked?.(held);
         toastError(
-          lock.kind === "janitor"
+          held.kind === "janitor"
             ? t("janitor.refused.janitor", { env: envName })
             : t("janitor.refused.deploy", { env: envName }),
         );
@@ -261,16 +283,58 @@ export function CleanupPreviewSheet({
                 </>
               }
               refreshing={preview.isPending}
-              onRefresh={() => preview.mutate()}
+              onRefresh={ask}
             />
           ) : null}
         </SheetHeader>
         <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto px-4 py-4 md:px-6">
+          {lock || data?.withheldNodes?.length || data?.networksWithheld ? (
+            <div className="flex flex-col gap-4">
+              {lock ? <OperationLockAlert lock={lock} envId={envId} envName={envName} /> : null}
+              {data ? <NodesBanner notReporting={data.withheldNodes} /> : null}
+              {data?.networksWithheld ? (
+                <Alert variant="warning">
+                  <TriangleAlert aria-hidden="true" />
+                  <AlertDescription className="text-foreground break-words">
+                    {data.withheldNodes?.length
+                      ? t("janitor.preview.withheldNetworks", {
+                          nodes: data.withheldNodes.join(", "),
+                        })
+                      : t("janitor.preview.withheldNetworksNoManager")}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          ) : null}
           {loading ? (
-            <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Spinner aria-hidden="true" />
-              {t("janitor.preview.checking", { count: Math.max(1, nodeCount) })}
-            </p>
+            <>
+              <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner aria-hidden="true" />
+                {t("janitor.preview.checking", { count: Math.max(1, nodeCount) })}
+              </p>
+              <Skeleton className="h-48 w-full rounded-lg" />
+              <Skeleton className="h-32 w-full rounded-lg" />
+            </>
+          ) : null}
+          {preview.isError ? (
+            <Alert variant="destructive">
+              <AlertTitle>{t("janitor.preview.error.title")}</AlertTitle>
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>{t("janitor.preview.error.body")}</span>
+                <Button type="button" variant="outline" size="sm" onClick={ask}>
+                  {t("janitor.preview.error.retry")}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {data && items.length === 0 ? (
+            <div className="flex flex-col items-center gap-1 py-6 text-center">
+              <CircleCheck aria-hidden="true" className="size-5 text-muted-foreground" />
+              <p className="text-base font-semibold">{t("janitor.preview.empty.title")}</p>
+              <p className="max-w-prose text-sm text-muted-foreground">
+                {t("janitor.preview.empty.body")}
+              </p>
+            </div>
           ) : null}
           {groups.map((group) => (
             <TypeSection
@@ -282,6 +346,9 @@ export function CleanupPreviewSheet({
               onToggleGroup={toggleGroup}
             />
           ))}
+          {data && (data.notRemoved?.length ?? 0) > 0 ? (
+            <NotRemovedList envId={envId} items={data.notRemoved ?? []} />
+          ) : null}
         </div>
         <PreviewFooter
           cancelRef={cancelRef}
@@ -501,15 +568,19 @@ function TypeSection({ group, swarm, ticked, onToggle, onToggleGroup }: TypeSect
   );
 }
 
-interface VirtualRowsProps {
-  rows: readonly Row[];
+interface VirtualRowsProps<T extends { key: string }> {
+  rows: readonly T[];
   scroller: HTMLDivElement | null;
-  renderRow: (row: Row) => ReactNode;
+  renderRow: (row: T) => ReactNode;
 }
 
 // VirtualRows draws the rows in view between two spacer rows that hold the height of the rest, so
 // the table stays a native table and a long list stays responsive.
-function VirtualRows({ rows, scroller, renderRow }: VirtualRowsProps) {
+function VirtualRows<T extends { key: string }>({
+  rows,
+  scroller,
+  renderRow,
+}: VirtualRowsProps<T>) {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scroller,
@@ -602,5 +673,88 @@ function PreviewRow({ item, ticked, onToggle }: PreviewRowProps) {
         {formatSize(item.sizeBytes, t)}
       </TableCell>
     </TableRow>
+  );
+}
+
+interface NotRemovedRow {
+  key: string;
+  item: JanitorItem;
+}
+
+// The reasons that say an opt-in is off: the row links to the policy, where it is turned on.
+const OPT_IN_OFF = new Set(["opt_in_off_containers", "opt_in_off_networks"]);
+const KEPT = new Set(["kept_label", "kept_row", "stack_excluded", "stack_declared_keep"]);
+
+// NotRemovedList is what the janitor looked at and left, closed to start with: reported only, or
+// protected, or too young, or not judged yet. Nothing in it is touched, so it has no checkboxes and
+// each row says why in words, not in a tooltip alone.
+function NotRemovedList({ envId, items }: { envId: string; items: readonly JanitorItem[] }) {
+  const t = useT();
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const rows = useMemo(
+    () => items.map((item, i) => ({ key: `${itemKey(item)}|${i}`, item })),
+    [items],
+  );
+  const virtual = rows.length > VIRTUALISE_OVER;
+  const renderRow = (row: NotRemovedRow) => (
+    <TableRow key={row.key} className={ROW}>
+      <TableCell className={cn(CELL, "w-28")}>{t(`janitor.type.${row.item.type}`)}</TableCell>
+      <TableCell className={cn(CELL, "min-w-48")}>
+        <TruncatedText mono>{row.item.name}</TruncatedText>
+      </TableCell>
+      <TableCell className={cn(CELL, "min-w-72 whitespace-normal")}>
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{reasonText(row.item.reason, t)}</span>
+          {OPT_IN_OFF.has(row.item.reason.code) ? (
+            <>
+              <Badge variant="outline">{t("janitor.preview.notRemoved.optInOff")}</Badge>
+              <Link
+                to="/env/$envId/janitor"
+                params={{ envId }}
+                hash="policy"
+                className="rounded-sm text-accent-ink underline underline-offset-3"
+              >
+                {t("janitor.preview.notRemoved.openPolicy")}
+              </Link>
+            </>
+          ) : null}
+          {KEPT.has(row.item.reason.code) ? (
+            <Badge variant="outline">{t("janitor.preview.notRemoved.kept")}</Badge>
+          ) : null}
+        </span>
+      </TableCell>
+    </TableRow>
+  );
+  return (
+    <Collapsible asChild>
+      <section className="rounded-lg border">
+        <CollapsibleTrigger className="group flex h-12 w-full items-center justify-between gap-2 px-3 text-start text-base font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <span>{t("janitor.preview.notRemoved.title", { count: items.length })}</span>
+          <ChevronDown
+            aria-hidden="true"
+            className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180"
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <p className="px-3 pb-2 text-xs text-muted-foreground">
+            {t("janitor.preview.notRemoved.caption")}
+          </p>
+          <div
+            ref={setScroller}
+            className={cn("border-t", virtual ? "max-h-[60svh] overflow-auto" : "overflow-x-auto")}
+          >
+            <table className="w-full caption-bottom text-sm">
+              <TableBody>
+                {virtual ? (
+                  <VirtualRows rows={rows} scroller={scroller} renderRow={renderRow} />
+                ) : (
+                  rows.map(renderRow)
+                )}
+              </TableBody>
+            </table>
+          </div>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   );
 }

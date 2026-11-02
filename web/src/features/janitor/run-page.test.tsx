@@ -4,14 +4,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { janitorRunQuery, RUN_REFETCH_MS } from "@/api/janitor";
 import { setCsrfToken } from "@/api/client";
+import { janitorRunQuery, RUN_REFETCH_MS } from "@/api/janitor";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { RunPage } from "@/features/janitor/run-page";
 import "@/i18n";
-import { makeMe } from "@/test-me";
 import { run, runItem } from "@/test-janitor";
+import { makeMe } from "@/test-me";
 import { TestRouter } from "@/test-router";
 
 const ENV = "e1";
@@ -132,11 +131,17 @@ describe("the items of a run", () => {
     const table = await screen.findByRole("table", { name: "Items in this run" });
     const row = (name: string) => within(table).getByText(name).closest("tr") as HTMLElement;
     expect(within(row("web.1.aaa")).getByText("Removed")).toBeTruthy();
-    expect(within(row("web.1.aaa")).getByText("Exited task, 3rd oldest of service web slot 1.")).toBeTruthy();
+    expect(
+      within(row("web.1.aaa")).getByText("Exited task, 3rd oldest of service web slot 1."),
+    ).toBeTruthy();
     expect(within(row("web.2.bbb")).getByText("In use, kept")).toBeTruthy();
-    expect(within(row("web.2.bbb")).getByText("web.2.bbb is in use again, so TierPlan kept it.")).toBeTruthy();
+    expect(
+      within(row("web.2.bbb")).getByText("web.2.bbb is in use again, so TierPlan kept it."),
+    ).toBeTruthy();
     expect(within(row("web.3.ccc")).getByText("Protected")).toBeTruthy();
-    expect(within(row("web.3.ccc")).getByText("web.3.ccc is no longer stale, so TierPlan kept it.")).toBeTruthy();
+    expect(
+      within(row("web.3.ccc")).getByText("web.3.ccc is no longer stale, so TierPlan kept it."),
+    ).toBeTruthy();
     expect(within(row("web.4.ddd")).getByText("Failed")).toBeTruthy();
     // A partly done run says what was removed, failed and kept.
     expect(screen.getByText("Partly done", { selector: "[data-slot=alert-title]" })).toBeTruthy();
@@ -176,7 +181,9 @@ describe("a run that failed", () => {
 describe("following a run", () => {
   it("reads it again every two seconds while it waits or works, and stops when it has ended", () => {
     const opts = janitorRunQuery(ENV, "r1");
-    const interval = opts.refetchInterval as (q: { state: { data?: { state: string } } }) => unknown;
+    const interval = opts.refetchInterval as (q: {
+      state: { data?: { state: string } };
+    }) => unknown;
     expect(RUN_REFETCH_MS).toBe(2000);
     expect(interval({ state: { data: { state: "waiting" } } })).toBe(RUN_REFETCH_MS);
     expect(interval({ state: { data: { state: "running" } } })).toBe(RUN_REFETCH_MS);

@@ -303,15 +303,19 @@ describe("a deploy holds the environment", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Remove 1 item" }));
 
     const sheet = screen.getByRole("dialog");
-    expect(await within(sheet).findByText(/Another stack operation is running on Prod: tracer/)).toBeTruthy();
-    expect(toasts.error).toHaveBeenCalledWith("A deploy is running in Prod. Try again when it finishes.");
+    expect(
+      await within(sheet).findByText(/Another stack operation is running on Prod: tracer/),
+    ).toBeTruthy();
+    expect(toasts.error).toHaveBeenCalledWith(
+      "A deploy is running in Prod. Try again when it finishes.",
+    );
     expect(closed).not.toHaveBeenCalled();
     // The commit can't be pressed again, and says why.
     const remove = within(sheet).getByRole("button", { name: "Remove 1 item" });
     expect(remove.getAttribute("aria-disabled")).toBe("true");
-    expect(document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
-      "Waiting for a deploy to finish. tracer is deploying.",
-    );
+    expect(
+      document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent,
+    ).toBe("Waiting for a deploy to finish. tracer is deploying.");
   });
 
   it("names the janitor when it is the janitor that holds it", async () => {
@@ -343,9 +347,9 @@ describe("a user below Env Admin", () => {
     mount();
     const remove = await screen.findByRole("button", { name: "Remove 1 item" });
     expect(remove.getAttribute("aria-disabled")).toBe("true");
-    expect(document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
-      "Needs Admin on Prod",
-    );
+    expect(
+      document.getElementById(remove.getAttribute("aria-describedby") ?? "")?.textContent,
+    ).toBe("Needs Admin on Prod");
     fireEvent.click(remove);
     expect(started).toBeUndefined();
   });
@@ -379,9 +383,7 @@ describe("nothing to clean up", () => {
     // Not removed is closed to start with; its reason is in the row, in words.
     fireEvent.click(screen.getByRole("button", { name: /^Not removed \(1\)/ }));
     expect(
-      await screen.findByText(
-        "Opt-in off: unused networks aren't removed until you turn that on.",
-      ),
+      await screen.findByText("Opt-in off: unused networks aren't removed until you turn that on."),
     ).toBeTruthy();
     expect(screen.getByText("scratch_net")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open policy" }).getAttribute("href")).toBe(
@@ -435,7 +437,7 @@ describe("a node that is not reporting", () => {
     mount();
     await screen.findByRole("button", { name: "Remove 1 item" });
     const sheet = screen.getByRole("dialog");
-    expect(within(sheet).getByText(/node-3/, { selector: "[data-slot=alert-description]" })).toBeTruthy();
+    expect(within(sheet).getByText(/^1 node isn't reporting: node-3\./)).toBeTruthy();
     expect(
       within(sheet).getByText("TierPlan won't judge networks while node-3 isn't reporting."),
     ).toBeTruthy();
