@@ -379,6 +379,58 @@ func (q *Queries) ListJanitorRuns(ctx context.Context, arg ListJanitorRunsParams
 	return items, nil
 }
 
+const pruneAllJanitorRuns = `-- name: PruneAllJanitorRuns :execrows
+DELETE FROM janitor_runs
+WHERE janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < ?1
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT ?2)
+`
+
+type PruneAllJanitorRunsParams struct {
+	Cutoff int64
+	Keep   int64
+}
+
+// PruneJanitorRuns over every environment, each by its own newest keep runs.
+func (q *Queries) PruneAllJanitorRuns(ctx context.Context, arg PruneAllJanitorRunsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneAllJanitorRuns, arg.Cutoff, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const pruneJanitorRuns = `-- name: PruneJanitorRuns :execrows
+DELETE FROM janitor_runs
+WHERE janitor_runs.env_id = ?1
+  AND janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < ?2
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT ?3)
+`
+
+type PruneJanitorRunsParams struct {
+	EnvID  string
+	Cutoff int64
+	Keep   int64
+}
+
+// Retention of one environment's run history (D-16): a run is kept while it started at or after the
+// cutoff (now minus the retention days), or while it is among the environment's newest keep runs
+// (the order the history lists them in: started_at, then id, newest first), whichever keeps more. A
+// run that is waiting or running is never deleted. The foreign keys take the run's items and
+// evidence with it.
+func (q *Queries) PruneJanitorRuns(ctx context.Context, arg PruneJanitorRunsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneJanitorRuns, arg.EnvID, arg.Cutoff, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setJanitorRunState = `-- name: SetJanitorRunState :execrows
 UPDATE janitor_runs SET state = ?, job_id = ?
 WHERE id = ? AND finished_at = 0

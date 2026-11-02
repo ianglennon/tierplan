@@ -21,6 +21,8 @@ import (
 
 // The states of a run.
 const (
+	// StateWaiting: a scheduled run is waiting for the environment's operation lock.
+	StateWaiting = "waiting"
 	// StateRunning: the run holds the environment and is working.
 	StateRunning = "running"
 	// StateCompleted: the run ended and every item it attempted ended as it should.
@@ -129,6 +131,12 @@ type RunStore interface {
 	ListRuns(ctx context.Context, envID string, limit int) ([]Run, error)
 	// CountRuns answers how many runs an environment has on record.
 	CountRuns(ctx context.Context, envID string) (int, error)
+	// PruneRuns deletes the runs of an environment the retention does not keep, with their items and
+	// evidence, in one statement, and answers how many it deleted. A waiting or running run is never
+	// deleted.
+	PruneRuns(ctx context.Context, envID string, keep Retention, now time.Time) (int, error)
+	// PruneAll is PruneRuns for every environment.
+	PruneAll(ctx context.Context, keep Retention, now time.Time) (int, error)
 	// SaveEvidence records the crash evidence of the item seq of a run, in a transaction of its own.
 	// It is called before the container is removed, which is not removed if it fails.
 	SaveEvidence(ctx context.Context, runID string, seq int, ev Evidence) error
@@ -304,6 +312,30 @@ func (s *SQLStore) CountRuns(ctx context.Context, envID string) (int, error) {
 	n, err := s.St.RQ.CountJanitorRuns(ctx, envID)
 	if err != nil {
 		return 0, fmt.Errorf("count the janitor runs: %w", err)
+	}
+	return int(n), nil
+}
+
+// PruneRuns implements RunStore.
+func (s *SQLStore) PruneRuns(ctx context.Context, envID string, keep Retention, now time.Time) (int, error) {
+	if err := keep.valid(); err != nil {
+		return 0, err
+	}
+	n, err := s.St.Q.PruneJanitorRuns(ctx, sqlc.PruneJanitorRunsParams{EnvID: envID, Cutoff: keep.cutoff(now), Keep: int64(keep.Runs)})
+	if err != nil {
+		return 0, fmt.Errorf("prune the janitor runs: %w", err)
+	}
+	return int(n), nil
+}
+
+// PruneAll implements RunStore.
+func (s *SQLStore) PruneAll(ctx context.Context, keep Retention, now time.Time) (int, error) {
+	if err := keep.valid(); err != nil {
+		return 0, err
+	}
+	n, err := s.St.Q.PruneAllJanitorRuns(ctx, sqlc.PruneAllJanitorRunsParams{Cutoff: keep.cutoff(now), Keep: int64(keep.Runs)})
+	if err != nil {
+		return 0, fmt.Errorf("prune the janitor runs: %w", err)
 	}
 	return int(n), nil
 }

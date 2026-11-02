@@ -176,6 +176,21 @@ func (r *Runner) endRecord(ctx context.Context, req RunRequest, run Run) {
 		r.log().Error("a janitor run could not be finished on record", "run", run.ID, "error", err)
 	}
 	r.auditRun(ctx, req, run)
+	r.prune(ctx, req.EnvID)
+}
+
+// prune applies the retention to the environment's run history once a run has ended, so the history
+// never grows without bound (T-11-41). Until the policy makes it configurable it is DefaultRetention.
+// A prune that fails is logged: the run has ended all the same.
+func (r *Runner) prune(ctx context.Context, envID string) {
+	n, err := r.Store.PruneRuns(ctx, envID, DefaultRetention, r.clock().Now())
+	if err != nil {
+		r.log().Error("the janitor's run history could not be pruned", "environment", envID, "error", err)
+		return
+	}
+	if n > 0 {
+		r.log().Info("pruned janitor runs beyond the retention", "environment", envID, "count", n)
+	}
 }
 
 // auditRun writes the summary row of a finished run (AUTH-08, D-16): who started it, what it

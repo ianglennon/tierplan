@@ -66,3 +66,26 @@ LIMIT ?;
 -- name: CountJanitorRuns :one
 -- How many runs an environment has on record.
 SELECT COUNT(*) FROM janitor_runs WHERE env_id = ?;
+
+-- name: PruneJanitorRuns :execrows
+-- Retention of one environment's run history (D-16): a run is kept while it started at or after the
+-- cutoff (now minus the retention days), or while it is among the environment's newest keep runs
+-- (the order the history lists them in: started_at, then id, newest first), whichever keeps more. A
+-- run that is waiting or running is never deleted. The foreign keys take the run's items and
+-- evidence with it.
+DELETE FROM janitor_runs
+WHERE janitor_runs.env_id = sqlc.arg(env_id)
+  AND janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < sqlc.arg(cutoff)
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT sqlc.arg(keep));
+
+-- name: PruneAllJanitorRuns :execrows
+-- PruneJanitorRuns over every environment, each by its own newest keep runs.
+DELETE FROM janitor_runs
+WHERE janitor_runs.state NOT IN ('waiting', 'running')
+  AND janitor_runs.started_at < sqlc.arg(cutoff)
+  AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
+                              WHERE k.env_id = janitor_runs.env_id
+                              ORDER BY k.started_at DESC, k.id DESC LIMIT sqlc.arg(keep));

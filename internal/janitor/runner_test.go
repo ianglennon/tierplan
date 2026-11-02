@@ -171,6 +171,41 @@ type memStore struct {
 	evidence    map[string]Evidence
 	evidenceErr error
 	saves       []string
+	// pruned are the prunes asked for, pruneErr what they answer when set, and onPrune is called with
+	// the lock held when one is asked for.
+	pruned   []prunedEnv
+	pruneErr error
+	onPrune  func(m *memStore, envID string)
+}
+
+// prunedEnv is a prune a memStore was asked for.
+type prunedEnv struct {
+	env  string
+	keep Retention
+	now  time.Time
+}
+
+func (m *memStore) PruneRuns(_ context.Context, envID string, keep Retention, now time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruned = append(m.pruned, prunedEnv{envID, keep, now})
+	if m.onPrune != nil {
+		m.onPrune(m, envID)
+	}
+	return 0, m.pruneErr
+}
+
+func (m *memStore) PruneAll(_ context.Context, keep Retention, now time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruned = append(m.pruned, prunedEnv{"", keep, now})
+	return 0, m.pruneErr
+}
+
+func (m *memStore) prunes() []prunedEnv {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.pruned)
 }
 
 func newMemStore() *memStore {
