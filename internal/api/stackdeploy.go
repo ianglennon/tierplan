@@ -1179,28 +1179,39 @@ func servicesProblem(e *stackops.ServicesInvalidError) error {
 }
 
 // holderSentence says what holds an environment's operation lock, without a stop: a stack operation
-// names its stack, and a clean-up of the environment (which names none) says the environment is
-// being cleaned.
+// names its stack, and the janitor's clean-up (which names none) says the janitor is cleaning the
+// environment.
 func holderSentence(envName string, h stackops.Holder) string {
 	if h.Kind == stackops.HolderKindJanitor {
-		return "TierPlan is cleaning up " + envName
+		return "The janitor is cleaning " + envName
 	}
 	return "Another stack operation is running on " + envName + ": " + h.StackName
 }
 
 // operationLocked is the 409 for an operation asked for while another holds the environment: it names
-// the stack, the job and when it started, so the page can say who to wait for and open it.
+// the stack, the job and when it started, so the page can say who to wait for and open it. The
+// janitor's hold names no stack: it names its kind and the run, and says the janitor is cleaning the
+// environment.
 func operationLocked(envName string, h stackops.Holder) error {
 	started := rfc3339(h.Started)
+	details := []*huma.ErrorDetail{
+		{Location: "stack", Message: h.StackName},
+		{Location: "job", Message: h.JobID},
+		{Location: "started", Message: started},
+		{Location: "stackId", Message: h.StackID},
+	}
+	if h.Kind == stackops.HolderKindJanitor {
+		details = []*huma.ErrorDetail{
+			{Location: "kind", Message: h.Kind},
+			{Location: "runId", Message: h.RunID},
+			{Location: "job", Message: h.JobID},
+			{Location: "started", Message: started},
+		}
+	}
 	return &huma.ErrorModel{
 		Type: problemOperationLocked, Title: http.StatusText(http.StatusConflict), Status: http.StatusConflict,
 		Detail: holderSentence(envName, h) + ", started " + started + ". Try again when it finishes.",
-		Errors: []*huma.ErrorDetail{
-			{Location: "stack", Message: h.StackName},
-			{Location: "job", Message: h.JobID},
-			{Location: "started", Message: started},
-			{Location: "stackId", Message: h.StackID},
-		},
+		Errors: details,
 	}
 }
 

@@ -11756,10 +11756,12 @@ export interface components {
             /** @description The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting */
             jobId: string;
             /**
-             * @description What the operation is. janitor is a clean-up of the environment, which names no stack
+             * @description What the operation is. janitor is the janitor cleaning the environment: it names no stack, so stackId and stackName are empty and runId names the run
              * @enum {string}
              */
             kind: "deploy" | "update" | "rollback" | "start" | "stop" | "remove" | "adopt" | "janitor";
+            /** @description Left out unless the kind is janitor: the janitor run that holds the lock, which GET .../janitor/runs/{runId} reads */
+            runId?: string;
             /** @description The stack the running operation is on */
             stackId: string;
             /** @description Its name */

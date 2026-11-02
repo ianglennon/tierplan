@@ -722,3 +722,121 @@ func TestJanitorRunErrorNotRetried(t *testing.T) {
 		}
 	}
 }
+
+// janitorHold takes the environment's lock as a janitor run does.
+func janitorHold(t *testing.T, f *envFix, envID string) (stackops.Holder, func()) {
+	t.Helper()
+	h := stackops.Holder{Kind: stackops.HolderKindJanitor, JobID: "job-9", RunID: "run-9", By: "ada", Started: time.Date(2026, 1, 1, 8, 30, 0, 0, time.UTC)}
+	release, _, ok := f.stackLocks.TryAcquire(envID, h)
+	if !ok {
+		t.Fatal("the lock was not free")
+	}
+	return h, release
+}
+
+// RESEARCH F9, Pitfall 4: a deploy, a review and an automatic deploy refused because the janitor holds the
+// lock are told the janitor has the environment, not an empty stack name, and may try again.
+func TestDeployRefusedByJanitorHold(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	operator := f.caller(t, e, "operator-1", "operator")
+	alpha := newStack(t, admin, "alpha")
+	h, release := janitorHold(t, f, e.ID)
+	t.Cleanup(release)
+
+	writes := len(f.fake.Writes())
+	rec := operator.deploy(alpha.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusConflict || problemType(t, rec) != "operation_locked" {
+		t.Fatalf("a deploy while the janitor cleans: %d %s, want 409 operation_locked", rec.Code, rec.Body)
+	}
+	pr := problemOf(t, rec)
+	if want := "The janitor is cleaning " + e.Name + ", started 2026-01-01T08:30:00Z. Try again when it finishes."; pr.Detail != want {
+		t.Errorf("detail = %q, want %q", pr.Detail, want)
+	}
+	var named []string
+	for _, er := range pr.Errors {
+		named = append(named, er.Location+"="+er.Message)
+	}
+	for _, want := range []string{"kind=janitor", "runId=" + h.RunID} {
+		if !slices.Contains(named, want) {
+			t.Errorf("errors = %v, want %s", named, want)
+		}
+	}
+	if slices.ContainsFunc(named, func(s string) bool { return strings.HasPrefix(s, "stack=") || strings.HasPrefix(s, "stackId=") }) {
+		t.Errorf("errors = %v, want no empty stack named", named)
+	}
+	if got := len(f.fake.Writes()); got != writes {
+		t.Errorf("writes went from %d to %d, a refused deploy writes nothing", writes, got)
+	}
+
+	// The review says it as a blocking problem, in the same words.
+	rv, code, raw := operator.reviewStack(alpha.ID, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("review: %d %s", code, raw)
+	}
+	if p, ok := rv.problem("operation_locked"); !ok || p.Severity != "error" || !strings.HasPrefix(p.Message, "The janitor is cleaning "+e.Name+", started ") {
+		t.Errorf("problems = %+v, want a blocking operation_locked that names the janitor", rv.Problems)
+	}
+
+	// Once the janitor is done the same deploy goes ahead.
+	release()
+	rec = operator.deploy(alpha.ID, `{"draftVersion":1}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("a deploy after the janitor finished: %d %s, want 202", rec.Code, rec.Body)
+	}
+	f.awaitDeploy(t, answerOf[struct {
+		JobID string `json:"jobId"`
+	}](t, rec).JobID)
+}
+
+// An automatic deploy (git) refused by the janitor's hold is a retryable refusal in the same words.
+func TestAutoDeployRefusedByJanitorHold(t *testing.T) {
+	t.Parallel()
+	r := newDeployerRig(t, "swarm")
+	v := r.stack(t, "locked", composeWeb127)
+	_, release := janitorHold(t, r.f, r.e.ID)
+	t.Cleanup(release)
+	ref := refusalOf(t, r.deploy(v, "webhook"))
+	if ref.Code != "operation_locked" || !ref.Retry || !strings.HasPrefix(ref.Detail, "The janitor is cleaning "+r.e.Name+", started ") {
+		t.Errorf("refusal = %+v, want a retryable operation_locked that names the janitor", ref)
+	}
+}
+
+// The lock a stack's page shows while the janitor cleans: its kind, no stack, and the run.
+func TestLockBodyJanitor(t *testing.T) {
+	t.Parallel()
+	f, e := stackEnv(t, nil)
+	admin := f.caller(t, e, "envadmin-1", "admin")
+	viewer := f.caller(t, e, "viewer-1", "viewer")
+	alpha := newStack(t, admin, "alpha")
+	if lock := lockOf(t, viewer, alpha.ID); lock != nil {
+		t.Fatalf("lock = %+v before anything holds the environment, want none", lock)
+	}
+	h, release := janitorHold(t, f, e.ID)
+	t.Cleanup(release)
+	rec := viewer.do(http.MethodGet, "stacks/"+alpha.ID, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get stack: %d %s", rec.Code, rec.Body)
+	}
+	lock := answerOf[struct {
+		Lock *struct {
+			lockAnswer
+			RunID string `json:"runId"`
+		} `json:"lock"`
+	}](t, rec).Lock
+	if lock == nil || lock.Kind != "janitor" || lock.StackID != "" || lock.StackName != "" || lock.RunID != h.RunID ||
+		lock.JobID != h.JobID || lock.StartedBy != "ada" || lock.StartedAt != "2026-01-01T08:30:00Z" {
+		t.Fatalf("lock = %+v, want the janitor's, with no stack and run %s", lock, h.RunID)
+	}
+	// Another holder's body carries no run.
+	release()
+	release2, _, ok := f.stackLocks.TryAcquire(e.ID, stackops.Holder{StackID: alpha.ID, StackName: "alpha", JobID: "j", Kind: "deploy", By: "ada", Started: h.Started})
+	if !ok {
+		t.Fatal("the lock was not free")
+	}
+	t.Cleanup(release2)
+	if raw := viewer.do(http.MethodGet, "stacks/"+alpha.ID, "").Body.String(); strings.Contains(raw, "runId") {
+		t.Errorf("a deploy's lock body names a run: %s", raw)
+	}
+}

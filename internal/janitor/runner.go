@@ -114,18 +114,17 @@ func (r *Runner) Start(ctx context.Context, req RunRequest) (Started, error) {
 	if r.Store == nil {
 		return Started{}, errors.New("janitor: the runner has no store to record a run in")
 	}
+	id, err := uuid.NewV7()
+	if err != nil {
+		return Started{}, fmt.Errorf("new run id: %w", err)
+	}
+	runID := id.String()
 	release, held, ok := r.Locks.TryAcquire(req.EnvID, stackops.Holder{
-		Kind: stackops.HolderKindJanitor, By: req.Actor, Started: r.clock().Now().UTC(),
+		Kind: stackops.HolderKindJanitor, By: req.Actor, RunID: runID, Started: r.clock().Now().UTC(),
 	})
 	if !ok {
 		return Started{}, &LockedError{Holder: held}
 	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		release()
-		return Started{}, fmt.Errorf("new run id: %w", err)
-	}
-	runID := id.String()
 	// The run is on record before anything can be removed (T-11-12). A run that cannot be
 	// recorded is not started.
 	actor := req.ActorID

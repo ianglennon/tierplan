@@ -325,7 +325,8 @@ type StackLockBody struct {
 	StackID   string `json:"stackId" doc:"The stack the running operation is on"`
 	StackName string `json:"stackName" doc:"Its name"`
 	JobID     string `json:"jobId" doc:"The job that runs the operation: open its console at .../stacks/{stackId}/deploys/{jobId}. Empty for the instant between the lock being taken and the job starting"`
-	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt,janitor" doc:"What the operation is. janitor is a clean-up of the environment, which names no stack"`
+	Kind      string `json:"kind" enum:"deploy,update,rollback,start,stop,remove,adopt,janitor" doc:"What the operation is. janitor is the janitor cleaning the environment: it names no stack, so stackId and stackName are empty and runId names the run"`
+	RunID     string `json:"runId,omitempty" doc:"Left out unless the kind is janitor: the janitor run that holds the lock, which GET .../janitor/runs/{runId} reads"`
 	StartedAt string `json:"startedAt" doc:"When it started, RFC 3339 UTC"`
 	StartedBy string `json:"startedBy" doc:"Who started it, as a name"`
 }
@@ -662,7 +663,7 @@ func stackDetailOf(ctx context.Context, d StacksDeps, st stackops.Stack) (StackD
 // lockBody is the holder of an environment's operation lock as the answers show it.
 func lockBody(h stackops.Holder) *StackLockBody {
 	return &StackLockBody{
-		StackID: h.StackID, StackName: h.StackName, JobID: h.JobID, Kind: h.Kind,
+		StackID: h.StackID, StackName: h.StackName, JobID: h.JobID, Kind: h.Kind, RunID: h.RunID,
 		StartedAt: rfc3339(h.Started), StartedBy: h.By,
 	}
 }

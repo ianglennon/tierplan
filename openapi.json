@@ -17054,7 +17054,7 @@
             "type": "string"
           },
           "kind": {
-            "description": "What the operation is. janitor is a clean-up of the environment, which names no stack",
+            "description": "What the operation is. janitor is the janitor cleaning the environment: it names no stack, so stackId and stackName are empty and runId names the run",
             "enum": [
               "deploy",
               "update",
@@ -17065,6 +17065,10 @@
               "adopt",
               "janitor"
             ],
+            "type": "string"
+          },
+          "runId": {
+            "description": "Left out unless the kind is janitor: the janitor run that holds the lock, which GET .../janitor/runs/{runId} reads",
             "type": "string"
           },
           "stackId": {

@@ -207,8 +207,8 @@ func TestRunnerHoldsLockOnlyWhileRunning(t *testing.T) {
 	}
 	testsupport.Await(t, "the run to read the environment", eng.entered)
 	held, ok := locks.Held("env-1")
-	if !ok || held.Kind != stackops.HolderKindJanitor || held.By != "ada" || held.JobID != started.JobID || held.StackID != "" || held.StackName != "" {
-		t.Fatalf("held = %+v %v, want a janitor holder by ada with the run's job and no stack", held, ok)
+	if !ok || held.Kind != stackops.HolderKindJanitor || held.By != "ada" || held.JobID != started.JobID || held.RunID != started.RunID || held.StackID != "" || held.StackName != "" {
+		t.Fatalf("held = %+v %v, want a janitor holder by ada with the run and its job and no stack", held, ok)
 	}
 	// A second run, or a deploy, finds the environment taken.
 	_, err = run.Start(ctx, RunRequest{EnvID: "env-1", Trigger: TriggerManual, Actor: "bob", Owner: "user:u2", Ticked: ticked("c2")})
