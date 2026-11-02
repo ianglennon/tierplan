@@ -95,7 +95,15 @@ func TestClassifyImageUsage(t *testing.T) {
 			},
 		}
 		plan := Build(Input{Snapshot: s}, DefaultPolicy(), t0)
-		if len(plan.Items) != 1 || plan.Items[0].NodeID != "n2-id" || len(plan.NotRemoved) != 0 {
+		// The stopped container is a plain one the standalone rules look at too (it was not inspected, so it is
+		// cant_tell); only the images are this case's business.
+		var notRemovedImages int
+		for _, it := range plan.NotRemoved {
+			if it.Type == KindImage {
+				notRemovedImages++
+			}
+		}
+		if len(plan.Items) != 1 || plan.Items[0].NodeID != "n2-id" || notRemovedImages != 0 {
 			t.Fatalf("plan = %+v, want the copy on n2 alone: the same image ID is one item per node, judged per node", plan)
 		}
 	})

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // The labels Docker puts on the container of a swarm task.
@@ -63,7 +65,8 @@ func taskGroup(c Container, global bool) (key, slot string, ok bool) {
 	return svcID + "/node/" + c.NodeID, "", true
 }
 
-// ContainerInput is everything ClassifyContainer decides on for one swarm task container.
+// ContainerInput is everything ClassifyContainer decides on for one container: a swarm task
+// container, or (Standalone) any other.
 type ContainerInput struct {
 	Container Container
 	// Group is the key of the container's group, empty when its labels do not place it. Slot is the
@@ -82,6 +85,24 @@ type ContainerInput struct {
 	End       ContainerEnd
 	Inspected bool
 	Grace     time.Duration
+
+	// Standalone is true for a container that is not the container of a swarm task. The fields below
+	// are its own; a task container leaves them zero.
+	Standalone bool
+	// Project is the compose project the container is labelled with, StackID the TierPlan stack it
+	// is labelled with; both are empty for a plain docker run container. Oneoff is true for a
+	// container left by docker compose run.
+	Project, StackID string
+	Oneoff           bool
+	// StacksRead is true when TierPlan's stack records were read. StackOwned: a TierPlan stack that
+	// exists owns the container's project (by the stack ID, or a stack named as the project).
+	// StackGone: the container carries the ID of a TierPlan stack that no longer exists.
+	StacksRead, StackOwned, StackGone bool
+	// ProjectBusy: another container of the project (or of the stack) is in any state but exited.
+	// ProjectOthers: another container of the project exists, in any state.
+	ProjectBusy, ProjectOthers bool
+	// OptIn is the policy's "also remove stopped standalone containers".
+	OptIn bool
 }
 
 // taskContainers builds the input of every swarm task container of a snapshot, with its rank in
@@ -121,6 +142,13 @@ func taskContainers(s Snapshot, p Policy) []ContainerInput {
 		}
 		out = append(out, ci)
 	}
+	rankGroups(out, groups)
+	return out
+}
+
+// rankGroups sets the Rank and Total of every container of every group, the oldest first. groups
+// maps a group key to the indexes in out of its exited containers.
+func rankGroups(out []ContainerInput, groups map[string][]int) {
 	for _, idx := range groups {
 		slices.SortStableFunc(idx, func(a, b int) int {
 			return cmp.Or(out[a].Container.Created.Compare(out[b].Container.Created), strings.Compare(out[a].Container.ID, out[b].Container.ID))
@@ -129,7 +157,66 @@ func taskContainers(s Snapshot, p Policy) []ContainerInput {
 			out[i].Rank, out[i].Total = rank+1, len(idx)
 		}
 	}
+}
+
+// standaloneContainers builds the input of every container that is not the container of a swarm
+// task, with the facts the standalone rules decide on. The one-offs of a compose service are
+// ranked per node, because a compose project lives on one engine: the newest KeepN of them stay.
+func standaloneContainers(s Snapshot, p Policy) []ContainerInput {
+	// How many containers share each compose project and each TierPlan stack ID, and how many of
+	// those are anything but exited. The container being judged is exited, so it adds to the first
+	// count and never to the second.
+	type tally struct{ all, live int }
+	projects, stackIDs := map[string]tally{}, map[string]tally{}
+	for _, c := range s.Containers {
+		live := 0
+		if c.State != stateExited {
+			live = 1
+		}
+		count := func(m map[string]tally, key string) {
+			if key == "" {
+				return
+			}
+			t := m[key]
+			t.all++
+			t.live += live
+			m[key] = t
+		}
+		count(projects, c.Labels[stacks.LabelComposeProject])
+		count(stackIDs, c.Labels[stacks.LabelStackID])
+	}
+	var out []ContainerInput
+	groups := map[string][]int{}
+	for _, c := range s.Containers {
+		if isSwarmTask(c) {
+			continue
+		}
+		project, stackID := c.Labels[stacks.LabelComposeProject], c.Labels[stacks.LabelStackID]
+		ci := ContainerInput{
+			Container: c, Standalone: true, KeepN: p.keepN(), Grace: p.grace(), OptIn: p.RemoveStoppedContainers,
+			Project: project, StackID: stackID, Oneoff: c.Labels[stacks.LabelComposeOneoff] == composeOneoff,
+			StacksRead: s.StacksRead,
+		}
+		if s.StacksRead {
+			ci.StackOwned = (stackID != "" && s.StackIDs[stackID]) || (project != "" && s.StackNames[project])
+			ci.StackGone = stackID != "" && !ci.StackOwned
+		}
+		ci.ProjectBusy = (project != "" && projects[project].live > 0) || (stackID != "" && stackIDs[stackID].live > 0)
+		ci.ProjectOthers = project != "" && projects[project].all > 1
+		if ci.Oneoff && c.State == stateExited {
+			ci.Group = strings.Join([]string{"oneoff", c.NodeID, project, c.Labels[stacks.LabelComposeService]}, "/")
+			groups[ci.Group] = append(groups[ci.Group], len(out))
+		}
+		out = append(out, ci)
+	}
+	rankGroups(out, groups)
 	return out
+}
+
+// allContainers is the input of every container of a snapshot: the swarm's task containers, then
+// the rest.
+func allContainers(s Snapshot, p Policy) []ContainerInput {
+	return append(taskContainers(s, p), standaloneContainers(s, p)...)
 }
 
 // beyondKeep reports whether a ranked container is older than the newest KeepN of its group.

@@ -412,11 +412,13 @@ func (f *authFixture) build(t *testing.T) http.Handler {
 		// The clock of a janitor run is the fixture's, so containers dated against it are past grace.
 		janitorClock := nowClock(f.clk.now)
 		janitorRuns := &janitor.SQLStore{St: f.st}
+		// The janitor asks the stack records which stacks and projects still exist, as the server does.
+		janitorFacts := stackops.NetFacts{Repo: stackops.Repo{Store: f.st, Vault: f.v}, Locks: f.stackLocks}
 		janitorDeps := api.JanitorDeps{
 			Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Locks: f.stackLocks, Jobs: f.jobHub,
-			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, AddressSpaces: addressSpaces,
+			Clock: janitorClock, Now: f.clk.now, Log: log, Runs: janitorRuns, AddressSpaces: addressSpaces, StackFacts: janitorFacts,
 			Runner: &janitor.Runner{
-				Engine: api.NewJanitorEngine(f.agg, addrClusters, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log,
+				Engine: api.NewJanitorEngine(f.agg, addrClusters, janitorFacts, log), Locks: f.stackLocks, Jobs: f.jobHub, Clock: janitorClock, Store: janitorRuns, Audit: f.aud, Log: log,
 				Networks: api.NewJanitorNetworks(api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: f.agg, Clusters: addrClusters, Store: f.st, Audit: f.aud, Checker: checker, Now: f.clk.now, Log: log}),
 			},
 		}

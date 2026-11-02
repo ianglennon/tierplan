@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ianglennon/tierplan/internal/dockerx"
 	"github.com/ianglennon/tierplan/internal/envs"
@@ -21,24 +24,35 @@ import (
 // are left un-inspected, which the planner reads as cant_tell.
 const inspectNodeTimeout = time.Minute
 
+// nodeTimeTimeout is how long reading one node's clock may take. A node that does not answer in
+// time has no clock in the snapshot, which the planner reads as unknown (RESEARCH A9).
+const nodeTimeTimeout = 10 * time.Second
+
+// nodeTimeFanout is how many nodes are asked for their clock at once.
+const nodeTimeFanout = 4
+
 // janitorEngine is janitor.Engine over the server's aggregator: a snapshot is read fresh from
 // every node, never from the cache, and the swarm's services and tasks come from one manager.
 type janitorEngine struct {
 	agg      *envs.Aggregator
 	clusters *envs.Clusters
-	log      *slog.Logger
+	// facts are TierPlan's own stacks, which say whether the stack or project a container is
+	// labelled with still exists. Nil means they are not read, and no compose container is removable.
+	facts envs.StackFacts
+	log   *slog.Logger
 }
 
 var _ janitor.Engine = (*janitorEngine)(nil)
 
 // NewJanitorEngine is the janitor's engine over the server's aggregator and cluster reader, for
-// the Runner the server builds. clusters may be nil on a server with no swarm reader; log nil
-// means slog.Default().
-func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, log *slog.Logger) janitor.Engine {
+// the Runner the server builds. clusters may be nil on a server with no swarm reader; facts are the
+// stacks of the environment (the same ones the Address space check reads), nil when there are none to
+// ask, in which case no compose container is ever removable; log nil means slog.Default().
+func NewJanitorEngine(agg *envs.Aggregator, clusters *envs.Clusters, facts envs.StackFacts, log *slog.Logger) janitor.Engine {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &janitorEngine{agg: agg, clusters: clusters, log: log}
+	return &janitorEngine{agg: agg, clusters: clusters, facts: facts, log: log}
 }
 
 // Snapshot implements janitor.Engine.
@@ -70,6 +84,8 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 			Size: img.Size, Created: img.Created, Labels: img.Labels,
 		})
 	}
+	e.readStacks(ctx, envID, &snap)
+	snap.NodeTimes = e.readNodeTimes(ctx, envID, agg.Nodes)
 	if e.clusters == nil {
 		return snap, nil
 	}
@@ -83,6 +99,57 @@ func (e *janitorEngine) Snapshot(ctx context.Context, envID string) (janitor.Sna
 		e.readManager(ctx, envID, &snap)
 	}
 	return snap, nil
+}
+
+// readStacks fills the names and IDs of the TierPlan stacks of the environment. When they cannot be
+// read StacksRead stays false, and the planner removes no compose container.
+func (e *janitorEngine) readStacks(ctx context.Context, envID string, snap *janitor.Snapshot) {
+	if e.facts == nil {
+		return
+	}
+	names, ids, err := e.facts.Stacks(ctx, envID)
+	if err != nil {
+		e.log.Warn("the janitor could not read the stacks of an environment", "environment", envID, "error", err)
+		return
+	}
+	snap.StackNames, snap.StackIDs, snap.StacksRead = names, ids, true
+}
+
+// readNodeTimes asks each node's engine what time it is, at most nodeTimeFanout nodes at once. A
+// node whose engine does not say, or does not answer in time, has no entry: its containers are
+// judged as before and the reason is logged (RESEARCH Pitfall 11, A9).
+func (e *janitorEngine) readNodeTimes(ctx context.Context, envID string, nodes []envs.NodeRef) map[string]time.Time {
+	var (
+		mu  sync.Mutex
+		out = make(map[string]time.Time, len(nodes))
+	)
+	var g errgroup.Group
+	g.SetLimit(nodeTimeFanout)
+	for _, n := range nodes {
+		g.Go(func() error {
+			ctx, cancel := context.WithTimeout(ctx, nodeTimeTimeout)
+			defer cancel()
+			var at time.Time
+			err := e.agg.OnNode(ctx, envID, n.ID, func(c *dockerx.Client) error {
+				var err error
+				at, err = c.SystemTime(ctx)
+				return err
+			})
+			switch {
+			case err != nil:
+				e.log.Warn("the janitor could not read the clock of a node", "environment", envID, "node", n.Name, "error", err)
+			case at.IsZero():
+				e.log.Info("the engine of a node does not report its time, so its clock is not checked", "environment", envID, "node", n.Name)
+			default:
+				mu.Lock()
+				out[n.ID] = at
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	_ = g.Wait()
+	return out
 }
 
 // readManager fills the swarm's services and the tasks it wants running from one manager. When no

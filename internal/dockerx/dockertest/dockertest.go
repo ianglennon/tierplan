@@ -89,6 +89,9 @@ type FakeConfig struct {
 	Hostname string
 	// OperatingSystem is Info.OperatingSystem. Default "Ubuntu 26.04 LTS".
 	OperatingSystem string
+	// SystemTime is Info.SystemTime, the engine's own clock as an RFC 3339 string. Empty leaves it out
+	// of /info, as an engine that does not report its time does.
+	SystemTime string
 	// SecurityOptions is Info.SecurityOptions.
 	SecurityOptions []string
 	// SwarmState is Info.Swarm.LocalNodeState. Default "inactive".
@@ -1022,6 +1025,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 			ServerVersion:   cfg.Version,
 			OperatingSystem: cfg.OperatingSystem,
 			OSType:          cfg.OSType,
+			SystemTime:      cfg.SystemTime,
 			Architecture:    "x86_64",
 			KernelVersion:   "7.0.0-fake",
 			Driver:          "overlayfs",

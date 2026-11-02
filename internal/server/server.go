@@ -788,7 +788,8 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	// The orphan check asks the stacks which networks they declare external and whether one holds an operation, so a
 	// network a stack uses or is deploying is never listed (NET-04). It opens the stacks with the vault, as every
 	// other reader of a stack does.
-	addressSpaces.WithStackFacts(stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks})
+	netFacts := stackops.NetFacts{Repo: stackops.Repo{Store: st, Vault: vlt}, Locks: stackLocks}
+	addressSpaces.WithStackFacts(netFacts)
 	driftMonitor := stackops.NewDriftMonitor(stackops.DriftMonitorDeps{
 		Ops:  stackops.Deps{Aggregator: aggregator, Clusters: clusters, Resolver: resolver, Checker: checker, Log: log},
 		Repo: stackops.Repo{Store: st, Vault: vlt}, Store: driftStore, Audit: st, Locks: stackLocks,
@@ -830,13 +831,13 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 	addressSpaceDeps := api.AddressSpaceDeps{AddressSpaces: addressSpaces, Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, HostRoutes: hostRoutes, Now: time.Now, Log: log}
 	janitorDeps := api.JanitorDeps{
 		Aggregator: aggregator, Clusters: clusters, Store: st, Audit: aud, Checker: checker, Locks: stackLocks, Jobs: jobHub,
-		AddressSpaces: addressSpaces, Clock: bo.janitorClock, Now: janitorNow, Log: log,
+		AddressSpaces: addressSpaces, StackFacts: netFacts, Clock: bo.janitorClock, Now: janitorNow, Log: log,
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
 	janitorRuns := &janitor.SQLStore{St: st}
 	janitorDeps.Runs = janitorRuns
 	janitorDeps.Runner = &janitor.Runner{
-		Engine: api.NewJanitorEngine(aggregator, clusters, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
+		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,
 		Policy: func(context.Context, string) (janitor.Policy, error) { return janitor.DefaultPolicy(), nil }, Store: janitorRuns, Audit: aud, Log: log,
 		Networks: api.NewJanitorNetworks(addressSpaceDeps),
 	}

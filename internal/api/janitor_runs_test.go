@@ -276,7 +276,7 @@ func TestJanitorEngineRemoveContainerChecksAgain(t *testing.T) {
 	s := janitorSwarm(t, onWorker(boxes), nil, wantedTask("task-web-live", "web-live"))
 	_, preview := s.previewJanitor(t)
 	node := preview.Items[0].NodeID
-	eng := api.NewJanitorEngine(s.agg, s.clusters, nil)
+	eng := api.NewJanitorEngine(s.agg, s.clusters, nil, nil)
 	ctx := testsupport.Context(t)
 	for id, want := range map[string]error{"web-live": janitor.ErrNoLongerStale, "web-kept": janitor.ErrNoLongerStale, "web-nobody": janitor.ErrGone} {
 		if err := eng.RemoveContainer(ctx, s.env.ID, node, id); !errors.Is(err, want) {

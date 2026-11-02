@@ -43,6 +43,10 @@ type JanitorDeps struct {
 	// AddressSpaces is the orphan check the preview judges networks by, the one the Address space
 	// page lists them with. Nil means the preview lists no network.
 	AddressSpaces *envs.AddressSpaces
+	// StackFacts are TierPlan's own stacks, the same ones the Address space check reads. The janitor
+	// asks them which stacks and projects of an environment still exist before it removes a compose
+	// container. Nil means they are not read, and no compose container is removable.
+	StackFacts envs.StackFacts
 	// Now is the clock; it defaults to time.Now.
 	Now func() time.Time
 	// Log receives server-side failures. Nil means slog.Default().

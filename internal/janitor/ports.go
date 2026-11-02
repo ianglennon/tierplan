@@ -91,8 +91,16 @@ type Snapshot struct {
 	// Services are the swarm's services by ID, nil when no manager answered.
 	Services map[string]Service
 	// Tasks are the tasks the swarm wants running. Without a manager there are none.
-	Tasks  []Task
-	ReadAt time.Time
+	Tasks []Task
+	// StackNames and StackIDs are the names and IDs of the TierPlan stacks of the environment, and
+	// StacksRead is true when they were read. A compose-labelled container is judged by whether its
+	// stack or project still exists, so while StacksRead is false none of them is removable.
+	StackNames, StackIDs map[string]bool
+	StacksRead           bool
+	// NodeTimes is the time each node's engine reported when it was read, by node ID. A node whose
+	// engine did not say what time it is has no entry (or the zero time).
+	NodeTimes map[string]time.Time
+	ReadAt    time.Time
 }
 
 // ContainerEnd is how a container ended: what a list does not carry and an inspect does.

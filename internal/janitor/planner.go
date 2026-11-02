@@ -211,6 +211,13 @@ type Input struct {
 //  9. its service is gone, and a manager said so: removable (task_service_gone)
 //  10. otherwise: removable (task_beyond_keep)
 //
+// A container that is not the container of a swarm task (on a standalone host, or beside the tasks
+// on a swarm node) is judged by the rules documented on standaloneRule: the leftovers of a TierPlan
+// stack that is gone and the one-offs of docker compose run beyond the newest KeepN are removable,
+// a stopped container someone may restart (a lone container of a compose project TierPlan does not
+// manage, a plain docker run container) is reported until the environment opts in to removing them,
+// and a container of a project that still exists is never touched. Each waits for the grace period.
+//
 // A network is judged by ClassifyNetwork from the orphan check's report, an image by ClassifyImage
 // from the snapshot's images, containers and service specs.
 //
@@ -226,7 +233,7 @@ func Build(in Input, p Policy, now time.Time) Plan {
 	}
 	slices.Sort(plan.WithheldNodes)
 
-	for _, ci := range taskContainers(s, p) {
+	for _, ci := range allContainers(s, p) {
 		end, inspected := in.Ends[ci.Container.ID]
 		ci.End, ci.Inspected = end, inspected
 		item, listed := ClassifyContainer(ci, now)
@@ -295,7 +302,7 @@ func sortItems(items []Item) {
 // the oldest first; a candidate over the cap is cant_tell in the plan.
 func Candidates(s Snapshot, p Policy) []ContainerRef {
 	var cands []ContainerInput
-	for _, ci := range taskContainers(s, p) {
+	for _, ci := range allContainers(s, p) {
 		if needsInspect(ci) {
 			cands = append(cands, ci)
 		}
