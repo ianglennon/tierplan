@@ -24,6 +24,7 @@ import (
 	"github.com/ianglennon/tierplan/internal/netspace"
 	"github.com/ianglennon/tierplan/internal/rbac"
 	"github.com/ianglennon/tierplan/internal/redact"
+	"github.com/ianglennon/tierplan/internal/stacks"
 	"github.com/ianglennon/tierplan/internal/store/sqlc"
 )
 
@@ -195,7 +196,7 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 			continue
 		}
 		if n.Scope == dockerx.ScopeSwarm {
-			return "", n.Labels["tierplan.keep"] == "true", nil
+			return "", n.Labels[stacks.LabelKeep] == "true", nil
 		}
 		if nodeID == "" || n.NodeID == nodeID {
 			local = append(local, n)
@@ -203,9 +204,9 @@ func keepNode(agg envs.Aggregate, name, nodeID string) (node string, labelKept b
 	}
 	switch {
 	case nodeID != "":
-		return nodeID, len(local) > 0 && local[0].Labels["tierplan.keep"] == "true", nil
+		return nodeID, len(local) > 0 && local[0].Labels[stacks.LabelKeep] == "true", nil
 	case len(local) == 1:
-		return local[0].NodeID, local[0].Labels["tierplan.keep"] == "true", nil
+		return local[0].NodeID, local[0].Labels[stacks.LabelKeep] == "true", nil
 	case len(local) > 1:
 		return "", false, httpx.Problem(http.StatusUnprocessableEntity, problemNodeRequired,
 			"More than one node has a network named "+name+". Say which one (nodeId).")

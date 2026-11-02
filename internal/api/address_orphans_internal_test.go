@@ -9,6 +9,10 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"github.com/ianglennon/tierplan/internal/dockerx"
+	"github.com/ianglennon/tierplan/internal/envs"
+	"github.com/ianglennon/tierplan/internal/stacks"
 )
 
 // decodeExact decodes a JSON document keeping numbers exact, to compare two documents.
@@ -137,5 +141,67 @@ func TestInspectRecordRefusesWhatIsNotOneObject(t *testing.T) {
 		if doc, _, err := inspectRecord([]byte(raw)); err == nil {
 			t.Errorf("%q: got %q, want an error", raw, doc)
 		}
+	}
+}
+
+// TestKeepLabelIsOneConstant: the keep label the orphan check reads (envs), the one the janitor and the strip sites
+// read (stacks) and the one the API reads are the same string (JAN-07, RESEARCH F1). envs does not import stacks, so
+// this is where the two meet.
+func TestKeepLabelIsOneConstant(t *testing.T) {
+	t.Parallel()
+	if envs.LabelKeep != stacks.LabelKeep {
+		t.Errorf("envs.LabelKeep = %q, stacks.LabelKeep = %q, want one label", envs.LabelKeep, stacks.LabelKeep)
+	}
+	if stacks.LabelKeep != "tierplan.keep" {
+		t.Errorf("stacks.LabelKeep = %q, want tierplan.keep: users write it into compose files", stacks.LabelKeep)
+	}
+}
+
+// TestKeepNodeExactLabel: a network protects itself only with the exact value "true" (JAN-07): no other case,
+// spelling or padding does.
+func TestKeepNodeExactLabel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"true", true},
+		{"TRUE", false},
+		{"True", false},
+		{"1", false},
+		{"yes", false},
+		{"", false},
+		{" true", false},
+		{"true ", false},
+		{"truе", false}, // the last letter is Cyrillic: no Unicode normalisation
+	}
+	scopes := []string{dockerx.ScopeSwarm, dockerx.ScopeLocal}
+	for _, scope := range scopes {
+		for _, c := range cases {
+			t.Run(scope+"/"+c.value, func(t *testing.T) {
+				t.Parallel()
+				agg := envs.Aggregate{Networks: []envs.NetworkRow{{
+					NetworkRow: dockerx.NetworkRow{Name: "back", Scope: scope, Labels: map[string]string{stacks.LabelKeep: c.value}},
+					NodeID:     "n1",
+				}}}
+
+				_, kept, err := keepNode(agg, "back", "n1")
+
+				if err != nil {
+					t.Fatalf("keepNode: %v", err)
+				}
+				if kept != c.want {
+					t.Errorf("label %q kept = %v, want %v", c.value, kept, c.want)
+				}
+			})
+		}
+	}
+
+	// A key that differs in case is another label.
+	agg := envs.Aggregate{Networks: []envs.NetworkRow{{
+		NetworkRow: dockerx.NetworkRow{Name: "back", Scope: dockerx.ScopeSwarm, Labels: map[string]string{"TierPlan.Keep": "true"}},
+	}}}
+	if _, kept, err := keepNode(agg, "back", ""); err != nil || kept {
+		t.Errorf("keepNode with a differently cased key = (kept %v, err %v), want not kept", kept, err)
 	}
 }

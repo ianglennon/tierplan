@@ -176,7 +176,7 @@ func (s *AddressSpaces) judge(ctx context.Context, envID string, now time.Time, 
 			InUse:            inUse,
 			Known:            usage.Known(row),
 			Created:          row.Created,
-			KeepLabel:        row.Labels[labelKeep] == "true",
+			KeepLabel:        row.Labels[LabelKeep] == "true",
 			KeepRow:          keeps[NetKey{NodeID: key.NodeID, NetworkID: row.Name}],
 			External:         sf.externals[row.Name],
 			ExternalsUnknown: len(sf.unknown) > 0,
@@ -351,7 +351,7 @@ func (s *AddressSpaces) Kept(ctx context.Context, envID string) ([]KeptRow, erro
 		}
 		seen[key] = true
 		i, have := at[key]
-		labelled := n.Labels[labelKeep] == "true"
+		labelled := n.Labels[LabelKeep] == "true"
 		if !have && !labelled {
 			continue
 		}
@@ -473,8 +473,10 @@ const (
 	labelComposeProject = "com.docker.compose.project"
 	// labelStackID is the label TierPlan puts on what it deploys, the ID of the stack record.
 	labelStackID = "tierplan.stack.id"
-	// labelKeep, set to "true" on a network, exempts it from the orphan check (D-11).
-	labelKeep = "tierplan.keep"
+	// LabelKeep, set to "true" on a network, exempts it from the orphan check (D-11). It is the same label as
+	// stacks.LabelKeep (JAN-07): envs never imports internal/stacks, so the value is written here once more and a
+	// test in internal/api pins the two equal.
+	LabelKeep = "tierplan.keep"
 )
 
 // networkOwnerOf is the stack or compose project a network's labels name; a stack wins when both

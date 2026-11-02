@@ -1192,3 +1192,50 @@ volumes:
 		}
 	}
 }
+
+// TestConvertKeepLabelLandsOnObjects: tierplan.keep written in a compose file reaches the objects the janitor reads
+// (JAN-07, D-09): the task containers (service labels), the swarm service (deploy labels) and a declared network. The
+// YAML boolean true and the string "true" both arrive as the exact string "true", and the other spellings are not
+// turned into it.
+func TestConvertKeepLabelLandsOnObjects(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name         string
+		svcLabels    string
+		deployLabels string
+		netLabels    string
+		want         string
+	}{
+		{"the YAML boolean", "{tierplan.keep: true}", "{tierplan.keep: true}", "{tierplan.keep: true}", "true"},
+		{"the quoted string", `{tierplan.keep: "true"}`, `{tierplan.keep: "true"}`, `{tierplan.keep: "true"}`, "true"},
+		{"a list entry", "[tierplan.keep=true]", "[tierplan.keep=true]", "[tierplan.keep=true]", "true"},
+		{"capitalised, which does not protect", `{tierplan.keep: "True"}`, `{tierplan.keep: "True"}`, `{tierplan.keep: "True"}`, "True"},
+		{"an empty value, which does not protect", `{tierplan.keep: ""}`, `{tierplan.keep: ""}`, `{tierplan.keep: ""}`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			compose := "services:\n  web:\n    image: nginx:1.27\n    labels: " + c.svcLabels + "\n    deploy:\n      labels: " + c.deployLabels +
+				"\n    networks: [back]\nnetworks:\n  back:\n    labels: " + c.netLabels + "\n"
+
+			got, err := plan(t, "keep", compose)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+
+			if len(got.Services) != 1 || len(got.Networks) != 1 {
+				t.Fatalf("plan = %d services, %d networks, want 1 and 1", len(got.Services), len(got.Networks))
+			}
+			spec := got.Services[0].Spec
+			if v, ok := spec.Labels[stacks.LabelKeep]; !ok || v != c.want {
+				t.Errorf("service labels = %v, want %s=%q", spec.Labels, stacks.LabelKeep, c.want)
+			}
+			if v, ok := spec.TaskTemplate.ContainerSpec.Labels[stacks.LabelKeep]; !ok || v != c.want {
+				t.Errorf("container labels = %v, want %s=%q", spec.TaskTemplate.ContainerSpec.Labels, stacks.LabelKeep, c.want)
+			}
+			if v, ok := got.Networks[0].Labels[stacks.LabelKeep]; !ok || v != c.want {
+				t.Errorf("network labels = %v, want %s=%q", got.Networks[0].Labels, stacks.LabelKeep, c.want)
+			}
+		})
+	}
+}
