@@ -202,6 +202,20 @@ func (m *memStore) PruneAll(_ context.Context, keep Retention, now time.Time) (i
 	return 0, m.pruneErr
 }
 
+func (m *memStore) MarkInterruptedRuns(_ context.Context, now time.Time) ([]Run, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []Run
+	for id, run := range m.runs {
+		if run.State == StateRunning || run.State == StateWaiting {
+			run.State, run.Reason, run.FinishedAt = StateFailed, ReasonServerRestarted, now
+			m.runs[id] = run
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
 func (m *memStore) prunes() []prunedEnv {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1111,6 +1125,123 @@ func TestRunnerJobListsEveryRemovalBeforeTheFirst(t *testing.T) {
 	}
 	if atFirst.Meta[MetaBy] != "ada" || atFirst.Meta[MetaTrigger] != TriggerManual || atFirst.Meta[MetaRunID] == "" {
 		t.Errorf("meta = %v, want the run, its trigger and who started it", atFirst.Meta)
+	}
+}
+
+// seedInterrupted puts the runs a stopped server leaves behind on record: one running with the items it
+// had recorded, one waiting, and one completed.
+func seedInterrupted(t *testing.T, f retentionFix, env, suffix string, started time.Time) {
+	t.Helper()
+	ctx := testsupport.Context(t)
+	f.add(t, env, "running-"+suffix, StateRunning, started)
+	f.add(t, env, "waiting-"+suffix, StateWaiting, started.Add(time.Minute))
+	f.add(t, env, "done-"+suffix, StateCompleted, started.Add(-time.Hour))
+	if err := f.s.AddItems(ctx, "running-"+suffix, []RunItem{
+		{Seq: 1, Type: KindContainer, Ref: "c1", Name: "web.1", Outcome: OutcomeRemoved, Size: 10},
+		{Seq: 2, Type: KindContainer, Ref: "c2", Name: "web.2", Outcome: OutcomeRemoved, Size: -1},
+		{Seq: 3, Type: KindImage, Ref: "i1", Outcome: OutcomeRemoved, Size: 5},
+		{Seq: 4, Type: KindNetwork, Ref: "n1", Outcome: OutcomeRemoved, Size: -1},
+		{Seq: 5, Type: KindContainer, Ref: "c3", Outcome: OutcomeRefusedInUse, Code: codeInUse, Size: 7},
+		{Seq: 6, Type: KindContainer, Ref: "c4", Outcome: OutcomeSkippedProtected, Code: codeNoLongerStale, Size: -1},
+		{Seq: 7, Type: KindContainer, Ref: "c5", Outcome: OutcomeSkippedProtected, Code: codeGone, Size: -1},
+		{Seq: 8, Type: KindContainer, Ref: "c6", Outcome: OutcomeError, Code: CodeActionFailed, Size: -1},
+		{Seq: 9, Type: KindContainer, Ref: "c7", Outcome: OutcomeSkippedNodeOffline, Code: codeNodeOffline, Size: -1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A server that stopped in the middle of a run leaves it "running" or "waiting" for ever; the start
+// finishes it as failed with the reason server_restarted, keeps the items it had recorded and counts
+// them, and leaves every other run alone (D-16, UI-SPEC "Server restart during a run").
+func TestMarkInterruptedRuns(t *testing.T) {
+	t.Parallel()
+	f := newRetentionFix(t)
+	ctx := testsupport.Context(t)
+	started := f.now.Add(-time.Hour)
+	seedInterrupted(t, f, "env-1", "a", started)
+	seedInterrupted(t, f, "env-2", "b", started)
+	sweepAt := f.now
+
+	got, err := f.s.MarkInterruptedRuns(ctx, sweepAt)
+	if err != nil || len(got) != 4 {
+		t.Fatalf("MarkInterruptedRuns = %+v, %v; want the four active runs of both environments", got, err)
+	}
+	byID := map[string]Run{}
+	for _, r := range got {
+		byID[r.ID] = r
+	}
+	for _, id := range []string{"running-a", "waiting-a", "running-b", "waiting-b"} {
+		r, ok := byID[id]
+		if !ok || r.State != StateFailed || r.Reason != ReasonServerRestarted || !r.FinishedAt.Equal(sweepAt) || r.Trigger != TriggerSchedule || r.EnvID == "" {
+			t.Errorf("swept %s = %+v, want failed with server_restarted, finished at the sweep", id, r)
+		}
+	}
+	// The counts are the ones the recorded items give; a waiting run had none.
+	want := Counts{RemovedContainers: 2, RemovedImages: 1, RemovedNetworks: 1, Kept: 2, Failed: 1, SkippedOffline: 1}
+	if r := byID["running-a"]; r.Counts != want || r.EstBytes != 15 {
+		t.Errorf("running-a counts = %+v est %d, want %+v and 15 bytes: what the recorded items freed", r.Counts, r.EstBytes, want)
+	}
+	if r := byID["waiting-a"]; r.Counts != (Counts{}) || r.EstBytes != -1 {
+		t.Errorf("waiting-a counts = %+v est %d, want none and no size", r.Counts, r.EstBytes)
+	}
+
+	// On record: the same, the items unchanged, the completed run as it was.
+	run, items, err := f.s.GetRun(ctx, "env-1", "running-a")
+	if err != nil || run.State != StateFailed || run.Reason != ReasonServerRestarted || run.FinishedAt.IsZero() || len(items) != 9 || run.Counts != want {
+		t.Fatalf("running-a = %+v with %d items, %v; want it failed with its 9 items and counts", run, len(items), err)
+	}
+	if done, _, err := f.s.GetRun(ctx, "env-1", "done-a"); err != nil || done.State != StateCompleted || done.Reason != "" {
+		t.Errorf("done-a = %+v, %v; want it untouched", done, err)
+	}
+	if done, _, err := f.s.GetRun(ctx, "env-2", "done-b"); err != nil || done.State != StateCompleted {
+		t.Errorf("done-b = %+v, %v; want it untouched", done, err)
+	}
+	// A second start finds nothing to sweep, and the first sweep's time stands.
+	if again, err := f.s.MarkInterruptedRuns(ctx, sweepAt.Add(time.Hour)); err != nil || len(again) != 0 {
+		t.Errorf("a second sweep = %+v, %v; want nothing", again, err)
+	}
+	if run, _, _ := f.s.GetRun(ctx, "env-1", "running-a"); !run.FinishedAt.Equal(sweepAt) {
+		t.Errorf("finished at %v after a second sweep, want %v", run.FinishedAt, sweepAt)
+	}
+}
+
+// A clock that is behind the run's start still gives the run an end that is not before it.
+func TestMarkInterruptedRunsNeverEndBeforeTheyStart(t *testing.T) {
+	t.Parallel()
+	f := newRetentionFix(t)
+	f.add(t, "env-1", "ahead", StateRunning, f.now.Add(time.Hour))
+	got, err := f.s.MarkInterruptedRuns(testsupport.Context(t), f.now)
+	if err != nil || len(got) != 1 || got[0].FinishedAt.Before(got[0].StartedAt) {
+		t.Fatalf("MarkInterruptedRuns = %+v, %v; want the run to end no earlier than it started", got, err)
+	}
+}
+
+// Each swept run is one janitor.cleaned row by the system, failed, with the reason (T-11-42).
+func TestAuditInterruptedRuns(t *testing.T) {
+	t.Parallel()
+	f := newRetentionFix(t)
+	ctx := testsupport.Context(t)
+	seedInterrupted(t, f, "env-1", "a", f.now.Add(-time.Hour))
+	swept, err := f.s.MarkInterruptedRuns(ctx, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := &auditLog{}
+	AuditInterrupted(ctx, log, nil, swept)
+	rows := log.rows()
+	if len(rows) != 2 {
+		t.Fatalf("audit rows = %d, want one for each swept run", len(rows))
+	}
+	for _, e := range rows {
+		if e.Action != audit.ActionJanitorCleaned || e.Actor != rbac.System(SystemActor).AuditActor() || e.TargetType != "environment" ||
+			e.TargetID != "env-1" || e.EnvID != "env-1" || e.Result != audit.ResultFailure || e.Reason != ReasonServerRestarted ||
+			e.Details["outcome"] != StateFailed || e.Details["reason"] != ReasonServerRestarted || e.Details["trigger"] != TriggerSchedule {
+			t.Errorf("entry = %+v, want janitor.cleaned by the system, a failure with the reason server_restarted", e)
+		}
+	}
+	if rows[0].Details["run"] == rows[1].Details["run"] {
+		t.Errorf("both rows name run %s, want one row for each run", rows[0].Details["run"])
 	}
 }
 

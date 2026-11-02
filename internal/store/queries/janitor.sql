@@ -89,3 +89,22 @@ WHERE janitor_runs.state NOT IN ('waiting', 'running')
   AND janitor_runs.id NOT IN (SELECT k.id FROM janitor_runs k
                               WHERE k.env_id = janitor_runs.env_id
                               ORDER BY k.started_at DESC, k.id DESC LIMIT sqlc.arg(keep));
+
+-- name: MarkJanitorRunsInterrupted :many
+-- Run at start, before anything can start a run: a run still waiting or running belongs to a process
+-- that is gone. It ends failed with the reason server_restarted, at the sweep's time (never before it
+-- started), keeps the items it had recorded, and counts them the way a finished run does. Nothing is
+-- added to it. One statement, so no run is half swept.
+UPDATE janitor_runs
+SET state = 'failed', reason = 'server_restarted', finished_at = MAX(janitor_runs.started_at, sqlc.arg(finished_at)),
+    removed_containers = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'container' AND i.outcome = 'removed'),
+    removed_images = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'image' AND i.outcome = 'removed'),
+    removed_networks = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'network' AND i.outcome = 'removed'),
+    kept = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id
+            AND (i.outcome = 'refused_in_use' OR (i.outcome = 'skipped_protected' AND i.code <> 'gone'))),
+    failed = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'error'),
+    skipped_offline = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'skipped_node_offline'),
+    est_bytes = COALESCE((SELECT SUM(i.est_bytes) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'removed' AND i.est_bytes >= 0), -1)
+WHERE janitor_runs.state IN ('waiting', 'running')
+RETURNING id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
+          removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes;

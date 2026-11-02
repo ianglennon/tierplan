@@ -206,6 +206,13 @@ func (r *Runner) auditRun(ctx context.Context, req RunRequest, run Run) {
 	if req.Trigger == TriggerSchedule {
 		actor = rbac.System(SystemActor).AuditActor()
 	}
+	if err := r.Audit.Record(ctx, cleanedEntry(actor, req.EnvID, req.Trigger, run)); err != nil {
+		r.log().Error("a janitor run could not be written to the audit log", "run", run.ID, "error", err)
+	}
+}
+
+// cleanedEntry is the janitor.cleaned row of a run that ended: what it counted and how it ended.
+func cleanedEntry(actor audit.Actor, envID, trigger string, run Run) audit.Entry {
 	result := audit.ResultSuccess
 	if run.State == StatePartial || run.State == StateFailed {
 		result = audit.ResultFailure
@@ -215,18 +222,33 @@ func (r *Runner) auditRun(ctx context.Context, req RunRequest, run Run) {
 		est = strconv.FormatInt(run.EstBytes, 10)
 	}
 	c := run.Counts
-	err := r.Audit.Record(ctx, audit.Entry{
-		Actor: actor, Action: audit.ActionJanitorCleaned, TargetType: "environment", TargetID: req.EnvID, EnvID: req.EnvID,
+	return audit.Entry{
+		Actor: actor, Action: audit.ActionJanitorCleaned, TargetType: "environment", TargetID: envID, EnvID: envID,
 		Result: result, Reason: run.Reason,
 		Details: map[string]string{
-			"run": run.ID, "trigger": req.Trigger, "outcome": run.State, "reason": run.Reason,
+			"run": run.ID, "trigger": trigger, "outcome": run.State, "reason": run.Reason,
 			"removed_containers": strconv.Itoa(c.RemovedContainers), "removed_images": strconv.Itoa(c.RemovedImages),
 			"removed_networks": strconv.Itoa(c.RemovedNetworks), "kept": strconv.Itoa(c.Kept), "failed": strconv.Itoa(c.Failed),
 			"skipped_offline": strconv.Itoa(c.SkippedOffline), "est_bytes": est,
 		},
-	})
-	if err != nil {
-		r.log().Error("a janitor run could not be written to the audit log", "run", run.ID, "error", err)
+	}
+}
+
+// AuditInterrupted writes the one janitor.cleaned row of each run the start of the server ended
+// (MarkInterruptedRuns), by the system, as failed with the reason server_restarted (T-11-42). A row that
+// cannot be written is logged: the runs are ended on record all the same. A nil log is slog.Default().
+func AuditInterrupted(ctx context.Context, sink AuditSink, log *slog.Logger, runs []Run) {
+	if sink == nil {
+		return
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	actor := rbac.System(SystemActor).AuditActor()
+	for _, run := range runs {
+		if err := sink.Record(ctx, cleanedEntry(actor, run.EnvID, run.Trigger, run)); err != nil {
+			log.Error("a janitor run that the server's stop interrupted could not be written to the audit log", "run", run.ID, "error", err)
+		}
 	}
 }
 

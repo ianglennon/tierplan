@@ -39,6 +39,9 @@ const (
 const (
 	// ReasonRunFailed: the run could not read the environment or its policy, or could not start.
 	ReasonRunFailed = "failed"
+	// ReasonServerRestarted: the server stopped while the run was waiting or working, so it was ended at
+	// the next start.
+	ReasonServerRestarted = "server_restarted"
 	// ReasonNoNodeReporting: no node of the environment reported, so there was nothing to judge.
 	ReasonNoNodeReporting = "no_node_reporting"
 )
@@ -137,6 +140,10 @@ type RunStore interface {
 	PruneRuns(ctx context.Context, envID string, keep Retention, now time.Time) (int, error)
 	// PruneAll is PruneRuns for every environment.
 	PruneAll(ctx context.Context, keep Retention, now time.Time) (int, error)
+	// MarkInterruptedRuns ends every run still waiting or running as failed with the reason
+	// ReasonServerRestarted, finished at now, and answers them. Their items are kept and counted. It is
+	// for the start of the server, before any run can begin.
+	MarkInterruptedRuns(ctx context.Context, now time.Time) ([]Run, error)
 	// SaveEvidence records the crash evidence of the item seq of a run, in a transaction of its own.
 	// It is called before the container is removed, which is not removed if it fails.
 	SaveEvidence(ctx context.Context, runID string, seq int, ev Evidence) error
@@ -338,6 +345,19 @@ func (s *SQLStore) PruneAll(ctx context.Context, keep Retention, now time.Time) 
 		return 0, fmt.Errorf("prune the janitor runs: %w", err)
 	}
 	return int(n), nil
+}
+
+// MarkInterruptedRuns implements RunStore.
+func (s *SQLStore) MarkInterruptedRuns(ctx context.Context, now time.Time) ([]Run, error) {
+	rows, err := s.St.Q.MarkJanitorRunsInterrupted(ctx, now.UTC().UnixNano())
+	if err != nil {
+		return nil, fmt.Errorf("end the janitor runs that were working when the server stopped: %w", err)
+	}
+	runs := make([]Run, 0, len(rows))
+	for _, r := range rows {
+		runs = append(runs, runOf(r))
+	}
+	return runs, nil
 }
 
 // SaveEvidence implements RunStore.

@@ -546,6 +546,30 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 
 	aud := audit.NewWriter(st, vlt, log, nil)
 
+	// The janitor's runs are in memory as well as on record: one still waiting or running belongs to a
+	// process that is gone. Before anything can start a run, each is ended as failed with the reason
+	// server_restarted and audited, so none reads "running" for ever, and then the run history is pruned to
+	// the retention, before the scheduler starts (D-16, RESEARCH F12).
+	janitorRuns := &janitor.SQLStore{St: st}
+	sweepAt := time.Now()
+	if bo.janitorClock != nil {
+		sweepAt = bo.janitorClock.Now()
+	}
+	swept, err := janitorRuns.MarkInterruptedRuns(ctx, sweepAt)
+	if err != nil {
+		_ = st.Close()
+		return nil, restoredStateError{fmt.Errorf("mark interrupted janitor runs: %w", err)}
+	}
+	if len(swept) > 0 {
+		log.Warn("janitor runs that were working when the server stopped were marked failed", "count", len(swept))
+		janitor.AuditInterrupted(ctx, aud, log, swept)
+	}
+	if pruned, perr := janitorRuns.PruneAll(ctx, janitor.DefaultRetention, sweepAt); perr != nil {
+		log.Warn("could not prune the janitor run history beyond the retention", "error", perr)
+	} else if pruned > 0 {
+		log.Info("pruned janitor runs beyond the retention", "count", pruned, "days", janitor.DefaultRetention.Days, "runs", janitor.DefaultRetention.Runs)
+	}
+
 	// While no user exists every start mints a fresh setup token, writes it to
 	// the data directory and logs it (D-01). There is no setting that skips or
 	// prefills it (D-79).
@@ -834,7 +858,6 @@ func assemble(ctx context.Context, cfg config.Config, log *slog.Logger, bo build
 		AddressSpaces: addressSpaces, StackFacts: netFacts, Clock: bo.janitorClock, Now: janitorNow, Log: log,
 	}
 	// One store keeps the record of the runs: the Runner writes it and the run route reads it.
-	janitorRuns := &janitor.SQLStore{St: st}
 	janitorDeps.Runs = janitorRuns
 	janitorDeps.Runner = &janitor.Runner{
 		Engine: api.NewJanitorEngine(aggregator, clusters, netFacts, log), Locks: stackLocks, Jobs: jobHub, Clock: bo.janitorClock,

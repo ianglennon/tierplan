@@ -379,6 +379,66 @@ func (q *Queries) ListJanitorRuns(ctx context.Context, arg ListJanitorRunsParams
 	return items, nil
 }
 
+const markJanitorRunsInterrupted = `-- name: MarkJanitorRunsInterrupted :many
+UPDATE janitor_runs
+SET state = 'failed', reason = 'server_restarted', finished_at = MAX(janitor_runs.started_at, ?1),
+    removed_containers = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'container' AND i.outcome = 'removed'),
+    removed_images = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'image' AND i.outcome = 'removed'),
+    removed_networks = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.type = 'network' AND i.outcome = 'removed'),
+    kept = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id
+            AND (i.outcome = 'refused_in_use' OR (i.outcome = 'skipped_protected' AND i.code <> 'gone'))),
+    failed = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'error'),
+    skipped_offline = (SELECT COUNT(*) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'skipped_node_offline'),
+    est_bytes = COALESCE((SELECT SUM(i.est_bytes) FROM janitor_run_items i WHERE i.run_id = janitor_runs.id AND i.outcome = 'removed' AND i.est_bytes >= 0), -1)
+WHERE janitor_runs.state IN ('waiting', 'running')
+RETURNING id, env_id, trigger, actor, state, reason, job_id, started_at, finished_at,
+          removed_containers, removed_images, removed_networks, kept, failed, skipped_offline, est_bytes
+`
+
+// Run at start, before anything can start a run: a run still waiting or running belongs to a process
+// that is gone. It ends failed with the reason server_restarted, at the sweep's time (never before it
+// started), keeps the items it had recorded, and counts them the way a finished run does. Nothing is
+// added to it. One statement, so no run is half swept.
+func (q *Queries) MarkJanitorRunsInterrupted(ctx context.Context, finishedAt interface{}) ([]JanitorRun, error) {
+	rows, err := q.db.QueryContext(ctx, markJanitorRunsInterrupted, finishedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []JanitorRun
+	for rows.Next() {
+		var i JanitorRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvID,
+			&i.Trigger,
+			&i.Actor,
+			&i.State,
+			&i.Reason,
+			&i.JobID,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.RemovedContainers,
+			&i.RemovedImages,
+			&i.RemovedNetworks,
+			&i.Kept,
+			&i.Failed,
+			&i.SkippedOffline,
+			&i.EstBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const pruneAllJanitorRuns = `-- name: PruneAllJanitorRuns :execrows
 DELETE FROM janitor_runs
 WHERE janitor_runs.state NOT IN ('waiting', 'running')
